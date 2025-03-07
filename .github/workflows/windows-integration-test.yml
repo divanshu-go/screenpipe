@@ -111,7 +111,7 @@ jobs:
     - name: Set SCREENPIPE_DATA_PATH environment variable
       shell: pwsh
       run: |
-          $env:SCREENPIPE_DATA_PATH = "$env:USERPROFILE\.screenpipe\"
+          $env:SCREENPIPE_DATA_PATH = "$env:USERPROFILE\.screenpipe\*"
           echo "SCREENPIPE_DATA_PATH=$env:SCREENPIPE_PATH" | Out-File -FilePath $env:GITHUB_ENV -Append
 
     - name: Upload logs and data
