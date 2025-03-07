@@ -121,3 +121,6 @@ jobs:
           screenpipe_output.log
           screenpipe_error.log
           ${{ env.USERPROFILE }}\.screenpipe\data\
+
+    - name: Setup tmate session
+      uses: mxschmitt/action-tmate@v3
