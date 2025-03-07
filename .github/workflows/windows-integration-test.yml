@@ -1,10 +1,6 @@
 name: Windows CLI Integration Test
 
-on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+on: [push]
 
 jobs:
   test-windows:
@@ -112,12 +108,11 @@ jobs:
         Get-Content "screenpipe_output.log" -Tail 100
         Get-Content "screenpipe_error.log"
 
-    - name: Upload logs and data
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: windows-logs-and-data
-        path: |
-          screenpipe_output.log
-          screenpipe_error.log
-          ${{ env.USERPROFILE }}\.screenpipe\data\
+    - name: Set SCREENPIPE_DATA_PATH environment variable
+      shell: pwsh
+      run: |
+          dir $env:USERPROFILE\.screenpipe\
+        
+
+
+
