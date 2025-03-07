@@ -108,6 +108,12 @@ jobs:
         Get-Content "screenpipe_output.log" -Tail 100
         Get-Content "screenpipe_error.log"
 
+    - name: Set SCREENPIPE_DATA_PATH environment variable
+      shell: pwsh
+      run: |
+          $env:SCREENPIPE_DATA_PATH = "$env:USERPROFILE\.screenpipe\"
+          echo "SCREENPIPE_DATA_PATH=$env:SCREENPIPE_PATH" | Out-File -FilePath $env:GITHUB_ENV -Append
+
     - name: Upload logs and data
       uses: actions/upload-artifact@v4
       if: always()
@@ -116,7 +122,7 @@ jobs:
         path: |
           screenpipe_output.log
           screenpipe_error.log
-          ${{ env.USERPROFILE }}\.screenpipe\data\
+          ${{ env.SCREENPIPE_DATA_PATH }}
+        include-hidden-files: true
 
-    - name: Setup tmate session
-      uses: mxschmitt/action-tmate@v3
+
