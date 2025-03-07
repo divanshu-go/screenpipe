@@ -125,4 +125,10 @@ jobs:
           ${{ env.SCREENPIPE_DATA_PATH }}
         include-hidden-files: true
 
+    - name: List files to upload
+      shell: pwsh
+      run: |
+          dir ${{ env.SCREENPIPE_DATA_PATH }}
+
+
 
