@@ -1,13 +1,6 @@
 name: Build and Test ScreenPipe
 
-on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
-
+on: [push]
 jobs:
   build:
     runs-on: windows-2019
