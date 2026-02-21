@@ -232,7 +232,7 @@ jobs:
         with:
           args: "--target x86_64-pc-windows-msvc --features mkl,official-build"
           projectPath: "./apps/screenpipe-app-tauri"
-          tauriScript: bunx tauri -vvv
+          tauriScript: bunx tauri -vv
           retryAttempts: 3
 
       - name: Upload enterprise NSIS installer

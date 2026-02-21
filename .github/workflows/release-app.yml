@@ -873,7 +873,7 @@ jobs:
         with:
           args: ${{ steps.tauri-args.outputs.args || matrix.tauri-args }}
           projectPath: "./apps/screenpipe-app-tauri"
-          tauriScript: bunx tauri -vvv
+          tauriScript: bunx tauri -vv
           retryAttempts: 3
 
       - name: Notarize and staple DMGs (macOS)
