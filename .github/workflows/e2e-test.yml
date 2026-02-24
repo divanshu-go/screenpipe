@@ -193,7 +193,7 @@ jobs:
           cargo install tauri-driver
         }
 
-    - name: Remove previous Edge WebDriver
+    - name: Remove previous Edge WebDriver (not same version)
       shell: pwsh
       run: |
         $folderPath = "$($env:SystemDrive)\SeleniumWebDrivers\EdgeDriver"
