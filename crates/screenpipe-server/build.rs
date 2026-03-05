@@ -1,8 +1,3 @@
-#[cfg(target_os = "windows")]
-fn link_onnx() {
-    println!("cargo:rustc-link-search=native=../../apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2/lib");
-}
-
 #[cfg(target_os = "macos")]
 fn has_foundation_models_sdk() -> bool {
     let sdk_path = std::process::Command::new("xcrun")
@@ -29,11 +24,6 @@ fn has_foundation_models_sdk() -> bool {
 }
 
 fn main() {
-    #[cfg(target_os = "windows")]
-    {
-        link_onnx();
-    }
-
     #[cfg(target_os = "macos")]
     {
         // Only weak-link FoundationModels if the SDK actually has it.

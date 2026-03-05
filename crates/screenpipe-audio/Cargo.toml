@@ -9,9 +9,7 @@ edition = { workspace = true }
 
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-[build-dependencies]
-reqwest = { workspace = true }
-which = "7.0.0"
+# ort crate uses download-binaries + copy-dylibs; no build-time ONNX download here
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }

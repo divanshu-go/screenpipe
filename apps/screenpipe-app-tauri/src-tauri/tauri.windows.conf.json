@@ -20,7 +20,7 @@
             "ffmpeg\\bin\\ffprobe.exe": "./",
             "ffmpeg\\bin\\*.dll": "./",
             "ffmpeg\\lib\\*": "./",
-            "onnxruntime*\\lib\\onnxruntime.dll": "./",
+            "target/*/release/onnxruntime.dll": "./",
             "vcredist\\*.dll": "./",
             "assets/*": "./assets/"
         }
