@@ -7,7 +7,10 @@ fn link_onnx() {
         return;
     }
     let pkg = "onnxruntime-win-x64-1.19.2";
-    println!("cargo:rustc-link-search=native=../../apps/screenpipe-app-tauri/src-tauri/{}/lib", pkg);
+    println!(
+        "cargo:rustc-link-search=native=../../apps/screenpipe-app-tauri/src-tauri/{}/lib",
+        pkg
+    );
     println!("cargo:rustc-link-lib=dylib=onnxruntime");
 }
 
