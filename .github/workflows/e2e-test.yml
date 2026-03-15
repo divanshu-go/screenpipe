@@ -22,6 +22,16 @@ jobs:
       with:
         bun-version: 1.3.10
 
+    - name: Cache Bun dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.bun/install/cache
+          apps/screenpipe-app-tauri/node_modules
+        key: ${{ runner.os }}-bun-${{ hashFiles('apps/screenpipe-app-tauri/bun.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-bun-
+
     - name: Install Scream on Windows
       shell: powershell
       run: |
@@ -52,30 +62,71 @@ jobs:
           Write-Host "Audio service is already running"
         }
 
+    - name: Cache Windows build artifacts
+      uses: actions/cache@v4
+      with:
+        path: |
+          apps/screenpipe-app-tauri/src-tauri/ffmpeg
+          apps/screenpipe-app-tauri/src-tauri/vcredist
+          apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2
+          apps/screenpipe-app-tauri/src-tauri/bun-x86_64-pc-windows-msvc.exe
+        key: Windows-e2e-artifacts-${{ hashFiles('apps/screenpipe-app-tauri/scripts/pre_build.js', 'crates/screenpipe-audio/build.rs') }}
+        restore-keys: |
+          Windows-e2e-artifacts-
+
+    - name: Set up Rust
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        toolchain: stable
+        override: true
+        rustflags: ""
+        target: x86_64-pc-windows-msvc
+
+    - name: Setup sccache
+      uses: mozilla-actions/sccache-action@v0.0.9
+
+    - name: Configure sccache
+      run: |
+        echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
+        echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+      shell: bash
+
+    - name: Rust cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: apps/screenpipe-app-tauri/src-tauri
+        shared-key: screenpipe-tauri
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        cache-on-failure: true
+        save-if: true
+
     - name: Install frontend dependencies
       working-directory: ./apps/screenpipe-app-tauri
-      run: bun install
+      run: bun install --frozen-lockfile
 
     - name: Run pre_build.js
       run: |
         bun ./scripts/pre_build.js
       working-directory: ./apps/screenpipe-app-tauri
 
+    - name: Cache Next.js build
+      uses: actions/cache@v4
+      with:
+        path: ./apps/screenpipe-app-tauri/.next
+        key: ${{ runner.os }}-next-${{ hashFiles('apps/screenpipe-app-tauri/package.json', 'apps/screenpipe-app-tauri/bun.lock', 'apps/screenpipe-app-tauri/next.config.mjs', 'apps/screenpipe-app-tauri/postcss.config.mjs', 'apps/screenpipe-app-tauri/app/**', 'apps/screenpipe-app-tauri/components/**', 'apps/screenpipe-app-tauri/lib/**', 'apps/screenpipe-app-tauri/styles/**') }}
+        restore-keys: |
+          ${{ runner.os }}-next-
+
     - name: Build
       uses: tauri-apps/tauri-action@v0.5.17
       env:
         CI: true
-        CARGO_PROFILE_RELEASE_LTO: thin
-        CARGO_PROFILE_RELEASE_OPT_LEVEL: 2
-        CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
-        CARGO_INCREMENTAL: true
-        CARGO_PROFILE_RELEASE_STRIP: symbols
-        CARGO_PROFILE_RELEASE_PANIC: abort
-        CARGO_PROFILE_RELEASE_INCREMENTAL: false
-        RUSTFLAGS: "-C link-arg=/LTCG"
+        CARGO_INCREMENTAL: "0"
+        CARGO_PROFILE_DEV_DEBUG: "0"
+        CARGO_PROFILE_DEV_CODEGEN_UNITS: "16"
 
       with:
-        args: "--no-sign --debug --verbose --no-bundle -- --features e2e"
+        args: "--no-sign --debug --no-bundle -- --features e2e"
         projectPath: "./apps/screenpipe-app-tauri"
         tauriScript: bunx tauri -v
 
@@ -93,8 +144,8 @@ jobs:
       with:
         name: windows-e2e-test-artifacts
         path: |
-          ./apps/screenpipe-app-tauri/e2e/videos/*
-          ./apps/screenpipe-app-tauri/e2e_output.log
+          ./apps/screenpipe-app-tauri/e2e/videos
+          ./apps/screenpipe-app-tauri/e2e/screenshots
 
     - name: Upload Screenpipe data
       uses: actions/upload-artifact@v4
@@ -102,163 +153,140 @@ jobs:
       with:
         name: windows-screenpipe-data
         include-hidden-files: true
+        path: ./apps/screenpipe-app-tauri/.e2e
+
+  linux-e2e-test:
+    name: Linux E2E Tests
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Bun
+      uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: 1.3.10
+
+    - name: Cache Bun dependencies
+      uses: actions/cache@v4
+      with:
         path: |
-          ~/.screenpipe/*
-  # linux-e2e-test:
-  #   name: Linux E2E Tests
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #   - uses: actions/checkout@v4
+          ~/.bun/install/cache
+          apps/screenpipe-app-tauri/node_modules
+        key: ${{ runner.os }}-bun-${{ hashFiles('apps/screenpipe-app-tauri/bun.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-bun-
 
-  #   - name: Setup Bun
-  #     uses: oven-sh/setup-bun@v2
-  #     with:
-  #       bun-version: 1.2.2
+    - name: Cache and install all Linux dependencies
+      uses: awalsh128/cache-apt-pkgs-action@v1.6.0
+      with:
+        version: ${{ hashFiles('apps/screenpipe-app-tauri/scripts/pre_build.js') }}
+        packages: >
+          tesseract-ocr libtesseract-dev ffmpeg build-essential libglib2.0-dev
+          libgtk-3-dev libwebkit2gtk-4.1-dev clang cmake
+          libavutil-dev libavformat-dev libavfilter-dev libavdevice-dev
+          libasound2-dev libxdo-dev
+          g++ libssl-dev libsoup-3.0-0 libsdl2-dev libclang-dev libxtst-dev libx11-dev
+          libxext-dev libxrandr-dev libxinerama-dev libxcursor-dev
+          libxi-dev libgl1-mesa-dev libasound2-dev libpulse-dev
+          curl desktop-file-utils xdg-utils dbus-x11 xvfb
+          x11-xserver-utils pkg-config libsqlite3-dev libbz2-dev
+          zlib1g-dev libonig-dev libayatana-appindicator3-dev
+          libsamplerate-dev libwebrtc-audio-processing-dev libgtk-3-dev
+          libwebkit2gtk-4.1-dev webkit2gtk-driver librsvg2-dev
+          patchelf x11-utils x11-apps xdotool openbox xterm
+          fonts-liberation imagemagick fonts-dejavu alsa-utils
+          pulseaudio pulseaudio-utils libpipewire-0.3-dev
+          libgbm-dev libwayland-dev libegl-dev mold
 
-  #   - name: Setup Node
-  #     uses: actions/setup-node@v4
-  #     with:
-  #       node-version: 22
-  #   - name: Install Linux dependencies
-  #     run: |
-  #       sudo apt-get update
-  #       sudo apt-get install -y \
-  #           g++ \
-  #           ffmpeg \
-  #           tesseract-ocr \
-  #           cmake \
-  #           clang \
-  #           libavformat-dev \
-  #           libavfilter-dev \
-  #           libavdevice-dev \
-  #           libssl-dev \
-  #           libsoup-3.0-0 \
-  #           libtesseract-dev \
-  #           libxdo-dev \
-  #           libsdl2-dev \
-  #           libclang-dev \
-  #           libxtst-dev \
-  #           libx11-dev \
-  #           libxext-dev \
-  #           libxrandr-dev \
-  #           libxinerama-dev \
-  #           libxcursor-dev \
-  #           libxi-dev \
-  #           libgl1-mesa-dev \
-  #           libasound2-dev \
-  #           libpulse-dev \
-  #           curl \
-  #           desktop-file-utils \
-  #           xdg-utils \
-  #           dbus-x11 \
-  #           xvfb \
-  #           x11-xserver-utils \
-  #           pkg-config \
-  #           libsqlite3-dev \
-  #           libbz2-dev \
-  #           zlib1g-dev \
-  #           libonig-dev \
-  #           libayatana-appindicator3-dev \
-  #           libsamplerate-dev \
-  #           libwebrtc-audio-processing-dev \
-  #           libgtk-3-dev \
-  #           libwebkit2gtk-4.1-dev \
-  #           webkit2gtk-driver \
-  #           librsvg2-dev \
-  #           patchelf \
-  #           x11-utils \
-  #           x11-apps \
-  #           xdotool \
-  #           openbox \
-  #           xterm \
-  #           fonts-liberation \
-  #           imagemagick \
-  #           fonts-dejavu \
-  #           alsa-utils \
-  #           pulseaudio \
-  #           pulseaudio-utils \
-  #           libpipewire-0.3-dev \
-  #           libgbm-dev \
-  #           libwayland-dev \
-  #           libegl-dev
+    - name: Set up Rust
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        toolchain: stable
+        override: true
+        rustflags: ""
+        target: x86_64-unknown-linux-gnu
 
-  #   - name: Set up Rust
-  #     uses: actions-rust-lang/setup-rust-toolchain@v1
-  #     with:
-  #       toolchain: stable
-  #       override: true
-  #       cache: true
-  #       target: x86_64-unknown-linux-gnu
-  #       rustflags: ""
+    - name: Setup sccache
+      uses: mozilla-actions/sccache-action@v0.0.9
 
-  #   - name: Build CLI on Linux
-  #     run: cargo build --release -p screenpipe-engine --target x86_64-unknown-linux-gnu
+    - name: Configure sccache
+      run: |
+        echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
+        echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
 
-  #   - name: Install frontend dependencies
-  #     working-directory: ./apps/screenpipe-app-tauri
-  #     run: bun install
+    - name: Rust cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: apps/screenpipe-app-tauri/src-tauri
+        shared-key: screenpipe-tauri
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        cache-on-failure: true
+        save-if: true
 
-  #   - name: Run pre_build.js
-  #     run: |
-  #       bun ./scripts/pre_build.js
-  #     working-directory: ./apps/screenpipe-app-tauri
+    - name: Install frontend dependencies
+      working-directory: ./apps/screenpipe-app-tauri
+      run: bun install --frozen-lockfile
 
-  #   - name: Build
-  #     uses: tauri-apps/tauri-action@v0.5.17
-  #     env:
-  #       CI: true
-  #       CARGO_PROFILE_RELEASE_LTO: false
-  #       CARGO_PROFILE_RELEASE_OPT_LEVEL: 3
-  #       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
-  #       CARGO_INCREMENTAL: false
-  #       CARGO_PROFILE_RELEASE_STRIP: none
-  #       CARGO_PROFILE_RELEASE_PANIC: unwind
-  #       CARGO_PROFILE_RELEASE_INCREMENTAL: true
-  #     with:
-  #       args: "--target x86_64-unknown-linux-gnu --no-bundle"
-  #       projectPath: "./apps/screenpipe-app-tauri"
-  #       tauriScript: bunx tauri -v
+    - name: Run pre_build.js
+      run: |
+        bun ./scripts/pre_build.js
+      working-directory: ./apps/screenpipe-app-tauri
 
-  #   - name: Install tauri-driver
-  #     run: |
-  #       if [ ! -f "$HOME/.cargo/bin/tauri-driver" ]; then
-  #         cargo install tauri-driver
-  #       fi
+    - name: Cache Next.js build
+      uses: actions/cache@v4
+      with:
+        path: ./apps/screenpipe-app-tauri/.next
+        key: ${{ runner.os }}-next-${{ hashFiles('apps/screenpipe-app-tauri/package.json', 'apps/screenpipe-app-tauri/bun.lock', 'apps/screenpipe-app-tauri/next.config.mjs', 'apps/screenpipe-app-tauri/postcss.config.mjs', 'apps/screenpipe-app-tauri/app/**', 'apps/screenpipe-app-tauri/components/**', 'apps/screenpipe-app-tauri/lib/**', 'apps/screenpipe-app-tauri/styles/**') }}
+        restore-keys: |
+          ${{ runner.os }}-next-
+
+    - name: Build
+      uses: tauri-apps/tauri-action@v0.5.17
+      env:
+        CI: true
+        CARGO_INCREMENTAL: "0"
+        CARGO_PROFILE_DEV_DEBUG: "0"
+        CARGO_PROFILE_DEV_CODEGEN_UNITS: "16"
+      with:
+        args: "--no-sign --debug --no-bundle -- --features e2e"
+        projectPath: "./apps/screenpipe-app-tauri"
+        tauriScript: bunx tauri -v
     
-  #   - name: Set up virtual display with window manager
-  #     run: .github/scripts/setup_display.sh
+    - name: Set up virtual display with window manager
+      run: .github/scripts/setup_display.sh
 
-  #   - name: Setup audio
-  #     run: .github/scripts/setup_audio.sh
+    - name: Setup audio
+      run: .github/scripts/setup_audio.sh
 
-  #   - name: Run E2E Tests
-  #     continue-on-error: true
-  #     shell: bash
-  #     working-directory: ./apps/screenpipe-app-tauri
-  #     run: |
-  #       export XDG_RUNTIME_DIR=/run/user/$(id -u)
-  #       export XDG_CONFIG_HOME="$HOME/.config"
-  #       export XDG_DATA_HOME="$HOME/.local/share"
-  #       export XDG_CACHE_HOME="$HOME/.cache"
-  #       export PULSE_SERVER=unix:${XDG_RUNTIME_DIR}/pulse/native
-  #       export DISPLAY=:99
+    - name: Run E2E Tests
+      shell: bash
+      working-directory: ./apps/screenpipe-app-tauri
+      run: |
+        export XDG_RUNTIME_DIR=/run/user/$(id -u)
+        export XDG_CONFIG_HOME="$HOME/.config"
+        export XDG_DATA_HOME="$HOME/.local/share"
+        export XDG_CACHE_HOME="$HOME/.cache"
+        export PULSE_SERVER=unix:${XDG_RUNTIME_DIR}/pulse/native
+        export DISPLAY=:99
+        export RECORD_VIDEO=1
 
-  #       bun run test:e2e 2>&1 | tee e2e_output.log
+        bun run test:e2e
 
-  #   - name: Upload E2E Test Artifacts
-  #     uses: actions/upload-artifact@v4
-  #     if: always()
-  #     with:
-  #       name: linux-e2e-test-artifacts
-  #       path: |
-  #         ./apps/screenpipe-app-tauri/e2e/videos/*
-  #         ./apps/screenpipe-app-tauri/e2e_output.log
+    - name: Upload E2E Test Artifacts
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: linux-e2e-test-artifacts
+        path: |
+          ./apps/screenpipe-app-tauri/e2e/videos
+          ./apps/screenpipe-app-tauri/e2e/screenshots
 
-  #   - name: Upload Screenpipe data
-  #     uses: actions/upload-artifact@v4
-  #     if: always()
-  #     with:
-  #       name: linux-screenpipe-data
-  #       include-hidden-files: true
-  #       path: |
-  #         ~/.screenpipe/*
+    - name: Upload Screenpipe data
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: linux-screenpipe-data
+        include-hidden-files: true
+        path: ./apps/screenpipe-app-tauri/.e2e

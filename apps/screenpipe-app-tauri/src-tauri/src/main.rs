@@ -639,7 +639,7 @@ async fn main() {
 
         if let Err(e) = builder.export(
             Typescript::default().bigint(specta_typescript::BigIntExportBehavior::BigInt),
-            "../lib/utils/tauri.ts",
+            "lib/utils/tauri.ts",
         ) {
             eprintln!("Warning: Failed to export TypeScript bindings: {e}");
         }

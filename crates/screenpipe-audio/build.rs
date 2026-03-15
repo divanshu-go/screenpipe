@@ -1,5 +1,5 @@
 #[cfg(target_os = "windows")]
-use std::{env, fs};
+use std::{env, fs, path::Path};
 use std::{
     io::Result,
     process::{Command, Output},
@@ -8,7 +8,7 @@ use std::{
 fn main() {
     #[cfg(target_os = "windows")]
     {
-        install_onnxruntime();
+        ensure_onnxruntime();
     }
 
     if !is_bun_installed() {
@@ -80,10 +80,9 @@ fn find_unzip() -> Option<std::path::PathBuf> {
 }
 
 #[cfg(target_os = "windows")]
-fn install_onnxruntime() {
+fn ensure_onnxruntime() {
     use reqwest::blocking::Client;
     use std::time::Duration;
-    use std::{path::Path, process::Command};
 
     // Use CPU-only onnxruntime — GPU (DirectML) causes issues on Intel integrated GPUs.
     // Windows ARM64 (aarch64-pc-windows-msvc) uses onnxruntime-win-arm64-*.
@@ -104,6 +103,7 @@ fn install_onnxruntime() {
 
     // Skip download if already present (CI pre-downloads via workflow step)
     if !target_dir.join("lib").join("onnxruntime.lib").exists() {
+        println!("cargo:warning=ONNX Runtime not found, downloading (pre_build.js fallback)...");
         let url = format!(
             "https://github.com/microsoft/onnxruntime/releases/download/v1.19.2/{}",
             zip_name
@@ -111,12 +111,12 @@ fn install_onnxruntime() {
         let client = Client::builder()
             .timeout(Duration::from_secs(300))
             .build()
-            .expect("failed to build client");
+            .expect("failed to build reqwest client");
         let resp = client.get(&url).send().expect("request failed");
         let body = resp.bytes().expect("body invalid");
-        fs::write(zip_name, &body).expect("failed to write");
+        fs::write(zip_name, &body).expect("failed to write zip");
         let unzip_path = find_unzip().expect(
-            "could not find unzip executable - please install it via GnuWin32 or add it to PATH",
+            "could not find unzip — run pre_build.js first or install GnuWin32 unzip",
         );
 
         let status = Command::new(unzip_path)
@@ -125,12 +125,12 @@ fn install_onnxruntime() {
             .expect("failed to execute unzip");
 
         if !status.success() {
-            panic!("failed to install onnx binary");
+            panic!("failed to extract ONNX Runtime");
         }
         if target_dir.exists() {
-            fs::remove_dir_all(&target_dir).expect("failed to remove existing directory");
+            fs::remove_dir_all(&target_dir).expect("failed to remove existing dir");
         }
-        fs::rename(pkg_name, &target_dir).expect("failed to rename");
+        fs::rename(pkg_name, &target_dir).expect("failed to rename extracted dir");
     }
     // Windows x86_64: emit link so we link against our extracted ONNX Runtime.
     // Windows aarch64: we use load-dynamic; ort loads our DLL at runtime via init_ort_from_dll(), no link here.
