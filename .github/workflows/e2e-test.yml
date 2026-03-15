@@ -100,8 +100,6 @@ jobs:
         path: ./apps/screenpipe-app-tauri/.next
         key: ${{ runner.os }}-next-v2-${{ hashFiles('apps/screenpipe-app-tauri/package.json', 'apps/screenpipe-app-tauri/bun.lock', 'apps/screenpipe-app-tauri/next.config.mjs', 'apps/screenpipe-app-tauri/postcss.config.mjs', 'apps/screenpipe-app-tauri/app/**', 'apps/screenpipe-app-tauri/components/**', 'apps/screenpipe-app-tauri/lib/**', 'apps/screenpipe-app-tauri/styles/**') }}
         restore-keys: |
-          ${{ runner.os }}-next-v2-${{ hashFiles('apps/screenpipe-app-tauri/package.json', 'apps/screenpipe-app-tauri/bun.lock', 'apps/screenpipe-app-tauri/next.config.mjs', 'apps/screenpipe-app-tauri/postcss.config.mjs', 'apps/screenpipe-app-tauri/app/**', 'apps/screenpipe-app-tauri/components/**', 'apps/screenpipe-app-tauri/lib/**', 'apps/screenpipe-app-tauri/styles/**') }}
-        restore-keys: |
           ${{ runner.os }}-next-v2-
 
     - name: Build
