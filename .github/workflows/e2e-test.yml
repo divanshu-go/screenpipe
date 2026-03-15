@@ -90,6 +90,13 @@ jobs:
         cache-on-failure: true
         save-if: true
 
+    - name: Configure Bun cache on same drive as workspace (Windows perf fix)
+      shell: pwsh
+      run: |
+        $drive = (Split-Path $env:GITHUB_WORKSPACE -Qualifier).TrimEnd(':')
+        echo "BUN_INSTALL_CACHE_DIR=${drive}:/bun" >> $env:GITHUB_ENV
+        echo "BUN_INSTALL_GLOBAL_DIR=${drive}:/bun-global" >> $env:GITHUB_ENV
+
     - name: Install frontend dependencies
       working-directory: ./apps/screenpipe-app-tauri
       run: bun install --frozen-lockfile
