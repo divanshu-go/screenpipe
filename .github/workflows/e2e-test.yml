@@ -22,16 +22,6 @@ jobs:
       with:
         bun-version: 1.3.10
 
-    - name: Cache Bun dependencies
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.bun/install/cache
-          apps/screenpipe-app-tauri/node_modules
-        key: ${{ runner.os }}-bun-${{ hashFiles('apps/screenpipe-app-tauri/bun.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-bun-
-
     - name: Install Scream on Windows
       shell: powershell
       run: |
@@ -70,9 +60,9 @@ jobs:
           apps/screenpipe-app-tauri/src-tauri/vcredist
           apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.19.2
           apps/screenpipe-app-tauri/src-tauri/bun-x86_64-pc-windows-msvc.exe
-        key: Windows-e2e-artifacts-${{ hashFiles('apps/screenpipe-app-tauri/scripts/pre_build.js', 'crates/screenpipe-audio/build.rs') }}
+        key: Windows-e2e-artifacts-v2-${{ hashFiles('apps/screenpipe-app-tauri/scripts/pre_build.js') }}
         restore-keys: |
-          Windows-e2e-artifacts-
+          Windows-e2e-artifacts-v2-
 
     - name: Set up Rust
       uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -95,8 +85,8 @@ jobs:
       uses: Swatinem/rust-cache@v2
       with:
         workspaces: apps/screenpipe-app-tauri/src-tauri
-        shared-key: screenpipe-tauri
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        shared-key: screenpipe-tauri-v2
+        key: ${{ runner.os }}-cargo-v2-${{ hashFiles('**/Cargo.lock') }}
         cache-on-failure: true
         save-if: true
 
@@ -104,18 +94,15 @@ jobs:
       working-directory: ./apps/screenpipe-app-tauri
       run: bun install --frozen-lockfile
 
-    - name: Run pre_build.js
-      run: |
-        bun ./scripts/pre_build.js
-      working-directory: ./apps/screenpipe-app-tauri
-
     - name: Cache Next.js build
       uses: actions/cache@v4
       with:
         path: ./apps/screenpipe-app-tauri/.next
-        key: ${{ runner.os }}-next-${{ hashFiles('apps/screenpipe-app-tauri/package.json', 'apps/screenpipe-app-tauri/bun.lock', 'apps/screenpipe-app-tauri/next.config.mjs', 'apps/screenpipe-app-tauri/postcss.config.mjs', 'apps/screenpipe-app-tauri/app/**', 'apps/screenpipe-app-tauri/components/**', 'apps/screenpipe-app-tauri/lib/**', 'apps/screenpipe-app-tauri/styles/**') }}
+        key: ${{ runner.os }}-next-v2-${{ hashFiles('apps/screenpipe-app-tauri/package.json', 'apps/screenpipe-app-tauri/bun.lock', 'apps/screenpipe-app-tauri/next.config.mjs', 'apps/screenpipe-app-tauri/postcss.config.mjs', 'apps/screenpipe-app-tauri/app/**', 'apps/screenpipe-app-tauri/components/**', 'apps/screenpipe-app-tauri/lib/**', 'apps/screenpipe-app-tauri/styles/**') }}
         restore-keys: |
-          ${{ runner.os }}-next-
+          ${{ runner.os }}-next-v2-${{ hashFiles('apps/screenpipe-app-tauri/package.json', 'apps/screenpipe-app-tauri/bun.lock', 'apps/screenpipe-app-tauri/next.config.mjs', 'apps/screenpipe-app-tauri/postcss.config.mjs', 'apps/screenpipe-app-tauri/app/**', 'apps/screenpipe-app-tauri/components/**', 'apps/screenpipe-app-tauri/lib/**', 'apps/screenpipe-app-tauri/styles/**') }}
+        restore-keys: |
+          ${{ runner.os }}-next-v2-
 
     - name: Build
       uses: tauri-apps/tauri-action@v0.5.17
@@ -168,16 +155,6 @@ jobs:
       with:
         bun-version: 1.3.10
 
-    - name: Cache Bun dependencies
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.bun/install/cache
-          apps/screenpipe-app-tauri/node_modules
-        key: ${{ runner.os }}-bun-${{ hashFiles('apps/screenpipe-app-tauri/bun.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-bun-
-
     - name: Cache and install all Linux dependencies
       uses: awalsh128/cache-apt-pkgs-action@v1.6.0
       with:
@@ -220,8 +197,8 @@ jobs:
       uses: Swatinem/rust-cache@v2
       with:
         workspaces: apps/screenpipe-app-tauri/src-tauri
-        shared-key: screenpipe-tauri
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        shared-key: screenpipe-tauri-v2
+        key: ${{ runner.os }}-cargo-v2-${{ hashFiles('**/Cargo.lock') }}
         cache-on-failure: true
         save-if: true
 
@@ -229,18 +206,13 @@ jobs:
       working-directory: ./apps/screenpipe-app-tauri
       run: bun install --frozen-lockfile
 
-    - name: Run pre_build.js
-      run: |
-        bun ./scripts/pre_build.js
-      working-directory: ./apps/screenpipe-app-tauri
-
     - name: Cache Next.js build
       uses: actions/cache@v4
       with:
         path: ./apps/screenpipe-app-tauri/.next
-        key: ${{ runner.os }}-next-${{ hashFiles('apps/screenpipe-app-tauri/package.json', 'apps/screenpipe-app-tauri/bun.lock', 'apps/screenpipe-app-tauri/next.config.mjs', 'apps/screenpipe-app-tauri/postcss.config.mjs', 'apps/screenpipe-app-tauri/app/**', 'apps/screenpipe-app-tauri/components/**', 'apps/screenpipe-app-tauri/lib/**', 'apps/screenpipe-app-tauri/styles/**') }}
+        key: ${{ runner.os }}-next-v2-${{ hashFiles('apps/screenpipe-app-tauri/package.json', 'apps/screenpipe-app-tauri/bun.lock', 'apps/screenpipe-app-tauri/next.config.mjs', 'apps/screenpipe-app-tauri/postcss.config.mjs', 'apps/screenpipe-app-tauri/app/**', 'apps/screenpipe-app-tauri/components/**', 'apps/screenpipe-app-tauri/lib/**', 'apps/screenpipe-app-tauri/styles/**') }}
         restore-keys: |
-          ${{ runner.os }}-next-
+          ${{ runner.os }}-next-v2-
 
     - name: Build
       uses: tauri-apps/tauri-action@v0.5.17
