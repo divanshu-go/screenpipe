@@ -134,7 +134,7 @@ jobs:
     - name: Build
       uses: tauri-apps/tauri-action@v0.5.17
       with:
-        args: "--no-sign --debug --no-bundle -- --features e2e --locked"
+        args: "--no-sign --debug --no-bundle -- --features e2e"
         projectPath: "./apps/screenpipe-app-tauri"
         tauriScript: bunx tauri -v
 
@@ -247,7 +247,7 @@ jobs:
     - name: Build
       uses: tauri-apps/tauri-action@v0.5.17
       with:
-        args: "--no-sign --debug --no-bundle -- --features e2e --locked"
+        args: "--no-sign --debug --no-bundle -- --features e2e"
         projectPath: "./apps/screenpipe-app-tauri"
         tauriScript: bunx tauri -v
 
