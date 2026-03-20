@@ -556,21 +556,23 @@ export function AIProviderConfig({
 
           <Button
             type="button"
-            variant={selectedProvider === "claude-code" ? "default" : "outline"}
+            variant={selectedProvider === "claude-code" || selectedProvider === "anthropic" ? "default" : "outline"}
             className="flex h-8 items-center justify-center gap-1.5 text-xs px-3"
             onClick={() => {
-              setSelectedProvider("claude-code");
-              setFormData({
-                ...formData,
-                provider: "claude-code",
-                url: "",
-                model: "claude-sonnet-4-5-20250514",
-              });
+              if (selectedProvider !== "claude-code" && selectedProvider !== "anthropic") {
+                setSelectedProvider("claude-code");
+                setFormData({
+                  ...formData,
+                  provider: "claude-code",
+                  url: "",
+                  model: "claude-sonnet-4-5-20250514",
+                });
+              }
             }}
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/images/claude-code.png" alt="Claude Code" className="h-3.5 w-3.5 rounded-sm" />
-            <span>claude</span>
+            <img src="/images/claude-ai.svg" alt="Claude.ai" className="h-3.5 w-3.5 rounded-sm" />
+            <span>claude.ai</span>
           </Button>
 
           {piAvailable && (
@@ -806,12 +808,70 @@ export function AIProviderConfig({
           </div>
         )}
 
-        {selectedProvider === "claude-code" && (
+        {(selectedProvider === "claude-code" || selectedProvider === "anthropic") && (
           <div className="space-y-1">
-            <div className="space-y-1">
-              <Label className="text-xs">claude account</Label>
-              <ClaudeCodeSignInButton />
+            <Label className="text-xs">how do you want to log in?</Label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedProvider("claude-code");
+                  setFormData({ ...formData, provider: "claude-code", url: "", model: "claude-sonnet-4-5-20250514" });
+                }}
+                className={`flex flex-col items-start gap-0.5 rounded-md border-2 p-2 text-left text-xs transition-colors hover:bg-accent ${
+                  selectedProvider === "claude-code" ? "border-primary bg-accent" : "border-border"
+                }`}
+              >
+                <span className="font-medium">Claude.ai Subscription</span>
+                <span className="text-[10px] text-muted-foreground">Claude Pro, Team, or Enterprise</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedProvider("anthropic");
+                  setFormData({ ...formData, provider: "anthropic", url: "https://api.anthropic.com", model: "claude-sonnet-4-5-20250514" });
+                }}
+                className={`flex flex-col items-start gap-0.5 rounded-md border-2 p-2 text-left text-xs transition-colors hover:bg-accent ${
+                  selectedProvider === "anthropic" ? "border-primary bg-accent" : "border-border"
+                }`}
+              >
+                <span className="font-medium">Anthropic Console</span>
+                <span className="text-[10px] text-muted-foreground">Pay via API usage</span>
+              </button>
             </div>
+
+            {selectedProvider === "claude-code" && (
+              <div className="space-y-1 pt-1">
+                <Label className="text-xs">claude account</Label>
+                <ClaudeCodeSignInButton />
+              </div>
+            )}
+
+            {selectedProvider === "anthropic" && (
+              <div className="space-y-1 pt-1">
+                <Label htmlFor="anthropicApiKey" className="text-xs">api key</Label>
+                <div className="relative">
+                  <Input
+                    id="anthropicApiKey"
+                    type={showApiKey ? "text" : "password"}
+                    placeholder="sk-ant-..."
+                    value={formData.apiKey || ""}
+                    onChange={(e) => setFormData({ ...formData, apiKey: e.target.value })}
+                    className="pr-10 h-8 text-sm"
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="absolute right-0 top-0 h-full px-2 py-1 hover:bg-transparent"
+                    onClick={() => setShowApiKey(!showApiKey)}
+                  >
+                    {showApiKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                  </Button>
+                </div>
+              </div>
+            )}
+
             <div className="space-y-1">
               <Label htmlFor="model" className="text-xs">model</Label>
               <Select
@@ -964,10 +1024,11 @@ export const AIPresetDialog = ({
       prompt: providerData.prompt,
     };
 
-    // Only add apiKey if provider is openai or custom
+    // Add apiKey for providers that require it
     if (
       providerData.provider === "openai" ||
-      providerData.provider === "custom"
+      providerData.provider === "custom" ||
+      providerData.provider === "anthropic"
     ) {
       (newPreset as any).apiKey = providerData.apiKey;
     }

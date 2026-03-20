@@ -1074,20 +1074,16 @@ const AISection = ({
 
           <AIProviderCard
             type="anthropic"
-            title="Anthropic"
-            description="Use your Anthropic API key for Claude models"
-            imageSrc="/images/anthropic.png"
-            selected={settingsPreset?.provider === "anthropic"}
-            onClick={() => handleAiProviderChange("anthropic")}
-          />
-
-          <AIProviderCard
-            type="claude-code"
-            title="Claude Code"
-            description="Use your Claude Pro or Max subscription. No API key needed."
-            imageSrc="/images/claude-code.png"
-            selected={settingsPreset?.provider === "claude-code"}
-            onClick={() => handleAiProviderChange("claude-code")}
+            title="Claude.ai"
+            description="Use your Claude Pro/Max subscription or Anthropic API key"
+            imageSrc="/images/claude-ai.svg"
+            selected={settingsPreset?.provider === "anthropic" || settingsPreset?.provider === "claude-code"}
+            onClick={() => {
+              // Default to claude-code (subscription) when first selecting Anthropic
+              if (settingsPreset?.provider !== "anthropic" && settingsPreset?.provider !== "claude-code") {
+                handleAiProviderChange("claude-code");
+              }
+            }}
           />
 
           <AIProviderCard
@@ -1149,6 +1145,82 @@ const AISection = ({
         />
       )}
 
+      {(settingsPreset?.provider === "claude-code" || settingsPreset?.provider === "anthropic") && (
+        <div className="w-full">
+          <div className="flex flex-col gap-3 mb-4 w-full">
+            <Label className="flex items-center gap-1">How do you want to log in?</Label>
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={() => handleAiProviderChange("claude-code")}
+                className={cn(
+                  "flex flex-col items-start gap-1 rounded-lg border-2 p-3 text-left transition-colors hover:bg-accent",
+                  settingsPreset?.provider === "claude-code"
+                    ? "border-primary bg-accent"
+                    : "border-border"
+                )}
+              >
+                <span className="font-medium text-sm">Claude.ai Subscription</span>
+                <span className="text-xs text-muted-foreground">Use your Claude Pro, Team, or Enterprise subscription</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleAiProviderChange("anthropic")}
+                className={cn(
+                  "flex flex-col items-start gap-1 rounded-lg border-2 p-3 text-left transition-colors hover:bg-accent",
+                  settingsPreset?.provider === "anthropic"
+                    ? "border-primary bg-accent"
+                    : "border-border"
+                )}
+              >
+                <span className="font-medium text-sm">Anthropic Console</span>
+                <span className="text-xs text-muted-foreground">Pay for API usage through your Console account</span>
+              </button>
+            </div>
+
+            {settingsPreset?.provider === "claude-code" && (
+              <div className="flex items-center gap-3 mt-1">
+                <Button
+                  type="button"
+                  variant={claudeCodeLoggedIn ? "outline" : "default"}
+                  className="transition-none"
+                  disabled={claudeCodeLoading}
+                  onClick={async () => {
+                    if (claudeCodeLoggedIn) {
+                      setClaudeCodeLoading(true);
+                      await commands.claudeOauthLogout();
+                      setClaudeCodeLoggedIn(false);
+                      setClaudeCodeLoading(false);
+                    } else {
+                      setClaudeCodeLoading(true);
+                      try {
+                        const res = await commands.claudeOauthLogin();
+                        if (res.status === "ok" && res.data) {
+                          setClaudeCodeLoggedIn(true);
+                        }
+                      } catch (e) {
+                        console.error("claude oauth failed:", e);
+                      }
+                      setClaudeCodeLoading(false);
+                    }
+                  }}
+                >
+                  {claudeCodeLoading ? (
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  ) : claudeCodeLoggedIn ? (
+                    <CheckCircle2 className="h-4 w-4 mr-2" />
+                  ) : null}
+                  {claudeCodeLoggedIn ? "Sign out" : "Sign in with Claude"}
+                </Button>
+                {claudeCodeLoggedIn && (
+                  <span className="text-sm text-muted-foreground">Signed in</span>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {(settingsPreset?.provider === "anthropic" || settingsPreset?.provider === "custom" || (isApiKeyRequired &&
         settingsPreset?.provider === "openai")) && (
           <div className="w-full">
@@ -1197,58 +1269,6 @@ const AISection = ({
             </div>
           </div>
         )}
-
-      {settingsPreset?.provider === "claude-code" && (
-        <div className="w-full">
-          <div className="flex flex-col gap-4 mb-4 w-full">
-            <Label className="flex items-center gap-1">
-              Claude Account
-            </Label>
-            <div className="flex items-center gap-3">
-              <Button
-                type="button"
-                variant={claudeCodeLoggedIn ? "outline" : "default"}
-                className="transition-none"
-                disabled={claudeCodeLoading}
-                onClick={async () => {
-                  if (claudeCodeLoggedIn) {
-                    setClaudeCodeLoading(true);
-                    await commands.claudeOauthLogout();
-                    setClaudeCodeLoggedIn(false);
-                    setClaudeCodeLoading(false);
-                  } else {
-                    setClaudeCodeLoading(true);
-                    try {
-                      const res = await commands.claudeOauthLogin();
-                      if (res.status === "ok" && res.data) {
-                        setClaudeCodeLoggedIn(true);
-                      }
-                    } catch (e) {
-                      console.error("claude oauth failed:", e);
-                    }
-                    setClaudeCodeLoading(false);
-                  }
-                }}
-              >
-                {claudeCodeLoading ? (
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                ) : claudeCodeLoggedIn ? (
-                  <CheckCircle2 className="h-4 w-4 mr-2" />
-                ) : null}
-                {claudeCodeLoggedIn ? "Sign out" : "Sign in with Claude"}
-              </Button>
-              {claudeCodeLoggedIn && (
-                <span className="text-sm text-muted-foreground">Signed in</span>
-              )}
-            </div>
-            {!claudeCodeLoggedIn && (
-              <p className="text-xs text-muted-foreground">
-                Opens your browser to sign in at claude.ai. Requires Claude Pro or Max.
-              </p>
-            )}
-          </div>
-        </div>
-      )}
 
       {settingsPreset?.provider === "openai-chatgpt" && (
         <div className="w-full">
@@ -1647,7 +1667,7 @@ const AISection = ({
 const providerImageSrc: Record<string, string> = {
   openai: "/images/openai.png",
   "openai-chatgpt": "/images/openai.png",
-  anthropic: "/images/anthropic.png",
+  anthropic: "/images/claude-ai.svg",
   "native-ollama": "/images/ollama.png",
   custom: "/images/custom.png",
   pi: "/images/screenpipe.png",
