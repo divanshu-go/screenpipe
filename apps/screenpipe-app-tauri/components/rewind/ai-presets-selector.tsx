@@ -122,6 +122,52 @@ export const DEFAULT_PROMPT = `Rules:
 - Always answer my question/intent, do not make up things
 `;
 
+function ClaudeCodeSignInButton() {
+  const [loggedIn, setLoggedIn] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    commands.claudeOauthStatus().then((res) => {
+      if (res.status === "ok") setLoggedIn(res.data.logged_in);
+    });
+  }, []);
+
+  return (
+    <Button
+      type="button"
+      variant={loggedIn ? "outline" : "default"}
+      disabled={loading}
+      className="h-7 text-xs w-full"
+      onClick={async () => {
+        if (loggedIn) {
+          setLoading(true);
+          await commands.claudeOauthLogout();
+          setLoggedIn(false);
+          setLoading(false);
+        } else {
+          setLoading(true);
+          try {
+            const res = await commands.claudeOauthLogin();
+            if (res.status === "ok" && res.data) setLoggedIn(true);
+          } catch (e) {
+            console.error("claude oauth failed:", e);
+          }
+          setLoading(false);
+        }
+      }}
+    >
+      {loading ? (
+        <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+      ) : loggedIn ? (
+        <Check className="h-3 w-3 mr-1 text-green-500" />
+      ) : (
+        <LogIn className="h-3 w-3 mr-1" />
+      )}
+      {loggedIn ? "signed in — sign out" : "sign in with claude"}
+    </Button>
+  );
+}
+
 function ChatGptSignInButton() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -438,8 +484,8 @@ export function AIProviderConfig({
         </div>
 
         <div className={cn(
-          "grid gap-1",
-          piAvailable ? "grid-cols-5" : "grid-cols-4"
+          "grid gap-2",
+          piAvailable ? "grid-cols-3" : "grid-cols-5"
         )}>
           <Button
             type="button"
@@ -506,6 +552,25 @@ export function AIProviderConfig({
           >
             <Icons.openai className="h-3.5 w-3.5" />
             <span>chatgpt</span>
+          </Button>
+
+          <Button
+            type="button"
+            variant={selectedProvider === "claude-code" ? "default" : "outline"}
+            className="flex h-8 items-center justify-center gap-1.5 text-xs px-3"
+            onClick={() => {
+              setSelectedProvider("claude-code");
+              setFormData({
+                ...formData,
+                provider: "claude-code",
+                url: "",
+                model: "claude-sonnet-4-5-20250514",
+              });
+            }}
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/images/claude-code.png" alt="Claude Code" className="h-3.5 w-3.5 rounded-sm" />
+            <span>claude</span>
           </Button>
 
           {piAvailable && (
@@ -737,6 +802,31 @@ export function AIProviderConfig({
                   ))}
                 </datalist>
               )}
+            </div>
+          </div>
+        )}
+
+        {selectedProvider === "claude-code" && (
+          <div className="space-y-1">
+            <div className="space-y-1">
+              <Label className="text-xs">claude account</Label>
+              <ClaudeCodeSignInButton />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="model" className="text-xs">model</Label>
+              <Select
+                value={formData.model}
+                onValueChange={(value) => setFormData({ ...formData, model: value })}
+              >
+                <SelectTrigger className="h-8 text-sm">
+                  <SelectValue placeholder="select model" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="claude-opus-4-6-20250828">claude opus 4.6</SelectItem>
+                  <SelectItem value="claude-sonnet-4-5-20250514">claude sonnet 4.5</SelectItem>
+                  <SelectItem value="claude-haiku-4-5-20251001">claude haiku 4.5</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </div>
         )}

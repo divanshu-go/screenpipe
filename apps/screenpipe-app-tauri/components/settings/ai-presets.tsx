@@ -110,7 +110,7 @@ const INITIAL_DIAGNOSTICS: DiagnosticResults = {
 };
 
 export interface AIProviderCardProps {
-  type: "openai" | "openai-chatgpt" | "native-ollama" | "anthropic" | "custom" | "embedded" | "pi";
+  type: "openai" | "openai-chatgpt" | "claude-code" | "native-ollama" | "anthropic" | "custom" | "embedded" | "pi";
   title: string;
   description: string;
   imageSrc: string;
@@ -210,6 +210,8 @@ const AISection = ({
   const diagnosticsAbortRef = useRef<AbortController | null>(null);
   const [chatgptLoggedIn, setChatgptLoggedIn] = useState(false);
   const [chatgptLoading, setChatgptLoading] = useState(false);
+  const [claudeCodeLoggedIn, setClaudeCodeLoggedIn] = useState(false);
+  const [claudeCodeLoading, setClaudeCodeLoading] = useState(false);
 
   // Filter presets the same way the UI does so hidden presets don't block creation
   const visiblePresets = useMemo(
@@ -268,6 +270,17 @@ const AISection = ({
       commands.chatgptOauthStatus().then((res) => {
         if (res.status === "ok") {
           setChatgptLoggedIn(res.data.logged_in);
+        }
+      });
+    }
+  }, [settingsPreset?.provider]);
+
+  // Check Claude Code OAuth status when provider is selected
+  useEffect(() => {
+    if (settingsPreset?.provider === "claude-code") {
+      commands.claudeOauthStatus().then((res) => {
+        if (res.status === "ok") {
+          setClaudeCodeLoggedIn(res.data.logged_in);
         }
       });
     }
@@ -454,6 +467,10 @@ const AISection = ({
         newUrl = "https://api.openai.com/v1";
         newModel = "gpt-5.4";
         break;
+      case "claude-code":
+        newUrl = "";
+        newModel = "claude-sonnet-4-5-20250514";
+        break;
       case "anthropic":
         newUrl = "https://api.anthropic.com";
         newModel = "claude-sonnet-4-5-20250514";
@@ -476,6 +493,7 @@ const AISection = ({
 
   const runDiagnostics = useCallback(async () => {
     if (settingsPreset?.provider === "pi") return;
+    if (settingsPreset?.provider === "claude-code") return;
 
     // Abort any previous run
     diagnosticsAbortRef.current?.abort();
@@ -753,6 +771,7 @@ const AISection = ({
 
   const isApiKeyRequired =
     settingsPreset?.provider !== "openai-chatgpt" &&
+    settingsPreset?.provider !== "claude-code" &&
     settingsPreset?.url !== "https://api.screenpi.pe/v1" &&
     settingsPreset?.url !== "http://localhost:11434/v1" &&
     settingsPreset?.url !== "embedded";
@@ -864,6 +883,16 @@ const AISection = ({
               { id: "claude-haiku-4-5-20251001", name: "Claude Haiku 4.5", provider: "anthropic" },
             ]);
           }
+          break;
+        }
+
+        case "claude-code": {
+          // Hardcoded model list — Claude Pro/Max subscription models
+          setModels([
+            { id: "claude-opus-4-6-20250828", name: "Claude Opus 4.6", provider: "claude-code" },
+            { id: "claude-sonnet-4-5-20250514", name: "Claude Sonnet 4.5", provider: "claude-code" },
+            { id: "claude-haiku-4-5-20251001", name: "Claude Haiku 4.5", provider: "claude-code" },
+          ]);
           break;
         }
 
@@ -990,6 +1019,7 @@ const AISection = ({
   // Auto-trigger diagnostics when provider + url + apiKey are set (debounced)
   useEffect(() => {
     if (settingsPreset?.provider === "pi") return;
+    if (settingsPreset?.provider === "claude-code") return;
     if (!settingsPreset?.provider) return;
 
     const needsApiKey =
@@ -1049,6 +1079,15 @@ const AISection = ({
             imageSrc="/images/anthropic.png"
             selected={settingsPreset?.provider === "anthropic"}
             onClick={() => handleAiProviderChange("anthropic")}
+          />
+
+          <AIProviderCard
+            type="claude-code"
+            title="Claude Code"
+            description="Use your Claude Pro or Max subscription. No API key needed."
+            imageSrc="/images/claude-code.png"
+            selected={settingsPreset?.provider === "claude-code"}
+            onClick={() => handleAiProviderChange("claude-code")}
           />
 
           <AIProviderCard
@@ -1158,6 +1197,58 @@ const AISection = ({
             </div>
           </div>
         )}
+
+      {settingsPreset?.provider === "claude-code" && (
+        <div className="w-full">
+          <div className="flex flex-col gap-4 mb-4 w-full">
+            <Label className="flex items-center gap-1">
+              Claude Account
+            </Label>
+            <div className="flex items-center gap-3">
+              <Button
+                type="button"
+                variant={claudeCodeLoggedIn ? "outline" : "default"}
+                className="transition-none"
+                disabled={claudeCodeLoading}
+                onClick={async () => {
+                  if (claudeCodeLoggedIn) {
+                    setClaudeCodeLoading(true);
+                    await commands.claudeOauthLogout();
+                    setClaudeCodeLoggedIn(false);
+                    setClaudeCodeLoading(false);
+                  } else {
+                    setClaudeCodeLoading(true);
+                    try {
+                      const res = await commands.claudeOauthLogin();
+                      if (res.status === "ok" && res.data) {
+                        setClaudeCodeLoggedIn(true);
+                      }
+                    } catch (e) {
+                      console.error("claude oauth failed:", e);
+                    }
+                    setClaudeCodeLoading(false);
+                  }
+                }}
+              >
+                {claudeCodeLoading ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : claudeCodeLoggedIn ? (
+                  <CheckCircle2 className="h-4 w-4 mr-2" />
+                ) : null}
+                {claudeCodeLoggedIn ? "Sign out" : "Sign in with Claude"}
+              </Button>
+              {claudeCodeLoggedIn && (
+                <span className="text-sm text-muted-foreground">Signed in</span>
+              )}
+            </div>
+            {!claudeCodeLoggedIn && (
+              <p className="text-xs text-muted-foreground">
+                Opens your browser to sign in at claude.ai. Requires Claude Pro or Max.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
 
       {settingsPreset?.provider === "openai-chatgpt" && (
         <div className="w-full">
