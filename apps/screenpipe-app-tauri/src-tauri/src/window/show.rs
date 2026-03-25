@@ -178,6 +178,16 @@ impl ShowRewindWindow {
             builder = builder.decorations(true);
         }
 
+        // Apply theme from settings
+        if let Ok(Some(settings)) = SettingsStore::get(app) {
+            let tauri_theme = match settings.ui_theme.as_str() {
+                "light" => Some(tauri::Theme::Light),
+                "dark" => Some(tauri::Theme::Dark),
+                _ => None, // "system" or others
+            };
+            builder = builder.theme(tauri_theme);
+        }
+
         builder
     }
 
@@ -1230,6 +1240,7 @@ impl ShowRewindWindow {
                     .background_color(Color(0, 0, 0, 1))
                     .effects(tauri::utils::config::WindowEffectsConfig {
                         effects: vec![tauri::window::Effect::Menu],
+                        state: Some(tauri::window::EffectState::Active),
                         ..Default::default()
                     });
                 let window = builder.build()?;
