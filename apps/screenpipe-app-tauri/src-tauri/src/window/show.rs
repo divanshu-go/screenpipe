@@ -1230,19 +1230,20 @@ impl ShowRewindWindow {
                 };
 
                 let builder = self.window_builder(app, &url).focused(true);
-                // Always transparent on macOS — CSS controls whether vibrancy is visible
                 #[cfg(target_os = "macos")]
-                use tauri::window::Color;
-                use tauri::TitleBarStyle;
-                let builder = builder
-                    .title_bar_style(TitleBarStyle::Overlay)
-                    .hidden_title(true)
-                    .background_color(Color(0, 0, 0, 1))
-                    .effects(tauri::utils::config::WindowEffectsConfig {
-                        effects: vec![tauri::window::Effect::Menu],
-                        state: Some(tauri::window::EffectState::Active),
-                        ..Default::default()
-                    });
+                let builder = {
+                    use tauri::window::Color;
+                    use tauri::TitleBarStyle;
+                    builder
+                        .title_bar_style(TitleBarStyle::Overlay)
+                        .hidden_title(true)
+                        .background_color(Color(0, 0, 0, 1))
+                        .effects(tauri::utils::config::WindowEffectsConfig {
+                            effects: vec![tauri::window::Effect::Menu],
+                            state: Some(tauri::window::EffectState::Active),
+                            ..Default::default()
+                        })
+                };
                 let window = builder.build()?;
 
                 // Disable WKWebView's native scroll so wheel events reach JavaScript
