@@ -40,6 +40,7 @@ onnxruntime-win-x64*/
 
 # JavaScript stuff
 node_modules/
+apps/screenpipe-app-tauri/e2e/.cache/
 
 
 cn 

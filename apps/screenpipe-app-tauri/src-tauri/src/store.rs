@@ -5,7 +5,31 @@ use specta::Type;
 use std::sync::{Arc, OnceLock};
 use tauri::AppHandle;
 use tauri_plugin_store::StoreBuilder;
-use tracing::error;
+use tracing::{error, warn};
+
+const SCREENPIPE_AUDIO_ENGINE: &str = "SCREENPIPE_AUDIO_ENGINE";
+
+const KNOWN_ENGINES: &[&str] = &[
+    "deepgram", "screenpipe-cloud", "disabled", "openai-compatible", "qwen3-asr",
+    "whisper-tiny", "whisper-tiny-quantized",
+    "whisper-large", "whisper-large-quantized",
+    "whisper-large-v3", "whisper-large-v3-quantized",
+    "whisper-large-v3-turbo", "whisper-large-v3-turbo-quantized",
+    "parakeet", "parakeet-mlx",
+];
+
+fn audio_engine_env_override() -> Option<String> {
+    let raw = std::env::var(SCREENPIPE_AUDIO_ENGINE).ok()?;
+    let v = raw.trim().to_lowercase();
+    if KNOWN_ENGINES.contains(&v.as_str()) {
+        Some(v)
+    } else {
+        if !v.is_empty() {
+            warn!("ignoring unsupported {SCREENPIPE_AUDIO_ENGINE} value: {raw}");
+        }
+        None
+    }
+}
 
 /// Cached store instance — built once, reused for the lifetime of the process.
 /// Avoids TOCTOU race in StoreBuilder::build() when called multiple times during
@@ -769,6 +793,18 @@ pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
             );
             store.recording.audio_transcription_engine = safe.to_string();
             should_save = true;
+        }
+
+        if let Some(override_engine) = audio_engine_env_override() {
+            if override_engine != store.recording.audio_transcription_engine {
+                warn!(
+                    "E2E engine override: {} -> {}",
+                    store.recording.audio_transcription_engine,
+                    override_engine
+                );
+                store.recording.audio_transcription_engine = override_engine;
+                should_save = true;
+            }
         }
     }
 

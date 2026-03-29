@@ -645,6 +645,7 @@ export function AudioTranscript({
 				pointerEvents: "auto",
 			}}
 			className="audio-transcript-panel bg-popover border border-border rounded-2xl shadow-2xl z-[100] overflow-hidden"
+			data-testid="timeline-audio-transcript"
 		>
 			{/* Header */}
 			<div
@@ -727,7 +728,13 @@ export function AudioTranscript({
 						</DropdownMenu>
 						<Tooltip>
 							<TooltipTrigger asChild>
-								<Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={handleClose}>
+								<Button
+									variant="ghost"
+									size="sm"
+									className="h-6 w-6 p-0"
+									onClick={handleClose}
+									data-testid="timeline-audio-transcript-close"
+								>
 									<X className="h-3 w-3" />
 								</Button>
 							</TooltipTrigger>

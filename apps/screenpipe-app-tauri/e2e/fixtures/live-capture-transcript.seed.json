@@ -1,0 +1,20 @@
+{
+  "name": "live-capture-transcript",
+  "media": [
+    {
+      "id": "SCREEN_AUDIO_PATH",
+      "filename": "simple-en-wikipedia.oga",
+      "sourceUrl": "https://upload.wikimedia.org/wikipedia/commons/7/7f/Simple_en_Wikipedia.oga",
+      "notes": "Played through the browser so the live audio pipeline captures and transcribes it."
+    }
+  ],
+  "expectations": {
+    "transcriptContains": [
+      "wikipedia",
+      "simple",
+      "english",
+      "languages",
+      "encyclopedia"
+    ]
+  }
+}

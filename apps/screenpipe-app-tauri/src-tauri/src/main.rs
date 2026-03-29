@@ -1204,7 +1204,8 @@ async fn main() {
                     }
                     // Determine which whisper model the user's config needs
                     let engine = match store_for_download.recording.audio_transcription_engine.as_str() {
-                        "deepgram" | "screenpipe-cloud" => None, // Cloud engines don't need local model
+                        "deepgram" | "screenpipe-cloud" | "qwen3-asr" | "openai-compatible"
+                        | "disabled" | "parakeet" | "parakeet-mlx" => None,
                         _ => {
                             use screenpipe_audio::core::engine::AudioTranscriptionEngine;
                             Some(std::sync::Arc::new(match store_for_download.recording.audio_transcription_engine.as_str() {

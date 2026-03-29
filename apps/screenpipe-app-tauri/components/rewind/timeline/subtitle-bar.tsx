@@ -158,6 +158,7 @@ export function SubtitleBar({ frames, currentIndex, isPlaying, onClick, transcri
 
 	return (
 		<div
+			data-testid="timeline-subtitle-bar"
 			className="transition-all duration-300 opacity-100 cursor-pointer group max-w-2xl mx-auto"
 			onClick={onClick}
 			onMouseEnter={() => setIsHovered(true)}

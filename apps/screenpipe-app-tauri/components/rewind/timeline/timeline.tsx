@@ -948,7 +948,7 @@ export const TimelineSlider = ({
 	}, [frameWidth, frameMargin]);
 
 	return (
-		<div className="relative w-full" dir="rtl">
+		<div className="relative w-full" dir="rtl" data-testid="timeline-slider">
 			{/* Filter icon column + inline expand (design E) */}
 			<div
 				ref={(el) => { if (filtersRef) filtersRef.current = el; }}

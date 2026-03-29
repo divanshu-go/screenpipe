@@ -1221,7 +1221,10 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 				})()}
 
 				{/* Subtitle bar — below nav bar, always visible when audio exists nearby */}
-				<div className={`absolute ${embedded ? "top-16" : "top-[calc(env(safe-area-inset-top)+96px)]"} left-4 right-4 z-[35]`}>
+				<div
+					className={`absolute ${embedded ? "top-16" : "top-[calc(env(safe-area-inset-top)+96px)]"} left-4 right-4 z-[35]`}
+					data-testid="timeline-subtitle-container"
+				>
 					<SubtitleBar
 						frames={frames}
 						currentIndex={currentIndex}
@@ -1234,7 +1237,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 
 				{/* Loading/Error States - Progressive loading: only block when no frames yet */}
 				{showBlockingLoader && (
-					<div className="absolute inset-0 z-50 flex items-center justify-center bg-background/90">
+					<div className="absolute inset-0 z-50 flex items-center justify-center bg-background/90" data-testid="timeline-loading-overlay">
 						{/* Close button - always visible to prevent being stuck (hidden in embedded mode) */}
 						{!embedded && (
 							<button
