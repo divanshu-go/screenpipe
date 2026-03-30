@@ -97,7 +97,7 @@ pub async fn get_or_download_model(model_type: PyannoteModel) -> Result<PathBuf>
                     "{} model download attempt {}/{}",
                     model_name, attempt, MAX_RETRIES
                 );
-                match download_model(model_type_clone).await {
+                match download_model(&model_type_clone).await {
                     Ok(_) => {
                         last_err = None;
                         break;
