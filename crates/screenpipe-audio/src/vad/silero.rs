@@ -76,7 +76,9 @@ impl SileroVad {
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .is_ok()
         {
-            return Err(anyhow::anyhow!("silero vad model download already in progress"));
+            return Err(anyhow::anyhow!(
+                "silero vad model download already in progress"
+            ));
         }
 
         tokio::spawn(async move {
@@ -89,7 +91,6 @@ impl SileroVad {
         Err(anyhow::anyhow!(
             "silero vad model not available yet; download started in background"
         ))
-
     }
 
     async fn download_model() -> anyhow::Result<()> {

@@ -413,13 +413,7 @@ pub async fn reconcile_untranscribed(
     }
 
     if let Some(segmentation_manager) = segmentation_manager {
-        let backfilled = backfill_missing_speakers(
-            db,
-            segmentation_manager.clone(),
-            24,
-            50,
-        )
-        .await;
+        let backfilled = backfill_missing_speakers(db, segmentation_manager.clone(), 24, 50).await;
         if backfilled > 0 {
             success_count += backfilled;
             info!(
@@ -1053,9 +1047,9 @@ mod tests {
             .await
             .unwrap();
         let segmentation_manager = Arc::new(SegmentationManager {
-            embedding_manager: Arc::new(StdMutex::new(crate::speaker::embedding_manager::EmbeddingManager::new(
-                usize::MAX,
-            ))),
+            embedding_manager: Arc::new(StdMutex::new(
+                crate::speaker::embedding_manager::EmbeddingManager::new(usize::MAX),
+            )),
             embedding_extractor: tokio::sync::Mutex::new(None),
             embedding_model_path: tokio::sync::Mutex::new(None),
             segmentation_model_path: tokio::sync::Mutex::new(None),

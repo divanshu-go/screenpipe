@@ -166,7 +166,10 @@ mod tests {
         let speaker_embedding = vec![0.0_f32; 512];
         let speaker = db.insert_speaker(&speaker_embedding).await.unwrap();
 
-        let chunk_with_speaker = db.insert_audio_chunk("with_speaker.mp4", None).await.unwrap();
+        let chunk_with_speaker = db
+            .insert_audio_chunk("with_speaker.mp4", None)
+            .await
+            .unwrap();
         db.insert_audio_transcription(
             chunk_with_speaker,
             "has speaker",
@@ -181,7 +184,10 @@ mod tests {
         .await
         .unwrap();
 
-        let chunk_without_speaker = db.insert_audio_chunk("without_speaker.mp4", None).await.unwrap();
+        let chunk_without_speaker = db
+            .insert_audio_chunk("without_speaker.mp4", None)
+            .await
+            .unwrap();
         db.insert_audio_transcription(
             chunk_without_speaker,
             "no speaker",

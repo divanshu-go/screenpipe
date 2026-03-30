@@ -824,19 +824,23 @@ impl AudioManager {
         let mut changed = false;
 
         // Re-initialize whisper transcription when the model becomes available.
-        let should_try_transcription_refresh = matches!(
-            audio_transcription_engine.as_ref(),
-            AudioTranscriptionEngine::WhisperTiny
-                | AudioTranscriptionEngine::WhisperTinyQuantized
-                | AudioTranscriptionEngine::WhisperLargeV3Turbo
-                | AudioTranscriptionEngine::WhisperLargeV3TurboQuantized
-                | AudioTranscriptionEngine::WhisperLargeV3
-                | AudioTranscriptionEngine::WhisperLargeV3Quantized
-        ) && get_cached_whisper_model_path(audio_transcription_engine.as_ref()).is_some();
+        let should_try_transcription_refresh =
+            matches!(
+                audio_transcription_engine.as_ref(),
+                AudioTranscriptionEngine::WhisperTiny
+                    | AudioTranscriptionEngine::WhisperTinyQuantized
+                    | AudioTranscriptionEngine::WhisperLargeV3Turbo
+                    | AudioTranscriptionEngine::WhisperLargeV3TurboQuantized
+                    | AudioTranscriptionEngine::WhisperLargeV3
+                    | AudioTranscriptionEngine::WhisperLargeV3Quantized
+            ) && get_cached_whisper_model_path(audio_transcription_engine.as_ref()).is_some();
 
         if should_try_transcription_refresh {
             let mut engine = self.engine.write().await;
-            if engine.as_ref().is_some_and(|e| e.config() == AudioTranscriptionEngine::Disabled) {
+            if engine
+                .as_ref()
+                .is_some_and(|e| e.config() == AudioTranscriptionEngine::Disabled)
+            {
                 match TranscriptionEngine::new(
                     audio_transcription_engine.clone(),
                     deepgram_api_key.clone(),
@@ -873,7 +877,10 @@ impl AudioManager {
 
             if should_try_audiopipe_refresh {
                 let mut engine = self.engine.write().await;
-                if engine.as_ref().is_some_and(|e| e.config() == AudioTranscriptionEngine::Disabled) {
+                if engine
+                    .as_ref()
+                    .is_some_and(|e| e.config() == AudioTranscriptionEngine::Disabled)
+                {
                     match TranscriptionEngine::new(
                         audio_transcription_engine.clone(),
                         deepgram_api_key.clone(),
@@ -890,10 +897,7 @@ impl AudioManager {
                             }
                         }
                         Err(e) => {
-                            debug!(
-                                "audiopipe transcription refresh still unavailable: {}",
-                                e
-                            );
+                            debug!("audiopipe transcription refresh still unavailable: {}", e);
                         }
                     }
                 }
@@ -936,7 +940,9 @@ impl AudioManager {
                 Ok(handle) => {
                     *transcription_guard = Some(handle);
                     result.transcription_restarted = true;
-                    info!("central transcription-receiver handler restarted for capability refresh");
+                    info!(
+                        "central transcription-receiver handler restarted for capability refresh"
+                    );
                 }
                 Err(e) => {
                     error!("failed to restart transcription-receiver handler: {}", e);

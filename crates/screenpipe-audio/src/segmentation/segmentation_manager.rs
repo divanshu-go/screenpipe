@@ -34,7 +34,8 @@ impl SegmentationManager {
             }
         };
 
-        let segmentation_model_path = match get_or_download_model(PyannoteModel::Segmentation).await {
+        let segmentation_model_path = match get_or_download_model(PyannoteModel::Segmentation).await
+        {
             Ok(path) => Some(path),
             Err(e) => {
                 warn!("segmentation model unavailable at startup: {e}");

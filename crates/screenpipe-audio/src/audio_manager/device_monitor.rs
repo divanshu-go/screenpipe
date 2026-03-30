@@ -635,7 +635,8 @@ pub async fn start_device_monitor(
                     let window = Duration::from_secs(300);
                     central_restart_times.retain(|t| now.duration_since(*t) < window);
                     if central_restart_times.len() < 3 {
-                        central_restart_exhausted.store(false, std::sync::atomic::Ordering::Relaxed);
+                        central_restart_exhausted
+                            .store(false, std::sync::atomic::Ordering::Relaxed);
                     }
                 }
 
@@ -683,7 +684,8 @@ pub async fn start_device_monitor(
                                     // detection.
                                     central_restart_times.push(now);
                                     let window = Duration::from_secs(300);
-                                    central_restart_times.retain(|t| now.duration_since(*t) < window);
+                                    central_restart_times
+                                        .retain(|t| now.duration_since(*t) < window);
                                     if central_restart_times.len() >= 3 {
                                         error!(
                                             "central handlers restarted {} times (including same-cycle capability update) in 5 min — stopping recovery to avoid restart storm",
@@ -710,7 +712,8 @@ pub async fn start_device_monitor(
                                     let now = Instant::now();
                                     central_restart_times.push(now);
                                     let window = Duration::from_secs(300);
-                                    central_restart_times.retain(|t| now.duration_since(*t) < window);
+                                    central_restart_times
+                                        .retain(|t| now.duration_since(*t) < window);
                                     if central_restart_times.len() >= 3 {
                                         error!(
                                             "central handlers restarted {} times in 5 min (including model refresh path) — stopping recovery to avoid restart storm",
@@ -733,9 +736,7 @@ pub async fn start_device_monitor(
                                 "model capabilities changed, but central handler restart is temporarily suspended"
                             );
                         }
-                        let _ = audio_manager
-                            .reconcile_missing_speakers(24, 50)
-                            .await;
+                        let _ = audio_manager.reconcile_missing_speakers(24, 50).await;
                     }
                 }
 

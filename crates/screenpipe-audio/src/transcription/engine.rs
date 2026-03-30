@@ -247,9 +247,16 @@ impl TranscriptionEngine {
                             })
                             .await
                             {
-                                Ok(Ok(path)) => info!("whisper model downloaded in background: {:?}", path),
-                                Ok(Err(error)) => warn!("whisper background download failed: {}", error),
-                                Err(join_error) => warn!("whisper background download task panicked: {}", join_error),
+                                Ok(Ok(path)) => {
+                                    info!("whisper model downloaded in background: {:?}", path)
+                                }
+                                Ok(Err(error)) => {
+                                    warn!("whisper background download failed: {}", error)
+                                }
+                                Err(join_error) => warn!(
+                                    "whisper background download task panicked: {}",
+                                    join_error
+                                ),
                             }
                         });
                         return Ok(Self::Disabled);
