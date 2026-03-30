@@ -90,6 +90,8 @@ export class TestRecorder {
           'gdigrab',
           '-framerate',
           '30',
+          '-thread_queue_size',
+          '1024',
           '-i',
           'desktop',
           '-loglevel',
@@ -97,8 +99,6 @@ export class TestRecorder {
           '-y',
           '-pix_fmt',
           'yuv420p',
-          '-thread_queue_size',
-          '1024',
           parsedPath,
         ]
       : [
@@ -106,6 +106,8 @@ export class TestRecorder {
           'x11grab',
           '-video_size',
           '1920x1080',
+          '-thread_queue_size',
+          '1024',
           '-i',
           process.env.DISPLAY || ':0.0',
           '-loglevel',
@@ -113,8 +115,6 @@ export class TestRecorder {
           '-y',
           '-pix_fmt',
           'yuv420p',
-          '-thread_queue_size',
-          '1024',
           parsedPath,
         ];
 
