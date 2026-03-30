@@ -79,33 +79,50 @@ pub async fn get_or_download_model(model_type: PyannoteModel) -> Result<PathBuf>
         return Ok(path);
     }
 
-    // Download with retries — use atomic flag to prevent concurrent downloads
-    if downloading_flag
+    // Download with retries — use atomic flag to prevent concurrent downloads.
+    // Starter returns immediately (non-blocking); concurrent callers wait for the file.
+    let started_download = downloading_flag
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .is_ok()
-    {
-        const MAX_RETRIES: u32 = 3;
-        let mut last_err = None;
-        for attempt in 1..=MAX_RETRIES {
-            info!("{} model download attempt {}/{}", filename, attempt, MAX_RETRIES);
-            match download_model(&model_type).await {
-                Ok(_) => {
-                    last_err = None;
-                    break;
-                }
-                Err(e) => {
-                    warn!("{} model download attempt {} failed: {}", filename, attempt, e);
-                    last_err = Some(e);
-                    if attempt < MAX_RETRIES {
-                        tokio::time::sleep(tokio::time::Duration::from_secs(2u64.pow(attempt))).await;
+        .is_ok();
+    if started_download {
+        info!("initiating {} model download...", filename);
+        let model_type_clone = model_type;
+        let model_name = filename.to_string();
+        let flag = downloading_flag;
+        tokio::spawn(async move {
+            const MAX_RETRIES: u32 = 3;
+            let mut last_err = None;
+            for attempt in 1..=MAX_RETRIES {
+                info!(
+                    "{} model download attempt {}/{}",
+                    model_name, attempt, MAX_RETRIES
+                );
+                match download_model(model_type_clone).await {
+                    Ok(_) => {
+                        last_err = None;
+                        break;
+                    }
+                    Err(e) => {
+                        warn!(
+                            "{} model download attempt {} failed: {}",
+                            model_name, attempt, e
+                        );
+                        last_err = Some(e);
+                        if attempt < MAX_RETRIES {
+                            tokio::time::sleep(tokio::time::Duration::from_secs(2u64.pow(attempt)))
+                                .await;
+                        }
                     }
                 }
             }
-        }
-        downloading_flag.store(false, Ordering::SeqCst);
-        if let Some(e) = last_err {
-            return Err(anyhow::anyhow!("{} model download failed after {} retries: {}", filename, MAX_RETRIES, e));
-        }
+            if let Some(e) = last_err {
+                warn!(
+                    "{} model download failed after {} retries: {}",
+                    model_name, MAX_RETRIES, e
+                );
+            }
+            flag.store(false, Ordering::SeqCst);
+        });
     } else {
         // Another task is downloading — wait for the file to appear
         let timeout = tokio::time::Duration::from_secs(120);
@@ -120,17 +137,26 @@ pub async fn get_or_download_model(model_type: PyannoteModel) -> Result<PathBuf>
             }
             tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
         }
+
+        if !path.exists() {
+            return Err(anyhow::anyhow!(
+                "{} model file missing after download",
+                filename
+            ));
+        }
+
+        let mut cached = model_path_lock.lock().await;
+        *cached = Some(path.clone());
+        return Ok(path);
     }
 
-    if !path.exists() {
-        return Err(anyhow::anyhow!("{} model file missing after download", filename));
-    }
-
-    let mut cached = model_path_lock.lock().await;
-    *cached = Some(path.clone());
-    Ok(path)
+    Err(anyhow::anyhow!(
+        "{} model not available yet; download started in background",
+        filename
+    ))
 }
 
+#[derive(Clone, Copy)]
 pub enum PyannoteModel {
     Segmentation,
     Embedding,
@@ -159,7 +185,10 @@ async fn download_model(model_type: &PyannoteModel) -> Result<()> {
     }
     let model_data = response.bytes().await?;
     if model_data.is_empty() {
-        return Err(anyhow::anyhow!("download returned empty body for {}", filename));
+        return Err(anyhow::anyhow!(
+            "download returned empty body for {}",
+            filename
+        ));
     }
 
     let cache_dir = get_cache_dir()?;
