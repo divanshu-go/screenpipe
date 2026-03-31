@@ -30,7 +30,6 @@
 //!   That's it — all Tauri commands and frontend rendering are automatic.
 
 use anyhow::Result;
-use base64::{engine::general_purpose::STANDARD, Engine as _};
 use once_cell::sync::Lazy;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -56,19 +55,19 @@ pub static PENDING_OAUTH: Lazy<Mutex<HashMap<String, oneshot::Sender<String>>>> 
 // Config
 // ---------------------------------------------------------------------------
 
-/// OAuth 2.0 authorization_code flow configuration (client_secret variant).
+/// OAuth 2.0 authorization_code flow configuration.
+///
+/// Secrets (`client_secret`) are **never** stored in the binary.  The token
+/// exchange is proxied through `https://screenpi.pe/api/oauth/exchange` which
+/// holds the secrets server-side.
 pub struct OAuthConfig {
     /// Browser authorization URL.
     pub auth_url: &'static str,
-    /// Token exchange endpoint.
-    pub token_url: &'static str,
+    /// Public client ID (safe to ship in the binary).
     pub client_id: &'static str,
-    pub client_secret: &'static str,
     /// Extra query params appended to the authorization URL verbatim.
     /// e.g. `&[("owner", "user")]` for Notion.
     pub extra_auth_params: &'static [(&'static str, &'static str)],
-    /// Token refresh endpoint.  `None` means tokens don't expire (e.g. Notion).
-    pub token_refresh_url: Option<&'static str>,
 }
 
 // ---------------------------------------------------------------------------
@@ -130,31 +129,24 @@ pub fn delete_oauth_token(integration_id: &str) -> Result<()> {
 // Token refresh
 // ---------------------------------------------------------------------------
 
-/// Attempt a token refresh using the stored `refresh_token`.
+/// Attempt a token refresh via the backend proxy.
 /// Writes the new token to disk on success, returns the new `access_token`.
 pub async fn refresh_token(
     client: &reqwest::Client,
-    config: &OAuthConfig,
     integration_id: &str,
 ) -> Result<String> {
-    let refresh_url = config
-        .token_refresh_url
-        .ok_or_else(|| anyhow::anyhow!("this integration does not support token refresh"))?;
-
     let content = std::fs::read_to_string(oauth_token_path(integration_id))?;
     let stored: Value = serde_json::from_str(&content)?;
-    let refresh_token = stored["refresh_token"]
+    let refresh_tok = stored["refresh_token"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("no refresh_token stored for {}", integration_id))?;
 
-    let credentials = STANDARD.encode(format!("{}:{}", config.client_id, config.client_secret));
     let resp: Value = client
-        .post(refresh_url)
-        .header("Authorization", format!("Basic {}", credentials))
-        .header("Content-Type", "application/json")
+        .post(EXCHANGE_PROXY_URL)
         .json(&serde_json::json!({
+            "integration_id": integration_id,
             "grant_type": "refresh_token",
-            "refresh_token": refresh_token,
+            "refresh_token": refresh_tok,
         }))
         .send()
         .await?
@@ -170,44 +162,42 @@ pub async fn refresh_token(
         .ok_or_else(|| anyhow::anyhow!("no access_token in refresh response"))
 }
 
-/// Read a valid token, refreshing automatically if expired and a refresh URL
-/// is configured.  Returns `None` only if disconnected with no way to recover.
+/// Read a valid token, refreshing automatically if expired.
+/// Returns `None` only if disconnected with no way to recover.
 pub async fn get_valid_token(
     client: &reqwest::Client,
-    config: &OAuthConfig,
     integration_id: &str,
 ) -> Option<String> {
     if let Some(token) = read_oauth_token(integration_id) {
         return Some(token);
     }
     // Token missing or expired — try refresh
-    refresh_token(client, config, integration_id)
+    refresh_token(client, integration_id)
         .await
         .ok()
 }
 
 // ---------------------------------------------------------------------------
-// Token exchange
+// Token exchange (via backend proxy — secrets stay server-side)
 // ---------------------------------------------------------------------------
 
-/// Exchange an authorization `code` for tokens using HTTP Basic auth.
-/// Returns the raw provider response.  The caller should pass the result
-/// to `write_oauth_token`.
+const EXCHANGE_PROXY_URL: &str = "https://screenpi.pe/api/oauth/exchange";
+
+/// Exchange an authorization `code` for tokens via the screenpipe backend
+/// proxy at `screenpi.pe`.  The backend holds `client_secret` — the desktop
+/// app never sees it.
 pub async fn exchange_code(
     client: &reqwest::Client,
-    config: &OAuthConfig,
+    integration_id: &str,
     code: &str,
     redirect_uri: &str,
 ) -> Result<Value> {
-    let credentials = STANDARD.encode(format!("{}:{}", config.client_id, config.client_secret));
     let resp = client
-        .post(config.token_url)
-        .header("Authorization", format!("Basic {}", credentials))
-        .header("Content-Type", "application/json")
+        .post(EXCHANGE_PROXY_URL)
         .json(&serde_json::json!({
-            "grant_type": "authorization_code",
-            "code":        code,
-            "redirect_uri": redirect_uri,
+            "integration_id": integration_id,
+            "code":           code,
+            "redirect_uri":   redirect_uri,
         }))
         .send()
         .await?

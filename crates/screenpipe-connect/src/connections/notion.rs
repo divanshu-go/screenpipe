@@ -8,16 +8,10 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use serde_json::{Map, Value};
 
-const NOTION_CLIENT_ID: &str = "REPLACE_WITH_NOTION_CLIENT_ID";
-const NOTION_CLIENT_SECRET: &str = "REPLACE_WITH_NOTION_CLIENT_SECRET";
-
 static OAUTH: OAuthConfig = OAuthConfig {
     auth_url: "https://api.notion.com/v1/oauth/authorize",
-    token_url: "https://api.notion.com/v1/oauth/token",
-    client_id: NOTION_CLIENT_ID,
-    client_secret: NOTION_CLIENT_SECRET,
+    client_id: "334d872b-594c-81f9-9dce-00371097ac7d",
     extra_auth_params: &[("owner", "user")],
-    token_refresh_url: None,
 };
 
 static DEF: IntegrationDef = IntegrationDef {

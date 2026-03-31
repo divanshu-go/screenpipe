@@ -97,7 +97,7 @@ pub async fn oauth_connect(
         .build()
         .map_err(|e| format!("http client: {}", e))?;
 
-    let token_data = oauth::exchange_code(&client, config, &code, OAUTH_REDIRECT_URI)
+    let token_data = oauth::exchange_code(&client, &integration_id, &code, OAUTH_REDIRECT_URI)
         .await
         .map_err(|e| {
             error!("token exchange failed for {}: {}", integration_id, e);
