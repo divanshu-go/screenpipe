@@ -160,17 +160,22 @@ export function MemoriesSection() {
         const data: MemoryListResponse = await res.json();
         const sorted = sortMemories(data.data);
 
-        // collect all unique tags
+        // collect all unique tags, filtering out ISO timestamps and date-like strings
+        const isUsefulTag = (t: string) =>
+          t.length > 0 &&
+          !/^\d{4}-\d{2}-\d{2}/.test(t) && // ISO date or timestamp
+          !/^\d+$/.test(t); // pure numbers
+
         if (offset === 0) {
           const tags = new Set<string>();
-          data.data.forEach((m) => m.tags.forEach((t) => tags.add(t)));
+          data.data.forEach((m) => m.tags.filter(isUsefulTag).forEach((t) => tags.add(t)));
           setAllTags((prev) => {
             const merged = new Set([...prev, ...tags]);
             return Array.from(merged).sort();
           });
         } else {
           data.data.forEach((m) =>
-            m.tags.forEach((t) =>
+            m.tags.filter(isUsefulTag).forEach((t) =>
               setAllTags((prev) =>
                 prev.includes(t) ? prev : [...prev, t].sort(),
               ),
@@ -461,7 +466,7 @@ export function MemoriesSection() {
                       {memory.source}
                     </Badge>
                     {memory.tags.length > 0 &&
-                      memory.tags.map((tag) => (
+                      memory.tags.filter((t) => !/^\d{4}-\d{2}-\d{2}/.test(t) && !/^\d+$/.test(t)).map((tag) => (
                         <Badge
                           key={tag}
                           variant="secondary"
