@@ -1942,9 +1942,15 @@ export function PipesSection() {
                                 } else {
                                   newSchedule = [...baseParts, "*"].join(" ");
                                 }
-                                // Save
                                 const pipeName = pipe.config.name;
-                                fetch(`http://localhost:3030/pipes/${pipeName}/config`, {
+                                setPipes((prev) =>
+                                  prev.map((p) =>
+                                    p.config.name === pipeName
+                                      ? { ...p, config: { ...p.config, schedule: newSchedule } }
+                                      : p
+                                  )
+                                );
+                                fetch(`${apiBase}/pipes/${pipeName}/config`, {
                                   method: "POST",
                                   headers: { "Content-Type": "application/json" },
                                   body: JSON.stringify({ schedule: newSchedule }),
@@ -1977,7 +1983,14 @@ export function PipesSection() {
                               }
                               const newSchedule = [...baseParts, dowStr].join(" ");
                               const pipeName = pipe.config.name;
-                              fetch(`http://localhost:3030/pipes/${pipeName}/config`, {
+                              setPipes((prev) =>
+                                prev.map((p) =>
+                                  p.config.name === pipeName
+                                    ? { ...p, config: { ...p.config, schedule: newSchedule } }
+                                    : p
+                                )
+                              );
+                              fetch(`${apiBase}/pipes/${pipeName}/config`, {
                                 method: "POST",
                                 headers: { "Content-Type": "application/json" },
                                 body: JSON.stringify({ schedule: newSchedule }),
