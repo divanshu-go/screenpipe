@@ -299,6 +299,18 @@ function SettingsPageContent() {
     }
   }, [activeSection, setActiveSection]);
 
+  // Listen for open-settings events from child components (e.g. connections strip)
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.section) {
+        openModal(detail.section as SettingsModalSection);
+      }
+    };
+    window.addEventListener("open-settings", handler);
+    return () => window.removeEventListener("open-settings", handler);
+  }, [openModal]);
+
   const renderMainSection = () => {
     if (isSectionHidden(activeSection) && activeSection !== "help") {
       return (

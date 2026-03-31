@@ -797,6 +797,40 @@ async chatgptOauthModels() : Promise<Result<string[], string>> {
 }
 },
 /**
+ * Start the OAuth flow for any integration that has `oauth_config()` set.
+ * `integration_id` must match the integration's `def().id`.
+ */
+async oauthConnect(integrationId: string) : Promise<Result<OAuthStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("oauth_connect", { integrationId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Check whether an OAuth token exists for the given integration.
+ */
+async oauthStatus(integrationId: string) : Promise<Result<OAuthStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("oauth_status", { integrationId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Remove the stored OAuth token for the given integration.
+ */
+async oauthDisconnect(integrationId: string) : Promise<Result<boolean, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("oauth_disconnect", { integrationId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Get current pipe suggestions settings.
  */
 async pipeSuggestionsGetSettings() : Promise<Result<PipeSuggestionsSettings, string>> {
@@ -994,6 +1028,7 @@ export type IcsCalendarEntry = { name: string; url: string; enabled: boolean }
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue }
 export type LogFile = { name: string; path: string; modified_at: bigint }
 export type MonitorDevice = { id: number; stableId: string; name: string; isDefault: boolean; width: number; height: number }
+export type OAuthStatus = { connected: boolean; display_name: string | null }
 export type OSPermission = "screenRecording" | "microphone" | "accessibility" | "automation"
 export type OSPermissionStatus = "notNeeded" | "empty" | "granted" | "denied"
 export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; microphone: OSPermissionStatus; accessibility: OSPermissionStatus }
