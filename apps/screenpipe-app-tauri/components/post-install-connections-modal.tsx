@@ -190,8 +190,8 @@ export function PostInstallConnectionsModal({
                         <div className="w-5 h-5 rounded-full border-2 border-muted-foreground/30" />
                       )}
                       {status?.configured && (
-                        <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-green-500 flex items-center justify-center">
-                          <Check className="h-2 w-2 text-white" />
+                        <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-foreground flex items-center justify-center">
+                          <Check className="h-2 w-2 text-background" />
                         </div>
                       )}
                     </div>
@@ -204,7 +204,7 @@ export function PostInstallConnectionsModal({
                       )}
                     </span>
                     {status?.configured ? (
-                      <span className="text-[10px] text-green-600">
+                      <span className="text-[10px] text-foreground">
                         configured
                       </span>
                     ) : (

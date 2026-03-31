@@ -704,7 +704,7 @@ function BrowserExtensionPanel({ connected, onRefresh }: { connected: boolean; o
       </div>
 
       <div className="flex items-center gap-2">
-        <div className={`w-2 h-2 rounded-full ${connected ? "bg-green-500" : "bg-muted-foreground/30"}`} />
+        <div className={`w-2 h-2 rounded-full ${connected ? "bg-foreground" : "bg-muted-foreground/30"}`} />
         <span className="text-sm">{connected ? "connected" : "not connected"}</span>
       </div>
 
