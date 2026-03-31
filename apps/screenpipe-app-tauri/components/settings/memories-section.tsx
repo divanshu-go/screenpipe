@@ -444,8 +444,8 @@ export function MemoriesSection() {
                         }
                       }}
                       disabled={savingId === memory.id}
-                      className="text-sm text-foreground w-full bg-transparent border border-foreground/20 rounded px-1.5 py-1 resize-none focus:outline-none focus:border-foreground/40"
-                      rows={Math.min(6, Math.max(2, editContent.split("\n").length))}
+                      className="text-sm text-foreground w-full bg-transparent border border-foreground/20 rounded px-1.5 py-1 resize-y focus:outline-none focus:border-foreground/40"
+                      rows={Math.min(15, Math.max(4, editContent.split("\n").length + 1))}
                     />
                   ) : (
                     <p className="text-sm text-foreground">
