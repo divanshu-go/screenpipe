@@ -332,7 +332,7 @@ export function PipeStoreView() {
       <ConnectionsStrip />
 
       {/* Tab bar */}
-      <div className="flex items-center gap-6 border-b border-border pb-0 mb-6">
+      <div className="flex items-center gap-6 border-b border-border pb-0 mb-8">
         {tabs.map(({ key, label }) => (
           <button
             key={key}
