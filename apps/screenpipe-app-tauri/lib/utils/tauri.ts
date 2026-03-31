@@ -92,9 +92,16 @@ async checkBrowsersAutomationPermission() : Promise<boolean> {
 async requestBrowsersAutomationPermission() : Promise<boolean> {
     return await TAURI_INVOKE("request_browsers_automation_permission");
 },
-async getBrowsersAutomationStatus() : Promise<{ name: string; status: string; running: boolean }[]> {
+/**
+ * Returns per-browser automation permission status for all installed Chromium browsers.
+ */
+async getBrowsersAutomationStatus() : Promise<BrowserAutomationStatus[]> {
     return await TAURI_INVOKE("get_browsers_automation_status");
 },
+/**
+ * Request automation permission for a single browser by name.
+ * Returns the new status: "granted", "denied", or "not_asked".
+ */
 async requestSingleBrowserAutomation(browserName: string) : Promise<string> {
     return await TAURI_INVOKE("request_single_browser_automation", { browserName });
 },
@@ -219,6 +226,12 @@ async saveEnterpriseLicenseKey(licenseKey: string) : Promise<Result<null, string
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+/**
+ * Called by the frontend after fetching the enterprise policy.
+ */
+async setEnterprisePolicy(hiddenSections: string[]) : Promise<void> {
+    await TAURI_INVOKE("set_enterprise_policy", { hiddenSections });
 },
 async getDiskUsage(forceRefresh: boolean | null, dataDir: string | null) : Promise<Result<JsonValue, string>> {
     try {
@@ -994,6 +1007,11 @@ async getHardwareCapability() : Promise<HardwareCapability> {
 export type AIPreset = { id: string; prompt: string; provider: AIProviderType; url?: string; model?: string; defaultPreset: boolean; apiKey: string | null; maxContextChars: number; maxTokens?: number }
 export type AIProviderType = "openai" | "openai-chatgpt" | "native-ollama" | "custom" | "screenpipe-cloud" | "pi" | "anthropic"
 export type AudioDeviceInfo = { name: string; isDefault: boolean }
+/**
+ * Per-browser automation status: "granted", "denied", or "not_asked".
+ * Also includes whether the browser is currently running.
+ */
+export type BrowserAutomationStatus = { name: string; status: string; running: boolean }
 export type BrowserLogEntry = { level: string; message: string }
 export type CacheFile = { path: string; label: string; size_bytes: bigint }
 export type CachedSuggestions = { suggestions: Suggestion[]; generatedAt: string; mode: string; aiGenerated: boolean; tags: string[] }
