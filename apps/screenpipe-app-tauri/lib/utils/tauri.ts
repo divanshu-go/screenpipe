@@ -822,7 +822,7 @@ async oauthConnect(integrationId: string) : Promise<Result<OAuthStatus, string>>
 }
 },
 /**
- * Check whether an OAuth token exists for the given integration.
+ * Check whether a valid (non-expired) OAuth token exists for the given integration.
  */
 async oauthStatus(integrationId: string) : Promise<Result<OAuthStatus, string>> {
     try {
