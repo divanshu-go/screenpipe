@@ -327,7 +327,7 @@ export function PipeStoreView() {
   ];
 
   return (
-    <div className="space-y-0">
+    <div className="space-y-4">
       {/* Connections strip */}
       <ConnectionsStrip />
 
