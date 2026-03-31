@@ -69,11 +69,16 @@ function SpeakerDetail({
 
   useEffect(() => {
     setLoadingSimilar(true);
-    fetch(`http://localhost:3030/speakers/similar?speaker_id=${speaker.id}&limit=5`)
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    fetch(`http://localhost:3030/speakers/similar?speaker_id=${speaker.id}&limit=5`, {
+      signal: controller.signal,
+    })
       .then((r) => r.json())
       .then((data) => setSimilar(Array.isArray(data) ? data : []))
       .catch(() => setSimilar([]))
-      .finally(() => setLoadingSimilar(false));
+      .finally(() => { clearTimeout(timeout); setLoadingSimilar(false); });
+    return () => { controller.abort(); clearTimeout(timeout); };
   }, [speaker.id]);
 
   const reassign = async (audioPath: string, newSpeakerName: string) => {
@@ -113,10 +118,7 @@ function SpeakerDetail({
           sounds similar — same person?
         </h4>
         {loadingSimilar && (
-          <div className="space-y-1">
-            <Skeleton className="h-8 w-full" />
-            <Skeleton className="h-8 w-full" />
-          </div>
+          <p className="text-xs text-muted-foreground">searching...</p>
         )}
         {!loadingSimilar && similar.length === 0 && (
           <p className="text-xs text-muted-foreground">no similar speakers found</p>
