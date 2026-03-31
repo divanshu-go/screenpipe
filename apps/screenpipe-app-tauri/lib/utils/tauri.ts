@@ -1145,6 +1145,10 @@ audioTranscriptionEngine: string;
  */
 transcriptionMode: string; 
 /**
+ * STT pipeline: "quality" (default) or "fast" (legacy pyannote-sliced STT).
+ */
+transcriptionPipelineMode?: string; 
+/**
  * Audio device names/IDs to capture from.
  */
 audioDevices: string[]; 

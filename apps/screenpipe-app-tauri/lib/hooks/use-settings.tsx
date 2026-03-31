@@ -114,6 +114,8 @@ export type Settings = SettingsStore & {
 	enableWorkflowEvents?: boolean;
 	/** Audio transcription scheduling: "realtime" (default) or "batch" (longer chunks for quality) */
 	transcriptionMode?: "realtime" | "smart" | "batch";
+	/** "quality" = full-chunk STT (default); "fast" = legacy pyannote-sliced STT */
+	transcriptionPipelineMode?: "quality" | "fast";
 	/** User's name for speaker identification — input device audio will be labeled with this name */
 	userName?: string;
 	/** When true, screen capture continues but OCR text extraction is skipped (saves CPU) */
@@ -332,6 +334,7 @@ let DEFAULT_SETTINGS: Settings = {
 			showOverlayInScreenRecording: false,
 			videoQuality: "balanced",
 			transcriptionMode: "batch",
+			transcriptionPipelineMode: "quality",
 			cloudArchiveEnabled: false,
 			cloudArchiveRetentionDays: 7,
 			filterMusic: false,

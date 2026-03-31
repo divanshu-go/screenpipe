@@ -5,6 +5,7 @@
 use screenpipe_audio::audio_manager::builder::TranscriptionMode;
 use screenpipe_audio::audio_manager::AudioManagerBuilder;
 use screenpipe_audio::core::engine::AudioTranscriptionEngine;
+use screenpipe_audio::TranscriptionPipelineMode;
 use screenpipe_audio::transcription::VocabularyEntry;
 use screenpipe_audio::vad::VadEngineEnum;
 use screenpipe_config::{ChannelConfig, DbConfig};
@@ -36,6 +37,9 @@ pub struct RecordingConfig {
     // Engines (typed, not strings)
     pub audio_transcription_engine: AudioTranscriptionEngine,
     pub transcription_mode: TranscriptionMode,
+
+    /// Quality (default): full-chunk STT. Fast: pyannote-sliced STT when models exist.
+    pub transcription_pipeline_mode: TranscriptionPipelineMode,
 
     // Devices & monitors
     pub audio_devices: Vec<String>,
@@ -141,6 +145,9 @@ impl RecordingConfig {
                 "smart" | "batch" => TranscriptionMode::Batch,
                 _ => TranscriptionMode::Realtime,
             },
+            transcription_pipeline_mode: TranscriptionPipelineMode::from_settings_str(
+                &settings.transcription_pipeline_mode,
+            ),
             audio_devices: settings.audio_devices.clone(),
             use_system_default_audio: settings.use_system_default_audio,
             monitor_ids: settings.monitor_ids.clone(),
@@ -228,6 +235,7 @@ impl RecordingConfig {
             .use_pii_removal(self.use_pii_removal)
             .filter_music(self.filter_music)
             .transcription_mode(self.transcription_mode.clone())
+            .transcription_pipeline_mode(self.transcription_pipeline_mode)
             .vocabulary(self.vocabulary.clone())
             .batch_max_duration_secs(self.batch_max_duration_secs)
             .channel_config(self.channel_config.clone())

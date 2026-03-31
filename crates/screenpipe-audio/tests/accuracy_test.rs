@@ -10,7 +10,7 @@ use screenpipe_audio::speaker::embedding_manager::EmbeddingManager;
 use screenpipe_audio::speaker::prepare_segments;
 use screenpipe_audio::transcription::stt::SAMPLE_RATE;
 use screenpipe_audio::vad::{silero::SileroVad, VadEngine};
-use screenpipe_audio::{resample, AudioInput, TranscriptionEngine};
+use screenpipe_audio::{resample, AudioInput, TranscriptionEngine, TranscriptionPipelineMode};
 use screenpipe_core::Language;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -124,6 +124,7 @@ async fn test_transcription_accuracy() {
                 &audio_input.device.name,
                 false,
                 false,
+                TranscriptionPipelineMode::Fast,
             )
             .await
             .unwrap();

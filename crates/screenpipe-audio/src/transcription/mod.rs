@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use crate::core::device::AudioDevice;
 
+pub mod assign_speakers;
 pub mod deepgram;
 pub mod engine;
 pub mod openai_compatible;
@@ -38,6 +39,7 @@ mod transcription_result;
 
 pub use transcription_result::get_or_create_speaker_from_embedding;
 pub use transcription_result::process_transcription_result;
+pub use transcription_result::AlignedWord;
 pub use transcription_result::TranscriptionResult;
 mod handle_new_transcript;
 pub use handle_new_transcript::{handle_new_transcript, AudioInsertCallback, AudioInsertInfo};

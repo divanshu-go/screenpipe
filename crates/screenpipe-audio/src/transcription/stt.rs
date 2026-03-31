@@ -5,10 +5,15 @@
 use crate::core::device::AudioDevice;
 use crate::core::engine::AudioTranscriptionEngine;
 use crate::metrics::AudioPipelineMetrics;
+use crate::pipeline_mode::TranscriptionPipelineMode;
 use crate::speaker::embedding::EmbeddingExtractor;
 use crate::speaker::embedding_manager::EmbeddingManager;
 use crate::speaker::prepare_segments;
 use crate::speaker::segment::SpeechSegment;
+use crate::transcription::assign_speakers::{
+    assign_token_speakers, collect_diarization_spans, dominant_embedding_for_tokens,
+    dominant_embedding_from_diarization,
+};
 use crate::transcription::deepgram::batch::transcribe_with_deepgram;
 use crate::transcription::engine::TranscriptionSession;
 use crate::transcription::openai_compatible::batch::transcribe_with_openai_compatible;
@@ -23,10 +28,20 @@ use screenpipe_core::Language;
 use std::path::PathBuf;
 use std::{sync::Arc, sync::Mutex as StdMutex};
 use tokio::sync::Mutex;
-use tracing::error;
+use tracing::{error, warn};
 use whisper_rs::WhisperState;
 
+use crate::transcription::AlignedWord;
 use crate::{AudioInput, TranscriptionResult};
+
+/// Inputs for Quality-mode post-STT diarization (WhisperX-style merge).
+#[derive(Clone)]
+pub struct QualityMergeParams {
+    pub pipeline_mode: TranscriptionPipelineMode,
+    pub segmentation_model_path: Option<PathBuf>,
+    pub embedding_manager: Arc<StdMutex<EmbeddingManager>>,
+    pub embedding_extractor: Option<Arc<StdMutex<EmbeddingExtractor>>>,
+}
 
 pub const SAMPLE_RATE: u32 = 16000;
 
@@ -276,6 +291,7 @@ pub async fn process_audio_input(
     metrics: Arc<AudioPipelineMetrics>,
     pre_written_path: Option<String>,
     filter_music: bool,
+    pipeline_mode: TranscriptionPipelineMode,
 ) -> Result<()> {
     // capture_timestamp is set when audio enters the channel. Used for both
     // file naming and DB storage so audio appears at the correct timeline position,
@@ -301,11 +317,12 @@ pub async fn process_audio_input(
         &audio_data,
         vad_engine,
         segmentation_model_path.as_ref(),
-        embedding_manager,
-        embedding_extractor,
+        embedding_manager.clone(),
+        embedding_extractor.clone(),
         &audio.device.to_string(),
         is_output_device,
         filter_music,
+        pipeline_mode,
     )
     .await?;
 
@@ -335,6 +352,13 @@ pub async fn process_audio_input(
         new_file_path
     };
 
+    let merge = QualityMergeParams {
+        pipeline_mode,
+        segmentation_model_path,
+        embedding_manager,
+        embedding_extractor,
+    };
+
     while let Some(segment) = segments.recv().await {
         let path = file_path.clone();
         let transcription_result = run_stt(
@@ -347,6 +371,7 @@ pub async fn process_audio_input(
             path,
             timestamp,
             session,
+            merge.clone(),
         )
         .await?;
 
@@ -358,17 +383,209 @@ pub async fn process_audio_input(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run_stt(
     segment: SpeechSegment,
     device: Arc<AudioDevice>,
-    _audio_transcription_engine: Arc<AudioTranscriptionEngine>,
+    audio_transcription_engine: Arc<AudioTranscriptionEngine>,
     _deepgram_api_key: Option<String>,
     _openai_compatible_config: Option<OpenAICompatibleConfig>,
     _languages: Vec<Language>,
     path: String,
     timestamp: u64,
     session: &mut TranscriptionSession,
+    merge: QualityMergeParams,
 ) -> Result<TranscriptionResult> {
+    let try_quality = merge.pipeline_mode == TranscriptionPipelineMode::Quality
+        && merge.segmentation_model_path.is_some()
+        && merge.embedding_extractor.is_some();
+
+    if try_quality && audio_transcription_engine.is_whisper_variant() {
+        if let TranscriptionSession::Whisper {
+            state,
+            languages,
+            vocabulary,
+            ..
+        } = session
+        {
+            let model_path = merge.segmentation_model_path.as_ref().unwrap().clone();
+            let extractor = merge.embedding_extractor.as_ref().unwrap().clone();
+            let emb_mgr = merge.embedding_manager.clone();
+            let samples = segment.samples.clone();
+            let sr = segment.sample_rate;
+            let start_time = segment.start;
+            let end_time = segment.end;
+
+            let whisper_result = crate::transcription::whisper::batch::process_with_whisper_with_tokens(
+                &segment.samples,
+                languages.clone(),
+                state,
+                vocabulary.as_slice(),
+            )
+            .await;
+
+            let (transcription, timed_tokens) = match whisper_result {
+                Ok(x) => x,
+                Err(e) => {
+                    error!("STT error for input {}: {:?}", device, e);
+                    return Ok(TranscriptionResult {
+                        input: AudioInput {
+                            data: Arc::new(segment.samples.clone()),
+                            sample_rate: sr,
+                            channels: 1,
+                            device: device.clone(),
+                            capture_timestamp: timestamp,
+                        },
+                        transcription: None,
+                        path,
+                        timestamp,
+                        error: Some(e.to_string()),
+                        speaker_embedding: Vec::new(),
+                        start_time,
+                        end_time,
+                        aligned_words: None,
+                    });
+                }
+            };
+
+            let spans_result = tokio::task::spawn_blocking(move || {
+                collect_diarization_spans(
+                    &samples,
+                    sr,
+                    model_path.as_path(),
+                    extractor,
+                    emb_mgr,
+                )
+            })
+            .await;
+
+            let spans = match spans_result {
+                Ok(Ok(s)) => s,
+                Ok(Err(e)) => {
+                    warn!("quality diarization failed: {}", e);
+                    Vec::new()
+                }
+                Err(e) => {
+                    warn!("quality diarization task join failed: {}", e);
+                    Vec::new()
+                }
+            };
+
+            let assigned = assign_token_speakers(timed_tokens, &spans, true);
+            let speaker_embedding = dominant_embedding_for_tokens(&assigned, &spans)
+                .or_else(|| dominant_embedding_from_diarization(&spans))
+                .unwrap_or_default();
+
+            let aligned_words: Vec<AlignedWord> = assigned
+                .into_iter()
+                .map(|w| AlignedWord {
+                    text: w.text,
+                    start_sec: w.start_sec,
+                    end_sec: w.end_sec,
+                    speaker_label: w.speaker_label,
+                })
+                .collect();
+
+            return Ok(TranscriptionResult {
+                input: AudioInput {
+                    data: Arc::new(segment.samples),
+                    sample_rate: sr,
+                    channels: 1,
+                    device: device.clone(),
+                    capture_timestamp: timestamp,
+                },
+                transcription: Some(transcription),
+                path,
+                timestamp,
+                error: None,
+                speaker_embedding,
+                start_time,
+                end_time,
+                aligned_words: Some(aligned_words),
+            });
+        }
+    }
+
+    if try_quality && !audio_transcription_engine.is_whisper_variant() {
+        let model_path = merge.segmentation_model_path.as_ref().unwrap().clone();
+        let extractor = merge.embedding_extractor.as_ref().unwrap().clone();
+        let emb_mgr = merge.embedding_manager.clone();
+        let samples = segment.samples.clone();
+        let sr = segment.sample_rate;
+        let audio = segment.samples.clone();
+        let sample_rate = segment.sample_rate;
+
+        let transcription = match session
+            .transcribe(&audio, sample_rate, &device.to_string())
+            .await
+        {
+            Ok(t) => t,
+            Err(e) => {
+                error!("STT error for input {}: {:?}", device, e);
+                return Ok(TranscriptionResult {
+                    input: AudioInput {
+                        data: Arc::new(segment.samples),
+                        sample_rate,
+                        channels: 1,
+                        device: device.clone(),
+                        capture_timestamp: timestamp,
+                    },
+                    transcription: None,
+                    path,
+                    timestamp,
+                    error: Some(e.to_string()),
+                    speaker_embedding: Vec::new(),
+                    start_time: segment.start,
+                    end_time: segment.end,
+                    aligned_words: None,
+                });
+            }
+        };
+
+        let spans_result = tokio::task::spawn_blocking(move || {
+            collect_diarization_spans(
+                &samples,
+                sr,
+                model_path.as_path(),
+                extractor,
+                emb_mgr,
+            )
+        })
+        .await;
+
+        let spans = match spans_result {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => {
+                warn!("quality diarization failed: {}", e);
+                Vec::new()
+            }
+            Err(e) => {
+                warn!("quality diarization task join failed: {}", e);
+                Vec::new()
+            }
+        };
+
+        let speaker_embedding = dominant_embedding_from_diarization(&spans).unwrap_or_default();
+
+        return Ok(TranscriptionResult {
+            input: AudioInput {
+                data: Arc::new(audio),
+                sample_rate,
+                channels: 1,
+                device: device.clone(),
+                capture_timestamp: timestamp,
+            },
+            transcription: Some(transcription),
+            path,
+            timestamp,
+            error: None,
+            speaker_embedding,
+            start_time: segment.start,
+            end_time: segment.end,
+            aligned_words: None,
+        });
+    }
+
     let audio = segment.samples.clone();
     let sample_rate = segment.sample_rate;
     match session
@@ -390,6 +607,7 @@ pub async fn run_stt(
             speaker_embedding: segment.embedding.clone(),
             start_time: segment.start,
             end_time: segment.end,
+            aligned_words: None,
         }),
         Err(e) => {
             error!("STT error for input {}: {:?}", device, e);
@@ -408,6 +626,7 @@ pub async fn run_stt(
                 speaker_embedding: Vec::new(),
                 start_time: segment.start,
                 end_time: segment.end,
+                aligned_words: None,
             })
         }
     }

@@ -42,6 +42,21 @@ impl std::str::FromStr for AudioTranscriptionEngine {
     }
 }
 
+impl AudioTranscriptionEngine {
+    /// Local Whisper.ggml models (not cloud / Parakeet / Deepgram).
+    pub fn is_whisper_variant(&self) -> bool {
+        matches!(
+            self,
+            Self::WhisperTiny
+                | Self::WhisperTinyQuantized
+                | Self::WhisperLargeV3Turbo
+                | Self::WhisperLargeV3TurboQuantized
+                | Self::WhisperLargeV3
+                | Self::WhisperLargeV3Quantized
+        )
+    }
+}
+
 impl fmt::Display for AudioTranscriptionEngine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

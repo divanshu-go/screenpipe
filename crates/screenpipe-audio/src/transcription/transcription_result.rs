@@ -13,6 +13,15 @@ use crate::core::engine::AudioTranscriptionEngine;
 
 use super::{text_utils::longest_common_word_substring, AudioInput};
 
+/// A Whisper token (or sub-word) with optional diarization-assigned speaker label.
+#[derive(Debug, Clone)]
+pub struct AlignedWord {
+    pub text: String,
+    pub start_sec: f64,
+    pub end_sec: f64,
+    pub speaker_label: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct TranscriptionResult {
     pub path: String,
@@ -23,6 +32,8 @@ pub struct TranscriptionResult {
     pub error: Option<String>,
     pub start_time: f64,
     pub end_time: f64,
+    /// Token-level alignment + speaker labels when Quality + local Whisper + diarization models run.
+    pub aligned_words: Option<Vec<AlignedWord>>,
 }
 
 impl TranscriptionResult {
@@ -381,6 +392,7 @@ mod tests {
             error: None,
             start_time: 0.0,
             end_time: 1.0,
+            aligned_words: None,
         };
 
         let insert_result = process_transcription_result(

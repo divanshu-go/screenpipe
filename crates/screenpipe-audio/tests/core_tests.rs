@@ -17,7 +17,7 @@ mod tests {
     use screenpipe_audio::speaker::embedding_manager::EmbeddingManager;
     use screenpipe_audio::speaker::prepare_segments;
     use screenpipe_audio::vad::{silero::SileroVad, VadEngine};
-    use screenpipe_audio::{pcm_decode, AudioInput, TranscriptionEngine};
+    use screenpipe_audio::{pcm_decode, AudioInput, TranscriptionEngine, TranscriptionPipelineMode};
     use screenpipe_core::Language;
     use std::path::{Path, PathBuf};
     use std::process::Command;
@@ -264,6 +264,7 @@ mod tests {
             &audio_input.device.to_string(),
             false,
             false,
+            TranscriptionPipelineMode::Fast,
         )
         .await
         .unwrap();
@@ -364,6 +365,7 @@ mod tests {
             &audio_input.device.to_string(),
             false,
             false,
+            TranscriptionPipelineMode::Fast,
         )
         .await
         .unwrap();

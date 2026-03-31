@@ -89,6 +89,14 @@ pub struct RecordingSettings {
     #[serde(rename = "filterMusic")]
     pub filter_music: bool,
 
+    /// STT segmentation: "quality" (default) = transcribe full chunk before pyannote slicing;
+    /// "fast" = legacy pyannote-defined STT segments when models are available.
+    #[serde(
+        rename = "transcriptionPipelineMode",
+        default = "default_transcription_pipeline_mode"
+    )]
+    pub transcription_pipeline_mode: String,
+
     /// Maximum batch duration in seconds for batch transcription.
     /// None = use engine-aware defaults (Deepgram=5000s, OpenAI=3000s, Whisper=600s).
     /// Also controls the max deferral cap during active meetings.
@@ -288,6 +296,7 @@ impl Default for RecordingSettings {
             deepgram_api_key: String::new(),
             vad_sensitivity: "high".to_string(),
             filter_music: false,
+            transcription_pipeline_mode: "quality".to_string(),
             batch_max_duration_secs: None,
             vocabulary: vec![],
             disable_vision: false,
@@ -328,6 +337,10 @@ impl Default for RecordingSettings {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_transcription_pipeline_mode() -> String {
+    "quality".to_string()
 }
 
 #[cfg(test)]

@@ -129,6 +129,16 @@ impl From<CliTranscriptionMode> for TranscriptionMode {
 }
 
 #[derive(Clone, Debug, ValueEnum, PartialEq)]
+pub enum CliTranscriptionPipelineMode {
+    /// Transcribe each capture chunk as a whole (fixes pyannote boundary cuts; default)
+    #[clap(name = "quality")]
+    Quality,
+    /// Legacy: pyannote slices STT input when segmentation models are available
+    #[clap(name = "fast")]
+    Fast,
+}
+
+#[derive(Clone, Debug, ValueEnum, PartialEq)]
 pub enum OutputFormat {
     Text,
     Json,
@@ -312,6 +322,10 @@ pub struct RecordArgs {
     #[arg(long, value_enum, default_value_t = CliTranscriptionMode::Batch)]
     pub transcription_mode: CliTranscriptionMode,
 
+    /// STT pipeline: quality (default) = full-chunk transcription; fast = pyannote-sliced STT
+    #[arg(long, value_enum, default_value_t = CliTranscriptionPipelineMode::Quality)]
+    pub transcription_pipeline: CliTranscriptionPipelineMode,
+
     /// Disable telemetry
     #[arg(long, default_value_t = false)]
     pub disable_telemetry: bool,
@@ -373,6 +387,11 @@ impl RecordArgs {
             CliTranscriptionMode::Batch => "batch",
         };
 
+        let pipeline_str = match self.transcription_pipeline {
+            CliTranscriptionPipelineMode::Quality => "quality",
+            CliTranscriptionPipelineMode::Fast => "fast",
+        };
+
         screenpipe_config::RecordingSettings {
             audio_chunk_duration: self.audio_chunk_duration as i32,
             port: self.port,
@@ -386,6 +405,7 @@ impl RecordArgs {
             enable_accessibility: true,
             audio_transcription_engine: engine_str.to_string(),
             transcription_mode: mode_str.to_string(),
+            transcription_pipeline_mode: pipeline_str.to_string(),
             audio_devices: self.audio_device.clone(),
             use_system_default_audio: self.use_system_default_audio,
             monitor_ids: self.monitor_id.iter().map(|id| id.to_string()).collect(),
