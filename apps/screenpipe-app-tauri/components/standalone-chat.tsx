@@ -19,6 +19,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { MemoizedReactMarkdown } from "@/components/markdown";
 import { VideoComponent } from "@/components/rewind/video";
 import { MermaidDiagram } from "@/components/rewind/mermaid-diagram";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { AIPresetsSelector } from "@/components/rewind/ai-presets-selector";
 import { AIPreset } from "@/lib/utils/tauri";
 import remarkGfm from "remark-gfm";
@@ -581,6 +582,22 @@ function MarkdownBlock({ text, isUser }: { text: string; isUser: boolean }) {
             <a href={href} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2" {...props}>
               {children}
             </a>
+          );
+        },
+        img({ src, alt, ...props }) {
+          if (!src) return null;
+          if (src.toLowerCase().endsWith(".mp4")) {
+            return <VideoComponent filePath={src} className="my-2" />;
+          }
+          const imgSrc = src.startsWith("/") ? convertFileSrc(src) : src;
+          return (
+            <img
+              src={imgSrc}
+              alt={alt || ""}
+              className="max-w-full h-auto rounded-md my-2"
+              loading="lazy"
+              {...props}
+            />
           );
         },
         pre({ children, ...props }) {
