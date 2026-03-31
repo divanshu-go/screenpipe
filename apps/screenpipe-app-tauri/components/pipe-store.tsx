@@ -308,10 +308,10 @@ function ConnectionsStrip() {
         </div>
         <button
           onClick={openConnections}
-          className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 text-[10px] font-medium uppercase tracking-wider border border-foreground/20 rounded hover:bg-foreground/5 transition-colors"
+          className="shrink-0 flex items-center gap-1.5 px-2 py-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+          title="manage connections"
         >
           <Plug className="w-3 h-3" />
-          connections
         </button>
       </div>
     </TooltipProvider>
