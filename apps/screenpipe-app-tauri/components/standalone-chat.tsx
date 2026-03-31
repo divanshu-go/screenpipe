@@ -19,6 +19,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { MemoizedReactMarkdown } from "@/components/markdown";
 import { VideoComponent } from "@/components/rewind/video";
 import { MermaidDiagram } from "@/components/rewind/mermaid-diagram";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { AIPresetsSelector } from "@/components/rewind/ai-presets-selector";
 import { AIPreset } from "@/lib/utils/tauri";
 import remarkGfm from "remark-gfm";
@@ -581,6 +582,39 @@ function MarkdownBlock({ text, isUser }: { text: string; isUser: boolean }) {
             <a href={href} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2" {...props}>
               {children}
             </a>
+          );
+        },
+        img({ src, alt, ...props }) {
+          if (!src) return null;
+          if (src.toLowerCase().endsWith(".mp4")) {
+            return <VideoComponent filePath={src} className="my-2" />;
+          }
+          // try asset protocol for local paths, fall back to http serve
+          let imgSrc = src;
+          if (src.startsWith("/")) {
+            try {
+              imgSrc = convertFileSrc(src);
+            } catch {
+              imgSrc = `http://localhost:3030/experimental/frames/from-file?path=${encodeURIComponent(src)}`;
+            }
+          }
+          return (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={imgSrc}
+              alt={alt || ""}
+              className="max-w-full h-auto rounded-md my-2 border border-border"
+              loading="lazy"
+              onError={(e) => {
+                // fallback: if asset protocol fails, try convertFileSrc or raw path
+                const target = e.currentTarget;
+                if (src.startsWith("/") && !target.dataset.retried) {
+                  target.dataset.retried = "1";
+                  target.src = convertFileSrc(src);
+                }
+              }}
+              {...props}
+            />
           );
         },
         pre({ children, ...props }) {

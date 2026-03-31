@@ -50,6 +50,7 @@ import { MeetingsSection } from "@/components/settings/meetings-section";
 import { MemoriesSection } from "@/components/settings/memories-section";
 import { NotificationsSettings } from "@/components/settings/notifications-settings";
 import { UsageSection } from "@/components/settings/usage-section";
+import { SpeakersSection } from "@/components/settings/speakers-section";
 import { StandaloneChat } from "@/components/standalone-chat";
 import Timeline from "@/components/rewind/timeline";
 import { useQueryState } from "nuqs";
@@ -85,7 +86,8 @@ type SettingsModalSection =
   | "team"
   | "notifications"
   | "referral"
-  | "usage";
+  | "usage"
+  | "speakers";
 
 type SettingsModalSectionItem = {
   id: SettingsModalSection;
@@ -98,7 +100,7 @@ type SettingsModalSectionItem = {
 const ALL_SECTIONS = [
   "home", "timeline", "pipes", "help",
   "account", "recording", "ai", "general", "display", "shortcuts", "notifications",
-  "connections", "privacy", "storage", "meetings", "memories", "team", "referral", "usage",
+  "connections", "privacy", "storage", "meetings", "memories", "speakers", "team", "referral", "usage",
   "feedback", // backwards compat → maps to "help"
   "disk-usage", "cloud-archive", "cloud-sync", // backwards compat → maps to "storage"
 ];
@@ -371,6 +373,8 @@ function SettingsPageContent() {
         return <ReferralSection />;
       case "usage":
         return <UsageSection />;
+      case "speakers":
+        return <SpeakersSection />;
     }
   };
 
@@ -393,6 +397,7 @@ function SettingsPageContent() {
     { id: "privacy", label: "Privacy", icon: <Shield className="h-4 w-4" />, group: "data" },
     { id: "storage", label: "Storage", icon: <HardDrive className="h-4 w-4" />, group: "data" },
     { id: "meetings", label: "Meetings", icon: <Phone className="h-4 w-4" />, group: "data" },
+    { id: "speakers", label: "Speakers", icon: <Mic className="h-4 w-4" />, group: "data" },
     { id: "memories", label: "Memories", icon: <Sparkles className="h-4 w-4" />, group: "data" },
     { id: "connections", label: "Connections", icon: <Plug className="h-4 w-4" />, group: "data" },
     { id: "team", label: "Team", icon: <Users className="h-4 w-4" />, group: "account" },

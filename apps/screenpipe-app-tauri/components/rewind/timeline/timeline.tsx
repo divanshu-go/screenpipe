@@ -1405,7 +1405,7 @@ export const TimelineSlider = ({
 											onMouseEnter={(e) => {
 												const rect = e.currentTarget.getBoundingClientRect();
 												setHoveredMemoryId(mem.id);
-												setHoveredMemoryRect({ x: rect.left + rect.width / 2, y: rect.bottom + 4 });
+												setHoveredMemoryRect({ x: rect.left + rect.width / 2, y: rect.top - 8 });
 											}}
 											onMouseLeave={() => {
 												setHoveredMemoryId(null);
@@ -1426,22 +1426,24 @@ export const TimelineSlider = ({
 					{/* Memory tooltip portal */}
 					{hoveredMemoryId !== null && hoveredMemoryRect && createPortal(
 						<div
-							className="fixed z-[9999] max-w-xs bg-popover border border-border rounded-lg px-3 py-2 text-xs shadow-2xl pointer-events-none"
+							className="fixed z-[9999] max-w-[240px] bg-popover border border-border rounded-lg px-3 py-2 text-xs shadow-2xl pointer-events-none"
 							style={{
 								left: `${hoveredMemoryRect.x}px`,
 								top: `${hoveredMemoryRect.y}px`,
-								transform: "translateX(-50%)",
+								transform: "translate(-50%, -100%)",
 							}}
 						>
 							{(() => {
 								const mem = memories.find((m) => m.id === hoveredMemoryId);
 								if (!mem) return null;
+								const truncated = mem.content.length > 120 ? mem.content.slice(0, 120) + "…" : mem.content;
+								const usefulTags = mem.tags.filter((t) => !/^\d{4}-\d{2}-\d{2}/.test(t));
 								return (
 									<>
-										<p className="text-foreground mb-1">{mem.content}</p>
-										<div className="flex items-center gap-1.5 text-muted-foreground">
+										<p className="text-foreground mb-1 line-clamp-3">{truncated}</p>
+										<div className="flex items-center gap-1.5 text-muted-foreground flex-wrap">
 											<span>{formatDistanceToNow(new Date(mem.created_at), { addSuffix: true })}</span>
-											{mem.tags.map((t) => (
+											{usefulTags.slice(0, 3).map((t) => (
 												<span key={t} className="px-1 py-0.5 bg-foreground/10 rounded text-[9px]">{t}</span>
 											))}
 										</div>
