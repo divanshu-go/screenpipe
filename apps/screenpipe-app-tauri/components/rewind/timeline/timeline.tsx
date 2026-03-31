@@ -4,7 +4,7 @@
 import { StreamTimeSeriesResponse, TimeRange } from "@/components/rewind/timeline";
 import { useTimelineSelection } from "@/lib/hooks/use-timeline-selection";
 import { getStore, type ChatConversation } from "@/lib/hooks/use-settings";
-import { isAfter, subDays, addDays, startOfDay, format } from "date-fns";
+import { isAfter, subDays, addDays, startOfDay, format, formatDistanceToNow } from "date-fns";
 import { motion } from "framer-motion";
 import { ZoomIn, ZoomOut, Mic, Monitor, AppWindow, Globe, Hash, RotateCcw, Phone, PanelBottomClose, PanelBottomOpen } from "lucide-react";
 import type { Meeting } from "@/lib/hooks/use-meetings";
@@ -351,27 +351,6 @@ export const TimelineSlider = ({
 	const [hoveredMemoryRect, setHoveredMemoryRect] = useState<{ x: number; y: number } | null>(null);
 	const memoriesFetchedRangeRef = useRef<string>("");
 
-	useEffect(() => {
-		if (!visibleFrames || visibleFrames.length === 0) return;
-		const firstTs = visibleFrames[visibleFrames.length - 1]?.timestamp;
-		const lastTs = visibleFrames[0]?.timestamp;
-		if (!firstTs || !lastTs) return;
-
-		const rangeKey = `${firstTs.slice(0, 13)}|${lastTs.slice(0, 13)}`;
-		if (memoriesFetchedRangeRef.current === rangeKey) return;
-		memoriesFetchedRangeRef.current = rangeKey;
-
-		const params = new URLSearchParams({
-			start_time: firstTs,
-			end_time: lastTs,
-			limit: "50",
-		});
-		fetch(`http://localhost:3030/memories?${params}`)
-			.then((r) => (r.ok ? r.json() : { data: [] }))
-			.then((res) => setMemories(res.data || []))
-			.catch(() => {});
-	}, [visibleFrames]);
-
 	// Chat history overlay — show PipeAI icon on timeline where chats occurred
 	const [chatConversations, setChatConversations] = useState<ChatConversation[]>([]);
 	const [hoveredChatConv, setHoveredChatConv] = useState<{ conv: ChatConversation; x: number; y: number } | null>(null);
@@ -527,6 +506,28 @@ export const TimelineSlider = ({
 		frozenFramesRef.current = latestVisibleFrames;
 	}
 	const visibleFrames = isUserInteracting ? frozenFramesRef.current : latestVisibleFrames;
+
+	// Fetch memories for the visible time range
+	useEffect(() => {
+		if (!visibleFrames || visibleFrames.length === 0) return;
+		const firstTs = visibleFrames[visibleFrames.length - 1]?.timestamp;
+		const lastTs = visibleFrames[0]?.timestamp;
+		if (!firstTs || !lastTs) return;
+
+		const rangeKey = `${firstTs.slice(0, 13)}|${lastTs.slice(0, 13)}`;
+		if (memoriesFetchedRangeRef.current === rangeKey) return;
+		memoriesFetchedRangeRef.current = rangeKey;
+
+		const params = new URLSearchParams({
+			start_time: firstTs,
+			end_time: lastTs,
+			limit: "50",
+		});
+		fetch(`http://localhost:3030/memories?${params}`)
+			.then((r) => (r.ok ? r.json() : { data: [] }))
+			.then((res) => setMemories(res.data || []))
+			.catch(() => {});
+	}, [visibleFrames]);
 
 	// Dynamically compute app names from the current viewport, sorted by frequency
 	const viewportAppNames = useMemo(() => {
@@ -1439,7 +1440,7 @@ export const TimelineSlider = ({
 									<>
 										<p className="text-foreground mb-1">{mem.content}</p>
 										<div className="flex items-center gap-1.5 text-muted-foreground">
-											<span>{timeAgo(mem.created_at)}</span>
+											<span>{formatDistanceToNow(new Date(mem.created_at), { addSuffix: true })}</span>
 											{mem.tags.map((t) => (
 												<span key={t} className="px-1 py-0.5 bg-foreground/10 rounded text-[9px]">{t}</span>
 											))}
