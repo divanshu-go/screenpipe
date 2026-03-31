@@ -63,6 +63,16 @@ import remarkGfm from "remark-gfm";
 import posthog from "posthog-js";
 import { PipesSection } from "@/components/settings/pipes-section";
 import { ChatPrefillData } from "@/lib/chat-utils";
+import {
+  IntegrationIcon,
+  IntegrationInfo,
+} from "@/components/settings/connections-section";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+  TooltipProvider,
+} from "@/components/ui/tooltip";
 // --- Types ---
 
 interface StorePipe {
@@ -227,6 +237,76 @@ function normalizePipe(raw: any): any {
 
 // --- Main Unified Component ---
 
+function ConnectionsStrip() {
+  const [integrations, setIntegrations] = useState<IntegrationInfo[]>([]);
+
+  useEffect(() => {
+    const cached = apiCache.get<IntegrationInfo[]>("connections/strip");
+    if (cached) {
+      setIntegrations(cached);
+      return;
+    }
+    fetch("http://localhost:3030/connections")
+      .then((r) => r.json())
+      .then((data) => {
+        const list: IntegrationInfo[] = data.data || [];
+        // only show integrations that have fields (API keys) or OAuth — skip empty ones
+        const relevant = list.filter((i) => i.fields.length > 0 || i.is_oauth);
+        apiCache.set("connections/strip", relevant, 30_000);
+        setIntegrations(relevant);
+      })
+      .catch(() => {});
+  }, []);
+
+  if (integrations.length === 0) return null;
+
+  const connected = integrations.filter((i) => i.connected);
+  const disconnected = integrations.filter((i) => !i.connected);
+  const sorted = [...connected, ...disconnected];
+
+  return (
+    <TooltipProvider delayDuration={200}>
+      <div className="flex items-center gap-1.5 mb-4 flex-wrap">
+        <span className="text-[10px] text-muted-foreground font-medium mr-1 uppercase tracking-wider">
+          connections
+        </span>
+        {sorted.map((integration) => (
+          <Tooltip key={integration.id}>
+            <TooltipTrigger asChild>
+              <button
+                onClick={() => {
+                  sessionStorage.setItem("openConnection", integration.id);
+                  // trigger settings modal to connections section
+                  window.dispatchEvent(
+                    new CustomEvent("open-settings", {
+                      detail: { section: "connections" },
+                    })
+                  );
+                }}
+                className={cn(
+                  "relative flex items-center justify-center w-7 h-7 border rounded transition-colors",
+                  integration.connected
+                    ? "border-foreground/20 hover:border-foreground/40"
+                    : "border-dashed border-muted-foreground/20 opacity-50 hover:opacity-80"
+                )}
+              >
+                <IntegrationIcon icon={integration.icon} />
+                {integration.connected && (
+                  <div className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-foreground" />
+                )}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="text-xs">
+              {integration.name}
+              {integration.connected ? " · connected" : " · not set up"}
+            </TooltipContent>
+          </Tooltip>
+        ))}
+      </div>
+    </TooltipProvider>
+  );
+}
+
 export function PipeStoreView() {
   const [activeTab, setActiveTab] = useState<"discover" | "my-pipes">("my-pipes");
 
@@ -237,6 +317,9 @@ export function PipeStoreView() {
 
   return (
     <div className="space-y-0">
+      {/* Connections strip */}
+      <ConnectionsStrip />
+
       {/* Tab bar */}
       <div className="flex items-center gap-6 border-b border-border pb-0 mb-6">
         {tabs.map(({ key, label }) => (
