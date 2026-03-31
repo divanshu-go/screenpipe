@@ -1302,7 +1302,6 @@ export function PipesSection() {
     <div className="space-y-4" data-testid="section-pipes">
       <div className="space-y-1">
         <div className="flex items-center justify-between">
-          <h3 className="text-lg font-medium">My Pipes</h3>
           <div className="flex items-center gap-2">
             {/* Device selector dropdown — always visible */}
             <DropdownMenu>

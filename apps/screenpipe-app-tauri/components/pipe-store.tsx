@@ -698,8 +698,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-xl font-semibold tracking-tight">discover pipes</h3>
-          <p className="text-sm text-muted-foreground mt-0.5">
+          <p className="text-sm text-muted-foreground">
             browse, install, and review community pipes
           </p>
         </div>
