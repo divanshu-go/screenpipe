@@ -95,6 +95,10 @@ export function MemoriesSection() {
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [copiedId, setCopiedId] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editContent, setEditContent] = useState("");
+  const [savingId, setSavingId] = useState<number | null>(null);
+  const editRef = useRef<HTMLTextAreaElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const loadingMoreRef = useRef(false);
@@ -248,6 +252,43 @@ export function MemoriesSection() {
     }
   };
 
+  const startEditing = (memory: MemoryRecord) => {
+    setEditingId(memory.id);
+    setEditContent(memory.content);
+    setTimeout(() => editRef.current?.focus(), 0);
+  };
+
+  const saveEdit = async (id: number) => {
+    const trimmed = editContent.trim();
+    const memory = memories.find((m) => m.id === id);
+    if (!trimmed || trimmed === memory?.content) {
+      setEditingId(null);
+      return;
+    }
+    setSavingId(id);
+    try {
+      const res = await fetch(`http://localhost:3030/memories/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: trimmed }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setMemories((prev) =>
+        prev.map((m) => (m.id === id ? { ...m, content: trimmed } : m)),
+      );
+      toast({ title: "memory updated" });
+    } catch (err) {
+      toast({
+        title: "failed to update memory",
+        description: String(err),
+        variant: "destructive",
+      });
+    } finally {
+      setSavingId(null);
+      setEditingId(null);
+    }
+  };
+
   return (
     <div className="space-y-4 h-full flex flex-col">
       <p className="text-muted-foreground text-sm mb-4">
@@ -376,8 +417,39 @@ export function MemoriesSection() {
                 key={memory.id}
                 className="group flex items-start gap-2 rounded-md border border-border p-2.5 transition-colors hover:bg-muted/30"
               >
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm text-foreground">{memory.content}</p>
+                <div
+                  className="flex-1 min-w-0 cursor-text"
+                  onClick={() => {
+                    if (editingId !== memory.id) startEditing(memory);
+                  }}
+                >
+                  {editingId === memory.id ? (
+                    <textarea
+                      ref={editRef}
+                      value={editContent}
+                      onChange={(e) => setEditContent(e.target.value)}
+                      onBlur={() => saveEdit(memory.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault();
+                          saveEdit(memory.id);
+                        }
+                        if (e.key === "Escape") {
+                          setEditingId(null);
+                        }
+                      }}
+                      disabled={savingId === memory.id}
+                      className="text-sm text-foreground w-full bg-transparent border border-foreground/20 rounded px-1.5 py-1 resize-none focus:outline-none focus:border-foreground/40"
+                      rows={Math.min(6, Math.max(2, editContent.split("\n").length))}
+                    />
+                  ) : (
+                    <p className="text-sm text-foreground">
+                      {memory.content}
+                      {savingId === memory.id && (
+                        <Loader2 className="inline h-3 w-3 ml-1 animate-spin" />
+                      )}
+                    </p>
+                  )}
                   <div className="flex items-center gap-2 mt-1 flex-wrap">
                     <span className="text-xs text-muted-foreground">
                       {timeAgo(memory.created_at)}
