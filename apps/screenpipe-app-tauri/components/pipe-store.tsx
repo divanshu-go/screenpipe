@@ -274,7 +274,7 @@ function ConnectionsStrip() {
 
   return (
     <TooltipProvider delayDuration={200}>
-      <div className="flex items-center gap-2 mb-4">
+      <div className="flex items-center gap-2 mb-6">
         <div className="flex-1 overflow-x-auto scrollbar-hide">
           <div className="flex items-center gap-1.5 py-1">
             {sorted.map((integration) => (
@@ -332,7 +332,7 @@ export function PipeStoreView() {
       <ConnectionsStrip />
 
       {/* Tab bar */}
-      <div className="flex items-center gap-6 border-b border-border pb-0 mb-8">
+      <div className="flex items-center gap-6 border-b border-border pb-0 mb-6">
         {tabs.map(({ key, label }) => (
           <button
             key={key}
