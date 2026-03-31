@@ -1950,11 +1950,17 @@ export function PipesSection() {
                                       : p
                                   )
                                 );
-                                fetch(`${apiBase}/pipes/${pipeName}/config`, {
+                                const savePromise = fetch(`${apiBase}/pipes/${pipeName}/config`, {
                                   method: "POST",
                                   headers: { "Content-Type": "application/json" },
                                   body: JSON.stringify({ schedule: newSchedule }),
-                                }).then(() => fetchPipes());
+                                }).then(() => {
+                                  delete pendingConfigSaves.current[pipeName];
+                                  fetchPipes();
+                                }).catch(() => {
+                                  delete pendingConfigSaves.current[pipeName];
+                                });
+                                pendingConfigSaves.current[pipeName] = savePromise;
                                 return;
                               }
                               // Build day-of-week field
@@ -1990,11 +1996,17 @@ export function PipesSection() {
                                     : p
                                 )
                               );
-                              fetch(`${apiBase}/pipes/${pipeName}/config`, {
+                              const savePromise = fetch(`${apiBase}/pipes/${pipeName}/config`, {
                                 method: "POST",
                                 headers: { "Content-Type": "application/json" },
                                 body: JSON.stringify({ schedule: newSchedule }),
-                              }).then(() => fetchPipes());
+                              }).then(() => {
+                                delete pendingConfigSaves.current[pipeName];
+                                fetchPipes();
+                              }).catch(() => {
+                                delete pendingConfigSaves.current[pipeName];
+                              });
+                              pendingConfigSaves.current[pipeName] = savePromise;
                             };
 
                             return (
