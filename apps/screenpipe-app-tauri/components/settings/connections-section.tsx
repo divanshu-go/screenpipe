@@ -398,12 +398,14 @@ function ClaudePanel({ onConnected }: { onConnected?: () => void }) {
             <summary className="cursor-pointer hover:text-foreground">didn&apos;t work? troubleshooting steps</summary>
             <ol className="mt-1.5 ml-4 list-decimal space-y-1">
               <li>
-                <button className="underline hover:text-foreground" onClick={() => mcpbPath && revealItemInDir(mcpbPath)}>
-                  show the .mcpb file
-                </button>
-                {" "}then drag and drop it into claude desktop&apos;s window
+                open claude desktop → developer → extensions
               </li>
-              <li>or in claude: developer → extensions → install extension → select the file</li>
+              <li>
+                <button className="underline hover:text-foreground" onClick={() => mcpbPath && revealItemInDir(mcpbPath)}>
+                  click here to show the .mcpb file
+                </button>
+                {" "}then drag it into the extensions panel
+              </li>
               <li>if nothing works, reinstall claude desktop to fix file associations</li>
             </ol>
           </details>
