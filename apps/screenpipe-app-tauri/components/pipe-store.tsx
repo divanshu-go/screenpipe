@@ -258,19 +258,18 @@ function ConnectionsStrip() {
       .catch(() => {});
   }, []);
 
-  if (integrations.length === 0) return null;
-
+  // only show connected integrations — keep the strip compact
   const connected = integrations.filter((i) => i.connected);
-  const disconnected = integrations.filter((i) => !i.connected);
-  const sorted = [...connected, ...disconnected];
+
+  if (connected.length === 0) return null;
 
   return (
     <TooltipProvider delayDuration={200}>
-      <div className="flex items-center gap-1.5 mb-4 flex-wrap">
-        <span className="text-[10px] text-muted-foreground font-medium mr-1 uppercase tracking-wider">
+      <div className="flex items-center gap-1.5 mb-4 overflow-x-auto scrollbar-hide">
+        <span className="text-[10px] text-muted-foreground font-medium mr-1 uppercase tracking-wider shrink-0">
           connections
         </span>
-        {sorted.map((integration) => (
+        {connected.map((integration) => (
           <Tooltip key={integration.id}>
             <TooltipTrigger asChild>
               <button
