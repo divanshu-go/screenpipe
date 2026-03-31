@@ -122,7 +122,14 @@ function SettingsPageContent() {
   const { settings } = useSettings();
   const teamState = useTeam();
   const { isSectionHidden, needsLicenseKey, submitLicenseKey } = useEnterprisePolicy();
-  
+
+  // If current section is hidden by enterprise policy, redirect to first visible one
+  useEffect(() => {
+    if (!isSectionHidden(activeSection)) return;
+    const fallback = ["home", "timeline", "pipes"].find((s) => !isSectionHidden(s));
+    setActiveSection(fallback ?? "home");
+  }, [activeSection, isSectionHidden, setActiveSection]);
+
   // Default true: treat undefined (settings still loading) as enabled to avoid opaque flash on init
   const isTranslucent = settings?.translucentSidebar !== false;
 
@@ -293,6 +300,14 @@ function SettingsPageContent() {
   }, [activeSection, setActiveSection]);
 
   const renderMainSection = () => {
+    if (isSectionHidden(activeSection) && activeSection !== "help") {
+      return (
+        <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
+          <img src="/128x128.png" alt="screenpipe" className="w-16 h-16 opacity-30 mb-4" />
+          <p className="text-sm font-mono">screenpipe</p>
+        </div>
+      );
+    }
     switch (activeSection) {
       case "home":
         return <StandaloneChat className="h-full" />;
@@ -303,7 +318,12 @@ function SettingsPageContent() {
       case "help":
         return <FeedbackSection />;
       default:
-        return <StandaloneChat className="h-full" />;
+        return (
+          <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
+            <img src="/128x128.png" alt="screenpipe" className="w-16 h-16 opacity-30 mb-4" />
+            <p className="text-sm font-mono">screenpipe</p>
+          </div>
+        );
     }
   };
 
@@ -614,7 +634,7 @@ function SettingsPageContent() {
                 })()}
 
                 {/* Settings */}
-                {(() => {
+                {!isSectionHidden("settings") && (() => {
                   const btn = (
                     <button
                       data-testid="nav-settings"
@@ -654,7 +674,7 @@ function SettingsPageContent() {
                 })()}
 
                 {/* Help */}
-                {(() => {
+                {!isSectionHidden("help") && (() => {
                   const isActive = activeSection === "help" && !settingsModalOpen;
                   const btn = (
                     <button

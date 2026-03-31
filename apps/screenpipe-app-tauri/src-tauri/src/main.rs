@@ -46,6 +46,7 @@ mod chatgpt_oauth;
 mod commands;
 mod disk_usage;
 mod embedded_server;
+mod enterprise_policy;
 mod hardware;
 mod ics_calendar;
 mod livetext;
@@ -559,6 +560,7 @@ async fn main() {
                 commands::is_enterprise_build_cmd,
                 commands::get_enterprise_license_key,
                 commands::save_enterprise_license_key,
+                enterprise_policy::set_enterprise_policy,
                 commands::get_disk_usage,
                 commands::list_cache_files,
                 commands::delete_cache_files,
@@ -790,6 +792,7 @@ async fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::is_enterprise_build_cmd,
             commands::get_enterprise_license_key,
+            enterprise_policy::set_enterprise_policy,
             commands::save_enterprise_license_key,
             spawn_screenpipe,
             stop_screenpipe,
