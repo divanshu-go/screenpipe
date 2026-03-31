@@ -73,6 +73,8 @@ export interface AudioData {
 	audio_chunk_id: number;
 	speaker_id?: number;
 	speaker_name?: string;
+	/** Quality pipeline: JSON array of tokens with diarization speaker_label */
+	aligned_words_json?: string;
 }
 
 export interface TimeRange {

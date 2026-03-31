@@ -939,6 +939,7 @@ impl DatabaseManager {
         start_time: Option<f64>,
         end_time: Option<f64>,
         timestamp: Option<DateTime<Utc>>,
+        aligned_words_json: Option<&str>,
     ) -> Result<i64, sqlx::Error> {
         use crate::write_queue::{WriteOp, WriteResult};
 
@@ -973,6 +974,7 @@ impl DatabaseManager {
                 start_time,
                 end_time,
                 timestamp,
+                aligned_words_json: aligned_words_json.map(|s| s.to_string()),
             })
             .await?;
 
@@ -984,7 +986,7 @@ impl DatabaseManager {
 
     /// Combined audio chunk + transcription insert in a single transaction.
     /// This halves the number of BEGIN IMMEDIATE acquisitions compared to
-    /// calling get_or_insert_audio_chunk() + insert_audio_transcription() separately.
+    /// calling get_or_insert_audio_chunk() + insert_audio_transcription separately.
     #[allow(clippy::too_many_arguments)]
     pub async fn insert_audio_chunk_and_transcription(
         &self,
@@ -997,6 +999,7 @@ impl DatabaseManager {
         start_time: Option<f64>,
         end_time: Option<f64>,
         timestamp: Option<DateTime<Utc>>,
+        aligned_words_json: Option<&str>,
     ) -> Result<i64, sqlx::Error> {
         use crate::write_queue::{WriteOp, WriteResult};
 
@@ -1033,6 +1036,7 @@ impl DatabaseManager {
                 timestamp,
                 existing_chunk_id,
                 is_duplicate,
+                aligned_words_json: aligned_words_json.map(|s| s.to_string()),
             })
             .await?;
 
@@ -1112,6 +1116,7 @@ impl DatabaseManager {
         timestamp: DateTime<Utc>,
         duration_secs: Option<f64>,
         speaker_id: Option<i64>,
+        aligned_words_json: Option<&str>,
     ) -> Result<(), sqlx::Error> {
         // Skip empty transcriptions
         let trimmed = transcription.trim();
@@ -1130,8 +1135,8 @@ impl DatabaseManager {
             .await?;
 
         sqlx::query(
-            "INSERT INTO audio_transcriptions (audio_chunk_id, transcription, text_length, offset_index, timestamp, transcription_engine, device, is_input_device, start_time, end_time, speaker_id)
-             VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT INTO audio_transcriptions (audio_chunk_id, transcription, text_length, offset_index, timestamp, transcription_engine, device, is_input_device, start_time, end_time, speaker_id, aligned_words_json)
+             VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         )
         .bind(audio_chunk_id)
         .bind(trimmed)
@@ -1143,6 +1148,7 @@ impl DatabaseManager {
         .bind(start_time)
         .bind(end_time)
         .bind(speaker_id)
+        .bind(aligned_words_json)
         .execute(&mut **tx.conn())
         .await?;
 
@@ -3755,6 +3761,7 @@ impl DatabaseManager {
             at.end_time,
             at.speaker_id,
             s.name as speaker_name,
+            at.aligned_words_json,
             CAST((julianday(datetime(at.timestamp, '+' || at.end_time || ' seconds')) -
                   julianday(datetime(at.timestamp, '+' || at.start_time || ' seconds'))) * 86400
                  as REAL) as duration_secs
@@ -3864,6 +3871,7 @@ impl DatabaseManager {
                 audio_chunk_id: row.get("audio_chunk_id"),
                 speaker_id: row.try_get("speaker_id").ok(),
                 speaker_name: row.try_get("speaker_name").ok(),
+                aligned_words_json: row.try_get("aligned_words_json").ok(),
                 start_time: start_offset,
                 end_time: end_offset,
             };

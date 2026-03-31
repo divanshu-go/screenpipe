@@ -27,6 +27,8 @@ pub struct AudioInsertInfo {
     pub start_time: Option<f64>,
     pub end_time: Option<f64>,
     pub speaker_id: Option<i64>,
+    /// Token alignment + diarization labels JSON (quality pipeline), same as stored in DB.
+    pub aligned_words_json: Option<String>,
     /// Epoch seconds when the audio was originally captured (not processed).
     /// Use this for timeline placement so deferred audio appears at the correct time.
     pub capture_timestamp: u64,
@@ -118,6 +120,9 @@ pub async fn handle_new_transcript(
         }
 
         transcription.transcription = current_transcript.clone();
+        if was_trimmed {
+            transcription.aligned_words = None;
+        }
         if current_transcript.is_some() {
             prev_transcript_by_device
                 .insert(device_key.clone(), current_transcript.clone().unwrap());
@@ -180,6 +185,7 @@ pub async fn handle_new_transcript(
                         start_time,
                         end_time,
                         speaker_id: result.speaker_id,
+                        aligned_words_json: result.aligned_words_json.clone(),
                         capture_timestamp,
                     });
                 }

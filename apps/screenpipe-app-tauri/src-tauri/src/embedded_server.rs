@@ -267,6 +267,7 @@ pub async fn start_embedded_server(
                         end_time: info.end_time,
                         speaker_id: info.speaker_id,
                         speaker_name: None,
+                        aligned_words_json: info.aligned_words_json,
                     })
                     .await;
             });

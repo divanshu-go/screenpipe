@@ -111,6 +111,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -187,7 +188,7 @@ mod tests {
             None,
             None,
             None,
-        )
+            None)
         .await
         .unwrap();
 
@@ -317,7 +318,7 @@ mod tests {
             None,
             None,
             None,
-        )
+            None)
         .await
         .unwrap();
 
@@ -429,7 +430,7 @@ mod tests {
             None,
             None,
             None,
-        )
+            None)
         .await
         .unwrap();
 
@@ -506,7 +507,7 @@ mod tests {
                 None,
                 None,
                 None,
-            )
+            None)
             .await;
         println!("Second audio insert result: {:?}", insert_result);
 
@@ -716,7 +717,7 @@ mod tests {
             None,
             None,
             None,
-        )
+            None)
         .await
         .unwrap();
 
@@ -766,7 +767,7 @@ mod tests {
             None,
             None,
             None,
-        )
+            None)
         .await
         .unwrap();
 
@@ -932,7 +933,7 @@ mod tests {
                     None,
                     None,
                     None,
-                )
+            None)
                 .await
                 .unwrap();
             }
@@ -1013,7 +1014,7 @@ mod tests {
                     None,
                     None,
                     None,
-                )
+            None)
                 .await
                 .unwrap();
             }
@@ -1073,7 +1074,7 @@ mod tests {
                     None,
                     None,
                     None,
-                )
+            None)
                 .await
                 .unwrap();
             }
@@ -1120,7 +1121,7 @@ mod tests {
             None,
             None,
             None,
-        )
+            None)
         .await
         .unwrap();
 
@@ -1171,7 +1172,7 @@ mod tests {
             None,
             None,
             None,
-        )
+            None)
         .await
         .unwrap();
 
@@ -1195,7 +1196,7 @@ mod tests {
             None,
             None,
             None,
-        )
+            None)
         .await
         .unwrap();
 
@@ -1416,7 +1417,7 @@ mod tests {
             None,
             None,
             None,
-        )
+            None)
         .await
         .unwrap();
 

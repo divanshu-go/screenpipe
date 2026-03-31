@@ -57,6 +57,8 @@ pub(crate) enum WriteOp {
         start_time: Option<f64>,
         end_time: Option<f64>,
         timestamp: Option<DateTime<Utc>>,
+        /// JSON from Quality+Whisper token+diarization merge; None for legacy paths.
+        aligned_words_json: Option<String>,
     },
     InsertAudioChunkAndTranscription {
         file_path: String,
@@ -73,6 +75,7 @@ pub(crate) enum WriteOp {
         existing_chunk_id: i64,
         /// Pre-computed during read phase: whether a similar transcription exists
         is_duplicate: bool,
+        aligned_words_json: Option<String>,
     },
     InsertSnapshotFrameWithOcr {
         device_name: String,
@@ -577,11 +580,12 @@ async fn execute_single_write(
             start_time,
             end_time,
             timestamp,
+            aligned_words_json,
         } => {
             let ts = timestamp.unwrap_or_else(Utc::now);
             let text_length = transcription.len() as i64;
             let result = sqlx::query(
-                "INSERT OR IGNORE INTO audio_transcriptions (audio_chunk_id, transcription, offset_index, timestamp, transcription_engine, device, is_input_device, speaker_id, start_time, end_time, text_length) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                "INSERT OR IGNORE INTO audio_transcriptions (audio_chunk_id, transcription, offset_index, timestamp, transcription_engine, device, is_input_device, speaker_id, start_time, end_time, text_length, aligned_words_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             )
             .bind(audio_chunk_id)
             .bind(transcription.as_str())
@@ -594,6 +598,7 @@ async fn execute_single_write(
             .bind(start_time)
             .bind(end_time)
             .bind(text_length)
+            .bind(aligned_words_json.as_deref())
             .execute(&mut **conn)
             .await?;
 
@@ -617,6 +622,7 @@ async fn execute_single_write(
             timestamp,
             existing_chunk_id,
             is_duplicate,
+            aligned_words_json,
         } => {
             let ts = timestamp.unwrap_or_else(Utc::now);
 
@@ -665,7 +671,7 @@ async fn execute_single_write(
             // Insert transcription
             let text_length = transcription.len() as i64;
             sqlx::query(
-                "INSERT OR IGNORE INTO audio_transcriptions (audio_chunk_id, transcription, offset_index, timestamp, transcription_engine, device, is_input_device, speaker_id, start_time, end_time, text_length) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                "INSERT OR IGNORE INTO audio_transcriptions (audio_chunk_id, transcription, offset_index, timestamp, transcription_engine, device, is_input_device, speaker_id, start_time, end_time, text_length, aligned_words_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             )
             .bind(audio_chunk_id)
             .bind(transcription.as_str())
@@ -678,6 +684,7 @@ async fn execute_single_write(
             .bind(start_time)
             .bind(end_time)
             .bind(text_length)
+            .bind(aligned_words_json.as_deref())
             .execute(&mut **conn)
             .await?;
 
@@ -1515,6 +1522,7 @@ mod tests {
                 start_time: None,
                 end_time: None,
                 timestamp: None,
+                aligned_words_json: None,
             })
             .await
             .unwrap();
@@ -1551,6 +1559,7 @@ mod tests {
                 timestamp: None,
                 existing_chunk_id: 0,
                 is_duplicate: false,
+                aligned_words_json: None,
             })
             .await
             .unwrap();
@@ -1604,6 +1613,7 @@ mod tests {
                 timestamp: None,
                 existing_chunk_id: 0,
                 is_duplicate: true, // pre-computed as duplicate
+                aligned_words_json: None,
             })
             .await
             .unwrap();
@@ -1791,6 +1801,7 @@ mod tests {
                 timestamp: None,
                 existing_chunk_id: 0,
                 is_duplicate: false,
+                aligned_words_json: None,
             })
             .await
             .unwrap();

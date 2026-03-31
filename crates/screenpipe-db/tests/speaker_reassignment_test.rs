@@ -53,7 +53,7 @@ mod speaker_reassignment_tests {
             Some(0.0),
             Some(5.0),
             None,
-        )
+            None)
         .await
         .unwrap();
 

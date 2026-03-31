@@ -53,7 +53,7 @@ mod tests {
             None,
             None,
             None,
-        )
+            None)
         .await
         .unwrap();
 
@@ -85,7 +85,7 @@ mod tests {
             None,
             None,
             None,
-        )
+            None)
         .await
         .unwrap();
 
@@ -179,8 +179,8 @@ mod tests {
             Some(speaker.id),
             None,
             None,
-            Some(Utc::now()),
-        )
+            Some(Utc::now()),,
+            None)
         .await
         .unwrap();
 
@@ -197,8 +197,8 @@ mod tests {
             None,
             None,
             None,
-            Some(Utc::now()),
-        )
+            Some(Utc::now()),,
+            None)
         .await
         .unwrap();
 

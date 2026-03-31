@@ -14,7 +14,7 @@ use crate::core::engine::AudioTranscriptionEngine;
 use super::{text_utils::longest_common_word_substring, AudioInput};
 
 /// A Whisper token (or sub-word) with optional diarization-assigned speaker label.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct AlignedWord {
     pub text: String,
     pub start_sec: f64,
@@ -65,16 +65,41 @@ impl TranscriptionResult {
     }
 }
 
+fn serialize_aligned_words(
+    words: Option<Vec<AlignedWord>>,
+    use_pii_removal: bool,
+) -> Option<String> {
+    let words = words?;
+    if words.is_empty() {
+        return None;
+    }
+    let processed: Vec<AlignedWord> = words
+        .into_iter()
+        .map(|w| AlignedWord {
+            text: if use_pii_removal {
+                remove_pii(&w.text)
+            } else {
+                w.text
+            },
+            start_sec: w.start_sec,
+            end_sec: w.end_sec,
+            speaker_label: w.speaker_label,
+        })
+        .collect();
+    serde_json::to_string(&processed).ok()
+}
+
 /// Result of a successful audio transcription DB insert.
 #[derive(Debug, Clone)]
 pub struct AudioInsertResult {
     pub audio_chunk_id: i64,
     pub speaker_id: Option<i64>,
+    pub aligned_words_json: Option<String>,
 }
 
 pub async fn process_transcription_result(
     db: &DatabaseManager,
-    result: TranscriptionResult,
+    mut result: TranscriptionResult,
     audio_transcription_engine: Arc<AudioTranscriptionEngine>,
     previous_transcript: Option<String>,
     previous_transcript_id: Option<i64>,
@@ -87,6 +112,9 @@ pub async fn process_transcription_result(
         );
         return Ok(None);
     }
+
+    let aligned_words_json = serialize_aligned_words(result.aligned_words.take(), use_pii_removal);
+    let aligned_words_json_for_callback = aligned_words_json.clone();
 
     let speaker_id = if result.speaker_embedding.is_empty() {
         debug!("empty speaker embedding; storing transcript without speaker");
@@ -157,6 +185,7 @@ pub async fn process_transcription_result(
                 Some(result.start_time),
                 Some(result.end_time),
                 capture_ts,
+                aligned_words_json.as_deref(),
             )
             .await
         {
@@ -188,6 +217,7 @@ pub async fn process_transcription_result(
     Ok(chunk_id.map(|id| AudioInsertResult {
         audio_chunk_id: id,
         speaker_id,
+        aligned_words_json: aligned_words_json_for_callback,
     }))
 }
 

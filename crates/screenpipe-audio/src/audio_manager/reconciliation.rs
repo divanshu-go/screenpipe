@@ -307,6 +307,7 @@ pub async fn reconcile_untranscribed(
                         chunk.timestamp,
                         Some(30.0),
                         None,
+                        None,
                     )
                     .await
                 {
@@ -472,6 +473,7 @@ async fn finalize_batch(
         pending.timestamp,
         Some(pending.duration_secs),
         pending.speaker_id,
+        None,
     )
     .await
     .map_err(|e| e.to_string())?;
@@ -496,6 +498,7 @@ async fn finalize_batch(
             start_time: Some(0.0),
             end_time: Some(pending.duration_secs),
             speaker_id: pending.speaker_id,
+            aligned_words_json: None,
             capture_timestamp: capture_ts,
         });
     }

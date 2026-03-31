@@ -296,6 +296,8 @@ pub struct AudioEntry {
     pub audio_chunk_id: i64,
     pub speaker_id: Option<i64>,
     pub speaker_name: Option<String>,
+    /// JSON array of token-level alignment + diarization labels (quality pipeline).
+    pub aligned_words_json: Option<String>,
     /// Offset in seconds from the start of the audio chunk file where this transcription begins
     pub start_time: Option<f64>,
     /// Offset in seconds from the start of the audio chunk file where this transcription ends

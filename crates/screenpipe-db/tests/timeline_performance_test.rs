@@ -112,7 +112,7 @@ mod timeline_performance_tests {
                 None,
                 None,
                 None,
-            )
+            None)
             .await
             .unwrap();
         }
@@ -626,8 +626,8 @@ mod timeline_performance_tests {
             None,
             Some(0.0), // start_time offset
             Some(6.0), // end_time offset (6 seconds)
-            Some(audio_start_time),
-        )
+            Some(audio_start_time),,
+            None)
         .await
         .unwrap();
 
@@ -744,8 +744,8 @@ mod timeline_performance_tests {
             None,
             Some(0.0),
             Some(2.0),
-            Some(audio_time),
-        )
+            Some(audio_time),,
+            None)
         .await
         .unwrap();
 

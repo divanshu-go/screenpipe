@@ -23,6 +23,7 @@ import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Meeting, deduplicateAudioItems } from "@/lib/hooks/use-meetings";
 import { usePipes } from "@/lib/hooks/use-pipes";
+import { dominantDiarizationLabel, formatDiarizationLabel } from "@/lib/diarization-label";
 
 // Extended audio item with timestamp for conversation view
 interface AudioItemWithTimestamp extends AudioData {
@@ -203,9 +204,15 @@ export function AudioTranscript({
 			if (speakerOverride) {
 				return { speakerId: speakerOverride.speakerId, speakerName: speakerOverride.speakerName };
 			}
+			const rawName = audio.speaker_name?.trim();
+			const diarRaw = dominantDiarizationLabel(audio.aligned_words_json);
+			const speakerName =
+				rawName ||
+				(diarRaw ? formatDiarizationLabel(diarRaw) : undefined) ||
+				(audio.is_input ? "You" : "Speaker");
 			return {
 				speakerId: audio.speaker_id,
-				speakerName: audio.speaker_name,
+				speakerName,
 			};
 		},
 		[speakerOverrides, speakerIdOverrides]
@@ -248,13 +255,14 @@ export function AudioTranscript({
 
 		// Build conversation items with grouping and gap detection
 		const items: ConversationItem[] = [];
-		let lastSpeakerId: number | undefined = undefined;
+		let lastGroupKey: string | undefined = undefined;
 		let lastTimestamp: Date | null = null;
 
 		dedupedAudio.forEach((audio) => {
-			const { speakerId, speakerName } = getSpeakerInfo(audio);
-			// Force new group for unnamed speakers so assign popover is always visible
-			const isFirstInGroup = speakerId !== lastSpeakerId || !speakerName;
+			const { speakerId } = getSpeakerInfo(audio);
+			const diarRaw = dominantDiarizationLabel(audio.aligned_words_json);
+			const groupKey = `${speakerId ?? -1}_${audio.is_input ? "in" : "out"}_${diarRaw ?? "nodiar"}`;
+			const isFirstInGroup = groupKey !== lastGroupKey;
 
 			// Detect time gaps > 2 minutes
 			let gapMinutesBefore: number | undefined;
@@ -276,16 +284,17 @@ export function AudioTranscript({
 				gapMinutesBefore,
 			});
 
-			lastSpeakerId = speakerId;
+			lastGroupKey = groupKey;
 			lastTimestamp = audio.timestamp;
 		});
 
 		// Compute participants and first chunk by speaker (for header assign popovers)
-		const participantMap = new Map<number, { name: string; duration: number }>();
+		const participantMap = new Map<string, { name: string; duration: number }>();
 		const firstChunkBySpeaker = new Map<number | string, { audioChunkId: number; audioFilePath: string }>();
 		dedupedAudio.forEach((audio) => {
 			const { speakerId, speakerName } = getSpeakerInfo(audio);
-			const id = speakerId ?? -1;
+			const diarRaw = dominantDiarizationLabel(audio.aligned_words_json);
+			const id = `${speakerId ?? -1}_${audio.is_input ? "in" : "out"}_${diarRaw ?? "nodiar"}`;
 			const existing = participantMap.get(id);
 			if (existing) {
 				existing.duration += audio.duration_secs;
@@ -349,13 +358,14 @@ export function AudioTranscript({
 
 		// Build conversation items
 		const items: ConversationItem[] = [];
-		let lastSpeakerId: number | undefined = undefined;
+		let lastGroupKey: string | undefined = undefined;
 		let lastTimestamp: Date | null = null;
 
 		dedupedAudio.forEach((audio) => {
-			const { speakerId, speakerName } = getSpeakerInfo(audio);
-			// Force new group for unnamed speakers so assign popover is always visible
-			const isFirstInGroup = speakerId !== lastSpeakerId || !speakerName;
+			const { speakerId } = getSpeakerInfo(audio);
+			const diarRaw = dominantDiarizationLabel(audio.aligned_words_json);
+			const groupKey = `${speakerId ?? -1}_${audio.is_input ? "in" : "out"}_${diarRaw ?? "nodiar"}`;
+			const isFirstInGroup = groupKey !== lastGroupKey;
 
 			let gapMinutesBefore: number | undefined;
 			if (lastTimestamp) {
@@ -375,7 +385,7 @@ export function AudioTranscript({
 				gapMinutesBefore,
 			});
 
-			lastSpeakerId = speakerId;
+			lastGroupKey = groupKey;
 			lastTimestamp = audio.timestamp;
 		});
 
@@ -390,7 +400,8 @@ export function AudioTranscript({
 		const firstChunkBySpeaker = new Map<number | string, { audioChunkId: number; audioFilePath: string }>();
 		dedupedAudio.forEach((audio) => {
 			const { speakerId } = getSpeakerInfo(audio);
-			const id = speakerId ?? -1;
+			const diarRaw = dominantDiarizationLabel(audio.aligned_words_json);
+			const id = `${speakerId ?? -1}_${audio.is_input ? "in" : "out"}_${diarRaw ?? "nodiar"}`;
 			if (!firstChunkBySpeaker.has(id)) {
 				firstChunkBySpeaker.set(id, {
 					audioChunkId: audio.audio_chunk_id,

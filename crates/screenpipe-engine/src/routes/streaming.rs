@@ -80,6 +80,8 @@ pub struct AudioData {
     pub audio_chunk_id: i64,
     pub speaker_id: Option<i64>,
     pub speaker_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aligned_words_json: Option<String>,
 }
 
 impl From<TimeSeriesFrame> for StreamTimeSeriesResponse {
@@ -118,6 +120,7 @@ impl From<TimeSeriesFrame> for StreamTimeSeriesResponse {
                                 audio_chunk_id: audio.audio_chunk_id,
                                 speaker_id: audio.speaker_id,
                                 speaker_name: audio.speaker_name,
+                                aligned_words_json: audio.aligned_words_json,
                             })
                             .collect(),
                         machine_id: device_frame.machine_id,
@@ -142,6 +145,7 @@ pub(crate) fn create_time_series_frame(chunk: FrameData) -> TimeSeriesFrame {
             audio_chunk_id: a.audio_chunk_id,
             speaker_id: a.speaker_id,
             speaker_name: a.speaker_name.clone(),
+            aligned_words_json: a.aligned_words_json.clone(),
             start_time: a.start_time,
             end_time: a.end_time,
         })
@@ -533,6 +537,7 @@ async fn handle_stream_frames_socket(
                                             audio_chunk_id: a.audio_chunk_id,
                                             speaker_id: a.speaker_id,
                                             speaker_name: a.speaker_name,
+                                            aligned_words_json: a.aligned_words_json,
                                         })
                                         .collect(),
                                     machine_id: hot_frame.machine_id.clone(),
@@ -582,6 +587,7 @@ async fn handle_stream_frames_socket(
                                     "audio_chunk_id": hot_audio.audio_chunk_id,
                                     "speaker_id": hot_audio.speaker_id,
                                     "speaker_name": hot_audio.speaker_name,
+                                    "aligned_words_json": hot_audio.aligned_words_json,
                                 }
                             });
                             if let Err(e) = sender.send(Message::Text(update.to_string())).await {
@@ -1274,6 +1280,7 @@ mod tests {
                 audio_chunk_id: i as i64,
                 speaker_id: None,
                 speaker_name: None,
+                aligned_words_json: None,
                 start_time: None,
                 end_time: None,
             })

@@ -400,6 +400,7 @@ pub(crate) async fn add_transcription_to_db(
         None,
         None,
         None,
+        None,
     )
     .await?;
 

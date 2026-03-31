@@ -69,7 +69,7 @@ mod tests {
                 Some(0.0),
                 Some(3.0),
                 None,
-            )
+            None)
             .await
             .unwrap();
         assert!(id1 > 0, "First insert should succeed");
@@ -90,7 +90,7 @@ mod tests {
                 Some(0.0),
                 Some(3.0),
                 None,
-            )
+            None)
             .await
             .unwrap();
 
@@ -119,7 +119,7 @@ mod tests {
                 Some(24.0),
                 Some(27.0),
                 None,
-            )
+            None)
             .await
             .unwrap();
         assert!(id1 > 0);
@@ -137,7 +137,7 @@ mod tests {
                 Some(0.0),
                 Some(30.0),
                 None,
-            )
+            None)
             .await
             .unwrap();
 
@@ -166,7 +166,7 @@ mod tests {
                 None,
                 None,
                 None,
-            )
+            None)
             .await
             .unwrap();
         assert!(id1 > 0);
@@ -184,7 +184,7 @@ mod tests {
                 None,
                 None,
                 None,
-            )
+            None)
             .await
             .unwrap();
 
@@ -219,7 +219,7 @@ mod tests {
                 None,
                 None,
                 None,
-            )
+            None)
             .await
             .unwrap();
         assert!(id1 > 0, "First transcription should be inserted");
@@ -244,7 +244,7 @@ mod tests {
                 None,
                 None,
                 None,
-            )
+            None)
             .await
             .unwrap();
 
@@ -274,7 +274,7 @@ mod tests {
                 None,
                 None,
                 None,
-            )
+            None)
             .await
             .unwrap();
         assert!(id1 > 0);
@@ -292,7 +292,7 @@ mod tests {
                 None,
                 None,
                 None,
-            )
+            None)
             .await
             .unwrap();
 
@@ -345,7 +345,7 @@ mod tests {
                 Some(0.0),
                 Some(2.5),
                 None,
-            )
+            None)
             .await
             .unwrap();
         assert!(id1 > 0);
@@ -362,7 +362,7 @@ mod tests {
                 Some(5.0),
                 Some(7.5),
                 None,
-            )
+            None)
             .await
             .unwrap();
         assert_eq!(id2, 0, "Same-chunk duplicate should be rejected");
@@ -390,7 +390,7 @@ mod tests {
                 Some(0.0),
                 Some(5.0),
                 None,
-            )
+            None)
             .await
             .unwrap();
         assert!(id1 > 0);
@@ -406,7 +406,7 @@ mod tests {
                 Some(5.0),
                 Some(10.0),
                 None,
-            )
+            None)
             .await
             .unwrap();
         assert!(id2 > 0);
@@ -439,7 +439,7 @@ mod tests {
                 None,
                 None,
                 None,
-            )
+            None)
             .await
             .unwrap();
 
@@ -459,7 +459,7 @@ mod tests {
                 None,
                 None,
                 None,
-            )
+            None)
             .await
             .unwrap();
 
@@ -486,7 +486,7 @@ mod tests {
                 None,
                 None,
                 None,
-            )
+            None)
             .await
             .unwrap();
 
@@ -516,7 +516,16 @@ mod tests {
 
             let id = db
                 .insert_audio_transcription(
-                    chunk, text, 0, "whisper", &device, None, None, None, None,
+                    chunk,
+                    text,
+                    0,
+                    "whisper",
+                    &device,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
                 )
                 .await
                 .unwrap();
@@ -558,7 +567,7 @@ mod tests {
                 None,
                 None,
                 None,
-            )
+            None)
             .await
             .unwrap();
         let id1b = db
@@ -572,7 +581,7 @@ mod tests {
                 None,
                 None,
                 None,
-            )
+            None)
             .await
             .unwrap();
         println!(
@@ -602,7 +611,7 @@ mod tests {
                 None,
                 None,
                 None,
-            )
+            None)
             .await
             .unwrap();
         let id2b = db
@@ -616,7 +625,7 @@ mod tests {
                 None,
                 None,
                 None,
-            )
+            None)
             .await
             .unwrap();
         println!(
@@ -646,7 +655,7 @@ mod tests {
                 None,
                 None,
                 None,
-            )
+            None)
             .await
             .unwrap();
         let id3b = db
@@ -660,7 +669,7 @@ mod tests {
                 None,
                 None,
                 None,
-            )
+            None)
             .await
             .unwrap();
         println!(
