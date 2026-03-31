@@ -196,7 +196,11 @@ impl ConnectionManager {
                         .map(|c| c.enabled && !c.credentials.is_empty())
                         .unwrap_or(false)
                 };
-                ConnectionInfo { def, connected, is_oauth }
+                ConnectionInfo {
+                    def,
+                    connected,
+                    is_oauth,
+                }
             })
             .collect()
     }

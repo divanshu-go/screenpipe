@@ -131,10 +131,7 @@ pub fn delete_oauth_token(integration_id: &str) -> Result<()> {
 
 /// Attempt a token refresh via the backend proxy.
 /// Writes the new token to disk on success, returns the new `access_token`.
-pub async fn refresh_token(
-    client: &reqwest::Client,
-    integration_id: &str,
-) -> Result<String> {
+pub async fn refresh_token(client: &reqwest::Client, integration_id: &str) -> Result<String> {
     let content = std::fs::read_to_string(oauth_token_path(integration_id))?;
     let stored: Value = serde_json::from_str(&content)?;
     let refresh_tok = stored["refresh_token"]
@@ -164,17 +161,12 @@ pub async fn refresh_token(
 
 /// Read a valid token, refreshing automatically if expired.
 /// Returns `None` only if disconnected with no way to recover.
-pub async fn get_valid_token(
-    client: &reqwest::Client,
-    integration_id: &str,
-) -> Option<String> {
+pub async fn get_valid_token(client: &reqwest::Client, integration_id: &str) -> Option<String> {
     if let Some(token) = read_oauth_token(integration_id) {
         return Some(token);
     }
     // Token missing or expired — try refresh
-    refresh_token(client, integration_id)
-        .await
-        .ok()
+    refresh_token(client, integration_id).await.ok()
 }
 
 // ---------------------------------------------------------------------------
