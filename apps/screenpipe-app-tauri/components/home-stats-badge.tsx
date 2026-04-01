@@ -43,7 +43,7 @@ export function HomeStatsBadge() {
   const [showModal, setShowModal] = useState(false);
 
   useEffect(() => {
-    fetch("http://localhost:3030/stats")
+    fetch("http://localhost:3030/stats?force_refresh=true")
       .then((r) => r.json())
       .then(setStats)
       .catch(() => {});
@@ -107,12 +107,12 @@ export function HomeStatsBadge() {
                   <div className="text-[10px] text-muted-foreground uppercase tracking-wide">day streak 🔥</div>
                 </div>
                 <div className="text-center">
-                  <div className="text-2xl font-bold">{formatNum(stats.all_time.total_words)}</div>
-                  <div className="text-[10px] text-muted-foreground uppercase tracking-wide">words spoken</div>
+                  <div className="text-2xl font-bold">{stats.all_time.total_apps}</div>
+                  <div className="text-[10px] text-muted-foreground uppercase tracking-wide">apps tracked</div>
                 </div>
                 <div className="text-center">
-                  <div className="text-2xl font-bold">{stats.week.focus_score}%</div>
-                  <div className="text-[10px] text-muted-foreground uppercase tracking-wide">focus score</div>
+                  <div className="text-2xl font-bold">{stats.all_time.total_meetings}</div>
+                  <div className="text-[10px] text-muted-foreground uppercase tracking-wide">meetings</div>
                 </div>
               </div>
 
