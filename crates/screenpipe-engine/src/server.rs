@@ -165,7 +165,7 @@ pub struct AppState {
 }
 
 async fn stats_handler(
-    State(state): State<Arc<AppState>>,
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
 ) -> axum::Json<crate::stats::UserStats> {
     axum::Json(crate::stats::get_stats(&state.db).await)
 }
