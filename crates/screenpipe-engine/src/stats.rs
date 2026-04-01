@@ -136,18 +136,18 @@ async fn compute_stats(db: &screenpipe_db::DatabaseManager) -> UserStats {
 async fn compute_day_stats(db: &screenpipe_db::DatabaseManager) -> DayStats {
     let pool = &db.pool;
 
-    // Frames today
+    // Frames today (using localtime for day boundary)
     let frames: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM frames WHERE timestamp >= datetime('now', 'start of day')",
+        "SELECT COUNT(*) FROM frames WHERE date(timestamp, 'localtime') = date('now', 'localtime')",
     )
     .fetch_one(pool)
     .await
     .unwrap_or(0);
 
-    // Calculate hours from first and last frame timestamps today (more accurate than fps math)
+    // Calculate hours from first and last frame timestamps today
     let hours: f64 = sqlx::query_scalar::<_, Option<f64>>(
         "SELECT (julianday(MAX(timestamp)) - julianday(MIN(timestamp))) * 24.0
-         FROM frames WHERE timestamp >= datetime('now', 'start of day')",
+         FROM frames WHERE date(timestamp, 'localtime') = date('now', 'localtime')",
     )
     .fetch_one(pool)
     .await
@@ -159,7 +159,7 @@ async fn compute_day_stats(db: &screenpipe_db::DatabaseManager) -> DayStats {
         "SELECT COALESCE(SUM(LENGTH(transcription) - LENGTH(REPLACE(transcription, ' ', '')) + 1), 0)
          FROM audio_transcriptions
          JOIN audio_chunks ON audio_transcriptions.audio_chunk_id = audio_chunks.id
-         WHERE audio_transcriptions.timestamp >= datetime('now', 'start of day')
+         WHERE audio_transcriptions.timestamp >= datetime(date('now', 'localtime'))
          AND (audio_chunks.device_name LIKE '%input%' OR audio_chunks.device_name LIKE '%microphone%' OR audio_chunks.device_name LIKE '%mic%')",
     )
     .fetch_one(pool)
@@ -168,7 +168,7 @@ async fn compute_day_stats(db: &screenpipe_db::DatabaseManager) -> DayStats {
 
     // Meetings today
     let meetings: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM meetings WHERE meeting_start >= datetime('now', 'start of day')",
+        "SELECT COUNT(*) FROM meetings WHERE meeting_start >= datetime(date('now', 'localtime'))",
     )
     .fetch_one(pool)
     .await
@@ -177,7 +177,7 @@ async fn compute_day_stats(db: &screenpipe_db::DatabaseManager) -> DayStats {
     // Top apps today
     let top_apps: Vec<(String, u64)> = sqlx::query_as(
         "SELECT app_name, COUNT(*) as cnt FROM frames
-         WHERE timestamp >= datetime('now', 'start of day')
+         WHERE timestamp >= datetime(date('now', 'localtime'))
          AND app_name IS NOT NULL AND app_name != ''
          GROUP BY app_name ORDER BY cnt DESC LIMIT 5",
     )
@@ -191,7 +191,7 @@ async fn compute_day_stats(db: &screenpipe_db::DatabaseManager) -> DayStats {
     // Distinct apps today
     let apps: i64 = sqlx::query_scalar(
         "SELECT COUNT(DISTINCT app_name) FROM frames
-         WHERE timestamp >= datetime('now', 'start of day')
+         WHERE timestamp >= datetime(date('now', 'localtime'))
          AND app_name IS NOT NULL AND app_name != ''",
     )
     .fetch_one(pool)
