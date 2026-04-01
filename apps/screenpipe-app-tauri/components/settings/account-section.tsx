@@ -197,7 +197,7 @@ export function AccountSection() {
                 variant="outline"
                 size="sm"
                 onClick={async () => {
-                  updateSettings({ user: undefined });
+                  updateSettings({ user: null as any });
                   // Restart Pi with null token so it stops using the old
                   // account's quota. Next message will auto-start as anonymous.
                   try {
