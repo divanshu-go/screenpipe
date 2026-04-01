@@ -27,7 +27,8 @@ import {
   Square,
   Sparkles,
 } from "lucide-react";
-import { showChatWithPrefill } from "@/lib/chat-utils";
+import { useQueryState } from "nuqs";
+import { emit } from "@tauri-apps/api/event";
 
 interface AudioSample {
   path: string;
@@ -331,6 +332,7 @@ export function SpeakersSection() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [, setSection] = useQueryState("section");
   const { toast } = useToast();
 
   const fetchSpeakers = useCallback(async () => {
@@ -428,7 +430,7 @@ export function SpeakersSection() {
           variant="outline"
           size="sm"
           className="h-7 text-xs gap-1.5"
-          onClick={() => {
+          onClick={async () => {
             const speakerSummary = allSpeakers
               .map((s) => {
                 const samples = parseSamples(s.metadata);
@@ -437,12 +439,19 @@ export function SpeakersSection() {
               })
               .join("\n");
 
-            showChatWithPrefill({
+            const prefillData = {
               context: `here are my current speakers:\n${speakerSummary}\n\nYou have access to the screenpipe API to manage speakers:\n- POST /speakers/update {id, name} to rename\n- POST /speakers/merge {speaker_id_to_keep, speaker_id_to_merge} to merge duplicates\n- POST /speakers/delete {speaker_id} to delete\n- POST /speakers/hallucination {speaker_id} to mark false detections`,
               prompt: "look at my speakers and help me organize them. find likely duplicates to merge, suggest better names for vague ones, and flag any that look like false detections. make the changes directly via the API.",
               autoSend: true,
               source: "speakers-organize",
-            });
+            };
+
+            // Store prefill for the chat to pick up on mount
+            sessionStorage.setItem("pendingChatPrefill", JSON.stringify(prefillData));
+            // Navigate to home (which is the chat)
+            await setSection("home");
+            // Also emit directly in case chat is already mounted
+            setTimeout(() => emit("chat-prefill", prefillData), 300);
           }}
         >
           <Sparkles className="h-3 w-3" />
