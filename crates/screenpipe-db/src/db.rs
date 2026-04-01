@@ -6820,9 +6820,8 @@ LIMIT ? OFFSET ?
         let merged_start: Option<String> = row.try_get("ms")?;
         let merged_end: Option<String> = row.try_get("me")?;
         // Update the survivor row
-        let update_sql =
-            format!("UPDATE meetings SET meeting_start = ?1, meeting_end = ?2 WHERE id = ?3");
-        sqlx::query(&update_sql)
+        let update_sql = "UPDATE meetings SET meeting_start = ?1, meeting_end = ?2 WHERE id = ?3";
+        sqlx::query(update_sql)
             .bind(&merged_start)
             .bind(&merged_end)
             .bind(survivor_id)
@@ -7028,7 +7027,7 @@ LIMIT ? OFFSET ?
 
         sql.push_str(" ORDER BY importance DESC, created_at DESC LIMIT ?7 OFFSET ?8");
 
-        let fts_query = query.map(|q| crate::text_normalizer::sanitize_fts5_query(q));
+        let fts_query = query.map(crate::text_normalizer::sanitize_fts5_query);
 
         sqlx::query_as::<_, MemoryRecord>(&sql)
             .bind(fts_query.as_deref())
@@ -7083,7 +7082,7 @@ LIMIT ? OFFSET ?
             sql.push_str(" AND created_at <= ?6");
         }
 
-        let fts_query = query.map(|q| crate::text_normalizer::sanitize_fts5_query(q));
+        let fts_query = query.map(crate::text_normalizer::sanitize_fts5_query);
 
         sqlx::query_scalar::<_, i64>(&sql)
             .bind(fts_query.as_deref())

@@ -43,7 +43,7 @@ impl Integration for GithubIssues {
         let api_token = require_str(creds, "api_token")?;
         let repo = require_str(creds, "repo")?;
         let resp: Value = client
-            .get(&format!("https://api.github.com/repos/{}", repo))
+            .get(format!("https://api.github.com/repos/{}", repo))
             .bearer_auth(api_token)
             .header("User-Agent", "screenpipe")
             .send()
