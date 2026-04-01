@@ -31,6 +31,7 @@ import {
   Sparkles,
   Bell,
   BarChart3,
+  History,
 } from "lucide-react";
 import { useOverlayData } from "@/app/shortcut-reminder/use-overlay-data";
 import { cn } from "@/lib/utils";
@@ -55,7 +56,7 @@ import { HomeStatsBadge } from "@/components/home-stats-badge";
 import { StandaloneChat } from "@/components/standalone-chat";
 import Timeline from "@/components/rewind/timeline";
 import { useQueryState } from "nuqs";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useTeam } from "@/lib/hooks/use-team";
 import { useEnterprisePolicy } from "@/lib/hooks/use-enterprise-policy";
@@ -563,6 +564,42 @@ function SettingsPageContent() {
                   return btn;
                 })}
               </div>
+
+              {/* Chat history toggle — only visible when on home (chat) */}
+              {activeSection === "home" && !settingsModalOpen && (
+                <div className="mt-1">
+                  {(() => {
+                    const btn = (
+                      <button
+                        onClick={() => {
+                          setActiveSection("home");
+                          setSettingsModalOpen(false);
+                          emit("toggle-chat-history", {});
+                        }}
+                        className={cn(
+                          "w-full flex items-center px-3 py-2 rounded-lg transition-all duration-150 text-left group",
+                          sidebarCollapsed ? "justify-center" : "space-x-2.5",
+                          isTranslucent
+                            ? "vibrant-nav-item vibrant-nav-hover"
+                            : "hover:bg-card/50 text-muted-foreground hover:text-foreground",
+                        )}
+                      >
+                        <History className={cn("h-4 w-4 flex-shrink-0 transition-colors", isTranslucent ? "" : "text-muted-foreground group-hover:text-foreground")} />
+                        {!sidebarCollapsed && <span className="text-sm font-medium">History</span>}
+                      </button>
+                    );
+                    if (sidebarCollapsed) {
+                      return (
+                        <Tooltip>
+                          <TooltipTrigger asChild>{btn}</TooltipTrigger>
+                          <TooltipContent side="right" className="text-xs">History</TooltipContent>
+                        </Tooltip>
+                      );
+                    }
+                    return btn;
+                  })()}
+                </div>
+              )}
 
               {/* Stats badge */}
               {!sidebarCollapsed && (

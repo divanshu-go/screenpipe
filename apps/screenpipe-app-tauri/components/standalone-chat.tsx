@@ -1191,6 +1191,17 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
     return () => { unlisten.then((fn) => fn()); };
   }, []);
 
+  // Listen for toggle-chat-history event from sidebar
+  useEffect(() => {
+    const unlisten = listen("toggle-chat-history", async () => {
+      if (!showHistory) {
+        await reloadStore();
+      }
+      setShowHistory((prev) => !prev);
+    });
+    return () => { unlisten.then((fn) => fn()); };
+  }, [showHistory, reloadStore, setShowHistory]);
+
   // Guard against duplicate chat-prefill processing. The listener below
   // re-subscribes when piInfo changes; during the brief overlap window
   // (async unlisten hasn't resolved yet) both old and new listeners can
