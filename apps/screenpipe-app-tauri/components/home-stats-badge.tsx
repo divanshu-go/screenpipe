@@ -56,22 +56,22 @@ export function HomeStatsBadge() {
       {/* Badge */}
       <button
         onClick={() => setShowModal(true)}
-        className="flex items-center gap-1.5 px-1.5 py-0.5 rounded hover:bg-muted/40 transition-all cursor-pointer text-[10px] text-muted-foreground"
+        className="flex items-center gap-3 px-3 py-1.5 rounded-md border border-border/40 hover:border-border hover:bg-muted/30 transition-all cursor-pointer text-xs text-muted-foreground"
       >
         {stats.all_time.recording_streak > 0 && (
-          <span className="flex items-center gap-0.5">
-            <Flame className="h-2.5 w-2.5 text-orange-500" />
-            {stats.all_time.recording_streak}
+          <span className="flex items-center gap-1">
+            <Flame className="h-3.5 w-3.5 text-orange-500" />
+            <span className="font-medium text-foreground">{stats.all_time.recording_streak}</span> days
           </span>
         )}
-        <span className="flex items-center gap-0.5">
-          <Pencil className="h-2.5 w-2.5" />
-          {formatNum(stats.all_time.total_words)}
+        <span className="flex items-center gap-1">
+          <Pencil className="h-3.5 w-3.5" />
+          <span className="font-medium text-foreground">{formatNum(stats.all_time.total_words)}</span> words
         </span>
         {stats.today.meetings > 0 && (
-          <span className="flex items-center gap-0.5">
-            <Mic className="h-2.5 w-2.5" />
-            {stats.today.meetings}
+          <span className="flex items-center gap-1">
+            <Mic className="h-3.5 w-3.5" />
+            <span className="font-medium text-foreground">{stats.today.meetings}</span> meetings
           </span>
         )}
       </button>
