@@ -48,6 +48,7 @@ pub struct HotAudio {
     pub speaker_id: Option<i64>,
     pub speaker_name: Option<String>,
     pub aligned_words_json: Option<String>,
+    pub chunk_timestamp: DateTime<Utc>,
 }
 
 /// In-memory cache for today's frames and audio.
@@ -257,6 +258,7 @@ impl HotFrameCache {
                                 speaker_id: audio_entry.speaker_id,
                                 speaker_name: audio_entry.speaker_name.clone(),
                                 aligned_words_json: audio_entry.aligned_words_json.clone(),
+                                chunk_timestamp: audio_entry.chunk_timestamp,
                             };
                             audio_map
                                 .entry(hot_audio.timestamp)
@@ -346,6 +348,7 @@ fn find_audio_for_frame(
                 speaker_id: a.speaker_id,
                 speaker_name: a.speaker_name.clone(),
                 aligned_words_json: a.aligned_words_json.clone(),
+                chunk_timestamp: a.chunk_timestamp,
                 start_time: a.start_time,
                 end_time: a.end_time,
             });
@@ -454,6 +457,7 @@ mod tests {
                 speaker_id: None,
                 speaker_name: None,
                 aligned_words_json: None,
+                chunk_timestamp: now,
             })
             .await;
 

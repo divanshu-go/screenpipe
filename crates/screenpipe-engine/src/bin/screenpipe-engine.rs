@@ -751,6 +751,11 @@ async fn main() -> anyhow::Result<()> {
                             speaker_id: info.speaker_id,
                             speaker_name: None,
                             aligned_words_json: info.aligned_words_json,
+                            chunk_timestamp: chrono::DateTime::from_timestamp(
+                                info.capture_timestamp as i64,
+                                0,
+                            )
+                            .unwrap_or_else(chrono::Utc::now),
                         })
                         .await;
                 });

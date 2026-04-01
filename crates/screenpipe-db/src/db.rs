@@ -3869,6 +3869,7 @@ impl DatabaseManager {
                 audio_file_path: row.get("audio_path"),
                 duration_secs: row.get("duration_secs"),
                 audio_chunk_id: row.get("audio_chunk_id"),
+                chunk_timestamp: audio_timestamp,
                 speaker_id: row.try_get("speaker_id").ok(),
                 speaker_name: row.try_get("speaker_name").ok(),
                 aligned_words_json: row.try_get("aligned_words_json").ok(),

@@ -75,6 +75,38 @@ export interface AudioData {
 	speaker_name?: string;
 	/** Quality pipeline: JSON array of tokens with diarization speaker_label */
 	aligned_words_json?: string;
+	/** UTC capture time of the audio chunk (matches DB `audio_transcriptions.timestamp`) */
+	audio_chunk_timestamp?: string;
+	/** Seconds from chunk start where speech ends (optional; else derived from duration) */
+	end_offset?: number | null;
+}
+
+/** Taller bars / "audio recorded" only when the frame time falls inside the speech window (not DB attach padding). */
+const FRAME_AUDIO_SLACK_MS = 4000;
+
+export function audioSpeechOverlapsFrame(
+	audio: AudioData,
+	frameTimestampIso: string
+): boolean {
+	const text = audio.transcription?.trim();
+	if (!text) return false;
+	const chunkIso = audio.audio_chunk_timestamp;
+	if (!chunkIso) return true;
+	const chunkMs = new Date(chunkIso).getTime();
+	if (Number.isNaN(chunkMs)) return true;
+	const startOffMs = (audio.start_offset ?? 0) * 1000;
+	const speechStart = chunkMs + startOffMs;
+	let speechEnd: number;
+	if (audio.end_offset != null && !Number.isNaN(Number(audio.end_offset))) {
+		speechEnd = chunkMs + Number(audio.end_offset) * 1000;
+	} else {
+		speechEnd = speechStart + (audio.duration_secs ?? 0) * 1000;
+	}
+	const ft = new Date(frameTimestampIso).getTime();
+	return (
+		ft >= speechStart - FRAME_AUDIO_SLACK_MS &&
+		ft <= speechEnd + FRAME_AUDIO_SLACK_MS
+	);
 }
 
 export interface TimeRange {

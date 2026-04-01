@@ -82,6 +82,10 @@ pub struct AudioData {
     pub speaker_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub aligned_words_json: Option<String>,
+    /// Chunk capture time (UTC). Used with start/end offsets for strict timeline overlap.
+    pub audio_chunk_timestamp: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_offset: Option<f64>,
 }
 
 impl From<TimeSeriesFrame> for StreamTimeSeriesResponse {
@@ -121,6 +125,8 @@ impl From<TimeSeriesFrame> for StreamTimeSeriesResponse {
                                 speaker_id: audio.speaker_id,
                                 speaker_name: audio.speaker_name,
                                 aligned_words_json: audio.aligned_words_json,
+                                audio_chunk_timestamp: audio.chunk_timestamp,
+                                end_offset: audio.end_time,
                             })
                             .collect(),
                         machine_id: device_frame.machine_id,
@@ -143,6 +149,7 @@ pub(crate) fn create_time_series_frame(chunk: FrameData) -> TimeSeriesFrame {
             audio_file_path: a.audio_file_path.clone(),
             duration_secs: a.duration_secs,
             audio_chunk_id: a.audio_chunk_id,
+            chunk_timestamp: a.chunk_timestamp,
             speaker_id: a.speaker_id,
             speaker_name: a.speaker_name.clone(),
             aligned_words_json: a.aligned_words_json.clone(),
@@ -538,6 +545,8 @@ async fn handle_stream_frames_socket(
                                             speaker_id: a.speaker_id,
                                             speaker_name: a.speaker_name,
                                             aligned_words_json: a.aligned_words_json,
+                                            audio_chunk_timestamp: a.chunk_timestamp,
+                                            end_offset: a.end_time,
                                         })
                                         .collect(),
                                     machine_id: hot_frame.machine_id.clone(),
@@ -588,6 +597,8 @@ async fn handle_stream_frames_socket(
                                     "speaker_id": hot_audio.speaker_id,
                                     "speaker_name": hot_audio.speaker_name,
                                     "aligned_words_json": hot_audio.aligned_words_json,
+                                    "audio_chunk_timestamp": hot_audio.chunk_timestamp.to_rfc3339(),
+                                    "end_offset": hot_audio.end_time,
                                 }
                             });
                             if let Err(e) = sender.send(Message::Text(update.to_string())).await {
@@ -1281,6 +1292,7 @@ mod tests {
                 speaker_id: None,
                 speaker_name: None,
                 aligned_words_json: None,
+                chunk_timestamp: chrono::Utc::now(),
                 start_time: None,
                 end_time: None,
             })
