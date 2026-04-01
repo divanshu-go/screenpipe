@@ -334,6 +334,14 @@ pub async fn event_driven_capture_loop(
             continue;
         }
 
+        // After unlock or wake, invalidate persistent SCStream handles so
+        // the next capture picks up fresh frames instead of stale ones.
+        #[cfg(target_os = "macos")]
+        if screenpipe_screen::stream_invalidation::take() {
+            info!("invalidating persistent streams after unlock/wake for monitor {}", monitor_id);
+            screenpipe_screen::stream_invalidation::invalidate_streams();
+        }
+
         // Skip capture while DRM streaming content is focused
         if crate::drm_detector::drm_content_paused() {
             tokio::time::sleep(poll_interval).await;
