@@ -52,7 +52,7 @@ import { MemoriesSection } from "@/components/settings/memories-section";
 import { NotificationsSettings } from "@/components/settings/notifications-settings";
 import { UsageSection } from "@/components/settings/usage-section";
 import { SpeakersSection } from "@/components/settings/speakers-section";
-import { HomeStatsBadge } from "@/components/home-stats-badge";
+// HomeStatsBadge is rendered inside SummaryCards (chat empty state)
 import { StandaloneChat } from "@/components/standalone-chat";
 import Timeline from "@/components/rewind/timeline";
 import { useQueryState } from "nuqs";
@@ -565,48 +565,6 @@ function SettingsPageContent() {
                 })}
               </div>
 
-              {/* Chat history toggle — only visible when on home (chat) */}
-              {activeSection === "home" && !settingsModalOpen && (
-                <div className="mt-1">
-                  {(() => {
-                    const btn = (
-                      <button
-                        onClick={() => {
-                          setActiveSection("home");
-                          setSettingsModalOpen(false);
-                          emit("toggle-chat-history", {});
-                        }}
-                        className={cn(
-                          "w-full flex items-center px-3 py-2 rounded-lg transition-all duration-150 text-left group",
-                          sidebarCollapsed ? "justify-center" : "space-x-2.5",
-                          isTranslucent
-                            ? "vibrant-nav-item vibrant-nav-hover"
-                            : "hover:bg-card/50 text-muted-foreground hover:text-foreground",
-                        )}
-                      >
-                        <History className={cn("h-4 w-4 flex-shrink-0 transition-colors", isTranslucent ? "" : "text-muted-foreground group-hover:text-foreground")} />
-                        {!sidebarCollapsed && <span className="text-sm font-medium">History</span>}
-                      </button>
-                    );
-                    if (sidebarCollapsed) {
-                      return (
-                        <Tooltip>
-                          <TooltipTrigger asChild>{btn}</TooltipTrigger>
-                          <TooltipContent side="right" className="text-xs">History</TooltipContent>
-                        </Tooltip>
-                      );
-                    }
-                    return btn;
-                  })()}
-                </div>
-              )}
-
-              {/* Stats badge */}
-              {!sidebarCollapsed && (
-                <div className="px-2 py-1.5">
-                  <HomeStatsBadge />
-                </div>
-              )}
 
               {/* Spacer */}
               <div className="flex-1" />

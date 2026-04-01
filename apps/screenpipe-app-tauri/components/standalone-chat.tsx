@@ -1191,17 +1191,6 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
     return () => { unlisten.then((fn) => fn()); };
   }, []);
 
-  // Listen for toggle-chat-history event from sidebar
-  useEffect(() => {
-    const unlisten = listen("toggle-chat-history", async () => {
-      if (!showHistory) {
-        await reloadStore();
-      }
-      setShowHistory((prev) => !prev);
-    });
-    return () => { unlisten.then((fn) => fn()); };
-  }, [showHistory, reloadStore, setShowHistory]);
-
   // Guard against duplicate chat-prefill processing. The listener below
   // re-subscribes when piInfo changes; during the brief overlap window
   // (async unlisten hasn't resolved yet) both old and new listeners can
@@ -2969,6 +2958,22 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
         {!isMac && !className && (
           <div className="absolute top-0 left-0 w-8 h-8 border-l-2 border-t-2 border-foreground/10 rounded-tl-lg" />
         )}
+        <Button
+          variant={showHistory ? "secondary" : "ghost"}
+          size="icon"
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={async (e) => {
+            e.stopPropagation();
+            if (!showHistory) {
+              await reloadStore();
+            }
+            setShowHistory(!showHistory);
+          }}
+          className="relative z-10 h-7 w-7"
+          title="Chat history"
+        >
+          <History size={14} />
+        </Button>
         <div className="relative z-10 p-1.5 rounded-lg bg-foreground/5 border border-border/50">
           <PipeAIIcon size={18} animated={false} className="text-foreground" />
         </div>
