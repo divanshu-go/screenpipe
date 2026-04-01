@@ -25,7 +25,9 @@ import {
   GitMerge,
   Play,
   Square,
+  Sparkles,
 } from "lucide-react";
+import { showChatWithPrefill } from "@/lib/chat-utils";
 
 interface AudioSample {
   path: string;
@@ -418,8 +420,34 @@ export function SpeakersSection() {
         />
       </div>
 
-      <div className="text-xs text-muted-foreground">
-        {speakers.length} named · {unnamed.length} unnamed
+      <div className="flex items-center justify-between">
+        <span className="text-xs text-muted-foreground">
+          {speakers.length} named · {unnamed.length} unnamed
+        </span>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-7 text-xs gap-1.5"
+          onClick={() => {
+            const speakerSummary = allSpeakers
+              .map((s) => {
+                const samples = parseSamples(s.metadata);
+                const transcripts = samples.map((sa) => sa.transcript).filter(Boolean).join("; ");
+                return `- ${s.isNamed ? s.name : `unnamed #${s.id}`} (id=${s.id}, ${s.isNamed ? "named" : "unnamed"})${transcripts ? `: "${transcripts}"` : ""}`;
+              })
+              .join("\n");
+
+            showChatWithPrefill({
+              context: `here are my current speakers:\n${speakerSummary}\n\nYou have access to the screenpipe API to manage speakers:\n- POST /speakers/update {id, name} to rename\n- POST /speakers/merge {speaker_id_to_keep, speaker_id_to_merge} to merge duplicates\n- POST /speakers/delete {speaker_id} to delete\n- POST /speakers/hallucination {speaker_id} to mark false detections`,
+              prompt: "look at my speakers and help me organize them. find likely duplicates to merge, suggest better names for vague ones, and flag any that look like false detections. make the changes directly via the API.",
+              autoSend: true,
+              source: "speakers-organize",
+            });
+          }}
+        >
+          <Sparkles className="h-3 w-3" />
+          organize with ai
+        </Button>
       </div>
 
       <div className="space-y-1.5">
