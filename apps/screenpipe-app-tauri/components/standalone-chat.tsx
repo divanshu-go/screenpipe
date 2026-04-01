@@ -2977,24 +2977,6 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
           <p className="text-[10px] text-muted-foreground font-mono uppercase tracking-wider">Screen Activity Assistant</p>
         </div>
         <Button
-          variant={showHistory ? "secondary" : "ghost"}
-          size="sm"
-          onMouseDown={(e) => e.stopPropagation()}
-          onClick={async (e) => {
-            e.stopPropagation();
-            if (!showHistory) {
-              // Refresh settings from store to ensure we have latest conversations
-              await reloadStore();
-            }
-            setShowHistory(!showHistory);
-          }}
-          className="relative z-10 h-7 px-2 gap-1 text-xs"
-          title="Chat history"
-        >
-          <History size={14} />
-          <span className="hidden sm:inline">History</span>
-        </Button>
-        <Button
           variant="default"
           size="sm"
           onMouseDown={(e) => e.stopPropagation()}
