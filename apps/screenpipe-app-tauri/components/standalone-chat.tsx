@@ -2983,6 +2983,24 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
           <h2 className="font-semibold text-sm tracking-tight">Pipe AI</h2>
           <p className="text-[10px] text-muted-foreground font-mono uppercase tracking-wider">Screen Activity Assistant</p>
         </div>
+        {!isEmbedded && (
+          <Button
+            variant={showHistory ? "secondary" : "ghost"}
+            size="icon"
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={async (e) => {
+              e.stopPropagation();
+              if (!showHistory) {
+                await reloadStore();
+              }
+              setShowHistory(!showHistory);
+            }}
+            className="relative z-10 h-7 w-7"
+            title="Chat history"
+          >
+            <History size={14} />
+          </Button>
+        )}
         <Button
           variant="default"
           size="sm"
