@@ -2958,24 +2958,22 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
         {!isMac && !className && (
           <div className="absolute top-0 left-0 w-8 h-8 border-l-2 border-t-2 border-foreground/10 rounded-tl-lg" />
         )}
-        {isEmbedded && (
-          <Button
-            variant={showHistory ? "secondary" : "ghost"}
-            size="icon"
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={async (e) => {
-              e.stopPropagation();
-              if (!showHistory) {
-                await reloadStore();
-              }
-              setShowHistory(!showHistory);
-            }}
-            className="relative z-10 h-7 w-7"
-            title="Chat history"
-          >
-            <History size={14} />
-          </Button>
-        )}
+        <Button
+          variant={showHistory ? "secondary" : "ghost"}
+          size="icon"
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={async (e) => {
+            e.stopPropagation();
+            if (!showHistory) {
+              await reloadStore();
+            }
+            setShowHistory(!showHistory);
+          }}
+          className="relative z-10 h-7 w-7"
+          title="Chat history"
+        >
+          <History size={14} />
+        </Button>
         <div className="relative z-10 p-1.5 rounded-lg bg-foreground/5 border border-border/50">
           <PipeAIIcon size={18} animated={false} className="text-foreground" />
         </div>
@@ -3003,27 +3001,6 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
           {formatShortcutDisplay(settings.showChatShortcut || (isMac ? "Control+Super+L" : "Alt+L"), isMac)}
         </kbd>
       </div>
-
-      {/* History toggle for overlay — below header to avoid traffic lights */}
-      {!isEmbedded && (
-        <div className="px-3 py-1 border-b border-border/50">
-          <Button
-            variant={showHistory ? "secondary" : "ghost"}
-            size="sm"
-            onClick={async () => {
-              if (!showHistory) {
-                await reloadStore();
-              }
-              setShowHistory(!showHistory);
-            }}
-            className="h-6 px-2 gap-1 text-xs"
-            title="Chat history"
-          >
-            <History size={12} />
-            <span>History</span>
-          </Button>
-        </div>
-      )}
 
       {/* Main content area with optional history sidebar */}
       <div className="flex-1 flex overflow-hidden">
