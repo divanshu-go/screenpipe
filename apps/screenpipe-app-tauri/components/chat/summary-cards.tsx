@@ -97,9 +97,7 @@ export function SummaryCards({
         One-click summaries from your screen activity
       </p>
 
-      <div className="mb-3">
-        <HomeStatsBadge />
-      </div>
+      <HomeStatsBadge />
 
       {/* Featured template cards */}
       <div className="grid grid-cols-3 gap-1.5 w-full max-w-lg mb-2">
