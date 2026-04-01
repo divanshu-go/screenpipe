@@ -488,7 +488,6 @@ impl SCServer {
             .get("/frames/:frame_id/metadata", get_frame_metadata)
             .get("/frames/next-valid", get_next_valid_frame)
             .get("/health", health_check)
-            .get("/stats", stats_handler)
             .post("/raw_sql", execute_raw_sql)
             .post("/add", add_to_database)
             .get("/speakers/unnamed", get_unnamed_speakers_handler)
@@ -532,6 +531,8 @@ impl SCServer {
         let router = Router::new()
             .merge(server.into_router())
             // Vault lock/unlock routes
+            // User activity stats (cached, runs once per day)
+            .route("/stats", get(stats_handler))
             .route("/vault/status", get(crate::routes::vault::vault_status))
             .route(
                 "/vault/lock",
