@@ -4,7 +4,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
-import { Flame, Pencil, Mic, X, BarChart3 } from "lucide-react";
+import { X, BarChart3 } from "lucide-react";
 
 interface UserStats {
   today: {
@@ -56,23 +56,27 @@ export function HomeStatsBadge() {
       {/* Badge */}
       <button
         onClick={() => setShowModal(true)}
-        className="flex items-center gap-3 px-3 py-1.5 rounded-md border border-border/40 hover:border-border hover:bg-muted/30 transition-all cursor-pointer text-xs text-muted-foreground"
+        className="inline-flex items-center gap-4 px-4 py-2 rounded-full bg-muted/40 hover:bg-muted/60 border border-border/30 hover:border-border/50 transition-all cursor-pointer text-sm"
       >
         {stats.all_time.recording_streak > 0 && (
-          <span className="flex items-center gap-1">
-            <Flame className="h-3.5 w-3.5 text-orange-500" />
-            <span className="font-medium text-foreground">{stats.all_time.recording_streak}</span> days
+          <span className="flex items-center gap-1.5">
+            <span>🔥</span>
+            <span className="font-semibold text-foreground">{stats.all_time.recording_streak} days</span>
           </span>
         )}
-        <span className="flex items-center gap-1">
-          <Pencil className="h-3.5 w-3.5" />
-          <span className="font-medium text-foreground">{formatNum(stats.all_time.total_words)}</span> words
+        {stats.all_time.recording_streak > 0 && <span className="text-border">|</span>}
+        <span className="flex items-center gap-1.5">
+          <span>🚀</span>
+          <span className="font-semibold text-foreground">{formatNum(stats.all_time.total_words)} words</span>
         </span>
         {stats.today.meetings > 0 && (
-          <span className="flex items-center gap-1">
-            <Mic className="h-3.5 w-3.5" />
-            <span className="font-medium text-foreground">{stats.today.meetings}</span> meetings
-          </span>
+          <>
+            <span className="text-border">|</span>
+            <span className="flex items-center gap-1.5">
+              <span>🏆</span>
+              <span className="font-semibold text-foreground">{stats.today.meetings} meetings</span>
+            </span>
+          </>
         )}
       </button>
 
