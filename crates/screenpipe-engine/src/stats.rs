@@ -144,8 +144,15 @@ async fn compute_day_stats(db: &screenpipe_db::DatabaseManager) -> DayStats {
     .await
     .unwrap_or(0);
 
-    // Approximate hours (frames / fps, assume ~0.5 fps default)
-    let hours = frames as f64 / 0.5 / 3600.0;
+    // Calculate hours from first and last frame timestamps today (more accurate than fps math)
+    let hours: f64 = sqlx::query_scalar::<_, Option<f64>>(
+        "SELECT (julianday(MAX(timestamp)) - julianday(MIN(timestamp))) * 24.0
+         FROM frames WHERE timestamp >= datetime('now', 'start of day')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(Some(0.0))
+    .unwrap_or(0.0);
 
     // Words spoken today (input devices only)
     let words: i64 = sqlx::query_scalar(
@@ -153,7 +160,7 @@ async fn compute_day_stats(db: &screenpipe_db::DatabaseManager) -> DayStats {
          FROM audio_transcriptions
          JOIN audio_chunks ON audio_transcriptions.audio_chunk_id = audio_chunks.id
          WHERE audio_transcriptions.timestamp >= datetime('now', 'start of day')
-         AND audio_chunks.device_name LIKE '%(input)%'",
+         AND (audio_chunks.device_name LIKE '%input%' OR audio_chunks.device_name LIKE '%microphone%' OR audio_chunks.device_name LIKE '%mic%')",
     )
     .fetch_one(pool)
     .await
@@ -204,9 +211,11 @@ async fn compute_day_stats(db: &screenpipe_db::DatabaseManager) -> DayStats {
 async fn compute_week_stats(db: &screenpipe_db::DatabaseManager) -> WeekStats {
     let pool = &db.pool;
 
-    // Hours per day for the last 7 days
-    let daily_rows: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT date(timestamp) as d, COUNT(*) as cnt FROM frames
+    // Hours per day from first-to-last frame timestamp span
+    let daily_hours_rows: Vec<(String, f64)> = sqlx::query_as(
+        "SELECT date(timestamp) as d,
+                (julianday(MAX(timestamp)) - julianday(MIN(timestamp))) * 24.0 as hours
+         FROM frames
          WHERE timestamp >= datetime('now', '-7 days')
          GROUP BY d ORDER BY d ASC",
     )
@@ -214,9 +223,9 @@ async fn compute_week_stats(db: &screenpipe_db::DatabaseManager) -> WeekStats {
     .await
     .unwrap_or_default();
 
-    let daily_hours: Vec<f64> = daily_rows
+    let daily_hours: Vec<f64> = daily_hours_rows
         .iter()
-        .map(|(_, cnt)| (*cnt as f64 / 0.5 / 3600.0 * 10.0).round() / 10.0)
+        .map(|(_, h)| (*h * 10.0).round() / 10.0)
         .collect();
 
     let total_hours: f64 = daily_hours.iter().sum();
@@ -227,7 +236,7 @@ async fn compute_week_stats(db: &screenpipe_db::DatabaseManager) -> WeekStats {
          FROM audio_transcriptions
          JOIN audio_chunks ON audio_transcriptions.audio_chunk_id = audio_chunks.id
          WHERE audio_transcriptions.timestamp >= datetime('now', '-7 days')
-         AND audio_chunks.device_name LIKE '%(input)%'",
+         AND (audio_chunks.device_name LIKE '%input%' OR audio_chunks.device_name LIKE '%microphone%' OR audio_chunks.device_name LIKE '%mic%')",
     )
     .fetch_one(pool)
     .await
@@ -280,7 +289,7 @@ async fn compute_all_time_stats(db: &screenpipe_db::DatabaseManager) -> AllTimeS
 
     // Recording streak: consecutive days with frames, counting back from today
     let days_with_frames: Vec<(String,)> = sqlx::query_as(
-        "SELECT DISTINCT date(timestamp) as d FROM frames
+        "SELECT DISTINCT date(timestamp, 'localtime') as d FROM frames
          WHERE timestamp >= datetime('now', '-90 days')
          ORDER BY d DESC",
     )

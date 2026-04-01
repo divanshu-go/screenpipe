@@ -49,28 +49,28 @@ export function HomeStatsBadge() {
       .catch(() => {});
   }, []);
 
-  if (!stats || stats.all_time.recording_streak === 0) return null;
+  if (!stats || stats.today.frames_captured === 0) return null;
 
   return (
     <>
       {/* Badge */}
       <button
         onClick={() => setShowModal(true)}
-        className="flex items-center gap-3 px-3 py-1.5 rounded-md border border-border/30 hover:border-border/60 hover:bg-muted/30 transition-all cursor-pointer text-xs text-muted-foreground"
+        className="flex items-center gap-1.5 px-1.5 py-0.5 rounded hover:bg-muted/40 transition-all cursor-pointer text-[10px] text-muted-foreground"
       >
         {stats.all_time.recording_streak > 0 && (
-          <span className="flex items-center gap-1">
-            <Flame className="h-3 w-3 text-orange-500" />
-            {stats.all_time.recording_streak}d
+          <span className="flex items-center gap-0.5">
+            <Flame className="h-2.5 w-2.5 text-orange-500" />
+            {stats.all_time.recording_streak}
           </span>
         )}
-        <span className="flex items-center gap-1">
-          <Pencil className="h-3 w-3" />
+        <span className="flex items-center gap-0.5">
+          <Pencil className="h-2.5 w-2.5" />
           {formatNum(stats.all_time.total_words)}
         </span>
         {stats.today.meetings > 0 && (
-          <span className="flex items-center gap-1">
-            <Mic className="h-3 w-3" />
+          <span className="flex items-center gap-0.5">
+            <Mic className="h-2.5 w-2.5" />
             {stats.today.meetings}
           </span>
         )}
