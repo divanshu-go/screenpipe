@@ -56,7 +56,7 @@ export function HomeStatsBadge() {
       {/* Badge */}
       <button
         onClick={() => setShowModal(true)}
-        className="inline-flex items-center gap-4 px-4 py-2 rounded-full bg-muted/40 hover:bg-muted/60 border border-border/30 hover:border-border/50 transition-all cursor-pointer text-sm"
+        className="inline-flex items-center gap-2.5 px-3 py-1 rounded-full bg-muted/30 hover:bg-muted/50 border border-border/20 hover:border-border/40 transition-all cursor-pointer text-xs"
       >
         {stats.all_time.recording_streak > 0 && (
           <>
