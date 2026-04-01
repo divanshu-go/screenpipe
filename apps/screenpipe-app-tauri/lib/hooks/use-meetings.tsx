@@ -7,7 +7,7 @@ import {
 	AudioData,
 	StreamTimeSeriesResponse,
 } from "@/components/rewind/timeline";
-import { dominantDiarizationLabel, formatDiarizationLabel } from "@/lib/diarization-label";
+import { dominantDiarizationLabel, resolveDisplaySpeakerLabel } from "@/lib/diarization-label";
 
 export interface AudioEntryWithTimestamp extends AudioData {
 	frameTimestamp: Date;
@@ -235,10 +235,13 @@ function detectMeetings(frames: StreamTimeSeriesResponse[]): Meeting[] {
 					: entry.is_input
 						? "input"
 						: "output";
-			const displayName =
-				entry.speaker_name?.trim() ||
-				(diarRaw ? formatDiarizationLabel(diarRaw) : undefined) ||
-				(entry.is_input ? "You" : "Speaker");
+			const displayName = resolveDisplaySpeakerLabel({
+				speaker_name: entry.speaker_name,
+				aligned_words_json: entry.aligned_words_json,
+				speaker_id: entry.speaker_id,
+				is_input: entry.is_input,
+				device_name: entry.device_name,
+			});
 			const existing = speakers.get(id);
 			if (existing) {
 				existing.durationSecs += entry.duration_secs;

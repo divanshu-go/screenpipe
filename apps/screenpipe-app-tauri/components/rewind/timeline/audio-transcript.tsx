@@ -23,7 +23,10 @@ import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Meeting, deduplicateAudioItems } from "@/lib/hooks/use-meetings";
 import { usePipes } from "@/lib/hooks/use-pipes";
-import { dominantDiarizationLabel, formatDiarizationLabel } from "@/lib/diarization-label";
+import {
+	dominantDiarizationLabel,
+	resolveDisplaySpeakerLabel,
+} from "@/lib/diarization-label";
 
 // Extended audio item with timestamp for conversation view
 interface AudioItemWithTimestamp extends AudioData {
@@ -204,12 +207,13 @@ export function AudioTranscript({
 			if (speakerOverride) {
 				return { speakerId: speakerOverride.speakerId, speakerName: speakerOverride.speakerName };
 			}
-			const rawName = audio.speaker_name?.trim();
-			const diarRaw = dominantDiarizationLabel(audio.aligned_words_json);
-			const speakerName =
-				rawName ||
-				(diarRaw ? formatDiarizationLabel(diarRaw) : undefined) ||
-				(audio.is_input ? "You" : "Speaker");
+			const speakerName = resolveDisplaySpeakerLabel({
+				speaker_name: audio.speaker_name,
+				aligned_words_json: audio.aligned_words_json,
+				speaker_id: audio.speaker_id,
+				is_input: audio.is_input,
+				device_name: audio.device_name,
+			});
 			return {
 				speakerId: audio.speaker_id,
 				speakerName,

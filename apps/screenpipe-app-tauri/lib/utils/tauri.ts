@@ -1145,10 +1145,6 @@ audioTranscriptionEngine: string;
  */
 transcriptionMode: string; 
 /**
- * STT pipeline: "quality" (default) or "fast" (legacy pyannote-sliced STT).
- */
-transcriptionPipelineMode?: string; 
-/**
  * Audio device names/IDs to capture from.
  */
 audioDevices: string[]; 
@@ -1175,6 +1171,11 @@ vadSensitivity: string;
  * Filter music-dominant audio before transcription using spectral analysis.
  */
 filterMusic: boolean; 
+/**
+ * STT segmentation: "quality" (default) = transcribe full chunk before pyannote slicing;
+ * "fast" = legacy pyannote-defined STT segments when models are available.
+ */
+transcriptionPipelineMode?: string; 
 /**
  * Maximum batch duration in seconds for batch transcription.
  * None = use engine-aware defaults (Deepgram=5000s, OpenAI=3000s, Whisper=600s).

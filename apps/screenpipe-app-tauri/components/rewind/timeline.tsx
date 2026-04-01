@@ -109,6 +109,39 @@ export function audioSpeechOverlapsFrame(
 	);
 }
 
+/**
+ * Absolute speech interval for a chunk. When `audio_chunk_timestamp` is missing,
+ * falls back to `frameFallbackMs` as chunk start (legacy / pre-metadata).
+ */
+export function getSpeechWindowMs(
+	audio: AudioData,
+	frameFallbackMs: number
+): { start: number; end: number } {
+	const chunkIso = audio.audio_chunk_timestamp;
+	if (!chunkIso) {
+		return {
+			start: frameFallbackMs,
+			end: frameFallbackMs + (audio.duration_secs || 5) * 1000,
+		};
+	}
+	const chunkMs = new Date(chunkIso).getTime();
+	if (Number.isNaN(chunkMs)) {
+		return {
+			start: frameFallbackMs,
+			end: frameFallbackMs + (audio.duration_secs || 5) * 1000,
+		};
+	}
+	const startOffMs = (audio.start_offset ?? 0) * 1000;
+	const speechStart = chunkMs + startOffMs;
+	let speechEnd: number;
+	if (audio.end_offset != null && !Number.isNaN(Number(audio.end_offset))) {
+		speechEnd = chunkMs + Number(audio.end_offset) * 1000;
+	} else {
+		speechEnd = speechStart + (audio.duration_secs ?? 0) * 1000;
+	}
+	return { start: speechStart, end: speechEnd };
+}
+
 export interface TimeRange {
 	start: Date;
 	end: Date;

@@ -10,7 +10,11 @@ type AlignedWordJson = {
 	speaker_label?: string | null;
 };
 
-/** Diarization label with the largest total token duration in the chunk. */
+/**
+ * Dominant pyannote/diarization cluster id in this chunk (from token `speaker_label`s).
+ * Not a person's name — see `formatDiarizationLabel`. Real names only come from
+ * `speaker_name` (after you assign in the app) or settings (e.g. mic / userName).
+ */
 export function dominantDiarizationLabel(json: string | undefined): string | undefined {
 	if (!json?.trim()) return undefined;
 	try {
@@ -37,9 +41,28 @@ export function dominantDiarizationLabel(json: string | undefined): string | und
 	}
 }
 
-/** Human-readable short label for pyannote-style ids (e.g. SPEAKER_00 → Speaker 1). */
+/** Maps pyannote ids to Voice 1, Voice 2, … — distinct from generic “Speaker” fallback. */
 export function formatDiarizationLabel(raw: string): string {
 	const m = /^SPEAKER_(\d+)$/i.exec(raw.trim());
-	if (m) return `Speaker ${Number(m[1]) + 1}`;
+	if (m) return `Voice ${Number(m[1]) + 1}`;
 	return raw;
+}
+
+/** Single place for transcript / meeting / subtitle speaker line (name → diar → embedding id → device). */
+export function resolveDisplaySpeakerLabel(audio: {
+	speaker_name?: string;
+	aligned_words_json?: string;
+	speaker_id?: number;
+	is_input: boolean;
+	device_name?: string;
+}): string {
+	const named = audio.speaker_name?.trim();
+	if (named) return named;
+	const diar = dominantDiarizationLabel(audio.aligned_words_json);
+	if (diar) return formatDiarizationLabel(diar);
+	if (audio.is_input) return "You";
+	if (audio.speaker_id != null) return `Unknown #${audio.speaker_id}`;
+	const dev = audio.device_name?.trim();
+	if (dev) return dev;
+	return "Playback";
 }

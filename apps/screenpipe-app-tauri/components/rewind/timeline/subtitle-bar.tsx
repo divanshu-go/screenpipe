@@ -4,7 +4,12 @@
 "use client";
 import { useMemo, useRef, useEffect, useState } from "react";
 import { Mic, Volume2, ChevronDown, X, Loader2, MessageSquareText } from "lucide-react";
-import { StreamTimeSeriesResponse, AudioData } from "@/components/rewind/timeline";
+import {
+	StreamTimeSeriesResponse,
+	AudioData,
+	getSpeechWindowMs,
+} from "@/components/rewind/timeline";
+import { resolveDisplaySpeakerLabel } from "@/lib/diarization-label";
 
 interface SubtitleBarProps {
 	frames: StreamTimeSeriesResponse[];
@@ -107,15 +112,24 @@ export function SubtitleBar({ frames, currentIndex, isPlaying, onClick, transcri
 		const lookahead: AudioEntry[] = [];
 
 		for (const entry of allEntries) {
-			const entryStartMs = entry.timestamp.getTime();
-			const entryEndMs = entryStartMs + (entry.duration_secs || 5) * 1000 + LINGER_SECS * 1000;
+			// Use chunk capture + offsets — not the frame timestamp (same chunk is copied to many frames).
+			const { start: speechStartMs, end: speechEndMs } = getSpeechWindowMs(
+				entry,
+				entry.timestamp.getTime()
+			);
+			const lingerMs = LINGER_SECS * 1000;
+			const prebufMs = 5000;
 
-			// Active: started (with 5s pre-buffer) and not expired
-			if (currentTime >= entryStartMs - 5000 && currentTime <= entryEndMs) {
+			// Active: playhead inside speech (+ small pre-roll) or linger after speech ends
+			if (
+				currentTime >= speechStartMs - prebufMs &&
+				currentTime <= speechEndMs + lingerMs
+			) {
 				active.push(entry);
-			}
-			// Lookahead: hasn't started yet but within lookahead window
-			else if (entryStartMs > currentTime && entryStartMs - currentTime <= LOOKAHEAD_MS) {
+			} else if (
+				speechStartMs > currentTime &&
+				speechStartMs - currentTime <= LOOKAHEAD_MS
+			) {
 				lookahead.push(entry);
 			}
 		}
@@ -249,9 +263,13 @@ function SubtitleLine({
 	isHovered: boolean;
 	isLookahead: boolean;
 }) {
-	const speakerLabel = entry.is_input
-		? "You"
-		: entry.speaker_name || entry.device_name || "Speaker";
+	const speakerLabel = resolveDisplaySpeakerLabel({
+		speaker_name: entry.speaker_name,
+		aligned_words_json: entry.aligned_words_json,
+		speaker_id: entry.speaker_id,
+		is_input: entry.is_input,
+		device_name: entry.device_name,
+	});
 
 	const timeStr = entry.timestamp.toLocaleTimeString([], {
 		hour: "2-digit",
