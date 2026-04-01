@@ -59,25 +59,23 @@ export function HomeStatsBadge() {
         className="inline-flex items-center gap-4 px-4 py-2 rounded-full bg-muted/40 hover:bg-muted/60 border border-border/30 hover:border-border/50 transition-all cursor-pointer text-sm"
       >
         {stats.all_time.recording_streak > 0 && (
-          <span className="flex items-center gap-1.5">
-            <span>🔥</span>
-            <span className="font-semibold text-foreground">{stats.all_time.recording_streak} days</span>
-          </span>
-        )}
-        {stats.all_time.recording_streak > 0 && <span className="text-border">|</span>}
-        <span className="flex items-center gap-1.5">
-          <span>🚀</span>
-          <span className="font-semibold text-foreground">{formatNum(stats.all_time.total_words)} words</span>
-        </span>
-        {stats.today.meetings > 0 && (
           <>
-            <span className="text-border">|</span>
             <span className="flex items-center gap-1.5">
-              <span>🏆</span>
-              <span className="font-semibold text-foreground">{stats.today.meetings} meetings</span>
+              <span>🔥</span>
+              <span className="font-semibold text-foreground">{stats.all_time.recording_streak} days</span>
             </span>
+            <span className="text-border">|</span>
           </>
         )}
+        <span className="flex items-center gap-1.5">
+          <span>⏱</span>
+          <span className="font-semibold text-foreground">{stats.today.hours_recorded}h today</span>
+        </span>
+        <span className="text-border">|</span>
+        <span className="flex items-center gap-1.5">
+          <span>📱</span>
+          <span className="font-semibold text-foreground">{stats.today.apps_used} apps</span>
+        </span>
       </button>
 
       {/* Modal */}
