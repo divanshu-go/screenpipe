@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tracing::debug;
 
-/// How long the cache is valid (1 hour).
-const CACHE_TTL_SECS: u64 = 3600;
+/// How long the cache is valid (24 hours).
+const CACHE_TTL_SECS: u64 = 86400;
 
 /// Cached stats with timestamp.
 static STATS_CACHE: std::sync::LazyLock<RwLock<(u64, Option<UserStats>)>> =
