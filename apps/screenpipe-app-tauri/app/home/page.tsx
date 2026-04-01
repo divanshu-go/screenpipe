@@ -51,6 +51,7 @@ import { MemoriesSection } from "@/components/settings/memories-section";
 import { NotificationsSettings } from "@/components/settings/notifications-settings";
 import { UsageSection } from "@/components/settings/usage-section";
 import { SpeakersSection } from "@/components/settings/speakers-section";
+import { HomeStatsBadge } from "@/components/home-stats-badge";
 import { StandaloneChat } from "@/components/standalone-chat";
 import Timeline from "@/components/rewind/timeline";
 import { useQueryState } from "nuqs";
@@ -562,6 +563,13 @@ function SettingsPageContent() {
                   return btn;
                 })}
               </div>
+
+              {/* Stats badge */}
+              {!sidebarCollapsed && (
+                <div className="px-2 py-1.5">
+                  <HomeStatsBadge />
+                </div>
+              )}
 
               {/* Spacer */}
               <div className="flex-1" />

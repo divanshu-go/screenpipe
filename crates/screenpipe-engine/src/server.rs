@@ -164,6 +164,12 @@ pub struct AppState {
     pub browser_bridge: Arc<crate::routes::browser::BrowserBridge>,
 }
 
+async fn stats_handler(
+    State(state): State<Arc<AppState>>,
+) -> axum::Json<crate::stats::UserStats> {
+    axum::Json(crate::stats::get_stats(&state.db).await)
+}
+
 pub struct SCServer {
     db: Arc<DatabaseManager>,
     addr: SocketAddr,
@@ -482,6 +488,7 @@ impl SCServer {
             .get("/frames/:frame_id/metadata", get_frame_metadata)
             .get("/frames/next-valid", get_next_valid_frame)
             .get("/health", health_check)
+            .get("/stats", stats_handler)
             .post("/raw_sql", execute_raw_sql)
             .post("/add", add_to_database)
             .get("/speakers/unnamed", get_unnamed_speakers_handler)
