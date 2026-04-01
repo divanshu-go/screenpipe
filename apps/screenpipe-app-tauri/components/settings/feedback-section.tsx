@@ -21,6 +21,12 @@ export function FeedbackSection() {
         Get support, send logs, or suggest features
       </p>
 
+      <div className="px-3 py-2.5 mb-2 bg-muted/50 border border-border text-xs text-muted-foreground leading-relaxed">
+        when you send logs, our AI automatically analyzes them to help
+        diagnose issues faster. you can also ask our support team to run
+        a deeper AI debug on your logs.
+      </div>
+
       <div className="space-y-2">
         <div className="px-3 py-2.5 bg-card border border-border">
           <div className="flex items-center gap-2.5 mb-2.5">
