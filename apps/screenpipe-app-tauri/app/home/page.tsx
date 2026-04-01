@@ -125,7 +125,7 @@ function SettingsPageContent() {
 
   const { settings } = useSettings();
   const teamState = useTeam();
-  const { isSectionHidden, needsLicenseKey, submitLicenseKey } = useEnterprisePolicy();
+  const { isSectionHidden, isSettingLocked, needsLicenseKey, submitLicenseKey } = useEnterprisePolicy();
 
   // If current section is hidden by enterprise policy, redirect to first visible one
   useEffect(() => {
