@@ -2983,24 +2983,6 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
           <h2 className="font-semibold text-sm tracking-tight">Pipe AI</h2>
           <p className="text-[10px] text-muted-foreground font-mono uppercase tracking-wider">Screen Activity Assistant</p>
         </div>
-        {!isEmbedded && (
-          <Button
-            variant={showHistory ? "secondary" : "ghost"}
-            size="icon"
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={async (e) => {
-              e.stopPropagation();
-              if (!showHistory) {
-                await reloadStore();
-              }
-              setShowHistory(!showHistory);
-            }}
-            className="relative z-10 h-7 w-7"
-            title="Chat history"
-          >
-            <History size={14} />
-          </Button>
-        )}
         <Button
           variant="default"
           size="sm"
@@ -3021,6 +3003,27 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
           {formatShortcutDisplay(settings.showChatShortcut || (isMac ? "Control+Super+L" : "Alt+L"), isMac)}
         </kbd>
       </div>
+
+      {/* History toggle for overlay — below header to avoid traffic lights */}
+      {!isEmbedded && (
+        <div className="px-3 py-1 border-b border-border/50">
+          <Button
+            variant={showHistory ? "secondary" : "ghost"}
+            size="sm"
+            onClick={async () => {
+              if (!showHistory) {
+                await reloadStore();
+              }
+              setShowHistory(!showHistory);
+            }}
+            className="h-6 px-2 gap-1 text-xs"
+            title="Chat history"
+          >
+            <History size={12} />
+            <span>History</span>
+          </Button>
+        </div>
+      )}
 
       {/* Main content area with optional history sidebar */}
       <div className="flex-1 flex overflow-hidden">
