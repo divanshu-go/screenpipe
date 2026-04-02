@@ -238,6 +238,7 @@ export function IntegrationIcon({ icon }: { icon: string }) {
     ntfy: <img src="/images/ntfy.png" alt="ntfy" className="w-5 h-5 rounded" />,
     toggl: <img src="/images/toggl.png" alt="Toggl" className="w-5 h-5 rounded" />,
     monday: <img src="/images/monday.png" alt="Monday.com" className="w-5 h-5 rounded" />,
+    asana: <img src="/images/asana.svg" alt="Asana" className="w-5 h-5" />,
     "browser-url": <img src="/images/browser-url.svg" alt="Browser URL" className="w-5 h-5 rounded" />,
     "browser-extension": (
       <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -245,6 +246,12 @@ export function IntegrationIcon({ icon }: { icon: string }) {
       </svg>
     ),
     "voice-memos": <img src="/images/voice-memos.svg" alt="Voice Memos" className="w-5 h-5 rounded" />,
+    clickup: (
+      <svg viewBox="0 0 24 24" className="w-5 h-5" fill="#7B68EE">
+        <path d="M3.064 11.993l3.39-2.96a5.601 5.601 0 0 0 5.557 4.96 5.601 5.601 0 0 0 5.557-4.96l3.39 2.96C19.27 15.715 15.894 18 12.011 18c-3.883 0-7.259-2.285-8.947-6.007z"/>
+        <path d="M12.011 6l-5.038 4.396L3.582 7.44 12.011 0l8.429 7.44-3.39 2.96L12.01 6z"/>
+      </svg>
+    ),
     brex: (
       <svg viewBox="0 0 24 24" className="w-5 h-5" fill="#F46A35">
         <path d="M18.69 2.319a3.868 3.868 0 0 0-3.108 1.547l-.759 1.007a1.658 1.658 0 0 1-1.313.656H0V21.68h5.296a3.87 3.87 0 0 0 3.108-1.547l.759-1.006a1.656 1.656 0 0 1 1.313-.657H24V2.319h-5.31Zm1.108 11.949h-5.66a3.87 3.87 0 0 0-3.108 1.547l-.759 1.007a1.658 1.658 0 0 1-1.313.656H4.202V9.731h5.661a3.868 3.868 0 0 0 3.107-1.547l.759-1.006a1.658 1.658 0 0 1 1.313-.657h4.771l-.015 7.747Z"/>

@@ -313,7 +313,7 @@ function SpeakerRow({
                 className="h-7 w-7 text-destructive"
                 title="delete"
                 disabled={deleting}
-                onClick={async () => { setDeleting(true); await onDelete(speaker.id); setDeleting(false); }}
+                onClick={async () => { setDeleting(true); try { await onDelete(speaker.id); } catch {} finally { setDeleting(false); } }}
               >
                 {deleting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
               </Button>
@@ -362,7 +362,7 @@ export function SpeakersSection() {
   const deleteSpeaker = async (id: number) => {
     const res = await fetch("http://localhost:3030/speakers/delete", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ speaker_id: id }),
+      body: JSON.stringify({ id }),
     });
     if (!res.ok) throw new Error("failed");
     toast({ title: "speaker deleted" });
