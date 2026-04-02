@@ -246,6 +246,14 @@ export function IntegrationIcon({ icon }: { icon: string }) {
       </svg>
     ),
     "voice-memos": <img src="/images/voice-memos.svg" alt="Voice Memos" className="w-5 h-5 rounded" />,
+    microsoft365: (
+      <svg viewBox="0 0 24 24" className="w-5 h-5">
+        <path fill="#F25022" d="M1 1h10v10H1z"/>
+        <path fill="#7FBA00" d="M13 1h10v10H13z"/>
+        <path fill="#00A4EF" d="M1 13h10v10H1z"/>
+        <path fill="#FFB900" d="M13 13h10v10H13z"/>
+      </svg>
+    ),
     trello: (
       <svg viewBox="0 0 24 24" className="w-5 h-5" fill="#0079BF">
         <path d="M21 0H3C1.34 0 0 1.34 0 3v18c0 1.66 1.34 3 3 3h18c1.66 0 3-1.34 3-3V3c0-1.66-1.34-3-3-3zM10.44 18.18c0 .96-.78 1.73-1.73 1.73H4.78c-.96 0-1.73-.78-1.73-1.73V4.78c0-.96.78-1.73 1.73-1.73h3.93c.96 0 1.73.78 1.73 1.73v13.4zm10.3-6.36c0 .96-.78 1.73-1.73 1.73h-3.93c-.96 0-1.73-.78-1.73-1.73V4.78c0-.96.78-1.73 1.73-1.73h3.93c.96 0 1.73.78 1.73 1.73v7.04z"/>

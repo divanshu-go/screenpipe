@@ -22,6 +22,7 @@ pub mod limitless;
 pub mod linear;
 pub mod logseq;
 pub mod make;
+pub mod microsoft365;
 pub mod monday;
 pub mod n8n;
 pub mod notion;
@@ -133,6 +134,7 @@ pub fn all_integrations() -> Vec<Box<dyn Integration>> {
         Box::new(clickup::ClickUp),
         Box::new(confluence::Confluence),
         Box::new(salesforce::Salesforce),
+        Box::new(microsoft365::Microsoft365),
         Box::new(trello::Trello),
         Box::new(zendesk::Zendesk),
         Box::new(stripe::Stripe),
