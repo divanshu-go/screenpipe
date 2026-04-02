@@ -36,6 +36,7 @@ import {
   ChevronDown,
   ChevronUp,
   GripVertical,
+  Share2,
 } from "lucide-react";
 import {
   DndContext,
@@ -1765,9 +1766,16 @@ function SortablePresetCard({
             <Star className="w-3 h-3 mr-1" />{isDefault ? "default" : "set default"}
           </Button>
           {isTeamAdmin && onShareToTeam && (
-            <Button variant="ghost" size="sm" className="text-[11px] h-6 px-2" onClick={(e) => { e.stopPropagation(); onShareToTeam(); }} disabled={isLoading}>
-              share to team
-            </Button>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={(e) => { e.stopPropagation(); onShareToTeam(); }} disabled={isLoading}>
+                    <Share2 className="w-3 h-3" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>share to team (e2e encrypted)</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           )}
           {!isDefault && (
             <Button variant="ghost" size="sm" className="text-[11px] h-6 px-2 text-destructive hover:text-destructive ml-auto" onClick={(e) => { e.stopPropagation(); onDelete(); }} disabled={isLoading}>
