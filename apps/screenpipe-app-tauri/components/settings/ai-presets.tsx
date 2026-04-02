@@ -75,6 +75,7 @@ import { toast } from "../ui/use-toast";
 import { Card, CardContent } from "../ui/card";
 import { AIProviderType } from "@/lib/hooks/use-settings";
 import { useIsEnterpriseBuild } from "@/lib/hooks/use-is-enterprise-build";
+import { useTeam } from "@/lib/hooks/use-team";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -1659,7 +1660,9 @@ function SortablePresetCard({
   onDuplicate,
   onSetDefault,
   onDelete,
+  onShareToTeam,
   isLoading,
+  isTeamAdmin,
 }: {
   preset: AIPreset;
   isDefault: boolean;
@@ -1668,7 +1671,9 @@ function SortablePresetCard({
   onDuplicate: () => void;
   onSetDefault: () => void;
   onDelete: () => void;
+  onShareToTeam?: () => void;
   isLoading: boolean;
+  isTeamAdmin?: boolean;
 }) {
   const {
     attributes,
@@ -1744,6 +1749,11 @@ function SortablePresetCard({
           <Button variant="ghost" size="sm" className="text-[11px] h-6 px-2" onClick={(e) => { e.stopPropagation(); onSetDefault(); }} disabled={isLoading || isDefault}>
             <Star className="w-3 h-3 mr-1" />{isDefault ? "default" : "set default"}
           </Button>
+          {isTeamAdmin && onShareToTeam && (
+            <Button variant="ghost" size="sm" className="text-[11px] h-6 px-2" onClick={(e) => { e.stopPropagation(); onShareToTeam(); }} disabled={isLoading}>
+              share to team
+            </Button>
+          )}
           {!isDefault && (
             <Button variant="ghost" size="sm" className="text-[11px] h-6 px-2 text-destructive hover:text-destructive ml-auto" onClick={(e) => { e.stopPropagation(); onDelete(); }} disabled={isLoading}>
               <Trash2 className="w-3 h-3" />
@@ -1767,6 +1777,17 @@ export const AIPresets = () => {
   const [isDuplicating, setIsDuplicating] = useState(false);
   const isEnterprise = useIsEnterpriseBuild();
   const [piAvailable, setPiAvailable] = useState(false);
+  const team = useTeam();
+  const isTeamAdmin = !!team.team && team.role === "admin";
+
+  const sharePresetToTeam = async (preset: AIPreset) => {
+    try {
+      await team.pushConfig("ai_provider", preset.id, preset);
+      toast({ title: "shared to team", description: `"${formatPresetName(preset.id)}" is now available to all team members (e2e encrypted)` });
+    } catch (err: any) {
+      toast({ title: "failed to share to team", description: err.message, variant: "destructive" });
+    }
+  };
 
   // Drag-and-drop sensors with activation distance to avoid conflicts with clicks
   const sensors = useSensors(
@@ -2021,7 +2042,9 @@ export const AIPresets = () => {
                 onDuplicate={() => duplicatePreset(preset.id)}
                 onSetDefault={() => setPresetToSetDefault(preset.id)}
                 onDelete={() => setPresetToDelete(preset.id)}
+                onShareToTeam={isTeamAdmin ? () => sharePresetToTeam(preset) : undefined}
                 isLoading={isLoading}
+                isTeamAdmin={isTeamAdmin}
               />
             ))}
           </div>

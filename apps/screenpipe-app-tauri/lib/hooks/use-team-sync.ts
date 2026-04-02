@@ -4,10 +4,11 @@
 
 import { useEffect, useRef } from "react";
 import { useSettings } from "./use-settings";
+import { AIPreset } from "@/lib/utils/tauri";
 import { TeamConfig } from "./use-team";
 
 /**
- * Auto-syncs team configs (window_filter, url_filter) into local settings.
+ * Auto-syncs team configs (window_filter, url_filter, ai_provider) into local settings.
  * Call inside a component that already has useTeam() mounted.
  */
 export function useTeamSync(configs: TeamConfig[], hasTeam: boolean) {
@@ -70,12 +71,31 @@ export function useTeamSync(configs: TeamConfig[], hasTeam: boolean) {
       ignoredUrls: [...new Set(ignoredUrls)],
     };
 
+    // Merge team AI provider presets into local presets
+    const aiProviderConfigs = configs.filter(
+      (c) => c.config_type === "ai_provider" && c.scope === "team" && c.value
+    );
+    let updatedPresets = [...settings.aiPresets];
+    for (const c of aiProviderConfigs) {
+      const teamPreset = c.value as AIPreset;
+      if (!teamPreset.id || !teamPreset.provider) continue;
+      const existing = updatedPresets.findIndex((p) => p.id === teamPreset.id);
+      if (existing >= 0) {
+        // Update in place, preserve local defaultPreset flag
+        const merged = { ...teamPreset, defaultPreset: updatedPresets[existing].defaultPreset } as AIPreset;
+        updatedPresets[existing] = merged;
+      } else {
+        // Add new team preset (not default)
+        updatedPresets.push({ ...teamPreset, defaultPreset: false } as AIPreset);
+      }
+    }
+
     // Fingerprint to avoid redundant writes
-    const fingerprint = JSON.stringify(teamFilters);
+    const fingerprint = JSON.stringify({ teamFilters, presetIds: aiProviderConfigs.map((c) => `${c.key}:${c.updated_at}`) });
     if (fingerprint === lastFingerprint.current) return;
     lastFingerprint.current = fingerprint;
 
-    updateSettings({ teamFilters });
+    updateSettings({ teamFilters, aiPresets: updatedPresets });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configs, hasTeam]);
 }
