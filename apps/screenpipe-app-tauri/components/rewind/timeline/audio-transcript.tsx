@@ -121,7 +121,6 @@ export function AudioTranscript({
 	const [isDragging, setIsDragging] = useState(false);
 	const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
 	const [windowSize, setWindowSize] = useState({ width: 360, height: 500 });
-	const resizerRef = useRef<HTMLDivElement | null>(null);
 	const panelRef = useRef<HTMLDivElement | null>(null);
 
 	const [copied, setCopied] = useState(false);
@@ -265,7 +264,15 @@ export function AudioTranscript({
 		dedupedAudio.forEach((audio) => {
 			const { speakerId, speakerName } = getSpeakerInfo(audio);
 			const diarRaw = dominantDiarizationLabel(audio.aligned_words_json);
-			const groupKey = `${speakerId ?? -1}_${audio.is_input ? "in" : "out"}_${diarRaw ?? "nodiar"}`;
+			// Stable grouping rules (ordered by reliability):
+			// 1. input device (mic) → one physical person owns the mic; ignore speaker_id because
+			//    the DB threshold often fails to match the same voice across 30s chunks, creating
+			//    spurious new speaker IDs (id=1, id=3, id=5 …) for the same person.
+			// 2. output device + speaker_id known → use it; stable via EmbeddingManager
+			// 3. output device + no speaker_id → fall back to diarization label
+			const speakerPart = audio.is_input ? "me" : (speakerId ?? -1);
+			const diarGroup = (speakerId != null || audio.is_input) ? "any" : (diarRaw ?? "nodiar");
+			const groupKey = `${speakerPart}_${audio.is_input ? "in" : "out"}_${diarGroup}`;
 			// Force new group for unnamed speakers so the assign popover is always visible
 			const isFirstInGroup = groupKey !== lastGroupKey || !speakerName;
 
@@ -299,7 +306,9 @@ export function AudioTranscript({
 		dedupedAudio.forEach((audio) => {
 			const { speakerId, speakerName } = getSpeakerInfo(audio);
 			const diarRaw = dominantDiarizationLabel(audio.aligned_words_json);
-			const id = `${speakerId ?? -1}_${audio.is_input ? "in" : "out"}_${diarRaw ?? "nodiar"}`;
+			const speakerPart = audio.is_input ? "me" : (speakerId ?? -1);
+			const diarGroup = (speakerId != null || audio.is_input) ? "any" : (diarRaw ?? "nodiar");
+			const id = `${speakerPart}_${audio.is_input ? "in" : "out"}_${diarGroup}`;
 			const existing = participantMap.get(id);
 			if (existing) {
 				existing.duration += audio.duration_secs;
@@ -370,7 +379,8 @@ export function AudioTranscript({
 		dedupedAudio.forEach((audio) => {
 			const { speakerId, speakerName } = getSpeakerInfo(audio);
 			const diarRaw = dominantDiarizationLabel(audio.aligned_words_json);
-			const groupKey = `${speakerId ?? -1}_${audio.is_input ? "in" : "out"}_${diarRaw ?? "nodiar"}`;
+			const diarGroup = (speakerId != null || audio.is_input) ? "any" : (diarRaw ?? "nodiar");
+			const groupKey = `${speakerId ?? -1}_${audio.is_input ? "in" : "out"}_${diarGroup}`;
 			// Force new group for unnamed speakers so the assign popover is always visible
 			const isFirstInGroup = groupKey !== lastGroupKey || !speakerName;
 
@@ -408,7 +418,9 @@ export function AudioTranscript({
 		dedupedAudio.forEach((audio) => {
 			const { speakerId } = getSpeakerInfo(audio);
 			const diarRaw = dominantDiarizationLabel(audio.aligned_words_json);
-			const id = `${speakerId ?? -1}_${audio.is_input ? "in" : "out"}_${diarRaw ?? "nodiar"}`;
+			const speakerPart = audio.is_input ? "me" : (speakerId ?? -1);
+			const diarGroup = (speakerId != null || audio.is_input) ? "any" : (diarRaw ?? "nodiar");
+			const id = `${speakerPart}_${audio.is_input ? "in" : "out"}_${diarGroup}`;
 			if (!firstChunkBySpeaker.has(id)) {
 				firstChunkBySpeaker.set(id, {
 					audioChunkId: audio.audio_chunk_id,
@@ -980,7 +992,6 @@ export function AudioTranscript({
 
 			{/* Resize handle */}
 			<div
-				ref={resizerRef}
 				onMouseDown={handleResizeMouseDown}
 				className="absolute right-0 bottom-0 w-4 h-4 cursor-se-resize bg-white/10 hover:bg-white/20 transition-colors"
 				style={{

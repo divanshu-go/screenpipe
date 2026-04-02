@@ -22,8 +22,22 @@ function formatDuration(seconds: number): string {
 	return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
 }
 
-function getSpeakerColorClass(_speakerId?: number | string): string {
-	return "border-l-border";
+const SPEAKER_COLORS = [
+	"border-l-blue-500",
+	"border-l-emerald-500",
+	"border-l-violet-500",
+	"border-l-amber-500",
+	"border-l-rose-500",
+	"border-l-cyan-500",
+];
+
+function getSpeakerColorClass(speakerId?: number | string): string {
+	if (speakerId == null) return "border-l-border";
+	const n =
+		typeof speakerId === "number"
+			? speakerId
+			: speakerId.split("").reduce((a, c) => a + c.charCodeAt(0), 0);
+	return SPEAKER_COLORS[Math.abs(n) % SPEAKER_COLORS.length];
 }
 
 const TRUNCATE_LENGTH = 150;

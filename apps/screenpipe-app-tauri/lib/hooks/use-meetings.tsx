@@ -108,11 +108,11 @@ function deduplicateAudio<T extends { audio_chunk_id: number; is_input: boolean;
 			const isDup = sim >= DEDUP_SIMILARITY_THRESHOLD
 				|| hasSharedWordSequence(uniqueEntries[i].transcription, uniqueEntries[j].transcription);
 			if (isDup) {
-				if (uniqueEntries[j].is_input) {
-					removed.add(i);
-				} else {
-					removed.add(j);
-				}
+				// Prefer system audio output over mic input when deduplicating.
+				// Acoustic echo: mic picks up MacBook speaker → keep the clean output capture,
+				// discard the degraded mic echo.
+				const inputIdx = uniqueEntries[i].is_input ? i : j;
+				removed.add(inputIdx);
 			}
 		}
 		if (!removed.has(i)) kept.push(uniqueEntries[i]);
@@ -154,11 +154,11 @@ export function deduplicateAudioItems<T extends { audio_chunk_id: number; is_inp
 			const isDup = sim >= DEDUP_SIMILARITY_THRESHOLD
 				|| hasSharedWordSequence(uniqueEntries[i].transcription, uniqueEntries[j].transcription);
 			if (isDup) {
-				if (uniqueEntries[j].is_input) {
-					removed.add(i);
-				} else {
-					removed.add(j);
-				}
+				// Prefer system audio output over mic input when deduplicating.
+				// Acoustic echo: mic picks up MacBook speaker → keep the clean output capture,
+				// discard the degraded mic echo.
+				const inputIdx = uniqueEntries[i].is_input ? i : j;
+				removed.add(inputIdx);
 			}
 		}
 		if (!removed.has(i)) kept.push(uniqueEntries[i]);

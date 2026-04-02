@@ -209,8 +209,15 @@ impl SegmentIterator {
                         &self.embedding_manager,
                     ) {
                         Ok(segment) => segment,
-                        Err(_) => {
-                            // Skip this segment (e.g. embedding extraction failed)
+                        Err(e) => {
+                            // Log so silent embedding failures become diagnosable.
+                            // Common causes: model not loaded, insufficient samples,
+                            // ORT runtime error, or knf_rs::compute_fbank failure.
+                            tracing::warn!(
+                                "speaker segment dropped (embedding extraction failed): {e}. \
+                                 Check that the pyannote embedding model is downloaded and \
+                                 sqlite-vec is loaded."
+                            );
                             self.is_speeching = false;
                             self.offset += self.frame_size;
                             continue;

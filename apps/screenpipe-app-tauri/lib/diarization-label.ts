@@ -43,8 +43,13 @@ export function dominantDiarizationLabel(json: string | undefined): string | und
 
 /** Maps pyannote ids to Voice 1, Voice 2, … — distinct from generic “Speaker” fallback. */
 export function formatDiarizationLabel(raw: string): string {
-	const m = /^SPEAKER_(\d+)$/i.exec(raw.trim());
+	const trimmed = raw.trim();
+	// Standard pyannote format: “SPEAKER_00” → “Voice 1”
+	const m = /^SPEAKER_(\d+)$/i.exec(trimmed);
 	if (m) return `Voice ${Number(m[1]) + 1}`;
+	// Bare integer format: “3” → “Voice 4” (pyannote sometimes outputs raw integers)
+	const n = parseInt(trimmed, 10);
+	if (!Number.isNaN(n) && trimmed === String(n)) return `Voice ${n + 1}`;
 	return raw;
 }
 

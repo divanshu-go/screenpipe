@@ -400,6 +400,16 @@ pub async fn run_stt(
         && merge.segmentation_model_path.is_some()
         && merge.embedding_extractor.is_some();
 
+    if merge.pipeline_mode == TranscriptionPipelineMode::Quality && !try_quality {
+        tracing::warn!(
+            "quality pipeline requested but diarization models unavailable \
+             (segmentation={}, embedding={}); falling back to plain STT. \
+             Speaker IDs will not be assigned until models finish downloading.",
+            merge.segmentation_model_path.is_some(),
+            merge.embedding_extractor.is_some(),
+        );
+    }
+
     if try_quality && audio_transcription_engine.is_whisper_variant() {
         if let TranscriptionSession::Whisper {
             state,

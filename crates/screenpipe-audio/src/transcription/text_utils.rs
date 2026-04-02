@@ -1,3 +1,49 @@
+/// Detects Whisper hallucination loops: returns true when the same sentence
+/// (or a very similar one) repeats more than `max_repeats` times.
+///
+/// Whisper produces these when audio is near-silent or acoustically degraded —
+/// the model gets stuck and loops on a plausible phrase. The `entropy_thold`
+/// param should catch this but is unreliable across whisper-rs versions.
+///
+/// Strategy: split on sentence boundaries, count exact+near-duplicate repeats,
+/// return true if any sentence appears more than `max_repeats` times.
+pub fn is_repetition_hallucination(text: &str, max_repeats: usize) -> bool {
+    let text = text.trim();
+    if text.is_empty() {
+        return false;
+    }
+    // Split on sentence-ending punctuation or newlines
+    let sentences: Vec<&str> = text
+        .split(|c| c == '.' || c == '!' || c == '?' || c == '\n')
+        .map(|s| s.trim())
+        .filter(|s| s.split_whitespace().count() >= 4)
+        .collect();
+
+    if sentences.len() < max_repeats {
+        return false;
+    }
+
+    // Count occurrences of each normalised sentence
+    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for s in &sentences {
+        // Normalise: lowercase, strip punctuation
+        let key: String = s
+            .chars()
+            .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+            .flat_map(|c| c.to_lowercase())
+            .collect();
+        let key = key.split_whitespace().collect::<Vec<_>>().join(" ");
+        if key.is_empty() {
+            continue;
+        }
+        *counts.entry(key).or_insert(0) += 1;
+        if counts.values().any(|&n| n > max_repeats) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Returns (start_idx_s1, start_idx_s2, match_length) for the longest common word substring.
 /// This allows callers to properly handle overlap removal by skipping past the matched portion.
 pub fn longest_common_word_substring(s1: &str, s2: &str) -> Option<(usize, usize, usize)> {

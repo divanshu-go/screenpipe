@@ -1269,7 +1269,11 @@ impl DatabaseManager {
         &self,
         embedding: &[f32],
     ) -> Result<Option<Speaker>, SqlxError> {
-        let speaker_threshold = 0.55;
+        // Cosine distance threshold (lower = stricter).
+        // 0.55 was too strict for real-world audio capture (30s chunks of the same speaker
+        // were regularly producing distance > 0.55, creating new speaker IDs every chunk).
+        // 0.75 keeps same-speaker chunks together while still separating truly distinct voices.
+        let speaker_threshold = 0.75;
         let bytes: &[u8] = embedding.as_bytes();
 
         // First try matching against stored embeddings (up to 10 per speaker)
@@ -6258,7 +6262,7 @@ LIMIT ? OFFSET ?
         //          their embeddings are similar to target. This prevents one similar
         //          embedding from stealing all transcriptions from an unrelated speaker.
         if propagate_similar {
-            let threshold = 0.55;
+            let threshold = 0.75; // raised from 0.55 — same reason as get_speaker_from_embedding
             let min_absorption_ratio = 0.5; // >50% of embeddings must match
 
             // Read-only: for each other speaker, count matching vs total embeddings

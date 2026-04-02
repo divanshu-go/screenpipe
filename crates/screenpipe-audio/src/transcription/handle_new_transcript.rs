@@ -6,10 +6,10 @@ use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     core::engine::AudioTranscriptionEngine, metrics::AudioPipelineMetrics,
-    transcription::process_transcription_result,
+    transcription::{process_transcription_result, text_utils::is_repetition_hallucination},
 };
 use screenpipe_db::DatabaseManager;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use super::TranscriptionResult;
 
@@ -116,6 +116,21 @@ pub async fn handle_new_transcript(
                 current_transcript = Some(current);
                 was_trimmed = true;
                 metrics.record_overlap_trimmed();
+            }
+        }
+
+        // Discard Whisper repetition hallucinations (model stuck looping on a phrase
+        // when audio is near-silent or acoustically degraded).
+        if let Some(ref t) = current_transcript {
+            if is_repetition_hallucination(t, 3) {
+                metrics.record_transcription_empty();
+                warn!(
+                    "device {} discarding repetition hallucination ({} chars): {:?}",
+                    transcription.input.device,
+                    t.len(),
+                    t.chars().take(120).collect::<String>()
+                );
+                continue;
             }
         }
 
