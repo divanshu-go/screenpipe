@@ -7,6 +7,7 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/components/ui/use-toast";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import {
@@ -22,10 +23,11 @@ import {
   UserX,
   ThumbsUp,
   ThumbsDown,
-  GitMerge,
   Play,
   Square,
   Sparkles,
+  GitMerge,
+  Volume2,
 } from "lucide-react";
 import { useQueryState } from "nuqs";
 import { emit } from "@tauri-apps/api/event";
@@ -49,6 +51,11 @@ interface SimilarSpeaker {
   metadata: string;
 }
 
+interface MergeSuggestion {
+  speaker: Speaker & { isNamed: boolean };
+  similar: SimilarSpeaker;
+}
+
 function parseSamples(metadata: string): AudioSample[] {
   try {
     const parsed = JSON.parse(metadata);
@@ -62,7 +69,8 @@ function AudioClip({ path, startTime, duration }: { path: string; startTime: num
   const audioRef = useRef<HTMLAudioElement>(null);
   const [playing, setPlaying] = useState(false);
 
-  const toggle = () => {
+  const toggle = (e?: React.MouseEvent) => {
+    e?.stopPropagation();
     const el = audioRef.current;
     if (!el) return;
     if (playing) {
@@ -71,7 +79,6 @@ function AudioClip({ path, startTime, duration }: { path: string; startTime: num
     } else {
       el.currentTime = startTime;
       el.play().then(() => setPlaying(true)).catch(() => setPlaying(false));
-      // Stop after duration
       setTimeout(() => {
         el.pause();
         setPlaying(false);
@@ -89,6 +96,141 @@ function AudioClip({ path, startTime, duration }: { path: string; startTime: num
   );
 }
 
+function MergeBanner({
+  suggestions,
+  onMerge,
+  onDismiss,
+}: {
+  suggestions: MergeSuggestion[];
+  onMerge: (keepId: number, mergeId: number) => Promise<void>;
+  onDismiss: (speakerId: number, similarId: number) => void;
+}) {
+  const [current, setCurrent] = useState(0);
+  const [merging, setMerging] = useState(false);
+
+  if (suggestions.length === 0) return null;
+
+  const suggestion = suggestions[current];
+  if (!suggestion) return null;
+
+  const speakerSamples = parseSamples(suggestion.speaker.metadata);
+  const similarSamples = parseSamples(suggestion.similar.metadata);
+
+  const handleMerge = async () => {
+    setMerging(true);
+    try {
+      await onMerge(suggestion.speaker.id, suggestion.similar.id);
+    } finally {
+      setMerging(false);
+      if (current >= suggestions.length - 1) setCurrent(0);
+    }
+  };
+
+  const handleDismiss = () => {
+    onDismiss(suggestion.speaker.id, suggestion.similar.id);
+    if (current >= suggestions.length - 1) setCurrent(Math.max(0, current - 1));
+  };
+
+  return (
+    <div className="rounded-lg border-2 border-dashed border-primary/30 bg-primary/5 p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2 text-sm font-medium">
+          <GitMerge className="h-4 w-4 text-primary" />
+          same person? ({current + 1}/{suggestions.length})
+        </div>
+        <div className="flex gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 text-xs"
+            disabled={current === 0}
+            onClick={() => setCurrent(current - 1)}
+          >
+            prev
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 text-xs"
+            disabled={current >= suggestions.length - 1}
+            onClick={() => setCurrent(current + 1)}
+          >
+            next
+          </Button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        {/* Left speaker */}
+        <div className="rounded-md border border-border bg-background p-3 space-y-2">
+          <div className="flex items-center gap-2">
+            <div className="h-7 w-7 rounded-full bg-primary/10 flex items-center justify-center text-xs font-mono shrink-0">
+              {suggestion.speaker.isNamed ? suggestion.speaker.name.slice(0, 2).toUpperCase() : "?"}
+            </div>
+            <span className="text-sm font-medium truncate">
+              {suggestion.speaker.isNamed ? suggestion.speaker.name : `Speaker #${suggestion.speaker.id}`}
+            </span>
+          </div>
+          {speakerSamples[0] && (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <AudioClip
+                path={speakerSamples[0].path}
+                startTime={speakerSamples[0].start_time}
+                duration={speakerSamples[0].end_time - speakerSamples[0].start_time}
+              />
+              <span className="truncate">&ldquo;{speakerSamples[0].transcript.slice(0, 50)}&rdquo;</span>
+            </div>
+          )}
+        </div>
+
+        {/* Right speaker */}
+        <div className="rounded-md border border-border bg-background p-3 space-y-2">
+          <div className="flex items-center gap-2">
+            <div className="h-7 w-7 rounded-full bg-muted flex items-center justify-center text-xs font-mono shrink-0">
+              {suggestion.similar.name ? suggestion.similar.name.slice(0, 2).toUpperCase() : "?"}
+            </div>
+            <span className="text-sm font-medium truncate">
+              {suggestion.similar.name || `Speaker #${suggestion.similar.id}`}
+            </span>
+          </div>
+          {similarSamples[0] && (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <AudioClip
+                path={similarSamples[0].path}
+                startTime={similarSamples[0].start_time}
+                duration={similarSamples[0].end_time - similarSamples[0].start_time}
+              />
+              <span className="truncate">&ldquo;{similarSamples[0].transcript.slice(0, 50)}&rdquo;</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="flex justify-center gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          className="gap-1.5 border-green-300 text-green-600 hover:bg-green-100 hover:text-green-700"
+          disabled={merging}
+          onClick={handleMerge}
+        >
+          {merging ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ThumbsUp className="h-3.5 w-3.5" />}
+          yes, merge
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          className="gap-1.5"
+          onClick={handleDismiss}
+        >
+          <ThumbsDown className="h-3.5 w-3.5" />
+          different people
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function SpeakerDetail({
   speaker,
   onMerge,
@@ -100,7 +242,6 @@ function SpeakerDetail({
 }) {
   const [similar, setSimilar] = useState<SimilarSpeaker[]>([]);
   const [loadingSimilar, setLoadingSimilar] = useState(true);
-  const { toast } = useToast();
 
   const samples = parseSamples(speaker.metadata);
 
@@ -117,11 +258,6 @@ function SpeakerDetail({
       .finally(() => { clearTimeout(timeout); setLoadingSimilar(false); });
     return () => { controller.abort(); clearTimeout(timeout); };
   }, [speaker.id]);
-
-  const reassign = async (audioPath: string, newSpeakerName: string) => {
-    // Find the audio chunk and reassign — for now just show what would happen
-    toast({ title: `would reassign to "${newSpeakerName}"` });
-  };
 
   return (
     <div className="px-3 py-3 space-y-4 border-t border-border/50 bg-muted/20">
@@ -147,7 +283,7 @@ function SpeakerDetail({
         ))}
       </div>
 
-      {/* Similar speakers — "is this the same person?" */}
+      {/* Similar speakers */}
       <div className="space-y-1.5">
         <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
           sounds similar — same person?
@@ -160,7 +296,6 @@ function SpeakerDetail({
         )}
         {similar.map((s) => {
           const simSamples = parseSamples(s.metadata);
-          const preview = simSamples[0]?.transcript || "(no sample)";
           return (
             <div
               key={s.id}
@@ -178,9 +313,6 @@ function SpeakerDetail({
               )}
               <div className="flex-1 min-w-0">
                 <span className="font-medium">{s.name || `Speaker #${s.id}`}</span>
-                <span className="text-muted-foreground ml-1.5 truncate">
-                  &ldquo;{preview.slice(0, 40)}&rdquo;
-                </span>
               </div>
               <Button
                 variant="outline"
@@ -252,7 +384,7 @@ function SpeakerRow({
         <button className="shrink-0" onClick={(e) => { e.stopPropagation(); onToggle(); }}>
           {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
         </button>
-        <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center text-xs font-mono shrink-0">
+        <div className={`h-8 w-8 rounded-full flex items-center justify-center text-xs font-mono shrink-0 ${isNamed ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"}`}>
           {isNamed ? speaker.name.slice(0, 2).toUpperCase() : "?"}
         </div>
         {editing ? (
@@ -277,15 +409,30 @@ function SpeakerRow({
           </div>
         ) : (
           <>
-            <div className="flex-1 min-w-0">
+            <div className="flex-1 min-w-0 flex items-center gap-2">
               <span className="text-sm">{isNamed ? speaker.name : `Speaker #${speaker.id}`}</span>
+              {!isNamed && (
+                <span className="text-[10px] font-medium uppercase tracking-wider text-amber-500 bg-amber-500/10 px-1.5 py-0.5 rounded">
+                  needs name
+                </span>
+              )}
               {samples.length > 0 && (
-                <span className="text-xs text-muted-foreground ml-2">
+                <span className="text-xs text-muted-foreground">
                   {samples.length} sample{samples.length !== 1 ? "s" : ""}
                 </span>
               )}
             </div>
-            <span className="text-xs text-muted-foreground">#{speaker.id}</span>
+            {/* Inline voice preview */}
+            {samples[0] && (
+              <div className="shrink-0" onClick={(e) => e.stopPropagation()}>
+                <AudioClip
+                  path={samples[0].path}
+                  startTime={samples[0].start_time}
+                  duration={Math.min(samples[0].end_time - samples[0].start_time, 3)}
+                />
+              </div>
+            )}
+            <span className="text-xs text-muted-foreground font-mono">#{speaker.id}</span>
             <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
               <Button
                 variant="ghost"
@@ -313,7 +460,7 @@ function SpeakerRow({
                 className="h-7 w-7 text-destructive"
                 title="delete"
                 disabled={deleting}
-                onClick={async () => { setDeleting(true); await onDelete(speaker.id); setDeleting(false); }}
+                onClick={async () => { setDeleting(true); try { await onDelete(speaker.id); } catch {} finally { setDeleting(false); } }}
               >
                 {deleting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
               </Button>
@@ -332,6 +479,8 @@ export function SpeakersSection() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [mergeSuggestions, setMergeSuggestions] = useState<MergeSuggestion[]>([]);
+  const [dismissedPairs, setDismissedPairs] = useState<Set<string>>(new Set());
   const [, setSection] = useQueryState("section");
   const { toast } = useToast();
 
@@ -349,6 +498,60 @@ export function SpeakersSection() {
 
   useEffect(() => { fetchSpeakers(); }, [fetchSpeakers]);
 
+  // Fetch merge suggestions for unnamed speakers
+  useEffect(() => {
+    if (unnamed.length === 0) return;
+    const controller = new AbortController();
+
+    const fetchSuggestions = async () => {
+      const suggestions: MergeSuggestion[] = [];
+      // Check first 5 unnamed speakers for similar matches
+      const toCheck = unnamed.slice(0, 5);
+      await Promise.allSettled(
+        toCheck.map(async (speaker) => {
+          try {
+            const res = await fetch(
+              `http://localhost:3030/speakers/similar?speaker_id=${speaker.id}&limit=1`,
+              { signal: controller.signal }
+            );
+            if (!res.ok) return;
+            const data = await res.json();
+            if (Array.isArray(data) && data.length > 0) {
+              suggestions.push({
+                speaker: { ...speaker, isNamed: false },
+                similar: data[0],
+              });
+            }
+          } catch {}
+        })
+      );
+      // Also check named speakers
+      const namedToCheck = speakers.slice(0, 3);
+      await Promise.allSettled(
+        namedToCheck.map(async (speaker) => {
+          try {
+            const res = await fetch(
+              `http://localhost:3030/speakers/similar?speaker_id=${speaker.id}&limit=1`,
+              { signal: controller.signal }
+            );
+            if (!res.ok) return;
+            const data = await res.json();
+            if (Array.isArray(data) && data.length > 0) {
+              suggestions.push({
+                speaker: { ...speaker, isNamed: true },
+                similar: data[0],
+              });
+            }
+          } catch {}
+        })
+      );
+      setMergeSuggestions(suggestions);
+    };
+
+    fetchSuggestions();
+    return () => controller.abort();
+  }, [unnamed, speakers]);
+
   const updateSpeaker = async (id: number, name: string) => {
     const res = await fetch("http://localhost:3030/speakers/update", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -362,7 +565,7 @@ export function SpeakersSection() {
   const deleteSpeaker = async (id: number) => {
     const res = await fetch("http://localhost:3030/speakers/delete", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ speaker_id: id }),
+      body: JSON.stringify({ id }),
     });
     if (!res.ok) throw new Error("failed");
     toast({ title: "speaker deleted" });
@@ -390,12 +593,26 @@ export function SpeakersSection() {
     fetchSpeakers();
   };
 
-  const allSpeakers = [
-    ...speakers.map((s) => ({ ...s, isNamed: true })),
-    ...unnamed.map((s) => ({ ...s, isNamed: false })),
-  ].filter(
-    (s) => !searchQuery || s.name.toLowerCase().includes(searchQuery.toLowerCase()) || `#${s.id}`.includes(searchQuery)
+  const dismissMergeSuggestion = (speakerId: number, similarId: number) => {
+    const key = `${speakerId}-${similarId}`;
+    setDismissedPairs((prev) => new Set(prev).add(key));
+  };
+
+  const activeSuggestions = mergeSuggestions.filter(
+    (s) => !dismissedPairs.has(`${s.speaker.id}-${s.similar.id}`)
   );
+
+  const namedSpeakers = speakers
+    .filter((s) => !searchQuery || s.name.toLowerCase().includes(searchQuery.toLowerCase()) || `#${s.id}`.includes(searchQuery))
+    .map((s) => ({ ...s, isNamed: true }));
+
+  const unnamedSpeakers = unnamed
+    .filter((s) => !searchQuery || `#${s.id}`.includes(searchQuery))
+    .map((s) => ({ ...s, isNamed: false }));
+
+  const total = speakers.length + unnamed.length;
+  const namedCount = speakers.length;
+  const progress = total > 0 ? Math.round((namedCount / total) * 100) : 0;
 
   if (loading) {
     return (
@@ -408,9 +625,25 @@ export function SpeakersSection() {
 
   return (
     <div className="space-y-5" data-testid="section-settings-speakers">
-      <p className="text-muted-foreground text-sm">
-        manage detected speakers. click to expand, confirm similar voices, and merge duplicates.
-      </p>
+      {/* Progress bar */}
+      {total > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-muted-foreground">
+              {namedCount} of {total} speakers identified
+            </span>
+            <span className="font-mono text-xs text-muted-foreground">{progress}%</span>
+          </div>
+          <Progress value={progress} className="h-2" />
+        </div>
+      )}
+
+      {/* Merge suggestions banner */}
+      <MergeBanner
+        suggestions={activeSuggestions}
+        onMerge={mergeSpeakers}
+        onDismiss={dismissMergeSuggestion}
+      />
 
       <div className="relative">
         <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -431,6 +664,7 @@ export function SpeakersSection() {
           size="sm"
           className="h-7 text-xs gap-1.5"
           onClick={async () => {
+            const allSpeakers = [...namedSpeakers, ...unnamedSpeakers];
             const speakerSummary = allSpeakers
               .map((s) => {
                 const samples = parseSamples(s.metadata);
@@ -446,11 +680,8 @@ export function SpeakersSection() {
               source: "speakers-organize",
             };
 
-            // Store prefill for the chat to pick up on mount
             sessionStorage.setItem("pendingChatPrefill", JSON.stringify(prefillData));
-            // Navigate to home (which is the chat)
             await setSection("home");
-            // Also emit directly in case chat is already mounted
             setTimeout(() => emit("chat-prefill", prefillData), 300);
           }}
         >
@@ -459,27 +690,62 @@ export function SpeakersSection() {
         </Button>
       </div>
 
-      <div className="space-y-1.5">
-        {allSpeakers.length === 0 && (
-          <p className="text-sm text-muted-foreground py-8 text-center">
-            {searchQuery ? "no speakers match your search" : "no speakers detected yet"}
+      {/* Named speakers */}
+      {namedSpeakers.length > 0 && (
+        <div className="space-y-1.5">
+          <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+            <Volume2 className="h-3 w-3" />
+            identified ({namedSpeakers.length})
+          </h3>
+          {namedSpeakers.map((s) => (
+            <SpeakerRow
+              key={s.id}
+              speaker={s}
+              isNamed={true}
+              expanded={expandedId === s.id}
+              onToggle={() => setExpandedId(expandedId === s.id ? null : s.id)}
+              onEdit={updateSpeaker}
+              onDelete={deleteSpeaker}
+              onHallucination={markHallucination}
+              onMerge={mergeSpeakers}
+              onRefresh={fetchSpeakers}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* Unnamed speakers */}
+      {unnamedSpeakers.length > 0 && (
+        <div className="space-y-1.5">
+          <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+            <UserX className="h-3 w-3" />
+            unidentified ({unnamedSpeakers.length})
+          </h3>
+          <p className="text-xs text-muted-foreground">
+            play a voice sample, then assign a name or mark as false detection
           </p>
-        )}
-        {allSpeakers.map((s) => (
-          <SpeakerRow
-            key={s.id}
-            speaker={s}
-            isNamed={s.isNamed}
-            expanded={expandedId === s.id}
-            onToggle={() => setExpandedId(expandedId === s.id ? null : s.id)}
-            onEdit={updateSpeaker}
-            onDelete={deleteSpeaker}
-            onHallucination={markHallucination}
-            onMerge={mergeSpeakers}
-            onRefresh={fetchSpeakers}
-          />
-        ))}
-      </div>
+          {unnamedSpeakers.map((s) => (
+            <SpeakerRow
+              key={s.id}
+              speaker={s}
+              isNamed={false}
+              expanded={expandedId === s.id}
+              onToggle={() => setExpandedId(expandedId === s.id ? null : s.id)}
+              onEdit={updateSpeaker}
+              onDelete={deleteSpeaker}
+              onHallucination={markHallucination}
+              onMerge={mergeSpeakers}
+              onRefresh={fetchSpeakers}
+            />
+          ))}
+        </div>
+      )}
+
+      {namedSpeakers.length === 0 && unnamedSpeakers.length === 0 && (
+        <p className="text-sm text-muted-foreground py-8 text-center">
+          {searchQuery ? "no speakers match your search" : "no speakers detected yet"}
+        </p>
+      )}
     </div>
   );
 }
