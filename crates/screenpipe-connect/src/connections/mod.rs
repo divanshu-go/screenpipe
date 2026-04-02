@@ -11,6 +11,7 @@ pub mod airtable;
 pub mod asana;
 pub mod brex;
 pub mod clickup;
+pub mod confluence;
 pub mod discord;
 pub mod email;
 pub mod github_issues;
@@ -29,6 +30,7 @@ pub mod obsidian;
 pub mod perplexity;
 pub mod pipedrive;
 pub mod pushover;
+pub mod salesforce;
 pub mod sentry;
 pub mod slack;
 pub mod stripe;
@@ -36,9 +38,11 @@ pub mod teams;
 pub mod telegram;
 pub mod todoist;
 pub mod toggl;
+pub mod trello;
 pub mod vercel;
 pub mod whatsapp;
 pub mod zapier;
+pub mod zendesk;
 
 use crate::oauth;
 use anyhow::Result;
@@ -127,6 +131,10 @@ pub fn all_integrations() -> Vec<Box<dyn Integration>> {
         Box::new(toggl::Toggl),
         Box::new(brex::Brex),
         Box::new(clickup::ClickUp),
+        Box::new(confluence::Confluence),
+        Box::new(salesforce::Salesforce),
+        Box::new(trello::Trello),
+        Box::new(zendesk::Zendesk),
         Box::new(stripe::Stripe),
         Box::new(sentry::Sentry),
         Box::new(vercel::Vercel),
