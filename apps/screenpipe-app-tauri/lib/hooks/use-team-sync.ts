@@ -6,14 +6,19 @@ import { useEffect, useRef } from "react";
 import { useSettings } from "./use-settings";
 import { AIPreset } from "@/lib/utils/tauri";
 import { TeamConfig } from "./use-team";
+import { mkdir, writeTextFile } from "@tauri-apps/plugin-fs";
+import { homeDir, join } from "@tauri-apps/api/path";
+
+const API_BASE = "http://localhost:3030";
 
 /**
- * Auto-syncs team configs (window_filter, url_filter, ai_provider) into local settings.
+ * Auto-syncs team configs (window_filter, url_filter, ai_provider, pipe) into local settings.
  * Call inside a component that already has useTeam() mounted.
  */
 export function useTeamSync(configs: TeamConfig[], hasTeam: boolean) {
   const { settings, updateSettings } = useSettings();
   const lastFingerprint = useRef<string>("");
+  const syncedPipes = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (!hasTeam) {
@@ -88,6 +93,30 @@ export function useTeamSync(configs: TeamConfig[], hasTeam: boolean) {
         // Add new team preset (not default)
         updatedPresets.push({ ...teamPreset, defaultPreset: false } as AIPreset);
       }
+    }
+
+    // Sync team-shared pipes to local pipe storage
+    const pipeConfigs = configs.filter(
+      (c) => c.config_type === "pipe" && c.scope === "team" && c.value
+    );
+    for (const c of pipeConfigs) {
+      const pipeKey = `${c.key}:${c.updated_at}`;
+      if (syncedPipes.current.has(pipeKey)) continue;
+      const val = c.value as { name?: string; raw_content?: string };
+      if (!val.name || !val.raw_content) continue;
+      // Write pipe.md directly to ~/.screenpipe/pipes/<name>/
+      (async () => {
+        try {
+          const home = await homeDir();
+          const pipeDir = await join(home, ".screenpipe", "pipes", val.name!);
+          await mkdir(pipeDir, { recursive: true });
+          const pipeMd = await join(pipeDir, "pipe.md");
+          await writeTextFile(pipeMd, val.raw_content!);
+          syncedPipes.current.add(pipeKey);
+        } catch {
+          // non-fatal — pipe may already exist or fs error
+        }
+      })();
     }
 
     // Fingerprint to avoid redundant writes
