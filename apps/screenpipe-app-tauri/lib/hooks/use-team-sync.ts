@@ -6,10 +6,8 @@ import { useEffect, useRef } from "react";
 import { useSettings } from "./use-settings";
 import { AIPreset } from "@/lib/utils/tauri";
 import { TeamConfig } from "./use-team";
-import { mkdir, writeTextFile } from "@tauri-apps/plugin-fs";
+import { exists, mkdir, readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import { homeDir, join } from "@tauri-apps/api/path";
-
-const API_BASE = "http://localhost:3030";
 
 /**
  * Auto-syncs team configs (window_filter, url_filter, ai_provider, pipe) into local settings.
@@ -95,26 +93,56 @@ export function useTeamSync(configs: TeamConfig[], hasTeam: boolean) {
       }
     }
 
-    // Sync team-shared pipes to local pipe storage
+    // Sync team-shared pipes to local pipe storage.
+    // Preserves member's local enabled/disabled override — only updates pipe content
+    // when admin pushes a new version (checked via updated_at).
     const pipeConfigs = configs.filter(
       (c) => c.config_type === "pipe" && c.scope === "team" && c.value
     );
     for (const c of pipeConfigs) {
       const pipeKey = `${c.key}:${c.updated_at}`;
       if (syncedPipes.current.has(pipeKey)) continue;
-      const val = c.value as { name?: string; raw_content?: string };
+      const val = c.value as { name?: string; raw_content?: string; config?: { enabled?: boolean } };
       if (!val.name || !val.raw_content) continue;
-      // Write pipe.md directly to ~/.screenpipe/pipes/<name>/
       (async () => {
         try {
           const home = await homeDir();
           const pipeDir = await join(home, ".screenpipe", "pipes", val.name!);
-          await mkdir(pipeDir, { recursive: true });
           const pipeMd = await join(pipeDir, "pipe.md");
-          await writeTextFile(pipeMd, val.raw_content!);
+
+          // Check if pipe already exists locally
+          const pipeExists = await exists(pipeMd);
+          let localEnabled: boolean | null = null;
+
+          if (pipeExists) {
+            // Preserve member's local enabled state
+            try {
+              const localContent = await readTextFile(pipeMd);
+              const enabledMatch = localContent.match(/^enabled:\s*(true|false)/m);
+              if (enabledMatch) {
+                localEnabled = enabledMatch[1] === "true";
+              }
+            } catch {
+              // can't read — will overwrite
+            }
+          }
+
+          await mkdir(pipeDir, { recursive: true });
+
+          // Write team content but preserve local enabled state
+          let content = val.raw_content!;
+          if (localEnabled !== null) {
+            // Replace the enabled field in the team content with the local value
+            content = content.replace(
+              /^enabled:\s*(true|false)/m,
+              `enabled: ${localEnabled}`
+            );
+          }
+
+          await writeTextFile(pipeMd, content);
           syncedPipes.current.add(pipeKey);
         } catch {
-          // non-fatal — pipe may already exist or fs error
+          // non-fatal
         }
       })();
     }
