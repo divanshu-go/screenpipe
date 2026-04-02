@@ -313,10 +313,6 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
     let mut consecutive_failures: u32 = 0;
     let mut consecutive_unhealthy: u32 = 0;
 
-    // DRM pause state — tracked here because engine memory is lost on stop_screenpipe
-    let mut drm_stopped = false;
-    let mut drm_stop_time: Option<Instant> = None;
-
     // Capture stall detection state
     let mut consecutive_audio_stall: u32 = 0;
     let mut consecutive_vision_stall: u32 = 0;
@@ -473,60 +469,6 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                         consecutive_vision_stall = 0;
                     }
                     last_known_spawn_epoch = current_epoch;
-                }
-            }
-
-            // ── DRM content pause / resume ──
-            // When the engine detects DRM streaming content (Netflix, etc.),
-            // stop the entire recording pipeline — exactly like the "stop recording"
-            // button. This fully releases ScreenCaptureKit so DRM doesn't black out.
-            //
-            // IMPORTANT: Stop and start are serialized — we never emit start in the
-            // same iteration as stop, and we enforce a cooldown between DRM stop and
-            // DRM resume to prevent the rapid stop/start race that killed the server.
-            if let Ok(ref health) = health_result {
-                if health.drm_content_paused && !drm_stopped {
-                    info!("DRM content detected — calling stop_screenpipe to fully release screen recording");
-                    let _ = app.emit("shortcut-stop-recording", ());
-                    drm_stopped = true;
-                    drm_stop_time = Some(Instant::now());
-                    // Skip resume check this iteration — let the stop complete first
-                }
-            }
-            // Auto-resume: when server is down due to DRM, poll the focused app.
-            // Wait at least 5s after stop to let shutdown complete before attempting restart.
-            if drm_stopped {
-                let stop_elapsed = drm_stop_time.map(|t| t.elapsed()).unwrap_or_default();
-                if stop_elapsed < Duration::from_secs(5) {
-                    debug!(
-                        "DRM stop cooldown: {:.1}s elapsed, waiting for 5s before resume check",
-                        stop_elapsed.as_secs_f64()
-                    );
-                } else {
-                    let should_resume = tokio::task::spawn_blocking(|| {
-                        // poll_drm_clear returns true = still DRM, false = cleared
-                        !screenpipe_engine::drm_detector::poll_drm_clear()
-                    })
-                    .await
-                    .unwrap_or(false);
-                    if should_resume {
-                        info!("DRM content no longer focused — auto-restarting recording");
-                        let _ = app.emit("shortcut-start-recording", ());
-                        drm_stopped = false;
-                        drm_stop_time = None;
-                        // Give the server time to start before checking health again
-                        last_restart_triggered = Some(Instant::now());
-                    }
-                }
-            }
-            // Clear drm_stopped if server came back and DRM flag is no longer set
-            // (e.g. user manually started recording or toggled the setting off)
-            if drm_stopped && health_result.is_ok() {
-                if let Ok(ref health) = health_result {
-                    if !health.drm_content_paused {
-                        drm_stopped = false;
-                        drm_stop_time = None;
-                    }
                 }
             }
 
