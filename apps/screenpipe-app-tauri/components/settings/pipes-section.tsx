@@ -817,7 +817,10 @@ export function PipesSection() {
 
   const fetchPipes = useCallback(async () => {
     try {
-      const res = await fetch(`${apiBase}/pipes?include_executions=true`);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+      const res = await fetch(`${apiBase}/pipes?include_executions=true`, { signal: controller.signal });
+      clearTimeout(timeout);
       const data = await res.json();
       const rawItems: Array<PipeStatus & { recent_executions?: PipeExecution[] }> = data.data || [];
       const fetched: PipeStatus[] = [];
@@ -984,7 +987,10 @@ export function PipesSection() {
 
   const fetchAllExecutions = useCallback(async () => {
     try {
-      const res = await fetch(`${apiBase}/pipes?include_executions=true`);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+      const res = await fetch(`${apiBase}/pipes?include_executions=true`, { signal: controller.signal });
+      clearTimeout(timeout);
       const data = await res.json();
       const rawItems: Array<PipeStatus & { recent_executions?: PipeExecution[] }> = data.data || [];
       const fetched: PipeStatus[] = [];
