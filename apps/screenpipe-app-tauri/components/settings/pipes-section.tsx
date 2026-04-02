@@ -817,10 +817,17 @@ export function PipesSection() {
 
   const fetchPipes = useCallback(async () => {
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 10000);
-      const res = await fetch(`${apiBase}/pipes?include_executions=true`, { signal: controller.signal });
-      clearTimeout(timeout);
+      // Try with executions first (10s timeout), fall back to without
+      let res: Response;
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        res = await fetch(`${apiBase}/pipes?include_executions=true`, { signal: controller.signal });
+        clearTimeout(timeout);
+      } catch {
+        // If timed out, retry without executions (much faster)
+        res = await fetch(`${apiBase}/pipes`);
+      }
       const data = await res.json();
       const rawItems: Array<PipeStatus & { recent_executions?: PipeExecution[] }> = data.data || [];
       const fetched: PipeStatus[] = [];
@@ -987,10 +994,15 @@ export function PipesSection() {
 
   const fetchAllExecutions = useCallback(async () => {
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 10000);
-      const res = await fetch(`${apiBase}/pipes?include_executions=true`, { signal: controller.signal });
-      clearTimeout(timeout);
+      let res: Response;
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        res = await fetch(`${apiBase}/pipes?include_executions=true`, { signal: controller.signal });
+        clearTimeout(timeout);
+      } catch {
+        return; // non-fatal background refresh — skip if slow
+      }
       const data = await res.json();
       const rawItems: Array<PipeStatus & { recent_executions?: PipeExecution[] }> = data.data || [];
       const fetched: PipeStatus[] = [];
