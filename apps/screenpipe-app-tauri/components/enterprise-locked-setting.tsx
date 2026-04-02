@@ -39,7 +39,7 @@ export function ManagedSwitch({
   ...rest
 }: { settingKey: string } & ComponentProps<typeof Switch>) {
   const { getManagedValue } = useEnterprisePolicy();
-  const managed = getManagedValue<string>(settingKey);
+  const managed = getManagedValue(settingKey);
 
   if (managed !== undefined) {
     return <Switch checked={managed === "true"} disabled {...rest} />;
