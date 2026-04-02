@@ -107,6 +107,16 @@ const formatPresetName = (name: string): string => {
   return name;
 };
 
+const isLocalhostUrl = (url?: string): boolean => {
+  if (!url) return false;
+  try {
+    const hostname = new URL(url).hostname.toLowerCase();
+    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+  } catch {
+    return false;
+  }
+};
+
 type DiagnosticStatus = "pass" | "fail" | "skip" | "pending" | "running";
 
 interface DiagnosticStepResult {
@@ -586,7 +596,11 @@ const AISection = ({
         chat: { status: "running", message: "Sending test message..." },
       }));
     } else {
-      const modelsFetchFn = fetch;
+      // Local custom providers often do not implement browser CORS preflight on /models.
+      const modelsFetchFn =
+        settingsPreset?.provider === "custom" && isLocalhostUrl(settingsPreset?.url)
+          ? tauriFetch
+          : fetch;
       try {
         modelsResponse = await modelsFetchFn(modelsUrl, {
           headers,
@@ -833,7 +847,8 @@ const AISection = ({
           break;
         case "custom":
           try {
-            const customResponse = await fetch(
+            const customFetchFn = isLocalhostUrl(settingsPreset?.url) ? tauriFetch : fetch;
+            const customResponse = await customFetchFn(
               `${settingsPreset?.url}/models`,
               {
                 headers: settingsPreset.apiKey
