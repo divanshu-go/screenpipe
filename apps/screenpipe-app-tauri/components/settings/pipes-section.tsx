@@ -817,17 +817,8 @@ export function PipesSection() {
 
   const fetchPipes = useCallback(async () => {
     try {
-      // Try with executions first (10s timeout), fall back to without
-      let res: Response;
-      try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 10000);
-        res = await fetch(`${apiBase}/pipes?include_executions=true`, { signal: controller.signal });
-        clearTimeout(timeout);
-      } catch {
-        // If timed out, retry without executions (much faster)
-        res = await fetch(`${apiBase}/pipes`);
-      }
+      // First load: skip executions for speed. Executions load lazily per-pipe.
+      const res = await fetch(`${apiBase}/pipes`);
       const data = await res.json();
       const rawItems: Array<PipeStatus & { recent_executions?: PipeExecution[] }> = data.data || [];
       const fetched: PipeStatus[] = [];
@@ -992,49 +983,16 @@ export function PipesSection() {
     return () => clearInterval(interval);
   }, [fetchPipes]);
 
-  const fetchAllExecutions = useCallback(async () => {
+  const pollRunningPipe = useCallback(async () => {
+    // Lightweight poll: only refresh pipe statuses + expanded pipe's executions
     try {
-      let res: Response;
-      try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 10000);
-        res = await fetch(`${apiBase}/pipes?include_executions=true`, { signal: controller.signal });
-        clearTimeout(timeout);
-      } catch {
-        return; // non-fatal background refresh — skip if slow
-      }
-      const data = await res.json();
-      const rawItems: Array<PipeStatus & { recent_executions?: PipeExecution[] }> = data.data || [];
-      const fetched: PipeStatus[] = [];
-      const results: Record<string, PipeExecution[]> = {};
-      for (const item of rawItems) {
-        const { recent_executions, ...pipe } = item;
-        fetched.push(pipe);
-        results[item.config.name] = recent_executions || [];
-      }
-      setPipeExecutions(results);
-      // Also sync pipe status (is_running) to keep summary consistent
-      const pendingNames = Object.keys(pendingConfigSaves.current);
-      if (pendingNames.length > 0) {
-        setPipes((prev) => {
-          const prevByName = new Map(prev.map((p) => [p.config.name, p]));
-          return fetched.map((p) =>
-            pendingNames.includes(p.config.name) && prevByName.has(p.config.name)
-              ? prevByName.get(p.config.name)!
-              : p
-          );
-        });
-      } else {
-        setPipes(fetched);
-      }
-      // Refresh execution history for the currently expanded pipe
+      await fetchPipes();
       const exp = expandedRef.current;
       if (exp) {
         try {
           const execRes = await fetch(`${apiBase}/pipes/${exp}/executions?limit=20`);
           const execData = await execRes.json();
           setExecutions(execData.data || []);
-          // Clean up live output for executions that are no longer running
           const finishedKeys = (execData.data || [])
             .filter((e: PipeExecution) => e.status !== "running")
             .map((e: PipeExecution) => `${e.pipe_name}:${e.id}`);
@@ -1056,15 +1014,15 @@ export function PipesSection() {
     } catch {
       // ignore — next poll will retry
     }
-  }, []);
+  }, [fetchPipes, apiBase]);
 
-  // Poll executions faster (3s) when any pipe is running, otherwise on pipe fetch (10s)
+  // Poll faster (3s) when any pipe is running to update status + expanded executions
   useEffect(() => {
     const anyRunning = pipes.some((p) => p.is_running) || runningPipe !== null;
     if (!anyRunning) return;
-    const id = setInterval(() => fetchAllExecutions(), 3000);
+    const id = setInterval(() => pollRunningPipe(), 3000);
     return () => clearInterval(id);
-  }, [pipes, runningPipe, fetchAllExecutions]);
+  }, [pipes, runningPipe, pollRunningPipe]);
 
   // Note: executions are fetched inside fetchPipes to avoid waterfall
 
@@ -1158,7 +1116,7 @@ export function PipesSection() {
     } finally {
       setRunningPipe(null);
       fetchPipes();
-      fetchAllExecutions();
+      pollRunningPipe();
     }
   };
 
@@ -1176,7 +1134,7 @@ export function PipesSection() {
     } finally {
       setStoppingPipe(null);
       fetchPipes();
-      fetchAllExecutions();
+      pollRunningPipe();
     }
   };
 
