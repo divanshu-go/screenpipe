@@ -454,13 +454,17 @@ const AISection = ({
     return null; // unknown model, don't change
   }, []);
 
+  // Only auto-set max tokens when the user actually changes the model name,
+  // not on mount — otherwise the saved maxTokens value gets overwritten.
+  const prevModelRef = useRef(settingsPreset?.model);
   useEffect(() => {
     const model = settingsPreset?.model;
     if (!model) return;
-    // Screenpipe Cloud uses per-model max output from the gateway catalog — do not infer from model name.
+    if (model === prevModelRef.current) return; // no change — preserve saved value
+    prevModelRef.current = model;
     if (settingsPreset?.provider === "screenpipe-cloud") return;
     const tokens = getDefaultMaxTokens(model);
-    if (tokens && (settingsPreset as any)?.maxTokens !== tokens) {
+    if (tokens) {
       updateSettingsPreset({ maxTokens: tokens } as any);
     }
   }, [settingsPreset?.model, settingsPreset?.provider, getDefaultMaxTokens, updateSettingsPreset]);
