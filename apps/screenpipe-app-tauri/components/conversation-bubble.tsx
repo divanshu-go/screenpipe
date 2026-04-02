@@ -246,7 +246,7 @@ export function ParticipantsSummary({
 	onSpeakerAssigned,
 	onBulkSpeakerAssigned,
 }: {
-	participants: Array<{ id: number | string; name: string; duration: number }>;
+	participants: Array<{ id: number | string; name: string; duration: number; speakerId?: number }>;
 	totalDuration: number;
 	timeRange: { start: Date; end: Date };
 	firstChunkBySpeaker?: Map<number | string, { audioChunkId: number; audioFilePath: string }>;
@@ -281,7 +281,7 @@ export function ParticipantsSummary({
 						const colorClass = getSpeakerColorClass(p.id);
 
 						if (isUnnamed && chunk && (onBulkSpeakerAssigned || onSpeakerAssigned)) {
-							const numericId = typeof p.id === "number" ? p.id : -1;
+							const numericId = p.speakerId ?? (typeof p.id === "number" ? p.id : -1);
 							return (
 								<SpeakerAssignPopover
 									key={p.id}

@@ -7,7 +7,7 @@ import {
 	AudioData,
 	StreamTimeSeriesResponse,
 } from "@/components/rewind/timeline";
-import { dominantDiarizationLabel, resolveDisplaySpeakerLabel } from "@/lib/diarization-label";
+import { resolveDisplaySpeakerLabel } from "@/lib/diarization-label";
 
 export interface AudioEntryWithTimestamp extends AudioData {
 	frameTimestamp: Date;
@@ -37,6 +37,24 @@ const MIN_SPEAKERS = 2; // need 2+ distinct speakers — this is the key filter
 // Deduplication: max time diff (ms) and min text similarity to consider entries duplicates
 const DEDUP_TIME_THRESHOLD_MS = 10_000;
 const DEDUP_SIMILARITY_THRESHOLD = 0.7;
+
+/**
+ * Returns true if `a` and `b` share a contiguous word sequence of at least `minWords`.
+ * Catches the case where mic and output capture different segments of the same speech —
+ * Dice coefficient misses these because overall word overlap is low, but they share
+ * a long identical phrase at the boundary.
+ */
+function hasSharedWordSequence(a: string, b: string, minWords = 6): boolean {
+	const wa = a.toLowerCase().trim().split(/\s+/);
+	const wb = b.toLowerCase().trim().split(/\s+/);
+	if (wa.length < minWords || wb.length < minWords) return false;
+	const bText = " " + wb.join(" ") + " ";
+	for (let i = 0; i <= wa.length - minWords; i++) {
+		const gram = " " + wa.slice(i, i + minWords).join(" ") + " ";
+		if (bText.includes(gram)) return true;
+	}
+	return false;
+}
 
 function textSimilarity(a: string, b: string): number {
 	const la = a.toLowerCase().trim();
@@ -87,7 +105,9 @@ function deduplicateAudio<T extends { audio_chunk_id: number; is_input: boolean;
 			);
 			if (timeDiff > DEDUP_TIME_THRESHOLD_MS) continue;
 			const sim = textSimilarity(uniqueEntries[i].transcription, uniqueEntries[j].transcription);
-			if (sim >= DEDUP_SIMILARITY_THRESHOLD) {
+			const isDup = sim >= DEDUP_SIMILARITY_THRESHOLD
+				|| hasSharedWordSequence(uniqueEntries[i].transcription, uniqueEntries[j].transcription);
+			if (isDup) {
 				if (uniqueEntries[j].is_input) {
 					removed.add(i);
 				} else {
@@ -131,7 +151,9 @@ export function deduplicateAudioItems<T extends { audio_chunk_id: number; is_inp
 			);
 			if (timeDiff > DEDUP_TIME_THRESHOLD_MS) continue;
 			const sim = textSimilarity(uniqueEntries[i].transcription, uniqueEntries[j].transcription);
-			if (sim >= DEDUP_SIMILARITY_THRESHOLD) {
+			const isDup = sim >= DEDUP_SIMILARITY_THRESHOLD
+				|| hasSharedWordSequence(uniqueEntries[i].transcription, uniqueEntries[j].transcription);
+			if (isDup) {
 				if (uniqueEntries[j].is_input) {
 					removed.add(i);
 				} else {
@@ -226,15 +248,13 @@ function detectMeetings(frames: StreamTimeSeriesResponse[]): Meeting[] {
 			{ name: string; durationSecs: number }
 		>();
 		for (const entry of entries) {
-			const diarRaw = dominantDiarizationLabel(entry.aligned_words_json);
-			// Prefer quality-pipeline diarization (SPEAKER_00, …); else split by clustered id + mic/output.
-			const id = diarRaw
-				? `diar_${diarRaw}_${entry.is_input ? "in" : "out"}`
-				: entry.speaker_id != null
-					? `spk_${entry.speaker_id}_${entry.is_input ? "in" : "out"}`
-					: entry.is_input
-						? "input"
-						: "output";
+			// Use globally clustered speaker_id — consistent across chunks, unlike per-chunk
+			// pyannote labels which reset for every chunk and would split the same person.
+			const id = entry.speaker_id != null
+				? `spk_${entry.speaker_id}_${entry.is_input ? "in" : "out"}`
+				: entry.is_input
+					? "input"
+					: "output";
 			const displayName = resolveDisplaySpeakerLabel({
 				speaker_name: entry.speaker_name,
 				aligned_words_json: entry.aligned_words_json,

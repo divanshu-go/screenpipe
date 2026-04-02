@@ -120,9 +120,7 @@ pub async fn handle_new_transcript(
         }
 
         transcription.transcription = current_transcript.clone();
-        if was_trimmed {
-            transcription.aligned_words = None;
-        }
+        // aligned_words timing is valid regardless of text trimming — keep it for speaker attribution
         if current_transcript.is_some() {
             prev_transcript_by_device
                 .insert(device_key.clone(), current_transcript.clone().unwrap());

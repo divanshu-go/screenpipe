@@ -263,10 +263,11 @@ export function AudioTranscript({
 		let lastTimestamp: Date | null = null;
 
 		dedupedAudio.forEach((audio) => {
-			const { speakerId } = getSpeakerInfo(audio);
+			const { speakerId, speakerName } = getSpeakerInfo(audio);
 			const diarRaw = dominantDiarizationLabel(audio.aligned_words_json);
 			const groupKey = `${speakerId ?? -1}_${audio.is_input ? "in" : "out"}_${diarRaw ?? "nodiar"}`;
-			const isFirstInGroup = groupKey !== lastGroupKey;
+			// Force new group for unnamed speakers so the assign popover is always visible
+			const isFirstInGroup = groupKey !== lastGroupKey || !speakerName;
 
 			// Detect time gaps > 2 minutes
 			let gapMinutesBefore: number | undefined;
@@ -293,7 +294,7 @@ export function AudioTranscript({
 		});
 
 		// Compute participants and first chunk by speaker (for header assign popovers)
-		const participantMap = new Map<string, { name: string; duration: number }>();
+		const participantMap = new Map<string, { name: string; duration: number; speakerId?: number }>();
 		const firstChunkBySpeaker = new Map<number | string, { audioChunkId: number; audioFilePath: string }>();
 		dedupedAudio.forEach((audio) => {
 			const { speakerId, speakerName } = getSpeakerInfo(audio);
@@ -306,6 +307,7 @@ export function AudioTranscript({
 				participantMap.set(id, {
 					name: speakerName || "",
 					duration: audio.duration_secs,
+					speakerId: speakerId ?? undefined,
 				});
 			}
 			if (!firstChunkBySpeaker.has(id)) {
@@ -317,7 +319,7 @@ export function AudioTranscript({
 		});
 
 		const participants = Array.from(participantMap.entries())
-			.map(([id, data]) => ({ id, name: data.name, duration: data.duration }))
+			.map(([id, data]) => ({ id, name: data.name, duration: data.duration, speakerId: data.speakerId }))
 			.sort((a, b) => b.duration - a.duration);
 
 		const totalDuration = participants.reduce((sum, p) => sum + p.duration, 0);
@@ -366,10 +368,11 @@ export function AudioTranscript({
 		let lastTimestamp: Date | null = null;
 
 		dedupedAudio.forEach((audio) => {
-			const { speakerId } = getSpeakerInfo(audio);
+			const { speakerId, speakerName } = getSpeakerInfo(audio);
 			const diarRaw = dominantDiarizationLabel(audio.aligned_words_json);
 			const groupKey = `${speakerId ?? -1}_${audio.is_input ? "in" : "out"}_${diarRaw ?? "nodiar"}`;
-			const isFirstInGroup = groupKey !== lastGroupKey;
+			// Force new group for unnamed speakers so the assign popover is always visible
+			const isFirstInGroup = groupKey !== lastGroupKey || !speakerName;
 
 			let gapMinutesBefore: number | undefined;
 			if (lastTimestamp) {
