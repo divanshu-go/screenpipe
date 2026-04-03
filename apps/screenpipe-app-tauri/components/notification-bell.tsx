@@ -5,14 +5,16 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Bell } from "lucide-react";
+import { Bell, ChevronRight, ChevronDown, MessageSquare } from "lucide-react";
 import localforage from "localforage";
+import ReactMarkdown from "react-markdown";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { openSettingsWindow } from "@/lib/utils/window";
+import { showChatWithPrefill } from "@/lib/chat-utils";
 
 interface NotificationEntry {
   id: string;
@@ -27,6 +29,7 @@ interface NotificationEntry {
 export function NotificationBell() {
   const [history, setHistory] = useState<NotificationEntry[]>([]);
   const [open, setOpen] = useState(false);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const loadHistory = useCallback(async () => {
     const entries =
@@ -110,38 +113,76 @@ export function NotificationBell() {
               no notifications yet
             </div>
           ) : (
-            history.map((entry) => (
-              <div
-                key={entry.id}
-                className="px-3 py-2 border-b border-border/50 last:border-0 hover:bg-muted/30"
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      {!entry.read && (
-                        <span className="w-1.5 h-1.5 rounded-full bg-foreground shrink-0" />
-                      )}
-                      <span className="text-[11px] font-medium text-foreground truncate">
-                        {entry.title}
+            history.map((entry) => {
+              const isExpanded = expandedId === entry.id;
+              return (
+                <div
+                  key={entry.id}
+                  className="border-b border-border/50 last:border-0"
+                >
+                  <div
+                    className="px-3 py-2 hover:bg-muted/30 cursor-pointer"
+                    onClick={() => setExpandedId(isExpanded ? null : entry.id)}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1">
+                          {isExpanded ? (
+                            <ChevronDown className="w-3 h-3 text-muted-foreground shrink-0" />
+                          ) : (
+                            <ChevronRight className="w-3 h-3 text-muted-foreground shrink-0" />
+                          )}
+                          {!entry.read && (
+                            <span className="w-1.5 h-1.5 rounded-full bg-foreground shrink-0" />
+                          )}
+                          <span className="text-[11px] font-medium text-foreground truncate">
+                            {entry.title}
+                          </span>
+                        </div>
+                        {!isExpanded && entry.body && (
+                          <p className="text-[10px] text-muted-foreground mt-0.5 line-clamp-2 pl-4">
+                            {entry.body}
+                          </p>
+                        )}
+                      </div>
+                      <span className="text-[9px] text-muted-foreground/50 shrink-0 mt-0.5">
+                        {formatTime(entry.timestamp)}
                       </span>
                     </div>
-                    {entry.body && (
-                      <p className="text-[10px] text-muted-foreground mt-0.5 line-clamp-2">
-                        {entry.body}
-                      </p>
-                    )}
-                    {entry.pipe_name && (
-                      <span className="text-[9px] text-muted-foreground/60 mt-0.5 block">
-                        {entry.pipe_name}
-                      </span>
-                    )}
                   </div>
-                  <span className="text-[9px] text-muted-foreground/50 shrink-0 mt-0.5">
-                    {formatTime(entry.timestamp)}
-                  </span>
+                  {isExpanded && (
+                    <div className="px-3 pb-2 pl-7">
+                      {entry.body && (
+                        <div className="text-[10px] text-muted-foreground leading-relaxed mb-2 [&_p]:mb-1 [&_p:last-child]:mb-0 [&_strong]:text-foreground [&_code]:bg-muted [&_code]:px-1 [&_code]:text-[9px] [&_ul]:pl-4 [&_ul]:my-0.5 [&_li]:my-0">
+                          <ReactMarkdown>{entry.body}</ReactMarkdown>
+                        </div>
+                      )}
+                      {entry.pipe_name && (
+                        <span className="text-[9px] text-muted-foreground/60 block mb-2">
+                          {entry.pipe_name}
+                        </span>
+                      )}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setOpen(false);
+                          showChatWithPrefill({
+                            context: `notification from ${entry.pipe_name || "screenpipe"}:\n\n**${entry.title}**\n${entry.body}`,
+                            prompt: `tell me more about this: "${entry.title}"`,
+                            autoSend: true,
+                            source: `notification-bell-${entry.id}`,
+                          });
+                        }}
+                        className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                      >
+                        <MessageSquare className="w-3 h-3" />
+                        ask ai about this
+                      </button>
+                    </div>
+                  )}
                 </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
 
