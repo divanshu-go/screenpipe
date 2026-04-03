@@ -780,8 +780,8 @@ pub type OnPipeRunComplete = Arc<dyn Fn(&str, bool, f64, Option<&str>) + Send + 
 /// Args: (pipe_name, execution_id, line)
 pub type OnPipeOutputLine = Arc<dyn Fn(&str, i64, &str) + Send + Sync>;
 
-/// Default execution timeout: 5 minutes.
-const DEFAULT_TIMEOUT_SECS: u64 = 300;
+/// Default execution timeout: 10 minutes.
+const DEFAULT_TIMEOUT_SECS: u64 = 600;
 
 /// Set up permissions for a Pi pipe: install extension, filtered skills,
 /// write the permissions JSON file, and register the token with the server.
