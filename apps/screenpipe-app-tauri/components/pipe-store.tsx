@@ -336,6 +336,7 @@ export function PipeStoreView() {
         {tabs.map(({ key, label }) => (
           <button
             key={key}
+            data-testid={`tab-${key}`}
             onClick={() => setActiveTab(key)}
             className={cn(
               "pb-3 text-sm font-medium transition-colors duration-150 border-b-2 -mb-px",
@@ -836,6 +837,7 @@ function PipeCard({
 
   return (
     <div
+      data-testid={`pipe-card-${pipe.slug}`}
       onClick={onClick}
       className="border border-border bg-card hover:bg-accent/50 transition-colors duration-150 rounded-none p-5 cursor-pointer group flex flex-col"
     >
@@ -846,6 +848,7 @@ function PipeCard({
         </div>
         <Button
           size="sm"
+          data-testid="pipe-install-btn"
           variant={isInstalled && !hasUpdate ? "outline" : "default"}
           className={cn(
             "h-7 px-3 text-xs font-semibold rounded-none uppercase tracking-wide flex-shrink-0",
