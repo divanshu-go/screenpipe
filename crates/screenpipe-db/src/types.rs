@@ -32,6 +32,20 @@ fn parse_flexible_timestamp(s: &str) -> DateTime<Utc> {
 
 /// Audio chunk that has no corresponding transcription row.
 /// Used by the reconciliation sweep to detect and retry orphaned chunks.
+/// A pyannote diarization voice label found in audio chunks that have no embedding-based
+/// speaker_id. Used to surface unidentified voices in the Speakers settings UI.
+#[derive(Debug, Clone, Serialize, Deserialize, OaSchema)]
+pub struct DiarizationVoice {
+    /// Raw pyannote label: "SPEAKER_00", "0", etc.
+    pub label: String,
+    /// Number of audio chunks this label appeared in (within the lookback window).
+    pub chunk_count: u32,
+    /// Timestamp string of the most recent chunk containing this label.
+    pub last_seen: String,
+    /// One example transcription from this voice for display.
+    pub sample_transcription: String,
+}
+
 #[derive(Debug, Clone, FromRow)]
 pub struct UntranscribedChunk {
     pub id: i64,

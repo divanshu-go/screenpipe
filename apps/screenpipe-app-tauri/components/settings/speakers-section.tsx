@@ -820,9 +820,17 @@ function MergeBanner({
   );
 }
 
+interface DiarizationVoice {
+  label: string;
+  chunk_count: number;
+  last_seen: string;
+  sample_transcription: string;
+}
+
 export function SpeakersSection() {
   const [speakers, setSpeakers] = useState<Speaker[]>([]);
   const [unnamed, setUnnamed] = useState<Speaker[]>([]);
+  const [diarizationVoices, setDiarizationVoices] = useState<DiarizationVoice[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [expandedId, setExpandedId] = useState<number | null>(null);
@@ -839,9 +847,10 @@ export function SpeakersSection() {
 
   const fetchSpeakers = useCallback(async () => {
     try {
-      const [namedRes, unnamedRes] = await Promise.all([
+      const [namedRes, unnamedRes, diarRes] = await Promise.all([
         fetch("http://localhost:3030/speakers/search"),
         fetch("http://localhost:3030/speakers/unnamed?limit=50"),
+        fetch("http://localhost:3030/speakers/diarization-voices"),
       ]);
       if (namedRes.ok)
         setSpeakers(
@@ -852,6 +861,10 @@ export function SpeakersSection() {
           await unnamedRes
             .json()
             .then((d: any) => (Array.isArray(d) ? d : []))
+        );
+      if (diarRes.ok)
+        setDiarizationVoices(
+          await diarRes.json().then((d: any) => (Array.isArray(d) ? d : []))
         );
     } catch {
       /* server not running */
@@ -1252,7 +1265,7 @@ export function SpeakersSection() {
         </div>
       )}
 
-      {filteredSpeakers.length === 0 && filteredClusters.length === 0 && (
+      {filteredSpeakers.length === 0 && filteredClusters.length === 0 && diarizationVoices.length === 0 && (
         <div className="py-8 text-center space-y-2">
           <p className="text-sm text-muted-foreground">
             {searchQuery
@@ -1266,6 +1279,49 @@ export function SpeakersSection() {
               within a few seconds of the download completing.
             </p>
           )}
+        </div>
+      )}
+
+      {/* Diarization-only voices: pyannote assigned labels but no embedding ID yet */}
+      {diarizationVoices.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-medium text-muted-foreground">
+              voices (no id yet)
+            </h3>
+            <span className="text-xs text-muted-foreground/60">
+              — pyannote detected these but embedding models aren&apos;t producing IDs
+            </span>
+          </div>
+          <div className="rounded-lg border divide-y">
+            {diarizationVoices.map((v) => (
+              <div key={v.label} className="flex items-start justify-between px-3 py-2 gap-3">
+                <div className="min-w-0 flex-1 space-y-0.5">
+                  <p className="text-sm font-medium truncate">
+                    {v.label.startsWith("SPEAKER_")
+                      ? `Voice ${parseInt(v.label.replace("SPEAKER_", ""), 10) + 1}`
+                      : /^\d+$/.test(v.label)
+                        ? `Voice ${parseInt(v.label, 10) + 1}`
+                        : v.label}
+                  </p>
+                  {v.sample_transcription && (
+                    <p className="text-xs text-muted-foreground truncate">
+                      &ldquo;{v.sample_transcription.slice(0, 80)}{v.sample_transcription.length > 80 ? "…" : ""}&rdquo;
+                    </p>
+                  )}
+                </div>
+                <div className="text-right shrink-0 space-y-0.5">
+                  <p className="text-xs text-muted-foreground">{v.chunk_count} chunk{v.chunk_count !== 1 ? "s" : ""}</p>
+                  <p className="text-xs text-muted-foreground/60">
+                    {new Date(v.last_seen).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground/60">
+            these voices will get stable IDs once the embedding model finishes downloading and the audio handler restarts.
+          </p>
         </div>
       )}
     </div>

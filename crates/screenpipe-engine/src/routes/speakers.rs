@@ -9,7 +9,7 @@ use axum::{
 };
 use oasgen::{oasgen, OaSchema};
 
-use screenpipe_db::Speaker;
+use screenpipe_db::{DiarizationVoice, Speaker};
 
 use super::search::{default_speaker_ids, from_comma_separated_array};
 use crate::server::AppState;
@@ -353,4 +353,37 @@ pub(crate) async fn undo_speaker_reassign_handler(
     })?;
 
     Ok(JsonResponse(UndoSpeakerReassignResponse { restored }))
+}
+
+#[derive(OaSchema, Deserialize, Debug)]
+pub struct GetDiarizationVoicesRequest {
+    #[serde(default = "default_lookback_hours")]
+    lookback_hours: i64,
+    #[serde(default = "default_voices_limit")]
+    limit: u32,
+}
+
+fn default_lookback_hours() -> i64 {
+    24
+}
+fn default_voices_limit() -> u32 {
+    20
+}
+
+#[oasgen]
+pub(crate) async fn get_diarization_voices_handler(
+    State(state): State<Arc<AppState>>,
+    Query(request): Query<GetDiarizationVoicesRequest>,
+) -> Result<JsonResponse<Vec<DiarizationVoice>>, (StatusCode, JsonResponse<Value>)> {
+    let voices = state
+        .db
+        .get_diarization_voices(request.lookback_hours, request.limit)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                JsonResponse(json!({"error": e.to_string()})),
+            )
+        })?;
+    Ok(JsonResponse(voices))
 }
