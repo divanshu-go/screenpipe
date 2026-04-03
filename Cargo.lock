@@ -6731,7 +6731,11 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio"
+<<<<<<< Updated upstream
 version = "0.3.250"
+=======
+version = "0.3.249"
+>>>>>>> Stashed changes
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -6791,7 +6795,11 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
+<<<<<<< Updated upstream
 version = "0.3.250"
+=======
+version = "0.3.249"
+>>>>>>> Stashed changes
 dependencies = [
  "dirs 6.0.0",
  "serde",
@@ -6804,7 +6812,11 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
+<<<<<<< Updated upstream
 version = "0.3.250"
+=======
+version = "0.3.249"
+>>>>>>> Stashed changes
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6833,7 +6845,11 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
+<<<<<<< Updated upstream
 version = "0.3.250"
+=======
+version = "0.3.249"
+>>>>>>> Stashed changes
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -6878,7 +6894,11 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-db"
+<<<<<<< Updated upstream
 version = "0.3.250"
+=======
+version = "0.3.249"
+>>>>>>> Stashed changes
 dependencies = [
  "anyhow",
  "chrono",
@@ -6904,7 +6924,11 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-engine"
+<<<<<<< Updated upstream
 version = "0.3.250"
+=======
+version = "0.3.249"
+>>>>>>> Stashed changes
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6974,7 +6998,11 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
+<<<<<<< Updated upstream
 version = "0.3.250"
+=======
+version = "0.3.249"
+>>>>>>> Stashed changes
 dependencies = [
  "anyhow",
  "chrono",
@@ -6992,7 +7020,11 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
+<<<<<<< Updated upstream
 version = "0.3.250"
+=======
+version = "0.3.249"
+>>>>>>> Stashed changes
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -7032,7 +7064,11 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-vault"
+<<<<<<< Updated upstream
 version = "0.3.250"
+=======
+version = "0.3.249"
+>>>>>>> Stashed changes
 dependencies = [
  "argon2",
  "chacha20poly1305",
