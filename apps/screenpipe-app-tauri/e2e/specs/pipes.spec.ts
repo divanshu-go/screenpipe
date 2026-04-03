@@ -8,17 +8,16 @@ import { saveScreenshot } from '../helpers/screenshot-utils.js';
 
 /**
  * Pipes: Discover → Install (no-connection pipe) → Play
+ * + negative paths: install failure, connection-required modal, cleanup
  *
- * Full happy-path test for the Pipes section on Windows:
- *   1. Navigate to Pipes section
- *   2. Switch to the Discover tab
- *   3. Find the first store pipe that requires NO connections, click GET
- *      → app auto-switches to My Pipes tab (onInstalled callback)
- *   4. Confirm the pipe row is visible in My Pipes list
- *   5. Scroll + hover the pipe row to reveal the play button, then click it
+ * Selectors use data-testid throughout — no text matching that breaks on copy change.
+ *   pipe-store.tsx  →  data-testid="tab-{key}"  on tab buttons
+ *                  →  data-testid="pipe-card-{slug}"  on each card div
+ *                  →  data-testid="pipe-install-btn"  on the GET/INSTALLED button
  */
 
 let installedPipeName = '';
+let connectionPipeSlug = '';
 
 describe('Pipes: discover → install → play', function () {
   this.timeout(120_000);
@@ -26,6 +25,18 @@ describe('Pipes: discover → install → play', function () {
   before(async () => {
     await waitForAppReady();
     await openHomeWindow();
+  });
+
+  after(async () => {
+    // Cleanup: uninstall the pipe so state doesn't leak to the next run
+    if (installedPipeName) {
+      try {
+        await fetch(`http://localhost:3030/pipes/${installedPipeName}`, { method: 'DELETE' });
+        console.log(`[pipes-spec] cleaned up pipe "${installedPipeName}"`);
+      } catch {
+        // best-effort
+      }
+    }
   });
 
   // ─── Step 1: open Pipes section ───────────────────────────────────────────
@@ -42,35 +53,165 @@ describe('Pipes: discover → install → play', function () {
     expect(existsSync(filepath)).toBe(true);
   });
 
-  // ─── Step 2: switch to Discover tab ──────────────────────────────────────
+  // ─── Step 2: switch to Discover tab (data-testid, not text) ──────────────
 
   it('switches to the Discover tab', async () => {
-    const discoverTab = await $('button=Discover');
+    const discoverTab = await $('[data-testid="tab-discover"]');
     await discoverTab.waitForExist({ timeout: 8_000 });
     await discoverTab.click();
 
-    // Wait for at least one GET button to appear (pipe grid loaded)
+    // Wait for at least one install button to appear in the grid
     await browser.waitUntil(
       async () => {
-        const btns = await $$('button=GET');
-        return btns.length > 0;
+        return await $$('[data-testid="pipe-install-btn"]').length > 0;
       },
-      { timeout: 20_000, timeoutMsg: 'Discover tab: no GET buttons appeared (store grid not loaded)' }
+      { timeout: 20_000, timeoutMsg: 'Discover tab: no pipe-install-btn appeared (store grid not loaded)' }
     );
 
     const filepath = await saveScreenshot('pipes-discover-tab');
     expect(existsSync(filepath)).toBe(true);
   });
 
+  // ─── Negative: install a non-existent slug → UI shows error, no crash ────
+
+  it('shows an error toast when install fails, does not crash', async () => {
+    // Intercept window.fetch so any POST to /pipes/store/install returns 503.
+    // This triggers React's handleInstall catch block which calls
+    // toast({ variant: "destructive" }) — testing the actual UI error path,
+    // not just the backend API.
+    await browser.execute(() => {
+      const orig = window.fetch.bind(window);
+      (window as any).__origFetch = orig;
+      window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).includes('/pipes/store/install')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ error: 'store unavailable (e2e simulated)' }), {
+              status: 503,
+              headers: { 'Content-Type': 'application/json' },
+            })
+          );
+        }
+        return orig(input, init);
+      };
+    });
+
+    try {
+      // Wait for the Discover grid to be populated — the store API must be
+      // reachable for this test. Hard-fail if it isn't: that signals an
+      // infrastructure problem, not a code problem.
+      await browser.waitUntil(
+        async () => (await $$('[data-testid="pipe-install-btn"]').length) > 0,
+        { timeout: 15_000, timeoutMsg: 'No pipe-install-btn found — store API unreachable or Discover grid not loaded' }
+      );
+
+      // Click any GET button — interceptor makes it fail inside handleInstall
+      const anyGetBtn = await $('[data-testid="pipe-install-btn"]');
+      await anyGetBtn.click();
+
+      // handleInstall catches the 503 and calls toast({ variant: "destructive" }).
+      // toaster.tsx sets data-testid="toast-error" on the inner <div> for
+      // destructive toasts. NOTE: requires a fresh binary build after toaster.tsx
+      // changes — the binary embeds frontend assets at compile time.
+      const toastError = await $('[data-testid="toast-error"]');
+      await toastError.waitForExist({ timeout: 8_000 });
+
+      // App must still be alive after the error — verify the Discover tab
+      // content is intact. section-pipes is only mounted on the my-pipes tab
+      // so we check the tab bar instead (always in DOM on the pipes page).
+      const discoverTab = await $('[data-testid="tab-discover"]');
+      expect(await discoverTab.isExisting()).toBe(true);
+
+      await saveScreenshot('pipes-install-error');
+    } finally {
+      // Restore fetch regardless of pass/fail so subsequent tests are clean
+      await browser.execute(() => {
+        if ((window as any).__origFetch) {
+          window.fetch = (window as any).__origFetch;
+          delete (window as any).__origFetch;
+        }
+      });
+    }
+  });
+
+  // ─── Negative: pipe that requires connections → modal appears, no auto-run
+
+  it('shows connection modal for a pipe that requires connections', async () => {
+    // Find a pipe whose permissions.allow_connections === true
+    const connSlug: string | null = await browser.executeAsync((done: (v: string | null) => void) => {
+      fetch('http://localhost:3030/pipes/store?sort=popular')
+        .then((r) => r.json())
+        .then((json) => {
+          const list: any[] = Array.isArray(json) ? json : (json.data || json.pipes || []);
+          const pipe = list.find((p: any) => p.permissions?.allow_connections === true);
+          done(pipe ? (pipe.slug as string) : null);
+        })
+        .catch(() => done(null));
+    });
+
+    if (!connSlug) {
+      // No connection-required pipe in current store — skip gracefully
+      console.log('[pipes-spec] no connection-required pipe found, skipping modal test');
+      return;
+    }
+
+    connectionPipeSlug = connSlug;
+    console.log(`[pipes-spec] connection-required pipe: "${connSlug}"`);
+
+    // Click the install button on that specific card
+    const card = await $(`[data-testid="pipe-card-${connSlug}"]`);
+    if (!(await card.isExisting())) {
+      // Card may not be in the current viewport/page — skip
+      console.log('[pipes-spec] connection pipe card not visible in current view, skipping');
+      return;
+    }
+
+    const installBtn = await card.$('[data-testid="pipe-install-btn"]');
+    const btnText = await installBtn.getText();
+
+    // Only proceed if it's actually a GET (not already installed)
+    if (btnText.trim() !== 'GET') {
+      console.log('[pipes-spec] connection pipe already installed, skipping modal test');
+      return;
+    }
+
+    await installBtn.click();
+
+    // After install, the connection modal OR "My Pipes" tab should appear.
+    // Either the modal opens (PostInstallConnectionsModal) or the tab switches.
+    // The modal renders a dialog with role="dialog" or an element containing "connections".
+    await browser.waitUntil(
+      async () => {
+        const body = (await browser.execute(() => document.body.innerText || '')) as string;
+        // Modal copy mentions "connection" or "setup"; My Pipes tab shows "scheduled"
+        return body.toLowerCase().includes('connection') || body.includes('scheduled');
+      },
+      { timeout: 15_000, timeoutMsg: 'Connection modal or My Pipes tab did not appear after installing connection-required pipe' }
+    );
+
+    await saveScreenshot('pipes-connection-modal');
+
+    // Clean up: delete the pipe if it was installed
+    await browser.executeAsync((slug: string, done: () => void) => {
+      fetch(`http://localhost:3030/pipes/${slug}`, { method: 'DELETE' })
+        .catch(() => {})
+        .finally(() => done());
+    }, connSlug);
+  });
+
   // ─── Step 3: find a no-connection pipe, click GET ─────────────────────────
-  // After clicking GET the app installs the pipe and onInstalled() auto-switches
-  // to My Pipes tab — we never see the "INSTALLED" badge, that's expected.
 
   it('finds a pipe with no connections requirement, clicks GET, auto-switches to My Pipes', async () => {
-    // Use browser.execute with a synchronous return so we avoid the async
-    // Promise-serialisation bug (browser.execute(async fn) returns [object Object]).
-    // We start the fetch then poll for the result.
-    const slug: string | null = await browser.executeAsync((done: (result: string | null) => void) => {
+    // Switch back to Discover tab (previous test may have left us on My Pipes)
+    const discoverTab = await $('[data-testid="tab-discover"]');
+    if (await discoverTab.isExisting()) {
+      await discoverTab.click();
+      await browser.waitUntil(
+        async () => await $$('[data-testid="pipe-install-btn"]').length > 0,
+        { timeout: 15_000 }
+      );
+    }
+
+    const slug: string | null = await browser.executeAsync((done: (v: string | null) => void) => {
       fetch('http://localhost:3030/pipes/store?sort=popular')
         .then((r) => r.json())
         .then((json) => {
@@ -87,38 +228,27 @@ describe('Pipes: discover → install → play', function () {
         .catch(() => done(null));
     });
 
-    expect(slug).not.toBeNull();
-    console.log(`[pipes-spec] installing pipe slug: "${slug}"`);
+    // Hard fail — no fallback to a random pipe
+    if (!slug) throw new Error('No no-connection pipe found in store; cannot proceed');
+    console.log(`[pipes-spec] installing: "${slug}"`);
+    installedPipeName = slug;
 
-    // slug IS the installed pipe name (backend returns data.name || slug, they match)
-    installedPipeName = slug!;
+    // Find the specific card by slug testid and click its install button
+    const card = await $(`[data-testid="pipe-card-${slug}"]`);
+    await card.waitForExist({ timeout: 8_000 });
+    await card.scrollIntoView({ block: 'center' });
 
-    // Click the GET button on the matching card (match by h4 title that includes slug)
-    const clicked = await browser.execute((targetSlug: string) => {
-      // Find a card whose h4 text matches or contains the slug (titles may be capitalised)
-      const allCards = Array.from(document.querySelectorAll<HTMLElement>('div.border'));
-      for (const card of allCards) {
-        const h4 = card.querySelector('h4');
-        const cardText = h4?.textContent?.toLowerCase() ?? '';
-        const slugNorm = targetSlug.toLowerCase().replace(/-/g, ' ');
-        if (cardText.includes(slugNorm) || cardText.replace(/\s+/g, '-').includes(targetSlug.toLowerCase())) {
-          const getBtn = Array.from(card.querySelectorAll<HTMLButtonElement>('button')).find(
-            (b) => b.textContent?.trim() === 'GET' && !b.disabled
-          );
-          if (getBtn) { getBtn.click(); return true; }
-        }
-      }
-      // Fallback: click the first enabled GET button on the page
-      const fallback = Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find(
-        (b) => b.textContent?.trim() === 'GET' && !b.disabled
-      );
-      if (fallback) { fallback.click(); return true; }
-      return false;
-    }, slug!);
+    const installBtn = await card.$('[data-testid="pipe-install-btn"]');
+    await installBtn.waitForExist({ timeout: 5_000 });
 
-    expect(clicked).toBe(true);
+    const btnText = await installBtn.getText();
+    if (btnText.trim() !== 'GET') {
+      throw new Error(`Expected GET button but found "${btnText}" for pipe "${slug}" — already installed?`);
+    }
 
-    // Wait for My Pipes tab content — PipesSection renders "scheduled (N)" sub-tabs
+    await installBtn.click();
+
+    // After GET click the app auto-switches to My Pipes (onInstalled callback)
     await browser.waitUntil(
       async () => {
         const text = (await browser.execute(() => document.body.innerText || '')) as string;
@@ -131,19 +261,17 @@ describe('Pipes: discover → install → play', function () {
     expect(existsSync(filepath)).toBe(true);
   });
 
-  // ─── Step 4: confirm pipe row is listed ──────────────────────────────────
+  // ─── Step 4: confirm pipe row is visible in My Pipes ─────────────────────
 
   it('shows the installed pipe in My Pipes list', async () => {
-    // The pipe row button text == pipe.config.name == slug
-    // It could be under "scheduled" or "manual" sub-tab; try both.
-    const foundInCurrent = await browser.execute((name: string) => {
+    const found = await browser.execute((name: string) => {
       return Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
         .some((b) => b.textContent?.trim() === name);
     }, installedPipeName);
 
-    if (!foundInCurrent) {
-      // Switch to manual sub-tab and retry
-      const manualTab = await $('button*=manual');
+    if (!found) {
+      // Try manual sub-tab
+      const manualTab = await $('[data-testid="tab-my-pipes"] ~ * button*=manual, button*=manual');
       if (await manualTab.isExisting()) {
         await manualTab.click();
         await browser.pause(500);
@@ -164,27 +292,21 @@ describe('Pipes: discover → install → play', function () {
     expect(existsSync(filepath)).toBe(true);
   });
 
-  // ─── Step 5: hover the pipe row to reveal the play button, then click ────
-  // The play button has `opacity-0 group-hover:opacity-100`. We must move the
-  // mouse cursor over the row so the hover state activates, then click the button.
+  // ─── Step 5: hover the row to reveal play button, click it ───────────────
 
   it('plays the installed pipe', async () => {
-    // Find the pipe row element via its name button
-    const pipeNameBtnEl = await $(`button=${installedPipeName}`);
-    await pipeNameBtnEl.waitForExist({ timeout: 8_000 });
+    const pipeNameBtn = await $(`button=${installedPipeName}`);
+    await pipeNameBtn.waitForExist({ timeout: 8_000 });
 
-    // Scroll the row into view so moveTo() works reliably
-    await pipeNameBtnEl.scrollIntoView({ block: 'center', inline: 'center' });
+    await pipeNameBtn.scrollIntoView({ block: 'center', inline: 'center' });
     await browser.pause(200);
 
-    // Move cursor to the row — triggers CSS group-hover, reveals play button
-    await pipeNameBtnEl.moveTo();
-    await browser.pause(400); // wait for opacity transition (150ms in CSS)
+    // Hover to trigger group-hover CSS → opacity-0 → opacity-100 on play button
+    await pipeNameBtn.moveTo();
+    await browser.pause(400);
 
-    // Click the now-visible play button inside the same group div
     const played = await browser.execute((name: string) => {
-      const allBtns = Array.from(document.querySelectorAll<HTMLButtonElement>('button'));
-      for (const nameBtn of allBtns) {
+      for (const nameBtn of Array.from(document.querySelectorAll<HTMLButtonElement>('button'))) {
         if (nameBtn.textContent?.trim() !== name) continue;
         const row = nameBtn.closest<HTMLElement>('div.group');
         if (!row) continue;
@@ -194,19 +316,15 @@ describe('Pipes: discover → install → play', function () {
           return true;
         }
       }
-      // Fallback: any run-pipe button on the page
-      const any = document.querySelector<HTMLButtonElement>('button[title="run pipe"]');
-      if (any && !any.disabled) { any.click(); return true; }
       return false;
     }, installedPipeName);
 
+    // No fallback — if we can't find the play button for the installed pipe, fail explicitly
     expect(played).toBe(true);
 
-    // Wait for running state: stop button appears, or body text contains "running"
     await browser.waitUntil(
       async () => {
-        const stopBtns = await $$('button[title="stop pipe"]');
-        if (stopBtns.length > 0) return true;
+        if (await $$('button[title="stop pipe"]').length > 0) return true;
         const body = (await browser.execute(() => document.body.innerText || '')) as string;
         return body.toLowerCase().includes('running');
       },

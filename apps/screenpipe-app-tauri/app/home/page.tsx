@@ -789,6 +789,7 @@ function SettingsPageContent() {
                           {appGroup.map((section) => (
                             <button
                               key={section.id}
+                              data-testid={`settings-nav-${section.id}`}
                               onClick={() => {
                                 setModalSection(section.id);
                                 setActiveSection(section.id);
@@ -823,6 +824,7 @@ function SettingsPageContent() {
                           {dataGroup.map((section) => (
                             <button
                               key={section.id}
+                              data-testid={`settings-nav-${section.id}`}
                               onClick={() => {
                                 setModalSection(section.id);
                                 setActiveSection(section.id);
@@ -857,6 +859,7 @@ function SettingsPageContent() {
                           {accountGroup.map((section) => (
                             <button
                               key={section.id}
+                              data-testid={`settings-nav-${section.id}`}
                               onClick={() => {
                                 setModalSection(section.id);
                                 setActiveSection(section.id);
