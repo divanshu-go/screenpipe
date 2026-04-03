@@ -1483,28 +1483,6 @@ export function PipesSection() {
         </Card>
       ) : (
         <div className="border border-border rounded-md divide-y divide-border">
-          {/* Global daily limit / credits exhausted banner — shown once at top */}
-          {(() => {
-            const errors = filteredPipes
-              .filter((p) => p.last_success === false && p.last_error)
-              .map((p) => parsePipeError(p.last_error!));
-            const limitError = errors.find(
-              (e) => e.type === "credits_exhausted" || e.type === "daily_limit"
-            );
-            if (!limitError) return null;
-            return (
-              <div className="flex items-center gap-2 text-xs px-4 py-2">
-                <span className="text-muted-foreground">
-                  {limitError.type === "credits_exhausted"
-                    ? "daily ai usage limit reached — try a lighter model or wait until tomorrow"
-                    : limitError.message}
-                  {limitError.resets_at && (
-                    <> · resets {new Date(limitError.resets_at).toLocaleTimeString()}</>
-                  )}
-                </span>
-              </div>
-            );
-          })()}
           {filteredPipes.map((pipe) => {
             const recentExecs = pipeExecutions[pipe.config.name] || [];
             const isRunning = pipe.is_running || runningPipe === pipe.config.name;
