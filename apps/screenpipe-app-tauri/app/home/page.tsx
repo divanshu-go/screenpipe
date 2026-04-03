@@ -53,6 +53,7 @@ import { NotificationsSettings } from "@/components/settings/notifications-setti
 import { UsageSection } from "@/components/settings/usage-section";
 import { SpeakersSection } from "@/components/settings/speakers-section";
 import { StandaloneChat } from "@/components/standalone-chat";
+import { NotificationBell } from "@/components/notification-bell";
 import Timeline from "@/components/rewind/timeline";
 import { useQueryState } from "nuqs";
 import { emit, listen } from "@tauri-apps/api/event";
@@ -466,6 +467,7 @@ function SettingsPageContent() {
               <div className={cn("flex items-center", sidebarCollapsed ? "justify-center" : "justify-between")}>
                 {!sidebarCollapsed && <h1 className={cn("text-lg font-bold", isTranslucent ? "vibrant-heading" : "text-foreground")}>screenpipe</h1>}
                 <div className="flex items-center gap-1.5">
+                  <NotificationBell />
                   <button
                     onClick={toggleMeeting}
                     disabled={meetingLoading}
