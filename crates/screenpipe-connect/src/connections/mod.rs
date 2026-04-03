@@ -15,6 +15,7 @@ pub mod confluence;
 pub mod discord;
 pub mod email;
 pub mod github_issues;
+pub mod granola;
 pub mod hubspot;
 pub mod intercom;
 pub mod jira;
@@ -123,6 +124,7 @@ pub fn all_integrations() -> Vec<Box<dyn Integration>> {
         Box::new(zapier::Zapier),
         Box::new(github_issues::GithubIssues),
         Box::new(jira::Jira),
+        Box::new(granola::Granola),
         Box::new(hubspot::HubSpot),
         Box::new(limitless::Limitless),
         Box::new(airtable::Airtable),

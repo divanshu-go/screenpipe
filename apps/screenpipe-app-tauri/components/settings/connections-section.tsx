@@ -230,6 +230,7 @@ export function IntegrationIcon({ icon }: { icon: string }) {
     zapier: <img src="/images/zapier.png" alt="Zapier" className="w-5 h-5 rounded" />,
     github: <img src="/images/github.png" alt="GitHub" className="w-5 h-5 rounded" />,
     jira: <img src="/images/jira.png" alt="Jira" className="w-5 h-5 rounded" />,
+    granola: <img src="/images/granola.png" alt="Granola" className="w-5 h-5 rounded" />,
     hubspot: <img src="/images/hubspot.png" alt="HubSpot" className="w-5 h-5 rounded" />,
     airtable: <img src="/images/airtable.png" alt="Airtable" className="w-5 h-5 rounded" />,
     limitless: <img src="/images/limitless.svg" alt="Limitless" className="w-5 h-5" />,
