@@ -1253,11 +1253,20 @@ export function SpeakersSection() {
       )}
 
       {filteredSpeakers.length === 0 && filteredClusters.length === 0 && (
-        <p className="text-sm text-muted-foreground py-8 text-center">
-          {searchQuery
-            ? "no speakers match your search"
-            : "no speakers detected yet"}
-        </p>
+        <div className="py-8 text-center space-y-2">
+          <p className="text-sm text-muted-foreground">
+            {searchQuery
+              ? "no speakers match your search"
+              : "no speakers detected yet"}
+          </p>
+          {!searchQuery && (
+            <p className="text-xs text-muted-foreground/70 max-w-sm mx-auto">
+              speaker identification requires the pyannote diarization models.
+              if they&apos;re still downloading, speakers will appear automatically
+              within a few seconds of the download completing.
+            </p>
+          )}
+        </div>
       )}
     </div>
   );

@@ -176,7 +176,9 @@ pub async fn start_device_monitor(
         let mut central_restart_times: Vec<Instant> = Vec::new();
         let central_restart_exhausted = std::sync::atomic::AtomicBool::new(false);
         let mut model_restart_pending = false;
-        let model_refresh_cooldown = Duration::from_secs(30);
+        // 5s: fast enough to activate quality mode promptly after background model download,
+        // without hammering disk on every 2s monitor tick.
+        let model_refresh_cooldown = Duration::from_secs(5);
         let mut last_model_refresh = Instant::now()
             .checked_sub(model_refresh_cooldown)
             .unwrap_or(Instant::now());

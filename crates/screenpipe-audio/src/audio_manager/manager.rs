@@ -429,6 +429,11 @@ impl AudioManager {
             .lock()
             .await
             .clone();
+        if embedding_extractor.is_some() {
+            info!("audio-receiver handler starting with diarization models ready — quality speaker IDs active");
+        } else {
+            info!("audio-receiver handler starting without diarization models — waiting for background download");
+        }
         let options = self.options.read().await;
         let output_path = options.output_path.clone();
         let languages = options.languages.clone();
