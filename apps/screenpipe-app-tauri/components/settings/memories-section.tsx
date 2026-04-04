@@ -21,6 +21,8 @@ import {
   Plus,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { MemoizedReactMarkdown } from "@/components/markdown";
+import remarkGfm from "remark-gfm";
 
 interface MemoryRecord {
   id: number;
@@ -633,12 +635,51 @@ export function MemoriesSection() {
                       rows={Math.min(15, Math.max(4, editContent.split("\n").length + 1))}
                     />
                   ) : (
-                    <p className="text-sm text-foreground">
-                      {memory.content}
+                    <div className="text-sm text-foreground">
+                      <MemoizedReactMarkdown
+                        className="prose prose-sm dark:prose-invert max-w-none break-words [word-break:break-word] prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0 prose-headings:my-1.5 prose-pre:my-1 prose-blockquote:my-1 prose-hr:my-2"
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          p({ children }) {
+                            return <p className="mb-1 last:mb-0">{children}</p>;
+                          },
+                          a({ href, children }) {
+                            return (
+                              <a
+                                href={href}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-blue-500 hover:underline"
+                              >
+                                {children}
+                              </a>
+                            );
+                          },
+                          code({ className, children, ...props }) {
+                            const isInline = !className;
+                            if (isInline) {
+                              return (
+                                <code className="px-1 py-0.5 rounded bg-muted text-xs font-mono" {...props}>
+                                  {children}
+                                </code>
+                              );
+                            }
+                            return (
+                              <pre className="rounded bg-muted p-2 overflow-x-auto text-xs">
+                                <code className={className} {...props}>
+                                  {children}
+                                </code>
+                              </pre>
+                            );
+                          },
+                        }}
+                      >
+                        {memory.content}
+                      </MemoizedReactMarkdown>
                       {savingId === memory.id && (
                         <Loader2 className="inline h-3 w-3 ml-1 animate-spin" />
                       )}
-                    </p>
+                    </div>
                   )}
                   <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
                     <span className="text-xs text-muted-foreground">
