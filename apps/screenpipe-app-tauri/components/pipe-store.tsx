@@ -939,11 +939,67 @@ function PipeDetailPanel({
   const needsReview = unrestricted && !pipe.author_verified;
   const isOwner = !!(currentUserId && pipe.author_id && currentUserId === pipe.author_id);
 
+  const [editing, setEditing] = useState(false);
+  const [editReadme, setEditReadme] = useState("");
+  const [editSource, setEditSource] = useState("");
+  const [publishing, setPublishing] = useState(false);
+
   const readmeContent = pipe.readme_md
     ? pipe.readme_md
     : pipe.source
       ? getReadmeFromPipeMd(pipe.source)
       : (pipe.full_description || pipe.description);
+
+  const startEditing = () => {
+    setEditReadme(readmeContent || "");
+    setEditSource(pipe.source || "");
+    setEditing(true);
+  };
+
+  const cancelEditing = () => {
+    setEditing(false);
+    setEditReadme("");
+    setEditSource("");
+  };
+
+  const republish = async () => {
+    setPublishing(true);
+    try {
+      const settings = await fetch("http://localhost:3030/settings").then(r => r.json());
+      const token = settings?.user?.token;
+      if (!token) throw new Error("not logged in");
+
+      const res = await fetch("http://localhost:3030/pipes/store/publish", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          slug: pipe.slug,
+          title: pipe.title,
+          description: pipe.description,
+          icon: pipe.icon,
+          category: pipe.category,
+          source_md: editSource,
+          readme_md: editReadme || undefined,
+          permissions: pipe.permissions || {},
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: "unknown error" }));
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+      setEditing(false);
+      // update pipe data in place
+      pipe.source = editSource;
+      pipe.readme_md = editReadme || undefined;
+    } catch (err) {
+      alert(`failed to republish: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setPublishing(false);
+    }
+  };
 
   return (
     <div className="space-y-8">
@@ -1017,7 +1073,46 @@ IMPORTANT: first read the screenpipe skill file to understand how pipes work, th
                 <GitFork className="h-4 w-4 mr-1.5" />
                 FORK
               </Button>
-              {isOwner && onUnpublish && (
+              {isOwner && !editing && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-9 px-4 text-sm font-semibold rounded-none uppercase tracking-wide"
+                  onClick={startEditing}
+                >
+                  EDIT
+                </Button>
+              )}
+              {isOwner && editing && (
+                <>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-9 px-4 text-sm font-semibold rounded-none uppercase tracking-wide"
+                    onClick={cancelEditing}
+                    disabled={publishing}
+                  >
+                    CANCEL
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="default"
+                    className="h-9 px-4 text-sm font-semibold rounded-none uppercase tracking-wide"
+                    onClick={republish}
+                    disabled={publishing}
+                  >
+                    {publishing ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
+                        PUBLISHING...
+                      </>
+                    ) : (
+                      "PUBLISH UPDATE"
+                    )}
+                  </Button>
+                </>
+              )}
+              {isOwner && onUnpublish && !editing && (
                 <Button
                   size="sm"
                   variant="destructive"
@@ -1072,32 +1167,42 @@ IMPORTANT: first read the screenpipe skill file to understand how pipes work, th
       {/* README section */}
       <div className="space-y-3">
         <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-widest">
-          README
+          README {editing && <span className="text-foreground/50">(editing)</span>}
         </h4>
-        <div className="border border-border rounded-none p-6">
-          {readmeContent ? (
-            <MemoizedReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              className="prose prose-sm dark:prose-invert max-w-none prose-pre:bg-muted prose-pre:text-foreground prose-pre:rounded-md prose-pre:border prose-pre:border-border prose-pre:text-xs prose-code:bg-muted prose-code:text-foreground prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-xs prose-code:before:content-none prose-code:after:content-none"
-              components={{
-                a: ({ href, children }) => (
-                  <a
-                    href={href}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-primary hover:underline"
-                  >
-                    {children}
-                  </a>
-                ),
-              }}
-            >
-              {readmeContent}
-            </MemoizedReactMarkdown>
-          ) : (
-            <p className="text-sm text-muted-foreground">no description available</p>
-          )}
-        </div>
+        {editing ? (
+          <textarea
+            value={editReadme}
+            onChange={(e) => setEditReadme(e.target.value)}
+            className="w-full border border-border rounded-none p-4 text-sm font-mono bg-muted/30 resize-y focus:outline-none focus:border-foreground/40 min-h-[200px]"
+            rows={15}
+            placeholder="write your README in markdown..."
+          />
+        ) : (
+          <div className="border border-border rounded-none p-6">
+            {readmeContent ? (
+              <MemoizedReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                className="prose prose-sm dark:prose-invert max-w-none prose-pre:bg-muted prose-pre:text-foreground prose-pre:rounded-md prose-pre:border prose-pre:border-border prose-pre:text-xs prose-code:bg-muted prose-code:text-foreground prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-xs prose-code:before:content-none prose-code:after:content-none"
+                components={{
+                  a: ({ href, children }) => (
+                    <a
+                      href={href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary hover:underline"
+                    >
+                      {children}
+                    </a>
+                  ),
+                }}
+              >
+                {readmeContent}
+              </MemoizedReactMarkdown>
+            ) : (
+              <p className="text-sm text-muted-foreground">no description available</p>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Permissions */}
@@ -1174,23 +1279,31 @@ IMPORTANT: first read the screenpipe skill file to understand how pipes work, th
       {/* Source */}
       <div className="space-y-3">
         <button
-          onClick={onToggleSource}
+          onClick={editing ? undefined : onToggleSource}
           className="flex items-center gap-2 text-xs font-medium text-muted-foreground uppercase tracking-widest hover:text-foreground transition-colors"
         >
-          {sourceExpanded ? (
+          {editing || sourceExpanded ? (
             <ChevronDown className="h-3.5 w-3.5" />
           ) : (
             <ChevronRight className="h-3.5 w-3.5" />
           )}
-          Source (pipe.md)
+          Source (pipe.md) {editing && <span className="text-foreground/50">(editing)</span>}
         </button>
-        {sourceExpanded && pipe.source && (
+        {editing ? (
+          <textarea
+            value={editSource}
+            onChange={(e) => setEditSource(e.target.value)}
+            className="w-full border border-border rounded-none p-4 text-xs font-mono bg-muted/30 resize-y focus:outline-none focus:border-foreground/40 min-h-[300px]"
+            rows={20}
+            placeholder="pipe.md source..."
+          />
+        ) : sourceExpanded && pipe.source ? (
           <div className="border border-border rounded-none overflow-hidden">
             <pre className="p-4 text-xs leading-relaxed whitespace-pre-wrap font-mono max-h-80 overflow-y-auto bg-muted/50">
               {pipe.source}
             </pre>
           </div>
-        )}
+        ) : null}
       </div>
     </div>
   );
