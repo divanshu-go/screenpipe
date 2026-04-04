@@ -465,7 +465,6 @@ export default function NotificationPanelPage() {
               components={{
                 a: ({ href, children }) => (
                   <a
-                    href={href}
                     onClick={async (e) => {
                       e.preventDefault();
                       if (!href) return;
