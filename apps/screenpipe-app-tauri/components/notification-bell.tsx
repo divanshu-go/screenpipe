@@ -7,6 +7,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { Bell, ChevronRight, ChevronDown, MessageSquare } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   Popover,
   PopoverContent,
@@ -148,9 +149,9 @@ export function NotificationBell() {
                           </span>
                         </div>
                         {!isExpanded && entry.body && (
-                          <p className="text-[10px] text-muted-foreground mt-0.5 line-clamp-2 pl-4">
-                            {entry.body}
-                          </p>
+                          <div className="text-[10px] text-muted-foreground mt-0.5 line-clamp-2 pl-4 [&_p]:inline [&_strong]:text-foreground [&_a]:underline">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{entry.body}</ReactMarkdown>
+                          </div>
                         )}
                       </div>
                       <span className="text-[9px] text-muted-foreground/50 shrink-0 mt-0.5">
@@ -162,7 +163,29 @@ export function NotificationBell() {
                     <div className="px-3 pb-2 pl-7">
                       {entry.body && (
                         <div className="text-[10px] text-muted-foreground leading-relaxed mb-2 [&_p]:mb-1 [&_p:last-child]:mb-0 [&_strong]:text-foreground [&_code]:bg-muted [&_code]:px-1 [&_code]:text-[9px] [&_ul]:pl-4 [&_ul]:my-0.5 [&_li]:my-0">
-                          <ReactMarkdown>{entry.body}</ReactMarkdown>
+                          <ReactMarkdown
+                            remarkPlugins={[remarkGfm]}
+                            components={{
+                              a: ({ href, children }) => (
+                                <a
+                                  onClick={async (e) => {
+                                    e.preventDefault();
+                                    if (!href) return;
+                                    try {
+                                      const { open } = await import("@tauri-apps/plugin-shell");
+                                      await open(href);
+                                    } catch {
+                                      console.error("failed to open url:", href);
+                                    }
+                                  }}
+                                  style={{ cursor: "pointer", textDecoration: "underline" }}
+                                  className="text-foreground"
+                                >
+                                  {children}
+                                </a>
+                              ),
+                            }}
+                          >{entry.body}</ReactMarkdown>
                         </div>
                       )}
                       {entry.pipe_name && (
