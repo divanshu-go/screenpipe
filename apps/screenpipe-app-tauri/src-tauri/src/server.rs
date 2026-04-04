@@ -14,6 +14,7 @@ use axum::{
 use http::header::{HeaderValue, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use tauri::Emitter;
 use tauri::Manager;
 use tokio::sync::mpsc;
@@ -57,6 +58,39 @@ struct NotificationPayload {
 struct ApiResponse {
     success: bool,
     message: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct NotificationHistoryEntry {
+    id: String,
+    #[serde(rename = "type")]
+    notification_type: String,
+    title: String,
+    body: String,
+    pipe_name: Option<String>,
+    timestamp: String,
+    read: bool,
+}
+
+const MAX_NOTIFICATION_HISTORY: usize = 100;
+
+fn notifications_path() -> PathBuf {
+    screenpipe_core::paths::default_screenpipe_data_dir().join("notifications.json")
+}
+
+fn read_notification_history() -> Vec<NotificationHistoryEntry> {
+    let path = notifications_path();
+    match std::fs::read_to_string(&path) {
+        Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
+        Err(_) => Vec::new(),
+    }
+}
+
+fn write_notification_history(entries: &[NotificationHistoryEntry]) {
+    let path = notifications_path();
+    if let Ok(data) = serde_json::to_string(entries) {
+        let _ = std::fs::write(&path, data);
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -247,12 +281,18 @@ pub async fn run_server(app_handle: tauri::AppHandle, port: u16) {
 
     let cors = CorsLayer::new()
         .allow_origin("*".parse::<HeaderValue>().unwrap())
-        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::OPTIONS])
         .allow_headers(Any)
         .allow_credentials(false);
 
     let app = Router::new()
         .route("/notify", axum::routing::post(send_notification))
+        .route(
+            "/notifications",
+            axum::routing::get(list_notifications)
+                .post(mark_notifications_read)
+                .delete(clear_notifications),
+        )
         .route("/inbox", axum::routing::post(send_inbox_message))
         .route("/log", axum::routing::post(log_message))
         .route("/auth", axum::routing::post(handle_auth))
@@ -322,6 +362,21 @@ async fn send_notification(
         "autoDismissMs": dismiss_ms,
     });
 
+    // Persist to disk before attempting to show — survives crashes/restarts
+    let entry = NotificationHistoryEntry {
+        id: panel_id.clone(),
+        notification_type: panel_payload["type"].as_str().unwrap_or("pipe").to_string(),
+        title: payload.title.clone(),
+        body: payload.body.clone(),
+        pipe_name: None,
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        read: false,
+    };
+    let mut history = read_notification_history();
+    history.insert(0, entry);
+    history.truncate(MAX_NOTIFICATION_HISTORY);
+    write_notification_history(&history);
+
     let panel_json = panel_payload.to_string();
 
     // Use the show_notification_panel command directly
@@ -341,6 +396,30 @@ async fn send_notification(
             ))
         }
     }
+}
+
+async fn list_notifications() -> Json<Vec<NotificationHistoryEntry>> {
+    Json(read_notification_history())
+}
+
+async fn mark_notifications_read() -> Json<ApiResponse> {
+    let mut history = read_notification_history();
+    for entry in &mut history {
+        entry.read = true;
+    }
+    write_notification_history(&history);
+    Json(ApiResponse {
+        success: true,
+        message: "all notifications marked as read".to_string(),
+    })
+}
+
+async fn clear_notifications() -> Json<ApiResponse> {
+    write_notification_history(&[]);
+    Json(ApiResponse {
+        success: true,
+        message: "notification history cleared".to_string(),
+    })
 }
 
 async fn send_inbox_message(

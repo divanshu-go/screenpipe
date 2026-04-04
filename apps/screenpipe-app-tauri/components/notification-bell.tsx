@@ -6,9 +6,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { Bell, ChevronRight, ChevronDown, MessageSquare } from "lucide-react";
-import localforage from "localforage";
 import ReactMarkdown from "react-markdown";
-import { listen } from "@tauri-apps/api/event";
 import {
   Popover,
   PopoverContent,
@@ -27,17 +25,23 @@ interface NotificationEntry {
   read: boolean;
 }
 
+const API_BASE = "http://localhost:11435";
+
 export function NotificationBell() {
   const [history, setHistory] = useState<NotificationEntry[]>([]);
   const [open, setOpen] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const loadHistory = useCallback(async () => {
-    const entries =
-      (await localforage.getItem<NotificationEntry[]>(
-        "notification-history"
-      )) || [];
-    setHistory(entries);
+    try {
+      const res = await fetch(`${API_BASE}/notifications`);
+      if (res.ok) {
+        const entries: NotificationEntry[] = await res.json();
+        setHistory(entries);
+      }
+    } catch {
+      // server not ready yet
+    }
   }, []);
 
   useEffect(() => {
@@ -46,45 +50,20 @@ export function NotificationBell() {
     return () => clearInterval(interval);
   }, [loadHistory]);
 
-  // Listen for native notifications so they appear in history even if the
-  // overlay window (which has NotificationHandler) isn't mounted.
-  useEffect(() => {
-    const unlisten = listen<string>("native-notification-shown", async (event) => {
-      try {
-        const data = JSON.parse(event.payload);
-        const history = await localforage.getItem<NotificationEntry[]>("notification-history") || [];
-        // Skip if already saved (dedup by id)
-        if (history.some((n) => n.id === data.id)) return;
-        const entry: NotificationEntry = {
-          id: data.id,
-          type: data.type,
-          title: data.title,
-          body: data.body,
-          pipe_name: data.pipe_name,
-          timestamp: new Date().toISOString(),
-          read: false,
-        };
-        const updated = [entry, ...history].slice(0, 100);
-        await localforage.setItem("notification-history", updated);
-        setHistory(updated);
-      } catch (e) {
-        console.error("failed to save notification to history:", e);
-      }
-    });
-    return () => { unlisten.then((u) => u()); };
-  }, []);
-
   const unreadCount = history.filter((n) => !n.read).length;
 
   const markAllRead = async () => {
-    const updated = history.map((n) => ({ ...n, read: true }));
-    setHistory(updated);
-    await localforage.setItem("notification-history", updated);
+    setHistory((prev) => prev.map((n) => ({ ...n, read: true })));
+    try {
+      await fetch(`${API_BASE}/notifications`, { method: "POST" });
+    } catch {}
   };
 
   const clearAll = async () => {
     setHistory([]);
-    await localforage.setItem("notification-history", []);
+    try {
+      await fetch(`${API_BASE}/notifications`, { method: "DELETE" });
+    } catch {}
   };
 
   const formatTime = (ts: string) => {
