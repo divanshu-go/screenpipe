@@ -53,6 +53,18 @@ pub fn mark_all_read() {
     write_all(&history);
 }
 
+pub fn remove_by_id(id: &str) -> bool {
+    let mut history = read_all();
+    let before = history.len();
+    history.retain(|e| e.id != id);
+    if history.len() < before {
+        write_all(&history);
+        true
+    } else {
+        false
+    }
+}
+
 pub fn clear() {
     write_all(&[]);
 }

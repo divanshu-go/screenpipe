@@ -6,7 +6,7 @@
 
 use super::store::{self, NotificationHistoryEntry};
 use crate::server::{ApiResponse, ServerState};
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
 use tracing::{error, info};
@@ -87,6 +87,27 @@ pub async fn clear() -> Json<ApiResponse> {
         success: true,
         message: "notification history cleared".to_string(),
     })
+}
+
+/// `DELETE /notifications/:id` — dismiss a single notification.
+pub async fn dismiss(Path(id): Path<String>) -> (StatusCode, Json<ApiResponse>) {
+    if store::remove_by_id(&id) {
+        (
+            StatusCode::OK,
+            Json(ApiResponse {
+                success: true,
+                message: "notification dismissed".to_string(),
+            }),
+        )
+    } else {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse {
+                success: false,
+                message: "notification not found".to_string(),
+            }),
+        )
+    }
 }
 
 // ── Payload types ────────────────────────────────────────────────────

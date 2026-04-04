@@ -5,7 +5,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Bell, ChevronRight, ChevronDown, MessageSquare } from "lucide-react";
+import { Bell, ChevronRight, ChevronDown, MessageSquare, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -64,6 +64,14 @@ export function NotificationBell() {
     setHistory([]);
     try {
       await fetch(`${API_BASE}/notifications`, { method: "DELETE" });
+    } catch {}
+  };
+
+  const dismissOne = async (id: string) => {
+    setHistory((prev) => prev.filter((n) => n.id !== id));
+    if (expandedId === id) setExpandedId(null);
+    try {
+      await fetch(`${API_BASE}/notifications/${encodeURIComponent(id)}`, { method: "DELETE" });
     } catch {}
   };
 
@@ -130,7 +138,7 @@ export function NotificationBell() {
                   className="border-b border-border/50 last:border-0"
                 >
                   <div
-                    className="px-3 py-2 hover:bg-muted/30 cursor-pointer"
+                    className="group/notif px-3 py-2 hover:bg-muted/30 cursor-pointer"
                     onClick={() => setExpandedId(isExpanded ? null : entry.id)}
                   >
                     <div className="flex items-start justify-between gap-2">
@@ -154,9 +162,21 @@ export function NotificationBell() {
                           </div>
                         )}
                       </div>
-                      <span className="text-[9px] text-muted-foreground/50 shrink-0 mt-0.5">
-                        {formatTime(entry.timestamp)}
-                      </span>
+                      <div className="flex items-center gap-1 shrink-0 mt-0.5">
+                        <span className="text-[9px] text-muted-foreground/50">
+                          {formatTime(entry.timestamp)}
+                        </span>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            dismissOne(entry.id);
+                          }}
+                          className="p-0.5 rounded hover:bg-muted/60 opacity-0 group-hover/notif:opacity-100 transition-opacity"
+                          title="dismiss"
+                        >
+                          <X className="w-3 h-3 text-muted-foreground/50 hover:text-foreground" />
+                        </button>
+                      </div>
                     </div>
                   </div>
                   {isExpanded && (
