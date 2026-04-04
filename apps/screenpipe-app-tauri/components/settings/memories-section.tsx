@@ -398,17 +398,29 @@ export function MemoriesSection() {
       {loading ? (
         <MemoriesSkeleton />
       ) : memories.length === 0 ? (
-        <div className="text-sm text-muted-foreground py-8 space-y-2">
+        <div className="text-sm text-muted-foreground py-8 space-y-2 text-center">
           <p>
             {debouncedQuery || activeTag
               ? "no memories match your search"
               : "no memories yet"}
           </p>
           {!debouncedQuery && !activeTag && (
-            <p className="text-xs">
-              memories are created when the AI learns something about you during
-              chat conversations. try asking the AI to remember something.
-            </p>
+            <>
+              <p className="text-xs">
+                memories are automatically created by pipes that learn from your
+                screen & audio activity.
+              </p>
+              <p className="text-xs mt-3">
+                install pipes from the{" "}
+                <a
+                  href="?section=pipes"
+                  className="underline text-foreground hover:text-foreground/80 transition-colors"
+                >
+                  pipe store
+                </a>{" "}
+                to start building memories.
+              </p>
+            </>
           )}
         </div>
       ) : (
