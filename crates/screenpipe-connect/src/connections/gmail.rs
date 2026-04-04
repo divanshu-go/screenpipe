@@ -14,7 +14,7 @@ use serde_json::{Map, Value};
 // Replace the client_id below with the registered value.
 static OAUTH: OAuthConfig = OAuthConfig {
     auth_url: "https://accounts.google.com/o/oauth2/v2/auth",
-    client_id: "TODO_REGISTER_GMAIL_OAUTH_CLIENT_ID",
+    client_id: "7048263620-ft2rcpk2i6djdnr7jig7tnfnphr8d05e.apps.googleusercontent.com",
     extra_auth_params: &[
         (
             "scope",
