@@ -760,8 +760,15 @@ public func notifFreeString(_ ptr: UnsafeMutablePointer<CChar>?) {
 @_cdecl("notif_show")
 public func notifShow(_ jsonPtr: UnsafePointer<CChar>) -> Int32 {
     let json = String(cString: jsonPtr)
-    guard let data = json.data(using: .utf8),
-          let payload = try? JSONDecoder().decode(NotificationPayload.self, from: data) else {
+    guard let data = json.data(using: .utf8) else {
+        NSLog("[screenpipe-notif] failed to convert json to utf8 data")
+        return -1
+    }
+    let payload: NotificationPayload
+    do {
+        payload = try JSONDecoder().decode(NotificationPayload.self, from: data)
+    } catch {
+        NSLog("[screenpipe-notif] json decode failed: \(error) — json: \(json.prefix(500))")
         return -1
     }
     if #available(macOS 13.0, *) {
