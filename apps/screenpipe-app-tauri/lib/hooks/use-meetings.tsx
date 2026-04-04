@@ -250,10 +250,12 @@ function detectMeetings(frames: StreamTimeSeriesResponse[]): Meeting[] {
 		for (const entry of entries) {
 			// Use globally clustered speaker_id — consistent across chunks, unlike per-chunk
 			// pyannote labels which reset for every chunk and would split the same person.
+			// Merge same speaker_id across input/output — acoustic echo makes the same
+			// person appear on both mic and output device with identical speaker_id.
 			const id = entry.speaker_id != null
-				? `spk_${entry.speaker_id}_${entry.is_input ? "in" : "out"}`
+				? `spk_${entry.speaker_id}`
 				: entry.is_input
-					? "input"
+					? "me_in"
 					: "output";
 			const displayName = resolveDisplaySpeakerLabel({
 				speaker_name: entry.speaker_name,

@@ -300,15 +300,22 @@ export function AudioTranscript({
 			lastTimestamp = audio.timestamp;
 		});
 
-		// Compute participants and first chunk by speaker (for header assign popovers)
+		// Compute participants and first chunk by speaker (for header assign popovers).
+		// Use speakerId as the key when known — this merges the same speaker even when
+		// they appear on both mic (echo) and output device (acoustic bleedthrough).
 		const participantMap = new Map<string, { name: string; duration: number; speakerId?: number }>();
 		const firstChunkBySpeaker = new Map<number | string, { audioChunkId: number; audioFilePath: string }>();
 		dedupedAudio.forEach((audio) => {
 			const { speakerId, speakerName } = getSpeakerInfo(audio);
 			const diarRaw = dominantDiarizationLabel(audio.aligned_words_json);
-			const speakerPart = audio.is_input ? "me" : (speakerId ?? -1);
 			const diarGroup = (speakerId != null || audio.is_input) ? "any" : (diarRaw ?? "nodiar");
-			const id = `${speakerPart}_${audio.is_input ? "in" : "out"}_${diarGroup}`;
+			// Participant key: merge same speakerId across input/output (acoustic echo produces
+			// duplicate entries otherwise). Fall back to device-aware key when no ID.
+			const id = speakerId != null
+				? `spk_${speakerId}`
+				: audio.is_input
+					? "me_in"
+					: `out_${diarGroup}`;
 			const existing = participantMap.get(id);
 			if (existing) {
 				existing.duration += audio.duration_secs;
@@ -413,14 +420,17 @@ export function AudioTranscript({
 
 		const totalDuration = participants.reduce((sum, p) => sum + p.duration, 0);
 
-		// Build first chunk by speaker for header assign popovers
+		// Build first chunk by speaker for header assign popovers (same merged key as participantMap)
 		const firstChunkBySpeaker = new Map<number | string, { audioChunkId: number; audioFilePath: string }>();
 		dedupedAudio.forEach((audio) => {
 			const { speakerId } = getSpeakerInfo(audio);
 			const diarRaw = dominantDiarizationLabel(audio.aligned_words_json);
-			const speakerPart = audio.is_input ? "me" : (speakerId ?? -1);
 			const diarGroup = (speakerId != null || audio.is_input) ? "any" : (diarRaw ?? "nodiar");
-			const id = `${speakerPart}_${audio.is_input ? "in" : "out"}_${diarGroup}`;
+			const id = speakerId != null
+				? `spk_${speakerId}`
+				: audio.is_input
+					? "me_in"
+					: `out_${diarGroup}`;
 			if (!firstChunkBySpeaker.has(id)) {
 				firstChunkBySpeaker.set(id, {
 					audioChunkId: audio.audio_chunk_id,

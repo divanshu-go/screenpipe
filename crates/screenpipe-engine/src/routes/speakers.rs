@@ -86,7 +86,9 @@ pub(crate) struct MergeSpeakersRequest {
 
 #[derive(OaSchema, Deserialize, Debug)]
 pub struct GetUnnamedSpeakersRequest {
+    #[serde(default = "default_unnamed_limit")]
     limit: u32,
+    #[serde(default)]
     offset: u32,
     // comma separated list of speaker ids to include
     #[serde(
@@ -94,6 +96,10 @@ pub struct GetUnnamedSpeakersRequest {
         default = "default_speaker_ids"
     )]
     speaker_ids: Option<Vec<i64>>,
+}
+
+fn default_unnamed_limit() -> u32 {
+    50
 }
 
 #[derive(OaSchema, Deserialize, Debug)]
