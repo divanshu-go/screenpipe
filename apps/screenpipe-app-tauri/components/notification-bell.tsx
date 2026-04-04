@@ -8,6 +8,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Bell, ChevronRight, ChevronDown, MessageSquare, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import posthog from "posthog-js";
 import {
   Popover,
   PopoverContent,
@@ -61,6 +62,7 @@ export function NotificationBell() {
   };
 
   const clearAll = async () => {
+    posthog.capture("notification_bell_clear_all", { count: history.length });
     setHistory([]);
     try {
       await fetch(`${API_BASE}/notifications`, { method: "DELETE" });
@@ -68,6 +70,11 @@ export function NotificationBell() {
   };
 
   const dismissOne = async (id: string) => {
+    const entry = history.find((n) => n.id === id);
+    posthog.capture("notification_bell_dismiss", {
+      notification_type: entry?.type,
+      pipe_name: entry?.pipe_name,
+    });
     setHistory((prev) => prev.filter((n) => n.id !== id));
     if (expandedId === id) setExpandedId(null);
     try {
@@ -90,7 +97,13 @@ export function NotificationBell() {
       open={open}
       onOpenChange={(o) => {
         setOpen(o);
-        if (o) markAllRead();
+        if (o) {
+          posthog.capture("notification_bell_opened", {
+            unread_count: unreadCount,
+            total_count: history.length,
+          });
+          markAllRead();
+        }
       }}
     >
       <PopoverTrigger asChild>
@@ -139,7 +152,17 @@ export function NotificationBell() {
                 >
                   <div
                     className="group/notif px-3 py-2 hover:bg-muted/30 cursor-pointer"
-                    onClick={() => setExpandedId(isExpanded ? null : entry.id)}
+                    onClick={() => {
+                      const willExpand = !isExpanded;
+                      setExpandedId(willExpand ? entry.id : null);
+                      if (willExpand) {
+                        posthog.capture("notification_bell_expand", {
+                          notification_type: entry.type,
+                          pipe_name: entry.pipe_name,
+                          title: entry.title,
+                        });
+                      }
+                    }}
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex-1 min-w-0">
@@ -223,6 +246,11 @@ export function NotificationBell() {
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
+                          posthog.capture("notification_bell_ask_ai", {
+                            notification_type: entry.type,
+                            pipe_name: entry.pipe_name,
+                            title: entry.title,
+                          });
                           setOpen(false);
                           showChatWithPrefill({
                             context: `notification from ${entry.pipe_name || "screenpipe"}:\n\n**${entry.title}**\n${entry.body}`,
