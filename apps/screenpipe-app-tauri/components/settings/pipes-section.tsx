@@ -1634,6 +1634,17 @@ export function PipesSection() {
                     </Button>
                   )}
 
+                  {/* Publish button */}
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    onClick={() => setPublishPipeName(pipe.config.name)}
+                    title="publish to store"
+                  >
+                    <Upload className="h-3.5 w-3.5" />
+                  </Button>
+
                   {/* Overflow menu */}
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>

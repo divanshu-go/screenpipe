@@ -1444,16 +1444,76 @@ export function PublishDialog({
       .finally(() => setLoadingPipes(false));
   }, [open, defaultPipe]);
 
+  const helpMePublish = () => {
+    const pipeName = selectedPipe || defaultPipe;
+    if (!pipeName) return;
+    const pipe = localPipes.find((p: any) => p.name === pipeName);
+    const sourceMd = pipe?.raw_content as string | undefined;
+    if (!sourceMd) {
+      toast({ title: "could not read pipe content", variant: "destructive" });
+      return;
+    }
+    onOpenChange(false);
+    navigateHomeAndPrefill({
+      context: `the user wants to publish their pipe "${pipeName}" to the screenpipe store. here is their current pipe.md:
+
+\`\`\`
+${sourceMd}
+\`\`\`
+
+IMPORTANT — follow these steps exactly:
+
+STEP 1: READ THE SKILL FILE
+- read the screenpipe pipe skill file first to understand how pipes, connections, permissions, and the store work
+
+STEP 2: CREATE A GENERIC VERSION
+- DO NOT modify the user's existing installed pipe
+- create the store-ready version as a separate output
+- review for personal/machine-specific content:
+  - hardcoded file paths (~/Documents/..., /Users/name/...) → replace with env vars or connection settings
+  - personal names in prompts → replace with "the user"
+  - hardcoded API keys or tokens → remove, use connections instead
+  - machine-specific config (specific ports, paths) → make configurable
+- set permissions preset appropriately (e.g. "reader", "writer", "none" — NOT left undefined)
+- if the pipe needs external services (Obsidian, Notion, Slack, etc.), use screenpipe connections properly
+- keep ALL original functionality intact
+
+STEP 3: PREPARE STORE METADATA
+generate all of these:
+- **title**: clear, concise name (e.g. "Daily Activity Summary")
+- **description**: 1-2 sentence explanation of what it does
+- **icon**: single emoji that represents the pipe
+- **category**: one of: Productivity, Dev, Health, Social, Other
+- **readme_md**: full markdown README with sections:
+  - what it does (bullet points)
+  - who it's for
+  - how to use (setup steps)
+  - configuration options (if any env vars or connections needed)
+
+STEP 4: SHOW THE USER AND ASK CONFIRMATION
+- show the complete final pipe.md source
+- show the title, description, icon, category, and README
+- explicitly ask: "does this look good? should I publish it?"
+- DO NOT publish until the user confirms
+
+STEP 5: PUBLISH (only after user says yes)
+- call POST http://localhost:3030/pipes/store/publish with JSON body:
+  { "source_md": "<the generic pipe.md>", "title": "<title>", "description": "<description>", "icon": "<emoji>", "category": "<category>", "readme_md": "<readme>" }
+- include Authorization header with Bearer token from settings (read settings first to get user.token)
+- tell the user the result`,
+      prompt: `help me publish my pipe "${pipeName}" to the store. make it generic and ready for anyone to use.`,
+      autoSend: true,
+    });
+  };
+
   const handlePublish = async () => {
     if (!selectedPipe || !title) return;
     setPublishing(true);
     try {
-      // Get pipe content from local pipes list
       const pipe = localPipes.find((p: any) => p.name === selectedPipe);
       let sourceMd = pipe?.raw_content as string | undefined;
       if (!sourceMd) throw new Error("could not read pipe content");
 
-      // Redact secrets if enabled
       if (redactEnabled) {
         const { redacted, count } = redactSecrets(sourceMd);
         if (count > 0) {
@@ -1516,6 +1576,27 @@ export function PublishDialog({
           </p>
         ) : (
           <div className="space-y-3">
+            {/* AI help banner */}
+            <button
+              onClick={helpMePublish}
+              disabled={!selectedPipe && !defaultPipe}
+              className="w-full flex items-center gap-3 p-3 border-2 border-dashed border-foreground/20 hover:border-foreground/40 hover:bg-muted/30 transition-colors text-left disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <span className="text-2xl">🤖</span>
+              <div>
+                <p className="text-sm font-medium">help me publish</p>
+                <p className="text-[11px] text-muted-foreground">
+                  ai will make your pipe generic, write a README, and publish it for you
+                </p>
+              </div>
+            </button>
+
+            <div className="flex items-center gap-3 text-xs text-muted-foreground">
+              <div className="flex-1 h-px bg-border" />
+              or publish manually
+              <div className="flex-1 h-px bg-border" />
+            </div>
+
             <div>
               <Label className="text-xs">pipe</Label>
               {loadingPipes ? (
@@ -1587,7 +1668,6 @@ export function PublishDialog({
               </div>
             </div>
 
-            {/* Redact secrets checkbox */}
             <div className="flex items-center gap-2 pt-1">
               <Checkbox
                 id="redact-secrets"
