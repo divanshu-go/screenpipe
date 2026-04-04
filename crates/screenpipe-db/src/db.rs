@@ -4140,7 +4140,8 @@ impl DatabaseManager {
                     ac.file_path,
                     at.transcription,
                     at.start_time,
-                    at.end_time
+                    at.end_time,
+                    CAST(unixepoch(at.timestamp) AS INTEGER) as abs_timestamp
                 FROM speakers s
                 JOIN audio_transcriptions at ON s.id = at.speaker_id
                 JOIN audio_chunks ac ON at.audio_chunk_id = ac.id
@@ -4178,7 +4179,8 @@ impl DatabaseManager {
                             'path', rap.file_path,
                             'transcript', rap.transcription,
                             'start_time', rap.start_time,
-                            'end_time', rap.end_time
+                            'end_time', rap.end_time,
+                            'timestamp', rap.abs_timestamp
                         )
                     ))
                     ELSE json_patch(
@@ -4188,7 +4190,8 @@ impl DatabaseManager {
                                 'path', rap.file_path,
                                 'transcript', rap.transcription,
                                 'start_time', rap.start_time,
-                                'end_time', rap.end_time
+                                'end_time', rap.end_time,
+                                'timestamp', rap.abs_timestamp
                             )
                         ))
                     )
@@ -4271,7 +4274,8 @@ impl DatabaseManager {
                     ac.file_path,
                     at2.transcription,
                     at2.start_time,
-                    at2.end_time
+                    at2.end_time,
+                    CAST(unixepoch(at2.timestamp) AS INTEGER) as abs_timestamp
                 FROM NamedSpeakers ns
                 JOIN audio_transcriptions at2 ON at2.speaker_id IN (
                     SELECT s2.id FROM speakers s2 WHERE s2.name = ns.name AND s2.hallucination = 0
@@ -4297,7 +4301,8 @@ impl DatabaseManager {
                             'path', rap.file_path,
                             'transcript', rap.transcription,
                             'start_time', rap.start_time,
-                            'end_time', rap.end_time
+                            'end_time', rap.end_time,
+                            'timestamp', rap.abs_timestamp
                         )
                     ))
                 END as metadata
@@ -5211,7 +5216,8 @@ impl DatabaseManager {
                     ac.file_path,
                     at.transcription,
                     at.start_time,
-                    at.end_time
+                    at.end_time,
+                    CAST(unixepoch(at.timestamp) AS INTEGER) as abs_timestamp
                 FROM speakers s
                 JOIN audio_transcriptions at ON s.id = at.speaker_id
                 JOIN audio_chunks ac ON at.audio_chunk_id = ac.id
@@ -5237,7 +5243,8 @@ impl DatabaseManager {
                         'path', rap.file_path,
                         'transcript', rap.transcription,
                         'start_time', rap.start_time,
-                        'end_time', rap.end_time
+                        'end_time', rap.end_time,
+                        'timestamp', rap.abs_timestamp
                     )))
                     ELSE json_patch(
                         json(s.metadata),
@@ -5245,7 +5252,8 @@ impl DatabaseManager {
                             'path', rap.file_path,
                             'transcript', rap.transcription,
                             'start_time', rap.start_time,
-                            'end_time', rap.end_time
+                            'end_time', rap.end_time,
+                            'timestamp', rap.abs_timestamp
                         )))
                     )
                 END as metadata
