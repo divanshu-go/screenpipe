@@ -8,6 +8,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Bell, ChevronRight, ChevronDown, MessageSquare } from "lucide-react";
 import localforage from "localforage";
 import ReactMarkdown from "react-markdown";
+import { listen } from "@tauri-apps/api/event";
 import {
   Popover,
   PopoverContent,
@@ -44,6 +45,34 @@ export function NotificationBell() {
     const interval = setInterval(loadHistory, 5000);
     return () => clearInterval(interval);
   }, [loadHistory]);
+
+  // Listen for native notifications so they appear in history even if the
+  // overlay window (which has NotificationHandler) isn't mounted.
+  useEffect(() => {
+    const unlisten = listen<string>("native-notification-shown", async (event) => {
+      try {
+        const data = JSON.parse(event.payload);
+        const history = await localforage.getItem<NotificationEntry[]>("notification-history") || [];
+        // Skip if already saved (dedup by id)
+        if (history.some((n) => n.id === data.id)) return;
+        const entry: NotificationEntry = {
+          id: data.id,
+          type: data.type,
+          title: data.title,
+          body: data.body,
+          pipe_name: data.pipe_name,
+          timestamp: new Date().toISOString(),
+          read: false,
+        };
+        const updated = [entry, ...history].slice(0, 100);
+        await localforage.setItem("notification-history", updated);
+        setHistory(updated);
+      } catch (e) {
+        console.error("failed to save notification to history:", e);
+      }
+    });
+    return () => { unlisten.then((u) => u()); };
+  }, []);
 
   const unreadCount = history.filter((n) => !n.read).length;
 
