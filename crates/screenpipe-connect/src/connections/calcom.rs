@@ -15,6 +15,7 @@ static OAUTH: OAuthConfig = OAuthConfig {
     auth_url: "https://api.cal.com/oauth/authorize",
     client_id: "e9e319206428a99bfcb2207e51f827c96c1ed24821458a8633356e80632575dd",
     extra_auth_params: &[],
+    redirect_uri_override: None,
 };
 
 static DEF: IntegrationDef = IntegrationDef {

@@ -15,6 +15,7 @@ static OAUTH: OAuthConfig = OAuthConfig {
     auth_url: "https://auth.calendly.com/oauth/authorize",
     client_id: "ouME2bVF3PpAx45iHSesFYzei_mMeORIsyWXs9XYeQo",
     extra_auth_params: &[],
+    redirect_uri_override: Some("https://screenpi.pe/api/oauth/callback"),
 };
 
 static DEF: IntegrationDef = IntegrationDef {
