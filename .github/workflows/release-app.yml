@@ -788,10 +788,13 @@ jobs:
           CARGO_PROFILE_RELEASE_STRIP: none
           CARGO_PROFILE_RELEASE_PANIC: abort
           CARGO_PROFILE_RELEASE_INCREMENTAL: "false"
-          RUSTFLAGS: ${{ matrix.target == 'x86_64-pc-windows-msvc' && '-C link-arg=/LTCG' || '' }}
-          # Cap MSVC codegen at AVX2 — prevents LTCG from auto-vectorizing C deps
-          # (e.g. sqlite-vec) to AVX-512 on CI Xeon runners. Lunar Lake and other
-          # consumer CPUs lack AVX-512, causing STATUS_ILLEGAL_INSTRUCTION (0xc000001d).
+          # LTCG removed: MSVC has known bugs where LTCG ignores /arch:AVX2 and
+          # emits AVX-512 instructions on Xeon CI runners, causing STATUS_ILLEGAL_INSTRUCTION
+          # (0xc000001d) on consumer CPUs without AVX-512 (Arrow Lake, Panther Lake, Lunar Lake).
+          # See: https://developercommunity.visualstudio.com/content/problem/848627
+          RUSTFLAGS: ""
+          # Cap MSVC codegen at AVX2 — prevents auto-vectorizing C deps
+          # (e.g. sqlite-vec) to AVX-512 on CI Xeon runners.
           # Only set for x86_64 — clang on ARM64 doesn't understand /arch:AVX2.
           CFLAGS: ${{ matrix.target == 'x86_64-pc-windows-msvc' && '/arch:AVX2' || '' }}
           CXXFLAGS: ${{ matrix.target == 'x86_64-pc-windows-msvc' && '/arch:AVX2' || '' }}
