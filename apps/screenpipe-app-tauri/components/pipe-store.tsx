@@ -688,6 +688,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
             currentUserId={settings.user?.id}
             onUnpublish={handleUnpublish}
             unpublishing={unpublishing}
+            onRefresh={() => openDetail(selectedPipe.slug)}
           />
         ) : null}
       </div>
@@ -934,7 +935,9 @@ function PipeDetailPanel({
   currentUserId?: string | null;
   onUnpublish?: (slug: string) => void;
   unpublishing?: boolean;
+  onRefresh?: () => void;
 }) {
+  const { toast } = useToast();
   const unrestricted = isUnrestricted(pipe.permissions);
   const needsReview = unrestricted && !pipe.author_verified;
   const isOwner = !!(currentUserId && pipe.author_id && currentUserId === pipe.author_id);
@@ -943,6 +946,7 @@ function PipeDetailPanel({
   const [editReadme, setEditReadme] = useState("");
   const [editSource, setEditSource] = useState("");
   const [publishing, setPublishing] = useState(false);
+  const [previewReadme, setPreviewReadme] = useState(false);
 
   const readmeContent = pipe.readme_md
     ? pipe.readme_md
@@ -950,24 +954,38 @@ function PipeDetailPanel({
       ? getReadmeFromPipeMd(pipe.source)
       : (pipe.full_description || pipe.description);
 
+  const isDirty = editing && (
+    editReadme !== (readmeContent || "") ||
+    editSource !== (pipe.source || "")
+  );
+
   const startEditing = () => {
     setEditReadme(readmeContent || "");
     setEditSource(pipe.source || "");
+    setPreviewReadme(false);
     setEditing(true);
   };
 
   const cancelEditing = () => {
+    if (isDirty) {
+      if (!confirm("discard unsaved changes?")) return;
+    }
     setEditing(false);
     setEditReadme("");
     setEditSource("");
   };
 
   const republish = async () => {
+    if (!isDirty) {
+      toast({ title: "no changes to publish" });
+      return;
+    }
     setPublishing(true);
     try {
-      const settings = await fetch("http://localhost:3030/settings").then(r => r.json());
-      const token = settings?.user?.token;
-      if (!token) throw new Error("not logged in");
+      const settingsRes = await fetch("http://localhost:3030/settings");
+      const settingsData = await settingsRes.json();
+      const token = settingsData?.user?.token;
+      if (!token) throw new Error("not logged in — go to account settings");
 
       const res = await fetch("http://localhost:3030/pipes/store/publish", {
         method: "POST",
@@ -990,16 +1008,32 @@ function PipeDetailPanel({
         const err = await res.json().catch(() => ({ error: "unknown error" }));
         throw new Error(err.error || `HTTP ${res.status}`);
       }
+      toast({ title: "pipe updated and published" });
       setEditing(false);
-      // update pipe data in place
-      pipe.source = editSource;
-      pipe.readme_md = editReadme || undefined;
+      onRefresh?.();
     } catch (err) {
-      alert(`failed to republish: ${err instanceof Error ? err.message : String(err)}`);
+      toast({
+        title: "failed to publish",
+        description: err instanceof Error ? err.message : String(err),
+        variant: "destructive",
+      });
     } finally {
       setPublishing(false);
     }
   };
+
+  // Cmd/Ctrl+S to save while editing
+  useEffect(() => {
+    if (!editing) return;
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
+        e.preventDefault();
+        republish();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [editing, editReadme, editSource]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="space-y-8">
@@ -1170,13 +1204,48 @@ IMPORTANT: first read the screenpipe skill file to understand how pipes work, th
           README {editing && <span className="text-foreground/50">(editing)</span>}
         </h4>
         {editing ? (
-          <textarea
-            value={editReadme}
-            onChange={(e) => setEditReadme(e.target.value)}
-            className="w-full border border-border rounded-none p-4 text-sm font-mono bg-muted/30 resize-y focus:outline-none focus:border-foreground/40 min-h-[200px]"
-            rows={15}
-            placeholder="write your README in markdown..."
-          />
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setPreviewReadme(false)}
+                className={`text-[10px] uppercase tracking-wider px-2 py-1 transition-colors ${!previewReadme ? "text-foreground border-b border-foreground" : "text-muted-foreground hover:text-foreground"}`}
+              >
+                edit
+              </button>
+              <button
+                onClick={() => setPreviewReadme(true)}
+                className={`text-[10px] uppercase tracking-wider px-2 py-1 transition-colors ${previewReadme ? "text-foreground border-b border-foreground" : "text-muted-foreground hover:text-foreground"}`}
+              >
+                preview
+              </button>
+              <span className="text-[9px] text-muted-foreground/50 ml-auto">cmd+s to publish</span>
+            </div>
+            {previewReadme ? (
+              <div className="border border-border rounded-none p-6">
+                <MemoizedReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  className="prose prose-sm dark:prose-invert max-w-none prose-pre:bg-muted prose-pre:text-foreground prose-pre:rounded-md prose-pre:border prose-pre:border-border prose-pre:text-xs prose-code:bg-muted prose-code:text-foreground prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-xs prose-code:before:content-none prose-code:after:content-none"
+                  components={{
+                    a: ({ href, children }) => (
+                      <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+                        {children}
+                      </a>
+                    ),
+                  }}
+                >
+                  {editReadme || "nothing to preview"}
+                </MemoizedReactMarkdown>
+              </div>
+            ) : (
+              <textarea
+                value={editReadme}
+                onChange={(e) => setEditReadme(e.target.value)}
+                className="w-full border border-border rounded-none p-4 text-sm font-mono bg-muted/30 resize-y focus:outline-none focus:border-foreground/40 min-h-[200px]"
+                rows={15}
+                placeholder="write your README in markdown..."
+              />
+            )}
+          </div>
         ) : (
           <div className="border border-border rounded-none p-6">
             {readmeContent ? (
