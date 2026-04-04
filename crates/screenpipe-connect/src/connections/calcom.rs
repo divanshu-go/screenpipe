@@ -12,7 +12,7 @@ use serde_json::{Map, Value};
 // Set redirect URI to http://localhost:3030/connections/oauth/callback
 // Then replace the client_id below with the registered value.
 static OAUTH: OAuthConfig = OAuthConfig {
-    auth_url: "https://api.cal.com/oauth/authorize",
+    auth_url: "https://app.cal.com/auth/oauth2/authorize",
     client_id: "e9e319206428a99bfcb2207e51f827c96c1ed24821458a8633356e80632575dd",
     extra_auth_params: &[],
     redirect_uri_override: None,

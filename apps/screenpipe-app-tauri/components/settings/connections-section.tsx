@@ -1033,7 +1033,7 @@ function OAuthPanel({ integrationId, integrationName }: { integrationId: string;
             <LogOut className="h-3 w-3" />disconnect
           </Button>
         ) : (
-          <Button onClick={handleConnect} disabled={status === "loading"} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
+          <Button onClick={handleConnect} disabled={status === "loading"} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal whitespace-nowrap">
             {status === "loading"
               ? (<><Loader2 className="h-3 w-3 animate-spin" />connecting...</>)
               : (<><LogIn className="h-3 w-3" />connect with {integrationName}</>)}
