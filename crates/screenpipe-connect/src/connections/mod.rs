@@ -10,6 +10,8 @@
 pub mod airtable;
 pub mod asana;
 pub mod brex;
+pub mod calcom;
+pub mod calendly;
 pub mod clickup;
 pub mod confluence;
 pub mod discord;
@@ -146,6 +148,8 @@ pub fn all_integrations() -> Vec<Box<dyn Integration>> {
         Box::new(intercom::Intercom),
         Box::new(monday::Monday),
         Box::new(asana::Asana),
+        Box::new(calcom::CalCom),
+        Box::new(calendly::Calendly),
     ]
 }
 
