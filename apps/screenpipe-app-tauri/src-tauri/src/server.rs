@@ -14,7 +14,6 @@ use axum::{
 use http::header::{HeaderValue, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use tauri::Emitter;
 use tauri::Manager;
 use tokio::sync::mpsc;
@@ -35,62 +34,10 @@ pub struct ServerState {
     pub app_handle: tauri::AppHandle,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-struct NotificationPayload {
-    title: String,
-    body: String,
-    /// unique id (auto-generated if omitted)
-    id: Option<String>,
-    /// notification type/category
-    #[serde(rename = "type")]
-    notification_type: Option<String>,
-    /// auto-dismiss after N ms (default 20000)
-    #[serde(rename = "autoDismissMs")]
-    auto_dismiss_ms: Option<u64>,
-    /// timeout in ms (alias for autoDismissMs)
-    timeout: Option<u64>,
-    /// action buttons shown in the notification panel
-    #[serde(default)]
-    actions: Vec<serde_json::Value>,
-}
-
 #[derive(Serialize)]
-struct ApiResponse {
-    success: bool,
-    message: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-struct NotificationHistoryEntry {
-    id: String,
-    #[serde(rename = "type")]
-    notification_type: String,
-    title: String,
-    body: String,
-    pipe_name: Option<String>,
-    timestamp: String,
-    read: bool,
-}
-
-const MAX_NOTIFICATION_HISTORY: usize = 100;
-
-fn notifications_path() -> PathBuf {
-    screenpipe_core::paths::default_screenpipe_data_dir().join("notifications.json")
-}
-
-fn read_notification_history() -> Vec<NotificationHistoryEntry> {
-    let path = notifications_path();
-    match std::fs::read_to_string(&path) {
-        Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
-        Err(_) => Vec::new(),
-    }
-}
-
-fn write_notification_history(entries: &[NotificationHistoryEntry]) {
-    let path = notifications_path();
-    if let Ok(data) = serde_json::to_string(entries) {
-        let _ = std::fs::write(&path, data);
-    }
+pub struct ApiResponse {
+    pub success: bool,
+    pub message: String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -286,12 +233,15 @@ pub async fn run_server(app_handle: tauri::AppHandle, port: u16) {
         .allow_credentials(false);
 
     let app = Router::new()
-        .route("/notify", axum::routing::post(send_notification))
+        .route(
+            "/notify",
+            axum::routing::post(crate::notifications::routes::send_notification),
+        )
         .route(
             "/notifications",
-            axum::routing::get(list_notifications)
-                .post(mark_notifications_read)
-                .delete(clear_notifications),
+            axum::routing::get(crate::notifications::routes::list)
+                .post(crate::notifications::routes::mark_read)
+                .delete(crate::notifications::routes::clear),
         )
         .route("/inbox", axum::routing::post(send_inbox_message))
         .route("/log", axum::routing::post(log_message))
@@ -339,87 +289,6 @@ pub async fn run_server(app_handle: tauri::AppHandle, port: u16) {
         addr,
         last_err.map(|e| e.to_string()).unwrap_or_default()
     );
-}
-
-async fn send_notification(
-    State(state): State<ServerState>,
-    Json(payload): Json<NotificationPayload>,
-) -> Result<Json<ApiResponse>, (StatusCode, String)> {
-    info!("Received notification request: {:?}", payload);
-
-    // Build the panel payload matching what the frontend expects
-    let panel_id = payload
-        .id
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let dismiss_ms = payload.auto_dismiss_ms.or(payload.timeout).unwrap_or(20000);
-
-    let panel_payload = serde_json::json!({
-        "id": panel_id,
-        "type": payload.notification_type.unwrap_or_else(|| "pipe".to_string()),
-        "title": payload.title,
-        "body": payload.body,
-        "actions": payload.actions,
-        "autoDismissMs": dismiss_ms,
-    });
-
-    // Persist to disk before attempting to show — survives crashes/restarts
-    let entry = NotificationHistoryEntry {
-        id: panel_id.clone(),
-        notification_type: panel_payload["type"].as_str().unwrap_or("pipe").to_string(),
-        title: payload.title.clone(),
-        body: payload.body.clone(),
-        pipe_name: None,
-        timestamp: chrono::Utc::now().to_rfc3339(),
-        read: false,
-    };
-    let mut history = read_notification_history();
-    history.insert(0, entry);
-    history.truncate(MAX_NOTIFICATION_HISTORY);
-    write_notification_history(&history);
-
-    let panel_json = panel_payload.to_string();
-
-    // Use the show_notification_panel command directly
-    match crate::commands::show_notification_panel(state.app_handle.clone(), panel_json).await {
-        Ok(()) => {
-            info!("Notification panel shown");
-            Ok(Json(ApiResponse {
-                success: true,
-                message: "Notification sent successfully".to_string(),
-            }))
-        }
-        Err(e) => {
-            error!("Failed to show notification panel: {}", e);
-            Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to show notification: {}", e),
-            ))
-        }
-    }
-}
-
-async fn list_notifications() -> Json<Vec<NotificationHistoryEntry>> {
-    Json(read_notification_history())
-}
-
-async fn mark_notifications_read() -> Json<ApiResponse> {
-    let mut history = read_notification_history();
-    for entry in &mut history {
-        entry.read = true;
-    }
-    write_notification_history(&history);
-    Json(ApiResponse {
-        success: true,
-        message: "all notifications marked as read".to_string(),
-    })
-}
-
-async fn clear_notifications() -> Json<ApiResponse> {
-    write_notification_history(&[]);
-    Json(ApiResponse {
-        success: true,
-        message: "notification history cleared".to_string(),
-    })
 }
 
 async fn send_inbox_message(
