@@ -17,6 +17,7 @@ pub mod confluence;
 pub mod discord;
 pub mod email;
 pub mod github_issues;
+pub mod gmail;
 pub mod granola;
 pub mod hubspot;
 pub mod intercom;
@@ -150,6 +151,7 @@ pub fn all_integrations() -> Vec<Box<dyn Integration>> {
         Box::new(asana::Asana),
         Box::new(calcom::CalCom),
         Box::new(calendly::Calendly),
+        Box::new(gmail::Gmail),
     ]
 }
 
