@@ -77,6 +77,16 @@ impl EmbeddingManager {
         self.max_speakers = usize::MAX;
     }
 
+    /// Update the stored centroid for an existing speaker with a better embedding.
+    /// Call this after all segments in a chunk are collected, using the embedding from
+    /// the longest utterance for each speaker — longer segments produce more stable embeddings.
+    /// No-ops if the speaker ID doesn't exist (prevents accidental new-speaker creation).
+    pub fn update_speaker_embedding(&mut self, speaker_id: usize, embedding: Vec<f32>) {
+        if self.speakers.contains_key(&speaker_id) {
+            self.speakers.insert(speaker_id, Array1::from_vec(embedding));
+        }
+    }
+
     /// Clear all speakers and reset the ID counter.
     /// Used between meetings to prevent cross-meeting speaker contamination.
     pub fn clear_speakers(&mut self) {

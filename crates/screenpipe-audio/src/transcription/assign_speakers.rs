@@ -13,6 +13,10 @@ use crate::speaker::embedding_manager::EmbeddingManager;
 use crate::speaker::segment::get_segments;
 
 /// Run pyannote segmentation on `samples` and collect labeled spans with embeddings.
+///
+/// After collecting all spans, the in-memory EmbeddingManager centroids are updated
+/// with the embedding from the **longest utterance** per speaker. Short segments produce
+/// noisier embeddings; using the longest segment gives future chunks a better reference point.
 pub fn collect_diarization_spans(
     samples: &[f32],
     sample_rate: u32,
@@ -26,7 +30,7 @@ pub fn collect_diarization_spans(
         sample_rate,
         model_path,
         embedding_extractor,
-        embedding_manager,
+        embedding_manager.clone(),
     )?;
     for seg in iter {
         let seg = seg?;
@@ -37,7 +41,38 @@ pub fn collect_diarization_spans(
             embedding: seg.embedding,
         });
     }
+
+    // Refresh manager centroids with the longest-segment embedding per speaker.
+    // The streaming iterator assigns speakers using whichever segment arrives first;
+    // this corrects those centroids so future chunks match against better references.
+    refresh_centroids_with_best_embeddings(&out, &embedding_manager);
+
     Ok(out)
+}
+
+/// For each speaker label in `spans`, find the longest span and update the
+/// EmbeddingManager centroid with its embedding.
+fn refresh_centroids_with_best_embeddings(
+    spans: &[DiarizationSpan],
+    manager: &Arc<StdMutex<EmbeddingManager>>,
+) {
+    use std::collections::HashMap;
+    // Map speaker_id (usize) → (best_duration, best_embedding)
+    let mut best: HashMap<usize, (f64, &Vec<f32>)> = HashMap::new();
+    for span in spans {
+        let Ok(id) = span.speaker_label.parse::<usize>() else {
+            continue;
+        };
+        let dur = span.end_sec - span.start_sec;
+        let entry = best.entry(id).or_insert((0.0, &span.embedding));
+        if dur > entry.0 {
+            *entry = (dur, &span.embedding);
+        }
+    }
+    let mut mgr = manager.lock().unwrap();
+    for (id, (_, embedding)) in best {
+        mgr.update_speaker_embedding(id, embedding.clone());
+    }
 }
 
 /// One diarization segment with speaker embedding for DB clustering.
@@ -65,29 +100,46 @@ pub struct TokenWithSpeaker {
     pub speaker_label: Option<String>,
 }
 
+/// Weighted boundary loss from transcripy: how well a diarization span's boundaries
+/// match a token's boundaries. Start is penalized 2x more than end — who started
+/// speaking matters more for attribution than who was still trailing off.
+#[inline]
+fn alignment_loss(seg: &DiarizationSpan, token_start: f64, token_end: f64) -> f64 {
+    let start_loss = (seg.start_sec - token_start).abs();
+    let end_loss = (seg.end_sec - token_end).abs();
+    2.0 * start_loss + end_loss
+}
+
 /// Picks the diarization speaker with maximum overlap duration with `[start, end]`.
+/// When two spans have overlap within 50ms of each other, uses weighted boundary loss
+/// as a tiebreaker — the span whose start aligns better with the token wins.
 fn dominant_speaker_for_interval(
     start: f64,
     end: f64,
     diarization: &[DiarizationSpan],
 ) -> Option<&DiarizationSpan> {
-    let mut best: Option<(&DiarizationSpan, f64)> = None;
+    // (span, overlap, alignment_loss)
+    let mut best: Option<(&DiarizationSpan, f64, f64)> = None;
     for seg in diarization {
-        let overlap =
-            (seg.end_sec.min(end) - seg.start_sec.max(start)).max(0.0);
+        let overlap = (seg.end_sec.min(end) - seg.start_sec.max(start)).max(0.0);
         if overlap <= 0.0 {
             continue;
         }
+        let loss = alignment_loss(seg, start, end);
         match best {
-            None => best = Some((seg, overlap)),
-            Some((_cur, cur_ow)) => {
-                if overlap > cur_ow {
-                    best = Some((seg, overlap));
+            None => best = Some((seg, overlap, loss)),
+            Some((_, cur_ov, cur_loss)) => {
+                // Primary: more overlap wins.
+                // Tiebreaker: within 50ms of each other, prefer better boundary alignment.
+                if overlap > cur_ov + 0.05
+                    || (overlap >= cur_ov - 0.05 && loss < cur_loss)
+                {
+                    best = Some((seg, overlap, loss));
                 }
             }
         }
     }
-    best.map(|(s, _)| s)
+    best.map(|(s, _, _)| s)
 }
 
 fn nearest_segment(mid: f64, diarization: &[DiarizationSpan]) -> Option<&DiarizationSpan> {

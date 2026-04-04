@@ -317,7 +317,12 @@ pub fn get_speaker_from_embedding(
     embedding_manager: &mut EmbeddingManager,
     embedding: Vec<f32>,
 ) -> String {
-    let search_threshold = 0.45; // cosine similarity threshold (1 - distance), aligned with DB threshold of 0.55 distance
+    // Cosine similarity threshold for in-memory speaker clustering within a chunk.
+    // DB threshold was raised to 0.75 cosine distance (db.rs:1276) because real-world
+    // 30s chunks from the same speaker regularly produce distance > 0.55.
+    // This in-memory threshold mirrors that: 0.45 similarity ≈ 0.55 distance is intentionally
+    // permissive so the same speaker across different parts of a chunk merges reliably.
+    let search_threshold = 0.45;
 
     embedding_manager
         .search_speaker(embedding.clone(), search_threshold)
