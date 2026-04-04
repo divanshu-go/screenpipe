@@ -320,7 +320,8 @@ struct MarkdownText: View {
     let raw: String
 
     init(_ text: String) {
-        self.raw = text
+        // Replace literal \n sequences with actual newlines
+        self.raw = text.replacingOccurrences(of: "\\n", with: "\n")
     }
 
     var body: some View {
