@@ -657,8 +657,8 @@ class NotificationPanelController: NSObject {
             if NSMouseInRect(mouseLocation, screen.frame, false) {
                 let visible = screen.visibleFrame
                 let panelHeight = panel.frame.height
-                let x = visible.origin.x + visible.size.width - Self.panelWidth
-                let y = visible.origin.y + visible.size.height - panelHeight
+                let x = visible.origin.x + visible.size.width - Self.panelWidth - 16
+                let y = visible.origin.y + visible.size.height - panelHeight - 16
                 panel.setFrameOrigin(NSPoint(x: x, y: y))
                 break
             }
