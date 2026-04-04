@@ -1010,7 +1010,6 @@ function PipeDetailPanel({
       }
       toast({ title: "pipe updated and published" });
       setEditing(false);
-      onRefresh?.();
     } catch (err) {
       toast({
         title: "failed to publish",
