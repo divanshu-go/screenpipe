@@ -172,8 +172,15 @@ export function NotificationBell() {
                                     e.preventDefault();
                                     if (!href) return;
                                     try {
+                                      let url = href;
+                                      if (url.startsWith("~/")) {
+                                        const home = await import("@tauri-apps/api/path").then(m => m.homeDir());
+                                        url = "file://" + home + url.slice(2);
+                                      } else if (url.startsWith("/") && !url.startsWith("//")) {
+                                        url = "file://" + url;
+                                      }
                                       const { open } = await import("@tauri-apps/plugin-shell");
-                                      await open(href);
+                                      await open(url);
                                     } catch {
                                       console.error("failed to open url:", href);
                                     }
