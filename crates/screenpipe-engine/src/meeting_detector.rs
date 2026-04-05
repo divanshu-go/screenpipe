@@ -2123,7 +2123,7 @@ pub async fn run_meeting_detection_loop(
             state = new_state;
             if let Some(meeting_id) = ended_id {
                 let now = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
-                if let Err(e) = db.end_meeting(meeting_id, &now).await {
+                if let Err(e) = db.end_meeting_with_typed_text(meeting_id, &now, true).await {
                     error!("meeting v2: failed to end meeting {}: {}", meeting_id, e);
                 }
             }

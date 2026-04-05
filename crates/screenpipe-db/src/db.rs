@@ -6638,6 +6638,121 @@ LIMIT ? OFFSET ?
         Ok(())
     }
 
+    /// Collect text typed during a meeting's time interval from ui_events.
+    /// Returns deduplicated text grouped by app+window, or None if nothing was typed.
+    pub async fn get_meeting_typed_text(&self, id: i64) -> Result<Option<String>, SqlxError> {
+        // Get meeting time range
+        let row: Option<(String, Option<String>)> = sqlx::query_as(
+            "SELECT meeting_start, meeting_end FROM meetings WHERE id = ?1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let (start, end) = match row {
+            Some((s, Some(e))) => (s, e),
+            _ => return Ok(None),
+        };
+
+        // Query typed text (keystroke events with text_content) during meeting
+        let rows: Vec<(String, String, String)> = sqlx::query_as(
+            r#"SELECT
+                COALESCE(app_name, '') as app,
+                COALESCE(window_title, '') as win,
+                COALESCE(text_content, '') as txt
+            FROM ui_events
+            WHERE timestamp >= ?1 AND timestamp <= ?2
+                AND text_content IS NOT NULL
+                AND text_content != ''
+                AND event_type IN ('Keystroke', 'KeyPress', 'key', 'input')
+            ORDER BY timestamp ASC
+            LIMIT 5000"#,
+        )
+        .bind(&start)
+        .bind(&end)
+        .fetch_all(&self.pool)
+        .await?;
+
+        if rows.is_empty() {
+            return Ok(None);
+        }
+
+        // Group by app+window, concatenate text
+        let mut sections: Vec<(String, String)> = Vec::new();
+        let mut current_key = String::new();
+        let mut current_text = String::new();
+
+        for (app, win, txt) in &rows {
+            let key = format!("{} — {}", app, win);
+            if key != current_key {
+                if !current_text.is_empty() {
+                    sections.push((current_key.clone(), current_text.clone()));
+                }
+                current_key = key;
+                current_text.clear();
+            }
+            current_text.push_str(txt);
+        }
+        if !current_text.is_empty() {
+            sections.push((current_key, current_text));
+        }
+
+        let mut output = String::from("## typed during meeting\n\n");
+        for (context, text) in &sections {
+            // Truncate very long sections
+            let display = if text.len() > 2000 {
+                format!("{}… (truncated)", &text[..2000])
+            } else {
+                text.clone()
+            };
+            output.push_str(&format!("**{}**\n{}\n\n", context, display));
+        }
+
+        Ok(Some(output))
+    }
+
+    /// End a meeting and optionally append typed text to its note.
+    pub async fn end_meeting_with_typed_text(
+        &self,
+        id: i64,
+        meeting_end: &str,
+        append_typed_text: bool,
+    ) -> Result<(), SqlxError> {
+        // First end the meeting so the time range is set
+        self.end_meeting(id, meeting_end).await?;
+
+        if !append_typed_text {
+            return Ok(());
+        }
+
+        // Collect typed text
+        if let Ok(Some(typed_text)) = self.get_meeting_typed_text(id).await {
+            // Append to existing note
+            let existing_note: Option<(Option<String>,)> =
+                sqlx::query_as("SELECT note FROM meetings WHERE id = ?1")
+                    .bind(id)
+                    .fetch_optional(&self.pool)
+                    .await?;
+
+            let new_note = match existing_note {
+                Some((Some(existing),)) if !existing.is_empty() => {
+                    format!("{}\n\n{}", existing, typed_text)
+                }
+                _ => typed_text,
+            };
+
+            let mut tx = self.begin_immediate_with_retry().await?;
+            sqlx::query("UPDATE meetings SET note = ?1 WHERE id = ?2")
+                .bind(&new_note)
+                .bind(id)
+                .execute(&mut **tx.conn())
+                .await?;
+            tx.commit().await?;
+        }
+
+        Ok(())
+    }
+
     pub async fn reopen_meeting(&self, id: i64) -> Result<(), SqlxError> {
         let mut tx = self.begin_immediate_with_retry().await?;
         sqlx::query("UPDATE meetings SET meeting_end = NULL WHERE id = ?1")
