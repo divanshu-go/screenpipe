@@ -842,6 +842,7 @@ export function SpeakersSection() {
   );
   const [clusters, setClusters] = useState<SpeakerCluster[]>([]);
   const [clusterLoading, setClusterLoading] = useState(false);
+  const [defragmentLoading, setDefragmentLoading] = useState(false);
   const [, setSection] = useQueryState("section");
   const { toast } = useToast();
 
@@ -876,6 +877,25 @@ export function SpeakersSection() {
   useEffect(() => {
     fetchSpeakers();
   }, [fetchSpeakers]);
+
+  const handleDefragment = async () => {
+    setDefragmentLoading(true);
+    try {
+      const res = await fetch("http://localhost:3030/speakers/defragment", {
+        method: "POST",
+      });
+      if (res.ok) {
+        toast({ title: "duplicate speakers merged", description: "similar unnamed speakers have been consolidated" });
+        await fetchSpeakers();
+      } else {
+        toast({ title: "defragment failed", variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "server unreachable", variant: "destructive" });
+    } finally {
+      setDefragmentLoading(false);
+    }
+  };
 
   // Build clusters from unnamed speakers using similarity
   useEffect(() => {
@@ -1147,6 +1167,24 @@ export function SpeakersSection() {
             notes and pipes. name them below to fix downstream output.
           </p>
         </div>
+      )}
+
+      {/* Clean up duplicate unnamed speakers */}
+      {unnamed.length > 1 && (
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 text-xs gap-1.5 self-start"
+          onClick={handleDefragment}
+          disabled={defragmentLoading}
+        >
+          {defragmentLoading ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <GitMerge className="h-3.5 w-3.5" />
+          )}
+          clean up duplicates
+        </Button>
       )}
 
       {/* Merge suggestions for named speakers */}

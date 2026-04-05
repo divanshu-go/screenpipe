@@ -45,7 +45,7 @@ use crate::{
         },
         search::{keyword_search_handler, search},
         speakers::{
-            delete_speaker_handler, get_diarization_voices_handler,
+            defragment_speakers_handler, delete_speaker_handler, get_diarization_voices_handler,
             get_similar_speakers_handler, get_unnamed_speakers_handler,
             mark_as_hallucination_handler, merge_speakers_handler, reassign_speaker_handler,
             search_speakers_handler, undo_speaker_reassign_handler, update_speaker_handler,
@@ -496,6 +496,7 @@ impl SCServer {
             .post("/speakers/reassign", reassign_speaker_handler)
             .post("/speakers/undo-reassign", undo_speaker_reassign_handler)
             .get("/speakers/diarization-voices", get_diarization_voices_handler)
+            .post("/speakers/defragment", defragment_speakers_handler)
             .get("/meetings", list_meetings_handler)
             .get("/meetings/status", meeting_status_handler)
             .post("/meetings/merge", merge_meetings_handler)

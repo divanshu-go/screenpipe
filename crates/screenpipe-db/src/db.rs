@@ -1455,6 +1455,40 @@ impl DatabaseManager {
 
     /// Get named speakers with non-null centroids for seeding the embedding manager.
     /// Returns (speaker_id, name, centroid as Vec<f32>).
+    /// Returns all unnamed speakers that have a centroid.
+    /// Each row: (speaker_id, centroid_vec, transcription_count).
+    /// Used by the session-end re-clustering pass to detect and merge fragmented speakers.
+    pub async fn get_unnamed_speakers_with_centroids(
+        &self,
+    ) -> Result<Vec<(i64, Vec<f32>, i64)>, SqlxError> {
+        let rows: Vec<(i64, Vec<u8>, i64)> = sqlx::query_as(
+            "SELECT s.id, s.centroid, COUNT(at.id) as transcription_count \
+             FROM speakers s \
+             LEFT JOIN audio_transcriptions at ON at.speaker_id = s.id \
+             WHERE (s.name IS NULL OR s.name = '') \
+             AND s.centroid IS NOT NULL \
+             AND (s.hallucination IS NULL OR s.hallucination = 0) \
+             GROUP BY s.id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .filter_map(|(id, blob, count)| {
+                if blob.len() == 512 * 4 {
+                    let floats: Vec<f32> = blob
+                        .chunks_exact(4)
+                        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                        .collect();
+                    Some((id, floats, count))
+                } else {
+                    None
+                }
+            })
+            .collect())
+    }
+
     pub async fn get_named_speakers_with_centroids(
         &self,
     ) -> Result<Vec<(i64, String, Vec<f32>)>, SqlxError> {

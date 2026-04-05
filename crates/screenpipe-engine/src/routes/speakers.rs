@@ -9,6 +9,7 @@ use axum::{
 };
 use oasgen::{oasgen, OaSchema};
 
+use screenpipe_audio::speaker::recluster::merge_fragmented_unnamed_speakers;
 use screenpipe_db::{DiarizationVoice, Speaker};
 
 use super::search::{default_speaker_ids, from_comma_separated_array};
@@ -374,6 +375,18 @@ fn default_lookback_hours() -> i64 {
 }
 fn default_voices_limit() -> u32 {
     20
+}
+
+/// Trigger a manual speaker de-fragmentation pass.
+/// Finds unnamed speakers whose centroids are very similar and merges them,
+/// collapsing the fragmentation that happens when the same person gets multiple IDs
+/// across chunks. Named speakers are never touched.
+#[oasgen]
+pub(crate) async fn defragment_speakers_handler(
+    State(state): State<Arc<AppState>>,
+) -> Result<JsonResponse<Value>, (StatusCode, JsonResponse<Value>)> {
+    merge_fragmented_unnamed_speakers(&state.db).await;
+    Ok(JsonResponse(json!({"success": true, "message": "speaker de-fragmentation complete"})))
 }
 
 #[oasgen]
