@@ -6654,17 +6654,14 @@ LIMIT ? OFFSET ?
             _ => return Ok(None),
         };
 
-        // Query typed text (keystroke events with text_content) during meeting
-        let rows: Vec<(String, String, String)> = sqlx::query_as(
-            r#"SELECT
-                COALESCE(app_name, '') as app,
-                COALESCE(window_title, '') as win,
-                COALESCE(text_content, '') as txt
+        // Query typed text during meeting (text events contain batched words)
+        let rows: Vec<(String,)> = sqlx::query_as(
+            r#"SELECT COALESCE(text_content, '') as txt
             FROM ui_events
             WHERE timestamp >= ?1 AND timestamp <= ?2
                 AND text_content IS NOT NULL
                 AND text_content != ''
-                AND event_type IN ('Keystroke', 'KeyPress', 'key', 'input')
+                AND event_type = 'text'
             ORDER BY timestamp ASC
             LIMIT 5000"#,
         )
@@ -6677,38 +6674,24 @@ LIMIT ? OFFSET ?
             return Ok(None);
         }
 
-        // Group by app+window, concatenate text
-        let mut sections: Vec<(String, String)> = Vec::new();
-        let mut current_key = String::new();
-        let mut current_text = String::new();
-
-        for (app, win, txt) in &rows {
-            let key = format!("{} — {}", app, win);
-            if key != current_key {
-                if !current_text.is_empty() {
-                    sections.push((current_key.clone(), current_text.clone()));
-                }
-                current_key = key;
-                current_text.clear();
-            }
-            current_text.push_str(txt);
-        }
-        if !current_text.is_empty() {
-            sections.push((current_key, current_text));
+        let mut all_text = String::new();
+        for (txt,) in &rows {
+            all_text.push_str(txt);
         }
 
-        let mut output = String::from("## typed during meeting\n\n");
-        for (context, text) in &sections {
-            // Truncate very long sections
-            let display = if text.len() > 2000 {
-                format!("{}… (truncated)", &text[..2000])
-            } else {
-                text.clone()
-            };
-            output.push_str(&format!("**{}**\n{}\n\n", context, display));
+        // Trim and truncate
+        let all_text = all_text.trim().to_string();
+        if all_text.is_empty() {
+            return Ok(None);
         }
 
-        Ok(Some(output))
+        let display = if all_text.len() > 5000 {
+            format!("{}… (truncated)", &all_text[..5000])
+        } else {
+            all_text
+        };
+
+        Ok(Some(format!("## typed during meeting\n\n{}", display)))
     }
 
     /// End a meeting and optionally append typed text to its note.
