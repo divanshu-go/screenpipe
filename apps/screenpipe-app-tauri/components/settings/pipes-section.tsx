@@ -1179,6 +1179,85 @@ export function PipesSection() {
     }
   }, []);
 
+  // Check if a pipe has notifications denied in its permissions
+  const isNotificationsDenied = (rawContent: string): boolean => {
+    const match = rawContent.match(/^---\n([\s\S]*?)\n---/);
+    if (!match) return false;
+    const yaml = match[1];
+    // Check for deny rule containing POST /notify
+    return /deny:[\s\S]*?Api\(\s*\*?\s*POST\s+\/notify\s*\)/i.test(yaml) ||
+           /deny:[\s\S]*?Api\(\s*POST\s+\/notify\s*\)/i.test(yaml);
+  };
+
+  const toggleNotifications = useCallback(async (pipeName: string, enabled: boolean) => {
+    const pipe = pipes.find((p) => p.config.name === pipeName);
+    if (!pipe) return;
+
+    let content = promptDrafts[pipeName] ?? pipe.raw_content;
+    const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
+
+    if (!frontmatterMatch) {
+      // No frontmatter — add one with permissions
+      if (!enabled) {
+        content = `---\npermissions:\n  deny:\n    - Api(POST /notify)\n---\n\n${content}`;
+      }
+    } else {
+      let yaml = frontmatterMatch[1];
+      const body = content.slice(frontmatterMatch[0].length);
+
+      if (!enabled) {
+        // Add deny rule for POST /notify
+        if (/deny:/m.test(yaml)) {
+          // Append to existing deny list
+          yaml = yaml.replace(/(deny:\s*\n)/m, `$1    - Api(POST /notify)\n`);
+        } else if (/permissions:/m.test(yaml)) {
+          // permissions exists but no deny — check if it's a preset string
+          const presetMatch = yaml.match(/permissions:\s*(\w+)\s*$/m);
+          if (presetMatch) {
+            // Convert preset to rules format with deny
+            const preset = presetMatch[1];
+            yaml = yaml.replace(
+              /permissions:\s*\w+\s*$/m,
+              `permissions:\n  preset: ${preset}\n  deny:\n    - Api(POST /notify)`
+            );
+          } else {
+            // Already rules format, add deny section
+            yaml = yaml.replace(
+              /(permissions:\s*\n)/m,
+              `$1  deny:\n    - Api(POST /notify)\n`
+            );
+          }
+        } else {
+          // No permissions at all — add it
+          yaml = yaml.trimEnd() + `\npermissions:\n  deny:\n    - Api(POST /notify)`;
+        }
+      } else {
+        // Remove deny rule for POST /notify
+        yaml = yaml.replace(/\s*-\s*Api\(\s*\*?\s*POST\s+\/notify\s*\)\n?/gi, "\n");
+        // Clean up empty deny list
+        yaml = yaml.replace(/\s*deny:\s*\n\s*\n/gm, "\n");
+        // Clean up deny with only whitespace after it
+        yaml = yaml.replace(/\s*deny:\s*$/gm, "");
+      }
+
+      content = `---\n${yaml.trim()}\n---${body}`;
+    }
+
+    // Save via raw_content
+    await savePipeContent(pipeName, content);
+    // Update local state
+    setPipes((prev) =>
+      prev.map((p) =>
+        p.config.name === pipeName ? { ...p, raw_content: content } : p
+      )
+    );
+    setPromptDrafts((prev) => {
+      const next = { ...prev };
+      delete next[pipeName];
+      return next;
+    });
+  }, [pipes, promptDrafts, savePipeContent]);
+
   const handlePipeEdit = useCallback((name: string, value: string) => {
     setPromptDrafts((prev) => ({ ...prev, [name]: value }));
     pendingSaves.current[name] = value;
@@ -2201,6 +2280,15 @@ export function PipesSection() {
                               </form>
                             </div>
                           </div>}
+
+                        {/* Notifications toggle */}
+                        <div className="flex items-center justify-between border px-3 py-2.5">
+                          <span className="text-xs font-medium cursor-help" title="allow this pipe to send notifications">notifications</span>
+                          <Switch
+                            checked={!isNotificationsDenied(promptDrafts[pipe.config.name] ?? pipe.raw_content)}
+                            onCheckedChange={(checked) => toggleNotifications(pipe.config.name, checked)}
+                          />
+                        </div>
 
                       </TabsContent>
 
