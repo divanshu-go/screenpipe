@@ -120,7 +120,10 @@ pub async fn process_transcription_result(
         debug!("empty speaker embedding; storing transcript without speaker");
         None
     } else {
-        let speaker = get_or_create_speaker_from_embedding(db, &result.speaker_embedding).await?;
+        let utterance_duration = result.end_time - result.start_time;
+        let speaker =
+            get_or_create_speaker_from_embedding(db, &result.speaker_embedding, utterance_duration)
+                .await?;
         debug!("detected speaker id={}", speaker.id);
         Some(speaker.id)
     };
@@ -221,9 +224,12 @@ pub async fn process_transcription_result(
     }))
 }
 
+/// Look up or create a speaker from an embedding, then update the centroid weighted by
+/// utterance duration. `utterance_duration_secs = 0.0` means unknown — uses baseline weight.
 pub async fn get_or_create_speaker_from_embedding(
     db: &DatabaseManager,
     embedding: &[f32],
+    utterance_duration_secs: f64,
 ) -> Result<Speaker, anyhow::Error> {
     let speaker = db.get_speaker_from_embedding(embedding).await?;
     if let Some(speaker) = speaker {
@@ -236,8 +242,11 @@ pub async fn get_or_create_speaker_from_embedding(
                 &speaker.name
             }
         );
-        // Improve cluster over time: update centroid and store diverse embeddings
-        if let Err(e) = db.update_speaker_centroid(speaker.id, embedding).await {
+        // Improve cluster over time: update centroid (duration-weighted) and store diverse embeddings
+        if let Err(e) = db
+            .update_speaker_centroid(speaker.id, embedding, utterance_duration_secs)
+            .await
+        {
             debug!("failed to update speaker centroid: {}", e);
         }
         if let Err(e) = db.add_embedding_to_speaker(speaker.id, embedding, 10).await {

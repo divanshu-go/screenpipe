@@ -1385,18 +1385,31 @@ impl DatabaseManager {
         Ok(())
     }
 
-    /// Update a speaker's running centroid with exponential decay.
+    /// Update a speaker's running centroid with exponential decay, weighted by utterance duration.
     /// Uses capped effective count (max 50) so new embeddings always contribute
     /// at least ~2%, preventing centroid stagnation after many samples.
+    ///
+    /// `utterance_duration_secs`: duration of the audio segment this embedding came from.
+    /// Longer utterances produce more stable embeddings and contribute more to the centroid.
+    /// Pass `0.0` when duration is unknown — treated as the baseline weight (1.0).
     pub async fn update_speaker_centroid(
         &self,
         speaker_id: i64,
         embedding: &[f32],
+        utterance_duration_secs: f64,
     ) -> Result<(), SqlxError> {
         // Cap for the running average denominator. After this many samples,
         // each new embedding contributes ~1/MAX_EFFECTIVE_COUNT to the centroid,
         // keeping it responsive to voice drift over time.
         const MAX_EFFECTIVE_COUNT: i64 = 50;
+        // Baseline duration: a 3-second utterance gets weight 1.0.
+        // A 9s+ utterance gets weight 3.0 (counted as 3 samples); a <0.75s gets weight 0.25.
+        const BASELINE_DURATION_SECS: f64 = 3.0;
+        let weight = if utterance_duration_secs > 0.0 {
+            (utterance_duration_secs / BASELINE_DURATION_SECS).clamp(0.25, 3.0) as f32
+        } else {
+            1.0 // unknown duration — treat as one baseline-weight sample
+        };
 
         // Get current centroid and count
         let row: Option<(Option<Vec<u8>>, i64)> =
@@ -1407,7 +1420,8 @@ impl DatabaseManager {
 
         let (new_centroid, new_count) = match row {
             Some((Some(blob), count)) if blob.len() == 512 * 4 => {
-                // Update running average with capped effective count
+                // Update running average with capped effective count and duration weight.
+                // Formula: (old * effective_n + new * weight) / (effective_n + weight)
                 let old: Vec<f32> = blob
                     .chunks_exact(4)
                     .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
@@ -1416,7 +1430,7 @@ impl DatabaseManager {
                 let new: Vec<f32> = old
                     .iter()
                     .zip(embedding.iter())
-                    .map(|(o, e)| (o * effective_n + e) / (effective_n + 1.0))
+                    .map(|(o, e)| (o * effective_n + e * weight) / (effective_n + weight))
                     .collect();
                 (new, count + 1)
             }

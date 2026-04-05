@@ -674,7 +674,8 @@ async fn extract_speaker_id(
 
     let embedding = best_embedding?;
 
-    match get_or_create_speaker_from_embedding(db, &embedding).await {
+    // Duration unknown in this reconciliation path — pass 0.0 to use baseline weight (1.0).
+    match get_or_create_speaker_from_embedding(db, &embedding, 0.0).await {
         Ok(speaker) => {
             debug!(
                 "reconciliation: matched speaker id={} for batch",

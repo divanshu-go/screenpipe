@@ -191,7 +191,14 @@ pub async fn process_with_whisper_with_tokens(
             for j in 0..n_tok {
                 if let Some(tok) = segment.get_token(j) {
                     let data = tok.token_data();
-                    let t0 = cs_to_sec(data.t0);
+                    // Prefer DTW anchor timestamps when available — they align to actual
+                    // speech onset rather than Whisper's segment-level estimates.
+                    // t_dtw is -1 when DTW is disabled or the token has no anchor.
+                    let t0 = if data.t_dtw >= 0 {
+                        cs_to_sec(data.t_dtw)
+                    } else {
+                        cs_to_sec(data.t0)
+                    };
                     let mut t1 = cs_to_sec(data.t1);
                     if t1 <= t0 {
                         t1 = t0 + 1e-4;

@@ -6,7 +6,7 @@ use anyhow::Result;
 use hf_hub::{api::sync::Api, Cache, Repo, RepoType};
 use std::{path::PathBuf, sync::Arc};
 use tracing::{debug, info};
-use whisper_rs::WhisperContextParameters;
+use whisper_rs::{DtwMode, DtwModelPreset, DtwParameters, WhisperContextParameters};
 
 fn whisper_model_filename(engine: &AudioTranscriptionEngine) -> &'static str {
     match *engine {
@@ -59,8 +59,24 @@ pub fn get_cached_whisper_model_path(engine: &AudioTranscriptionEngine) -> Optio
     cache_repo.get(model_name)
 }
 
+/// Map an engine variant to the matching DTW model preset.
+/// DTW requires the correct attention head patterns per model architecture —
+/// using the wrong preset produces garbage timestamps.
+fn dtw_preset_for_engine(engine: &AudioTranscriptionEngine) -> DtwModelPreset {
+    match engine {
+        AudioTranscriptionEngine::WhisperTiny | AudioTranscriptionEngine::WhisperTinyQuantized => {
+            DtwModelPreset::Tiny
+        }
+        AudioTranscriptionEngine::WhisperLargeV3 | AudioTranscriptionEngine::WhisperLargeV3Quantized => {
+            DtwModelPreset::LargeV3
+        }
+        // Default covers WhisperLargeV3Turbo, WhisperLargeV3TurboQuantized, and the fallback gguf.
+        _ => DtwModelPreset::LargeV3Turbo,
+    }
+}
+
 pub fn create_whisper_context_parameters<'a>(
-    _engine: Arc<AudioTranscriptionEngine>,
+    engine: Arc<AudioTranscriptionEngine>,
 ) -> Result<WhisperContextParameters<'a>> {
     let mut context_param = WhisperContextParameters::default();
 
@@ -70,10 +86,26 @@ pub fn create_whisper_context_parameters<'a>(
     context_param.use_gpu(true);
     info!("whisper context: gpu acceleration enabled (Metal on macOS, Vulkan on Windows)");
 
-    // NOTE: keep DTW disabled to avoid whisper.cpp median_filter asserts on short inputs
-    // (WHISPER_ASSERT filter_width < a->ne[2]). Token-level timestamps are optional for us
-    // and DTW can be re-enabled after the upstream issue is addressed.
-    context_param.dtw_parameters.mode = whisper_rs::DtwMode::None;
+    // Enable DTW (Dynamic Time Warping) for word-level timestamp alignment.
+    // DTW produces significantly more accurate per-token timestamps than the native
+    // Whisper estimates, especially for fast speech and speaker-turn boundaries.
+    //
+    // Previously disabled due to whisper.cpp median_filter assert on short inputs
+    // (WHISPER_ASSERT filter_width < a->ne[2]). That assert fires only when real audio
+    // is shorter than the filter width. Our pipeline always pads to ≥16000 samples
+    // (1 second) before inference, and whisper.cpp internally pads to 30s — giving
+    // ~3000 encoder frames vs. the filter width of 7. Safe to enable.
+    //
+    // DTW and flash_attn are mutually exclusive — flash_attn defaults to false, so no
+    // additional change needed. Memory: 128 MB default, sufficient for ≤30s chunks.
+    let preset = dtw_preset_for_engine(&engine);
+    context_param.dtw_parameters = DtwParameters {
+        mode: DtwMode::ModelPreset {
+            model_preset: preset,
+        },
+        dtw_mem_size: 1024 * 1024 * 128, // 128 MB
+    };
+    info!("whisper context: DTW token timestamps enabled");
 
     Ok(context_param)
 }
