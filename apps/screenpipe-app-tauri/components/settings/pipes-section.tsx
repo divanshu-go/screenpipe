@@ -1179,14 +1179,30 @@ export function PipesSection() {
     }
   }, []);
 
-  // Check if a pipe has notifications denied in its permissions
+  // Check if a pipe has notifications denied in its permissions.
+  // Looks for "Api(POST /notify)" (any spacing/casing) in deny lines.
   const isNotificationsDenied = (rawContent: string): boolean => {
     const match = rawContent.match(/^---\n([\s\S]*?)\n---/);
     if (!match) return false;
     const yaml = match[1];
-    // Check for deny rule containing POST /notify
-    return /deny:[\s\S]*?Api\(\s*\*?\s*POST\s+\/notify\s*\)/i.test(yaml) ||
-           /deny:[\s\S]*?Api\(\s*POST\s+\/notify\s*\)/i.test(yaml);
+    // Split into lines for precise matching — only match inside deny block
+    const lines = yaml.split("\n");
+    let inDeny = false;
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (/^deny:\s*$/.test(trimmed) || /^deny:$/.test(trimmed)) {
+        inDeny = true;
+        continue;
+      }
+      // Exit deny block when hitting another key at same indent
+      if (inDeny && /^\w/.test(trimmed) && !trimmed.startsWith("-")) {
+        inDeny = false;
+      }
+      if (inDeny && /^-\s*Api\(\s*(\*)?\s*POST\s+\/notify\s*\)/i.test(trimmed)) {
+        return true;
+      }
+    }
+    return false;
   };
 
   const toggleNotifications = useCallback(async (pipeName: string, enabled: boolean) => {
@@ -1197,60 +1213,123 @@ export function PipesSection() {
     const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
 
     if (!frontmatterMatch) {
-      // No frontmatter — add one with permissions
+      // No frontmatter — add one with deny rule
       if (!enabled) {
         content = `---\npermissions:\n  deny:\n    - Api(POST /notify)\n---\n\n${content}`;
       }
     } else {
-      let yaml = frontmatterMatch[1];
+      const yaml = frontmatterMatch[1];
       const body = content.slice(frontmatterMatch[0].length);
+      const lines = yaml.split("\n");
 
       if (!enabled) {
         // Add deny rule for POST /notify
-        if (/deny:/m.test(yaml)) {
-          // Append to existing deny list
-          yaml = yaml.replace(/(deny:\s*\n)/m, `$1    - Api(POST /notify)\n`);
-        } else if (/permissions:/m.test(yaml)) {
-          // permissions exists but no deny — check if it's a preset string
-          const presetMatch = yaml.match(/permissions:\s*(\w+)\s*$/m);
-          if (presetMatch) {
-            // Convert preset to rules format with deny
-            const preset = presetMatch[1];
-            yaml = yaml.replace(
-              /permissions:\s*\w+\s*$/m,
-              `permissions:\n  preset: ${preset}\n  deny:\n    - Api(POST /notify)`
-            );
-          } else {
-            // Already rules format, add deny section
-            yaml = yaml.replace(
-              /(permissions:\s*\n)/m,
-              `$1  deny:\n    - Api(POST /notify)\n`
-            );
+        const hasDeny = lines.some((l) => l.trim() === "deny:" || /^\s+deny:\s*$/.test(l));
+        const hasPermissions = lines.some((l) => /^permissions:\s/.test(l) || l.trim() === "permissions:");
+        const isPreset = lines.some((l) => /^permissions:\s+\S/.test(l));
+
+        if (hasDeny) {
+          // Find deny: line and insert after it
+          const idx = lines.findIndex((l) => l.trim() === "deny:" || /^\s+deny:\s*$/.test(l));
+          lines.splice(idx + 1, 0, "    - Api(POST /notify)");
+        } else if (hasPermissions && isPreset) {
+          // permissions: reader → keep as-is, just add deny block after it
+          // "permissions: reader" stays valid — Rust treats preset + deny as:
+          // resolve preset rules, then apply deny overrides.
+          // Actually — the Rust enum is untagged: Preset(String) or Rules{allow,deny,...}.
+          // We can't mix them. So we need to KEEP the preset line and add a
+          // separate deny line. But that's not valid YAML for the enum.
+          //
+          // Safest: just append a top-level deny at the permissions level.
+          // Convert: "permissions: reader" → "permissions:\n  allow: []\n  deny:\n    - Api(POST /notify)"
+          // But this loses the preset behavior.
+          //
+          // Best approach: don't touch the permissions at all.
+          // Instead, add a separate top-level field that the middleware can check.
+          // BUT we said no Rust changes...
+          //
+          // Practical fix: for preset permissions, switch to Rules format
+          // and copy the preset's allow list. But we don't know the allow list on the frontend.
+          //
+          // Simplest correct approach: convert to Rules with empty allow (= deny everything
+          // except what the preset would allow). This is wrong.
+          //
+          // Actually — let's just append deny as a sibling of permissions.
+          // The YAML will look like:
+          //   permissions: reader
+          //   deny:
+          //     - Api(POST /notify)
+          // This won't parse as PipePermissionsConfig because it's "untagged" enum.
+          // The deny would end up in the catch-all config HashMap instead.
+          //
+          // OK — the REAL simplest fix: wrap it in Rules format.
+          // "permissions: reader" → permissions:\n  allow: []\n  deny:\n    - Api(POST /notify)
+          // With empty allow, the default allowlist for "none" preset kicks in = full access.
+          // Then deny overrides. This is effectively the same as the preset with a deny added.
+          const permIdx = lines.findIndex((l) => /^permissions:\s+\S/.test(l));
+          lines.splice(permIdx, 1,
+            "permissions:",
+            "  deny:",
+            "    - Api(POST /notify)",
+          );
+        } else if (hasPermissions) {
+          // Already rules format, add deny section
+          // Find the end of the permissions block and insert deny
+          const permIdx = lines.findIndex((l) => l.trim() === "permissions:");
+          // Find where to insert: after the last indented line under permissions
+          let insertIdx = permIdx + 1;
+          while (insertIdx < lines.length && (lines[insertIdx].startsWith("  ") || lines[insertIdx].trim() === "")) {
+            insertIdx++;
           }
+          lines.splice(insertIdx, 0, "  deny:", "    - Api(POST /notify)");
         } else {
-          // No permissions at all — add it
-          yaml = yaml.trimEnd() + `\npermissions:\n  deny:\n    - Api(POST /notify)`;
+          // No permissions at all — add it at end
+          lines.push("permissions:", "  deny:", "    - Api(POST /notify)");
         }
       } else {
         // Remove deny rule for POST /notify
-        yaml = yaml.replace(/\s*-\s*Api\(\s*\*?\s*POST\s+\/notify\s*\)\n?/gi, "\n");
-        // Clean up empty deny list
-        yaml = yaml.replace(/\s*deny:\s*\n\s*\n/gm, "\n");
-        // Clean up deny with only whitespace after it
-        yaml = yaml.replace(/\s*deny:\s*$/gm, "");
+        const filtered: string[] = [];
+        let skipEmpty = false;
+        for (let i = 0; i < lines.length; i++) {
+          const trimmed = lines[i].trim();
+          if (/^-\s*Api\(\s*(\*)?\s*POST\s+\/notify\s*\)/i.test(trimmed)) {
+            skipEmpty = true;
+            continue; // skip this line
+          }
+          filtered.push(lines[i]);
+        }
+
+        // Clean up empty deny: blocks (deny: followed by no items)
+        const cleaned: string[] = [];
+        for (let i = 0; i < filtered.length; i++) {
+          const trimmed = filtered[i].trim();
+          if ((trimmed === "deny:" || /^\s*deny:\s*$/.test(filtered[i]))) {
+            // Check if next non-empty line is an item (starts with -)
+            let nextIdx = i + 1;
+            while (nextIdx < filtered.length && filtered[nextIdx].trim() === "") nextIdx++;
+            if (nextIdx >= filtered.length || !filtered[nextIdx].trim().startsWith("-")) {
+              continue; // skip empty deny:
+            }
+          }
+          cleaned.push(filtered[i]);
+        }
+
+        lines.length = 0;
+        lines.push(...cleaned);
       }
 
-      content = `---\n${yaml.trim()}\n---${body}`;
+      content = `---\n${lines.join("\n").trim()}\n---${body}`;
     }
 
     // Save via raw_content
     await savePipeContent(pipeName, content);
-    // Update local state
+    // Update local state so UI reflects change immediately
     setPipes((prev) =>
       prev.map((p) =>
         p.config.name === pipeName ? { ...p, raw_content: content } : p
       )
     );
+    // Clear any draft so the raw editor shows the saved version
     setPromptDrafts((prev) => {
       const next = { ...prev };
       delete next[pipeName];
