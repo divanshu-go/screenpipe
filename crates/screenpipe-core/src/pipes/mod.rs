@@ -444,6 +444,91 @@ fn remove_local_override(pipes_dir: &Path, pipe_name: &str) -> Result<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// PID file helpers — defense-in-depth against duplicate pipe spawns.
+// The PID file is the OS-level truth for "is this pipe running?"
+// ---------------------------------------------------------------------------
+
+const PID_FILE_NAME: &str = "run.pid";
+
+/// Write the child PID to `{pipes_dir}/{pipe_name}/run.pid`.
+fn write_pid_file(pipes_dir: &Path, pipe_name: &str, pid: u32) {
+    let path = pipes_dir.join(pipe_name).join(PID_FILE_NAME);
+    let _ = std::fs::write(&path, pid.to_string());
+}
+
+/// Read and parse the PID from `{pipes_dir}/{pipe_name}/run.pid`.
+fn read_pid_file(pipes_dir: &Path, pipe_name: &str) -> Option<u32> {
+    let path = pipes_dir.join(pipe_name).join(PID_FILE_NAME);
+    std::fs::read_to_string(&path)
+        .ok()?
+        .trim()
+        .parse::<u32>()
+        .ok()
+}
+
+/// Remove the PID file for a pipe.
+fn remove_pid_file(pipes_dir: &Path, pipe_name: &str) {
+    let path = pipes_dir.join(pipe_name).join(PID_FILE_NAME);
+    let _ = std::fs::remove_file(&path);
+}
+
+/// Check if a process with the given PID is still alive.
+fn is_process_alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        // kill(pid, 0) checks existence without sending a signal
+        unsafe { libc::kill(pid as i32, 0) == 0 }
+    }
+    #[cfg(windows)]
+    {
+        use std::ptr;
+        const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+        unsafe {
+            let handle = windows_sys::Win32::System::Threading::OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION,
+                0, // FALSE
+                pid,
+            );
+            if handle.is_null() || handle == ptr::null_mut() {
+                false
+            } else {
+                windows_sys::Win32::Foundation::CloseHandle(handle);
+                true
+            }
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = pid;
+        false
+    }
+}
+
+/// On startup, remove any PID files whose processes are no longer alive.
+fn cleanup_orphaned_pid_files(pipes_dir: &Path) {
+    let entries = match std::fs::read_dir(pipes_dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        if !entry.path().is_dir() {
+            continue;
+        }
+        let pipe_name = entry.file_name().to_string_lossy().to_string();
+        if let Some(pid) = read_pid_file(pipes_dir, &pipe_name) {
+            if is_process_alive(pid) {
+                info!(
+                    "startup: killing orphaned pipe '{}' process {}",
+                    pipe_name, pid
+                );
+                let _ = crate::agents::pi::kill_process_group(pid);
+            }
+            remove_pid_file(pipes_dir, &pipe_name);
+        }
+    }
+}
+
 /// Result of a single pipe run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipeRunLog {
@@ -998,6 +1083,9 @@ impl PipeManager {
     /// Mark orphaned 'running' executions as failed on startup,
     /// then prune old executions (keep 50 per pipe).
     pub async fn startup_recovery(&self) {
+        // Clean up orphaned PID files from previous crashes
+        cleanup_orphaned_pid_files(&self.pipes_dir);
+
         if let Some(ref store) = self.store {
             match store.mark_orphaned_running().await {
                 Ok(count) => {
@@ -1488,22 +1576,29 @@ impl PipeManager {
             let _ = store.set_execution_running(id, None).await;
         }
 
-        // PID channel
-        let (pid_tx, pid_rx) = tokio::sync::oneshot::channel::<u32>();
+        // Shared PID — set synchronously by the executor right after spawn
+        let shared_pid = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let shared_pid_for_kill = shared_pid.clone();
 
         // Spawn PID watcher
         let running_for_pid = self.running.clone();
         let store_for_pid = self.store.clone();
         let name_for_pid = pipe_name.clone();
         let exec_id_for_pid = exec_id;
+        let shared_pid_watcher = shared_pid.clone();
+        let pipes_dir_for_pidfile = self.pipes_dir.clone();
+        let pipe_name_for_pidfile = pipe_name.clone();
         tokio::spawn(async move {
-            if let Ok(pid) = pid_rx.await {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            let pid = shared_pid_watcher.load(std::sync::atomic::Ordering::SeqCst);
+            if pid != 0 {
                 {
                     let mut r = running_for_pid.lock().await;
                     if let Some(handle) = r.get_mut(&name_for_pid) {
                         handle.pid = pid;
                     }
                 }
+                write_pid_file(&pipes_dir_for_pidfile, &pipe_name_for_pidfile, pid);
                 if let (Some(ref store), Some(id)) = (&store_for_pid, exec_id_for_pid) {
                     let _ = store.set_execution_running(id, Some(pid)).await;
                 }
@@ -1536,8 +1631,6 @@ impl PipeManager {
         let on_complete = self.on_run_complete.clone();
         let on_output = self.on_output_line.clone();
         let pipes_dir_for_log = self.pipes_dir.clone();
-        let executors = self.executors.clone();
-        let agent = config.agent.clone();
         let pipe_timeout = config.timeout.unwrap_or(DEFAULT_TIMEOUT_SECS);
 
         // Spawn the actual execution in a background task
@@ -1571,7 +1664,7 @@ impl PipeManager {
                     run_provider.as_deref(),
                     run_provider_url.as_deref(),
                     run_api_key.as_deref(),
-                    Some(pid_tx),
+                    Some(shared_pid.clone()),
                     line_tx,
                     history_enabled,
                     Some(&pipe_system_prompt),
@@ -1581,8 +1674,8 @@ impl PipeManager {
 
             let finished_at = Utc::now();
 
-            // Remove from running
-            let removed_handle = {
+            // Remove from running + clean up PID file
+            let _removed_handle = {
                 let mut r = running_ref.lock().await;
                 r.remove(&pipe_name)
             };
@@ -1590,6 +1683,7 @@ impl PipeManager {
                 let mut exec_ids = running_exec_ids_ref.lock().await;
                 exec_ids.remove(&pipe_name);
             }
+            remove_pid_file(&pipes_dir_for_log, &pipe_name);
 
             let (log, cb_error_type): (PipeRunLog, Option<String>) = match run_result {
                 Ok(Ok(output)) => {
@@ -1673,12 +1767,9 @@ impl PipeManager {
                     )
                 }
                 Err(_elapsed) => {
-                    if let Some(handle) = removed_handle {
-                        if handle.pid != 0 {
-                            if let Some(executor) = executors.get(&agent) {
-                                let _ = executor.kill(&handle);
-                            }
-                        }
+                    let real_pid = shared_pid_for_kill.load(std::sync::atomic::Ordering::SeqCst);
+                    if real_pid != 0 {
+                        let _ = crate::agents::pi::kill_process_group(real_pid);
                     }
                     if let (Some(ref store), Some(id)) = (&store_ref, exec_id) {
                         let _ = store
@@ -1804,7 +1895,7 @@ impl PipeManager {
                 if running.contains_key(name) {
                     return Err(anyhow!("pipe '{}' is already running", name));
                 }
-                // Placeholder handle; real PID comes via pid_tx channel
+                // Placeholder handle; real PID comes via SharedPid
                 running.insert(name.to_string(), ExecutionHandle { pid: 0 });
             }
 
@@ -1926,29 +2017,34 @@ impl PipeManager {
                 render_pipe_system_prompt(&body, self.api_port, preset_prompt.as_deref());
             let prompt = self.render_prompt(&config, &body, preset_prompt.as_deref());
 
-            // Create a channel so the executor can report PID immediately
-            let (pid_tx, pid_rx) = tokio::sync::oneshot::channel::<u32>();
+            // Shared PID — set synchronously by the executor right after spawn
+            let shared_pid = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+            let shared_pid_for_kill = shared_pid.clone();
 
             // Mark as running in DB
             if let (Some(ref store), Some(id)) = (&self.store, exec_id) {
                 let _ = store.set_execution_running(id, None).await;
             }
 
-            // Spawn PID watcher: when PID arrives, update running map + DB
+            // Spawn PID watcher: when PID arrives, update running map + DB + PID file
             let running_ref = self.running.clone();
             let store_for_pid = self.store.clone();
             let name_for_pid = name.to_string();
             let exec_id_for_pid = exec_id;
+            let shared_pid_watcher = shared_pid.clone();
+            let pipes_dir_for_pidfile = self.pipes_dir.clone();
+            let pipe_name_for_pidfile = name.to_string();
             tokio::spawn(async move {
-                if let Ok(pid) = pid_rx.await {
-                    // Update in-memory running map with real PID
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                let pid = shared_pid_watcher.load(std::sync::atomic::Ordering::SeqCst);
+                if pid != 0 {
                     {
                         let mut r = running_ref.lock().await;
                         if let Some(handle) = r.get_mut(&name_for_pid) {
                             handle.pid = pid;
                         }
                     }
-                    // Update DB row with PID
+                    write_pid_file(&pipes_dir_for_pidfile, &pipe_name_for_pidfile, pid);
                     if let (Some(ref store), Some(id)) = (&store_for_pid, exec_id_for_pid) {
                         let _ = store.set_execution_running(id, Some(pid)).await;
                     }
@@ -2006,7 +2102,7 @@ impl PipeManager {
                     run_provider.as_deref(),
                     run_provider_url.as_deref(),
                     run_api_key.as_deref(),
-                    Some(pid_tx),
+                    Some(shared_pid.clone()),
                     line_tx,
                     history_enabled,
                     Some(&pipe_system_prompt),
@@ -2014,8 +2110,8 @@ impl PipeManager {
             )
             .await;
 
-            // Remove from running
-            let removed_handle = {
+            // Remove from running + clean up PID file
+            let _removed_handle = {
                 let mut running = self.running.lock().await;
                 running.remove(name)
             };
@@ -2023,6 +2119,7 @@ impl PipeManager {
                 let mut exec_ids = self.running_execution_ids.lock().await;
                 exec_ids.remove(name);
             }
+            remove_pid_file(&self.pipes_dir, name);
 
             let finished_at = Utc::now();
             let _duration_ms = (finished_at - started_at).num_milliseconds();
@@ -2121,12 +2218,9 @@ impl PipeManager {
                         "pipe '{}' timed out after {}s, killing process",
                         name, pipe_timeout
                     );
-                    if let Some(handle) = removed_handle {
-                        if handle.pid != 0 {
-                            if let Some(executor) = self.executors.get(&config.agent) {
-                                let _ = executor.kill(&handle);
-                            }
-                        }
+                    let real_pid = shared_pid_for_kill.load(std::sync::atomic::Ordering::SeqCst);
+                    if real_pid != 0 {
+                        let _ = crate::agents::pi::kill_process_group(real_pid);
                     }
 
                     if let (Some(ref store), Some(id)) = (&self.store, exec_id) {
@@ -2734,11 +2828,28 @@ impl PipeManager {
                         continue;
                     }
 
-                    // Check not already running
+                    // Check not already running (HashMap)
                     {
                         let r = running.lock().await;
                         if r.contains_key(name) {
                             continue;
+                        }
+                    }
+
+                    // Defense-in-depth: check PID file (survives crashes)
+                    if let Some(existing_pid) = read_pid_file(&pipes_dir, name) {
+                        if is_process_alive(existing_pid) {
+                            debug!(
+                                "scheduler: pipe '{}' has live process {} (PID file), skipping",
+                                name, existing_pid
+                            );
+                            continue;
+                        } else {
+                            info!(
+                                "scheduler: pipe '{}' has stale PID file (pid {}), cleaning up",
+                                name, existing_pid
+                            );
+                            remove_pid_file(&pipes_dir, name);
                         }
                     }
 
@@ -2885,22 +2996,32 @@ impl PipeManager {
                             let _ = store.set_execution_running(id, None).await;
                         }
 
-                        // PID channel
-                        let (pid_tx, pid_rx) = tokio::sync::oneshot::channel::<u32>();
+                        // Shared PID — set synchronously by the executor right after spawn
+                        let shared_pid = std::sync::Arc::new(
+                            std::sync::atomic::AtomicU32::new(0),
+                        );
+                        let shared_pid_for_kill = shared_pid.clone();
+                        let pipes_dir_for_pidfile = pipes_dir_for_log.clone();
+                        let pipe_name_for_pidfile = pipe_name.clone();
 
-                        // Spawn PID watcher
+                        // Update running HashMap + DB + PID file once PID is available
                         let running_for_pid = running_ref.clone();
                         let store_for_pid = store_ref.clone();
                         let name_for_pid = pipe_name.clone();
                         let exec_id_for_pid = exec_id;
+                        let shared_pid_watcher = shared_pid.clone();
                         tokio::spawn(async move {
-                            if let Ok(pid) = pid_rx.await {
+                            // Brief wait for the synchronous PID store
+                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                            let pid = shared_pid_watcher.load(std::sync::atomic::Ordering::SeqCst);
+                            if pid != 0 {
                                 {
                                     let mut r = running_for_pid.lock().await;
                                     if let Some(handle) = r.get_mut(&name_for_pid) {
                                         handle.pid = pid;
                                     }
                                 }
+                                write_pid_file(&pipes_dir_for_pidfile, &pipe_name_for_pidfile, pid);
                                 if let (Some(ref store), Some(id)) =
                                     (&store_for_pid, exec_id_for_pid)
                                 {
@@ -2939,7 +3060,7 @@ impl PipeManager {
                                 provider.as_deref(),
                                 provider_url.as_deref(),
                                 api_key.as_deref(),
-                                Some(pid_tx),
+                                Some(shared_pid.clone()),
                                 line_tx,
                                 history_enabled,
                                 Some(&pipe_system_prompt),
@@ -2949,8 +3070,8 @@ impl PipeManager {
 
                         let finished_at = Utc::now();
 
-                        // Remove from running
-                        let removed_handle = {
+                        // Remove from running + clean up PID file
+                        let _removed_handle = {
                             let mut r = running_ref.lock().await;
                             r.remove(&pipe_name)
                         };
@@ -2958,6 +3079,7 @@ impl PipeManager {
                             let mut exec_ids = running_exec_ids_ref.lock().await;
                             exec_ids.remove(&pipe_name);
                         }
+                        remove_pid_file(&pipes_dir_for_log, &pipe_name);
 
                         let (log, cb_error_type): (PipeRunLog, Option<String>) = match run_result {
                             Ok(Ok(output)) => {
@@ -3049,10 +3171,9 @@ impl PipeManager {
                             }
                             Err(_elapsed) => {
                                 warn!("pipe '{}' timed out after {}s", pipe_name, pipe_timeout);
-                                if let Some(handle) = removed_handle {
-                                    if handle.pid != 0 {
-                                        let _ = crate::agents::pi::kill_process_group(handle.pid);
-                                    }
+                                let real_pid = shared_pid_for_kill.load(std::sync::atomic::Ordering::SeqCst);
+                                if real_pid != 0 {
+                                    let _ = crate::agents::pi::kill_process_group(real_pid);
                                 }
                                 if let (Some(ref store), Some(id)) = (&store_ref, exec_id) {
                                     let _ = store
