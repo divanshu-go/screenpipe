@@ -6,43 +6,57 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Loader2, LogOut, Mail } from "lucide-react";
+import { Loader2, LogOut, Mail, Plus } from "lucide-react";
 import { commands } from "@/lib/utils/tauri";
 import posthog from "posthog-js";
 
-export function GmailCard() {
-  const [connected, setConnected] = useState(false);
-  const [email, setEmail] = useState<string | null>(null);
-  const [isConnecting, setIsConnecting] = useState(false);
-  const [isDisconnecting, setIsDisconnecting] = useState(false);
+interface GmailAccount {
+  instance: string | null;
+  displayName: string | null;
+}
 
-  const fetchStatus = useCallback(async () => {
+export function GmailCard() {
+  const [accounts, setAccounts] = useState<GmailAccount[]>([]);
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [disconnecting, setDisconnecting] = useState<string | null>(null);
+
+  const fetchAccounts = useCallback(async () => {
     try {
-      const res = await commands.oauthStatus("gmail");
-      if (res.status === "ok" && res.data.connected) {
-        setConnected(true);
-        setEmail(res.data.display_name ?? null);
-      } else {
-        setConnected(false);
-        setEmail(null);
+      const res = await commands.oauthListInstances("gmail");
+      if (res.status === "ok") {
+        setAccounts(
+          res.data.map((a: any) => ({
+            instance: a.instance ?? null,
+            displayName: a.display_name ?? null,
+          }))
+        );
       }
     } catch (e) {
-      console.error("failed to fetch gmail status:", e);
+      // fallback: check single default account
+      try {
+        const res = await commands.oauthStatus("gmail", null);
+        if (res.status === "ok" && res.data.connected) {
+          setAccounts([{ instance: null, displayName: res.data.display_name ?? null }]);
+        } else {
+          setAccounts([]);
+        }
+      } catch {
+        setAccounts([]);
+      }
     }
   }, []);
 
   useEffect(() => {
-    fetchStatus();
-  }, [fetchStatus]);
+    fetchAccounts();
+  }, [fetchAccounts]);
 
   const handleConnect = async () => {
     setIsConnecting(true);
     try {
-      const res = await commands.oauthConnect("gmail");
+      const res = await commands.oauthConnect("gmail", null);
       if (res.status === "ok" && res.data.connected) {
-        setConnected(true);
-        setEmail(res.data.display_name ?? null);
         posthog.capture("gmail_connected");
+        await fetchAccounts();
       }
     } catch (e) {
       console.error("gmail oauth failed:", e);
@@ -50,18 +64,20 @@ export function GmailCard() {
     setIsConnecting(false);
   };
 
-  const handleDisconnect = async () => {
-    setIsDisconnecting(true);
+  const handleDisconnect = async (instance: string | null) => {
+    const key = instance ?? "__default__";
+    setDisconnecting(key);
     try {
-      await commands.oauthDisconnect("gmail");
-      setConnected(false);
-      setEmail(null);
-      posthog.capture("gmail_disconnected");
+      await commands.oauthDisconnect("gmail", instance);
+      posthog.capture("gmail_disconnected", { instance });
+      await fetchAccounts();
     } catch (e) {
       console.error("failed to disconnect gmail:", e);
     }
-    setIsDisconnecting(false);
+    setDisconnecting(null);
   };
+
+  const connected = accounts.length > 0;
 
   return (
     <Card className="border-border bg-card overflow-hidden">
@@ -84,7 +100,7 @@ export function GmailCard() {
               <h3 className="text-sm font-semibold text-foreground">Gmail</h3>
               {connected && (
                 <span className="px-2 py-0.5 text-xs font-medium bg-foreground text-background rounded-full">
-                  connected
+                  {accounts.length} account{accounts.length > 1 ? "s" : ""}
                 </span>
               )}
             </div>
@@ -98,37 +114,57 @@ export function GmailCard() {
               .
             </p>
 
-            {!connected ? (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleConnect}
-                disabled={isConnecting}
-                className="text-xs"
-              >
-                {isConnecting ? (
-                  <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
-                ) : (
-                  <Mail className="h-3 w-3 mr-1.5" />
-                )}
-                {isConnecting ? "Waiting for Google..." : "Connect Gmail"}
-              </Button>
-            ) : (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={handleDisconnect}
-                disabled={isDisconnecting}
-                className="text-xs text-muted-foreground hover:text-destructive h-7 px-2"
-              >
-                {isDisconnecting ? (
-                  <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
-                ) : (
-                  <LogOut className="h-3 w-3 mr-1.5" />
-                )}
-                Disconnect
-              </Button>
+            {/* Connected accounts list */}
+            {accounts.length > 0 && (
+              <div className="space-y-2 mb-3">
+                {accounts.map((account) => {
+                  const key = account.instance ?? "__default__";
+                  const isDisconnecting = disconnecting === key;
+                  return (
+                    <div key={key} className="flex items-center justify-between gap-2 text-xs">
+                      <span className="text-muted-foreground truncate">
+                        {account.displayName || account.instance || "default account"}
+                      </span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleDisconnect(account.instance)}
+                        disabled={isDisconnecting}
+                        className="text-xs text-muted-foreground hover:text-destructive h-6 px-2 shrink-0"
+                      >
+                        {isDisconnecting ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <LogOut className="h-3 w-3" />
+                        )}
+                      </Button>
+                    </div>
+                  );
+                })}
+              </div>
             )}
+
+            {/* Connect / Add account button */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleConnect}
+              disabled={isConnecting}
+              className="text-xs"
+            >
+              {isConnecting ? (
+                <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+              ) : connected ? (
+                <Plus className="h-3 w-3 mr-1.5" />
+              ) : (
+                <Mail className="h-3 w-3 mr-1.5" />
+              )}
+              {isConnecting
+                ? "Waiting for Google..."
+                : connected
+                ? "Add another account"
+                : "Connect Gmail"}
+            </Button>
           </div>
         </div>
 
@@ -136,8 +172,8 @@ export function GmailCard() {
         <div className="px-4 py-2 bg-muted/50 border-t border-border">
           <div className="flex items-center gap-3 text-xs text-muted-foreground">
             <span>
-              {connected && email
-                ? `connected as ${email}`
+              {connected
+                ? accounts.map((a) => a.displayName || a.instance).filter(Boolean).join(", ") || "connected"
                 : "Lets pipes read and send Gmail via the local API"}
             </span>
             <span className="ml-auto">
