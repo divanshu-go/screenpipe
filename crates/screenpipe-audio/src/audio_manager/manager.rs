@@ -33,7 +33,6 @@ use crate::{
     meeting_detector::MeetingDetector,
     metrics::AudioPipelineMetrics,
     segmentation::segmentation_manager::SegmentationManager,
-    speaker::recluster::merge_fragmented_unnamed_speakers,
     transcription::{
         engine::TranscriptionEngine,
         handle_new_transcript,
@@ -282,13 +281,6 @@ impl AudioManager {
         self.recording_handles.clear();
         self.device_manager.stop_all_devices().await?;
         info!("audio manager stopped");
-
-        // Session-end de-fragmentation: merge unnamed speakers that got split across chunks.
-        // Runs in the background so stop() returns immediately.
-        let db = self.db.clone();
-        tokio::spawn(async move {
-            merge_fragmented_unnamed_speakers(&db).await;
-        });
 
         Ok(())
     }
