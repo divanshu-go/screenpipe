@@ -22,27 +22,14 @@ export function GmailCard() {
 
   const fetchAccounts = useCallback(async () => {
     try {
-      const res = await commands.oauthListInstances("gmail");
-      if (res.status === "ok") {
-        setAccounts(
-          res.data.map((a: any) => ({
-            instance: a.instance ?? null,
-            displayName: a.display_name ?? null,
-          }))
-        );
-      }
-    } catch (e) {
-      // fallback: check single default account
-      try {
-        const res = await commands.oauthStatus("gmail", null);
-        if (res.status === "ok" && res.data.connected) {
-          setAccounts([{ instance: null, displayName: res.data.display_name ?? null }]);
-        } else {
-          setAccounts([]);
-        }
-      } catch {
+      const res = await commands.oauthStatus("gmail");
+      if (res.status === "ok" && res.data.connected) {
+        setAccounts([{ instance: null, displayName: (res.data as any).display_name ?? null }]);
+      } else {
         setAccounts([]);
       }
+    } catch {
+      setAccounts([]);
     }
   }, []);
 
@@ -53,7 +40,7 @@ export function GmailCard() {
   const handleConnect = async () => {
     setIsConnecting(true);
     try {
-      const res = await commands.oauthConnect("gmail", null);
+      const res = await commands.oauthConnect("gmail");
       if (res.status === "ok" && res.data.connected) {
         posthog.capture("gmail_connected");
         await fetchAccounts();
@@ -68,7 +55,7 @@ export function GmailCard() {
     const key = instance ?? "__default__";
     setDisconnecting(key);
     try {
-      await commands.oauthDisconnect("gmail", instance);
+      await commands.oauthDisconnect("gmail");
       posthog.capture("gmail_disconnected", { instance });
       await fetchAccounts();
     } catch (e) {
