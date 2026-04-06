@@ -32,6 +32,8 @@ pub struct RecordingConfig {
     pub use_pii_removal: bool,
     /// Filter music-dominant audio before transcription using spectral analysis
     pub filter_music: bool,
+    /// Apply RNNoise neural noise suppression (fans, HVAC, keyboards) before transcription
+    pub noise_suppression: bool,
     // enable_input_capture and enable_accessibility removed — always true
 
     // Engines (typed, not strings)
@@ -136,6 +138,7 @@ impl RecordingConfig {
             disable_vision: settings.disable_vision,
             use_pii_removal: settings.use_pii_removal,
             filter_music: settings.filter_music,
+            noise_suppression: settings.noise_suppression,
             // enable_input_capture / enable_accessibility removed — always true
             enable_workflow_events: settings.enable_workflow_events,
             audio_transcription_engine: engine_str
@@ -234,6 +237,7 @@ impl RecordingConfig {
             .output_path(output_path)
             .use_pii_removal(self.use_pii_removal)
             .filter_music(self.filter_music)
+            .noise_suppression(self.noise_suppression)
             .transcription_mode(self.transcription_mode.clone())
             .transcription_pipeline_mode(self.transcription_pipeline_mode)
             .vocabulary(self.vocabulary.clone())

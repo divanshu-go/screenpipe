@@ -46,6 +46,7 @@ import {
   Zap,
   Sparkles,
   Music,
+  Wind,
   User,
   Users,
   ChevronUp,
@@ -1696,6 +1697,32 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   checked={settings.filterMusic ?? false}
                   onCheckedChange={(checked) =>
                     handleSettingsChange({ filterMusic: checked }, true)
+                  }
+                />
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {!settings.disableAudio && settings.audioTranscriptionEngine !== "disabled" && (
+          <Card className="border-border bg-card">
+            <CardContent className="px-3 py-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2.5">
+                  <Wind className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <div>
+                    <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                      Noise suppression
+                      <HelpTooltip text="Apply RNNoise neural noise suppression before transcription. Reduces fan, HVAC, and keyboard background noise. Adds ~50ms processing per 30s chunk." />
+                    </h3>
+                    <p className="text-xs text-muted-foreground">Remove mic background noise from transcriptions</p>
+                  </div>
+                </div>
+                <Switch
+                  id="noiseSuppression"
+                  checked={settings.noiseSuppression ?? false}
+                  onCheckedChange={(checked) =>
+                    handleSettingsChange({ noiseSuppression: checked }, true)
                   }
                 />
               </div>

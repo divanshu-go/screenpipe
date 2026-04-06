@@ -57,6 +57,8 @@ pub struct AudioManagerOptions {
     pub use_pii_removal: bool,
     /// Filter music-dominant audio before transcription using spectral analysis
     pub filter_music: bool,
+    /// Apply RNNoise neural noise suppression before transcription (fans, HVAC, keyboards)
+    pub noise_suppression: bool,
     /// When true, automatically follow system default audio devices
     /// and switch when the system default changes (e.g., device plug/unplug)
     pub use_system_default_audio: bool,
@@ -98,6 +100,7 @@ impl Default for AudioManagerOptions {
             deepgram_url,
             use_pii_removal: false,
             filter_music: false,
+            noise_suppression: false,
             use_system_default_audio: true,
             transcription_mode: TranscriptionMode::default(),
             meeting_detector: None,
@@ -184,6 +187,11 @@ impl AudioManagerBuilder {
 
     pub fn filter_music(mut self, filter_music: bool) -> Self {
         self.options.filter_music = filter_music;
+        self
+    }
+
+    pub fn noise_suppression(mut self, noise_suppression: bool) -> Self {
+        self.options.noise_suppression = noise_suppression;
         self
     }
 

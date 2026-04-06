@@ -5,7 +5,8 @@ use super::segment::get_segments;
 use crate::{
     pipeline_mode::TranscriptionPipelineMode,
     utils::audio::{
-        average_noise_spectrum, filter_music_frames, normalize_v2, spectral_subtraction,
+        average_noise_spectrum, denoise_audio, filter_music_frames, normalize_v2,
+        spectral_subtraction,
     },
     vad::VadEngine,
 };
@@ -28,12 +29,17 @@ pub async fn prepare_segments(
     device: &str,
     is_output_device: bool,
     filter_music: bool,
+    noise_suppression: bool,
     pipeline_mode: TranscriptionPipelineMode,
 ) -> Result<(tokio::sync::mpsc::Receiver<SpeechSegment>, bool, f32)> {
     let mut audio_data = normalize_v2(audio_data);
 
     if filter_music {
         filter_music_frames(&mut audio_data);
+    }
+
+    if noise_suppression {
+        audio_data = denoise_audio(&audio_data);
     }
 
     // Silero VAD v5 expects continuous 512-sample chunks at 16kHz (32ms).

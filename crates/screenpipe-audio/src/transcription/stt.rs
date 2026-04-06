@@ -291,6 +291,7 @@ pub async fn process_audio_input(
     metrics: Arc<AudioPipelineMetrics>,
     pre_written_path: Option<String>,
     filter_music: bool,
+    noise_suppression: bool,
     pipeline_mode: TranscriptionPipelineMode,
 ) -> Result<()> {
     // capture_timestamp is set when audio enters the channel. Used for both
@@ -322,6 +323,7 @@ pub async fn process_audio_input(
         &audio.device.to_string(),
         is_output_device,
         filter_music,
+        noise_suppression,
         pipeline_mode,
     )
     .await?;

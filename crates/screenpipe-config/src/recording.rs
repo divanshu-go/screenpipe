@@ -89,6 +89,10 @@ pub struct RecordingSettings {
     #[serde(rename = "filterMusic")]
     pub filter_music: bool,
 
+    /// Apply RNNoise neural noise suppression (fans, HVAC, keyboards) before transcription.
+    #[serde(rename = "noiseSuppression", default)]
+    pub noise_suppression: bool,
+
     /// STT segmentation: "quality" (default) = transcribe full chunk before pyannote slicing;
     /// "fast" = legacy pyannote-defined STT segments when models are available.
     #[serde(
@@ -296,6 +300,7 @@ impl Default for RecordingSettings {
             deepgram_api_key: String::new(),
             vad_sensitivity: "high".to_string(),
             filter_music: false,
+            noise_suppression: false,
             transcription_pipeline_mode: "quality".to_string(),
             batch_max_duration_secs: None,
             vocabulary: vec![],

@@ -294,6 +294,10 @@ pub struct RecordArgs {
     #[arg(long, default_value_t = false)]
     pub filter_music: bool,
 
+    /// Apply RNNoise neural noise suppression before transcription (fans, HVAC, keyboards)
+    #[arg(long, default_value_t = false)]
+    pub noise_suppression: bool,
+
     /// Disable vision recording
     #[arg(long, default_value_t = false)]
     pub disable_vision: bool,
@@ -399,6 +403,7 @@ impl RecordArgs {
             disable_vision: self.disable_vision,
             use_pii_removal: self.use_pii_removal,
             filter_music: self.filter_music,
+            noise_suppression: self.noise_suppression,
             #[allow(deprecated)]
             enable_input_capture: true,
             #[allow(deprecated)]

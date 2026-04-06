@@ -445,6 +445,7 @@ impl AudioManager {
         let is_batch_mode = options.transcription_mode == TranscriptionMode::Batch;
         let batch_max_duration_secs = options.batch_max_duration_secs;
         let filter_music = options.filter_music;
+        let noise_suppression = options.noise_suppression;
         let pipeline_mode = options.transcription_pipeline_mode;
         let vad_engine = self.vad_engine.clone();
         let whisper_receiver = self.recording_receiver.clone();
@@ -661,6 +662,7 @@ impl AudioManager {
                                 metrics.clone(),
                                 persisted_file_path.clone(),
                                 filter_music,
+                                noise_suppression,
                                 pipeline_mode,
                             )
                             .await
@@ -687,6 +689,7 @@ impl AudioManager {
                                 metrics.clone(),
                                 persisted_file_path.clone(),
                                 filter_music,
+                                noise_suppression,
                                 pipeline_mode,
                         )
                         .await
@@ -713,6 +716,7 @@ impl AudioManager {
                         metrics.clone(),
                         persisted_file_path.clone(),
                         filter_music,
+                        noise_suppression,
                         pipeline_mode,
                     )
                     .await

@@ -146,6 +146,8 @@ export type Settings = SettingsStore & {
 	openaiCompatibleRawAudio?: boolean;
 	/** Filter music-dominant audio before transcription (reduces Spotify/YouTube music noise) */
 	filterMusic?: boolean;
+	/** Apply RNNoise neural noise suppression before transcription (fans, HVAC, keyboards) */
+	noiseSuppression?: boolean;
 	/** Maximum batch transcription duration in seconds (0 = engine default: Deepgram 5000s, OpenAI 3000s, Whisper 600s) */
 	batchMaxDurationSecs?: number;
 	/** Show periodic notifications suggesting pipe ideas based on user's data (default: true) */
