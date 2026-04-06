@@ -1552,10 +1552,36 @@ impl PipeManager {
         {
             let mut running = self.running.lock().await;
             if running.contains_key(name) {
-                return Err(anyhow!("pipe '{}' is already running", name));
+                return Err(anyhow!(
+                    "pipe '{}' is already running — you may already be executing inside this pipe. \
+                     Do NOT run `screenpipe pipe run` from within a pipe.",
+                    name
+                ));
             }
             running.insert(name.to_string(), ExecutionHandle { pid: 0 });
         }
+
+        // Defense-in-depth: check PID file (cross-process lock)
+        if let Some(existing_pid) = read_pid_file(&self.pipes_dir, name) {
+            if is_process_alive(existing_pid) {
+                let mut running = self.running.lock().await;
+                running.remove(name);
+                return Err(anyhow!(
+                    "pipe '{}' is already running (pid {}) — another process is executing this pipe. \
+                     Do NOT run `screenpipe pipe run` from within a pipe.",
+                    name, existing_pid
+                ));
+            } else {
+                info!(
+                    "start_pipe_background: pipe '{}' has stale PID file (pid {}), cleaning up",
+                    name, existing_pid
+                );
+                remove_pid_file(&self.pipes_dir, name);
+            }
+        }
+
+        // Write a pre-emptive PID file to claim the lock before spawn
+        write_pid_file(&self.pipes_dir, name, std::process::id());
 
         // Resolve preset
         let (run_model, run_provider, run_provider_url, run_api_key, preset_prompt) =
@@ -1952,11 +1978,38 @@ impl PipeManager {
             {
                 let mut running = self.running.lock().await;
                 if running.contains_key(name) {
-                    return Err(anyhow!("pipe '{}' is already running", name));
+                    return Err(anyhow!(
+                        "pipe '{}' is already running — you may already be executing inside this pipe. \
+                         Do NOT run `screenpipe pipe run` from within a pipe.",
+                        name
+                    ));
                 }
                 // Placeholder handle; real PID comes via SharedPid
                 running.insert(name.to_string(), ExecutionHandle { pid: 0 });
             }
+
+            // Defense-in-depth: check PID file (cross-process lock)
+            if let Some(existing_pid) = read_pid_file(&self.pipes_dir, name) {
+                if is_process_alive(existing_pid) {
+                    // Undo the running insert since we're bailing out
+                    let mut running = self.running.lock().await;
+                    running.remove(name);
+                    return Err(anyhow!(
+                        "pipe '{}' is already running (pid {}) — another process is executing this pipe. \
+                         Do NOT run `screenpipe pipe run` from within a pipe.",
+                        name, existing_pid
+                    ));
+                } else {
+                    info!(
+                        "run_pipe: pipe '{}' has stale PID file (pid {}), cleaning up",
+                        name, existing_pid
+                    );
+                    remove_pid_file(&self.pipes_dir, name);
+                }
+            }
+
+            // Write a pre-emptive PID file to claim the lock before spawn
+            write_pid_file(&self.pipes_dir, name, std::process::id());
 
             let started_at = Utc::now();
             let pipe_dir = self.pipes_dir.join(name);
@@ -2937,6 +2990,9 @@ impl PipeManager {
                         r.insert(name.clone(), ExecutionHandle { pid: 0 });
                     }
 
+                    // Write pre-emptive PID file to claim the lock before spawn
+                    write_pid_file(&pipes_dir, name, std::process::id());
+
                     // Resolve preset → model/provider overrides (same as run_pipe)
                     let (model, provider, provider_url, api_key, preset_prompt) = if let Some(
                         preset_id,
@@ -3563,7 +3619,7 @@ fn render_pipe_system_prompt(body: &str, api_port: u16, system_prompt: Option<&s
     }
 
     sys.push_str(&format!(
-        "OS: {os}\nOutput directory: ./output/\nScreenpipe API: http://localhost:{api_port}\nPrefer bun/TypeScript for scripts. Python may not be installed.\nSend notifications via POST http://localhost:11435/notify with {{\"title\": \"...\", \"body\": \"...\"}}. Body supports markdown. File links MUST use absolute paths (e.g. [View log](/Users/me/file.md)), never relative paths like ./output/file.md — relative paths break the notification link handler.\n\n"
+        "CRITICAL: You ARE this pipe. You are already running inside it. NEVER run `screenpipe pipe run` — that would create a recursive duplicate. Execute the task directly using the tools available to you (bash, file I/O, HTTP requests, etc.).\n\nOS: {os}\nOutput directory: ./output/\nScreenpipe API: http://localhost:{api_port}\nPrefer bun/TypeScript for scripts. Python may not be installed.\nSend notifications via POST http://localhost:11435/notify with {{\"title\": \"...\", \"body\": \"...\"}}. Body supports markdown. File links MUST use absolute paths (e.g. [View log](/Users/me/file.md)), never relative paths like ./output/file.md — relative paths break the notification link handler.\n\n"
     ));
     sys.push_str(body);
     sys
@@ -3613,7 +3669,7 @@ Pipe name: {}
         prompt.push_str(ctx);
     }
 
-    prompt.push_str("\nExecute the pipe now.");
+    prompt.push_str("\nDo the work described above now. Do NOT re-run this pipe via CLI.");
 
     prompt
 }
@@ -4245,7 +4301,7 @@ mod tests {
         let prompt = render_prompt_with_port(&config, "body text", 3031, None, None);
         // User prompt contains time range and the "Execute" instruction
         assert!(prompt.contains("Time range:"));
-        assert!(prompt.contains("Execute the pipe now."));
+        assert!(prompt.contains("Do the work described above now."));
         // Port / body go into system prompt, not user prompt
         let sys = render_pipe_system_prompt("body text", 3031, None);
         assert!(sys.contains("http://localhost:3031"));
@@ -4323,6 +4379,13 @@ mod tests {
         let sys = render_pipe_system_prompt("body text", 3030, None);
         assert!(!sys.contains("System prompt:"));
         assert!(sys.contains("body text"));
+    }
+
+    #[test]
+    fn test_system_prompt_contains_anti_recursion_warning() {
+        let sys = render_pipe_system_prompt("task body", 3030, None);
+        assert!(sys.contains("NEVER run `screenpipe pipe run`"));
+        assert!(sys.contains("You ARE this pipe"));
     }
 
     // -- PipeExecution / SchedulerState serde roundtrip ----------------------
