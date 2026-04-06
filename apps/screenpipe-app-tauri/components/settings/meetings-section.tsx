@@ -5,7 +5,6 @@
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/ui/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -626,12 +625,6 @@ export function MeetingsSection() {
                             {meeting.meeting_app}
                           </span>
                         )}
-                        <Badge
-                          variant="outline"
-                          className="text-[10px] px-1 py-0 font-normal"
-                        >
-                          {meeting.detection_source}
-                        </Badge>
                       </div>
                       <div className="text-xs text-muted-foreground mt-0.5">
                         {formatTime(meeting.meeting_start)}
