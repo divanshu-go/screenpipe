@@ -605,6 +605,9 @@ impl TranscriptionSession {
                 let result = engine
                     .transcribe_with_sample_rate(audio, sample_rate, opts)
                     .map_err(|e| anyhow!("{}", e))?;
+                // Free cached Metal buffers after each transcription to prevent
+                // unbounded GPU memory growth from variable-length audio tensors
+                mlx_memory::clear_cache();
                 Ok(result.text)
             }
 
