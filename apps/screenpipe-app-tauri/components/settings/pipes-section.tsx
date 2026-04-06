@@ -1383,10 +1383,6 @@ export function PipesSection() {
             }}>
               {refreshing ? <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" /> : <RefreshCw className="h-3.5 w-3.5" />}
             </Button>
-            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setSection("connections")}>
-              <Link className="h-3.5 w-3.5 mr-1" />
-              connections
-            </Button>
           </div>
         </div>
         <p className="text-sm text-muted-foreground">
