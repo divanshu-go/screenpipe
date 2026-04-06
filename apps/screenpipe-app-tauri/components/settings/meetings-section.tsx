@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { useSettings } from "@/lib/hooks/use-settings";
+import { showChatWithPrefill } from "@/lib/chat-utils";
 
 interface MeetingRecord {
   id: number;
@@ -324,6 +325,72 @@ export function MeetingsSection() {
     } finally {
       setSuggestingAttendees(false);
     }
+  };
+
+  const summarizeMeeting = async (meeting: MeetingRecord) => {
+    const start = new Date(meeting.meeting_start);
+    const end = meeting.meeting_end ? new Date(meeting.meeting_end) : null;
+    const duration = end
+      ? `${Math.round((end.getTime() - start.getTime()) / 60000)} minutes`
+      : "ongoing";
+
+    const parts: string[] = [
+      `app: ${meeting.meeting_app}`,
+      `time: ${start.toLocaleString()}${end ? ` – ${end.toLocaleTimeString()}` : ""} (${duration})`,
+    ];
+    if (meeting.title) parts.push(`title: ${meeting.title}`);
+    if (meeting.attendees) parts.push(`attendees: ${meeting.attendees}`);
+    if (meeting.note) parts.push(`notes: ${meeting.note}`);
+
+    const startTime = start.toISOString();
+    const endTime = (end || new Date()).toISOString();
+
+    // fetch what was on screen and said during the meeting
+    let screenText = "";
+    let audioText = "";
+    try {
+      const [screenRes, audioRes] = await Promise.all([
+        fetch(`http://localhost:3030/search?content_type=vision&start_time=${startTime}&end_time=${endTime}&limit=30`),
+        fetch(`http://localhost:3030/search?content_type=audio&start_time=${startTime}&end_time=${endTime}&limit=50`),
+      ]);
+      if (screenRes.ok) {
+        const data = await screenRes.json();
+        const texts = (data.data || [])
+          .map((item: any) => item.content?.text || "")
+          .filter(Boolean)
+          .slice(0, 15);
+        if (texts.length) screenText = texts.join("\n---\n");
+      }
+      if (audioRes.ok) {
+        const data = await audioRes.json();
+        const transcripts = (data.data || [])
+          .map((item: any) => {
+            const c = item.content;
+            if (!c) return "";
+            const speaker = c.speaker_name && c.speaker_name !== "unknown" ? `${c.speaker_name}: ` : "";
+            return speaker + (c.transcription || "");
+          })
+          .filter(Boolean);
+        if (transcripts.length) audioText = transcripts.join("\n");
+      }
+    } catch {}
+
+    const context = [
+      `meeting metadata:\n${parts.join("\n")}`,
+      screenText ? `screen content during meeting:\n${screenText}` : "",
+      audioText ? `audio transcript:\n${audioText}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+
+    const prompt = `summarize this meeting concisely: key topics discussed, decisions made, and action items. then suggest which of my connected integrations (e.g. slack, notion, linear, todoist, email) would be useful to share this summary with, and draft a short message for each.`;
+
+    showChatWithPrefill({
+      context,
+      prompt,
+      autoSend: true,
+      source: "meeting-summarize",
+    });
   };
 
   const cancelEdit = () => {
@@ -690,6 +757,15 @@ export function MeetingsSection() {
                     </>
                   ) : (
                     <>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+                        onClick={() => summarizeMeeting(meeting)}
+                        title="summarize with AI"
+                      >
+                        <Sparkles className="h-3.5 w-3.5 text-muted-foreground" />
+                      </Button>
                       <Button
                         size="icon"
                         variant="ghost"
