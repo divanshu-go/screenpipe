@@ -1032,7 +1032,7 @@ impl PipeManager {
             store,
             api_port,
             last_reload: Arc::new(Mutex::new(
-                Instant::now() - std::time::Duration::from_secs(10),
+                Instant::now().checked_sub(std::time::Duration::from_secs(10)).unwrap_or(Instant::now()),
             )),
             token_registry: None,
             extra_context: None,
