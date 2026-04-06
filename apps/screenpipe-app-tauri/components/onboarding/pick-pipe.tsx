@@ -96,8 +96,8 @@ export default function PickPipe() {
         });
       } catch {}
 
-      // Show Main window and close onboarding
-      await commands.showWindow("Main");
+      // Show Home window and close onboarding
+      await commands.showWindow({ Home: { page: null } });
       try { window.close(); } catch {}
     } catch (err) {
       console.error("failed to enable pipe:", err);
@@ -124,7 +124,7 @@ export default function PickPipe() {
       console.error("failed to schedule notification:", e);
     }
     try {
-      await commands.showWindow("Main");
+      await commands.showWindow({ Home: { page: null } });
       window.close();
     } catch {
       /* ignore */
