@@ -71,7 +71,6 @@ import { useQueryState } from "nuqs";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { pipeExecutionToConversation } from "@/lib/pipe-ndjson-to-chat";
 import { saveConversationFile } from "@/lib/chat-storage";
-import { UpgradeDialog } from "@/components/upgrade-dialog";
 import { PublishDialog } from "@/components/pipe-store";
 import {
   Dialog,
@@ -701,7 +700,6 @@ export function PipesSection() {
   const [loading, setLoading] = useState(true);
   const [runningPipe, setRunningPipe] = useState<string | null>(null);
   const [stoppingPipe, setStoppingPipe] = useState<string | null>(null);
-  const [showUpgrade, setShowUpgrade] = useState(false);
   const [promptDrafts, setPromptDrafts] = useState<Record<string, string>>({});
   const [saveStatus, setSaveStatus] = useState<Record<string, "saving" | "saved" | "error">>({});
   const [saveErrors, setSaveErrors] = useState<Record<string, string>>({});
@@ -2645,13 +2643,6 @@ export function PipesSection() {
           connections={connectionModal.connections}
         />
       )}
-
-      <UpgradeDialog
-        open={showUpgrade}
-        onOpenChange={setShowUpgrade}
-        reason="daily_limit"
-        source="pipes"
-      />
 
       <PublishDialog
         open={!!publishPipeName}
