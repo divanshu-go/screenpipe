@@ -1200,6 +1200,12 @@ useAllMonitors: boolean;
  */
 videoQuality: string; 
 /**
+ * Maximum width for stored snapshots. Images wider than this are downscaled
+ * (preserving aspect ratio) before JPEG encoding. 0 = no limit (store at
+ * native resolution). Default: 1920.
+ */
+maxSnapshotWidth?: number; 
+/**
  * Window titles to exclude from capture.
  */
 ignoredWindows: string[]; 
@@ -1331,6 +1337,10 @@ scheduleRules?: ScheduleRule[] }) &
  * Reduces CPU usage significantly while still recording video.
  */
 disableOcr?: boolean; showShortcutOverlay?: boolean; 
+/**
+ * Overlay size: "small" (default), "medium" (1.5x), "large" (2x)
+ */
+shortcutOverlaySize?: string; 
 /**
  * Unique device ID for AI usage tracking (generated on first launch)
  */
