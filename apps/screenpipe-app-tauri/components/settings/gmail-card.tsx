@@ -6,8 +6,10 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Loader2, LogOut, Mail, Plus } from "lucide-react";
+import { Loader2, Lock, LogOut, Mail, Plus } from "lucide-react";
 import { commands } from "@/lib/utils/tauri";
+import { useSettings } from "@/lib/hooks/use-settings";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import posthog from "posthog-js";
 
 interface GmailAccount {
@@ -16,6 +18,8 @@ interface GmailAccount {
 }
 
 export function GmailCard() {
+  const { settings } = useSettings();
+  const isPro = !!settings.user?.cloud_subscribed;
   const [accounts, setAccounts] = useState<GmailAccount[]>([]);
   const [isConnecting, setIsConnecting] = useState(false);
   const [disconnecting, setDisconnecting] = useState<string | null>(null);
@@ -132,26 +136,51 @@ export function GmailCard() {
             )}
 
             {/* Connect / Add account button */}
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleConnect}
-              disabled={isConnecting}
-              className="text-xs"
-            >
-              {isConnecting ? (
-                <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
-              ) : connected ? (
-                <Plus className="h-3 w-3 mr-1.5" />
-              ) : (
-                <Mail className="h-3 w-3 mr-1.5" />
-              )}
-              {isConnecting
-                ? "Waiting for Google..."
-                : connected
-                ? "Add another account"
-                : "Connect Gmail"}
-            </Button>
+            {!isPro && !connected ? (
+              <div className="flex flex-col gap-1.5">
+                <Button disabled size="sm" className="gap-1.5 h-7 text-xs opacity-60">
+                  <Lock className="h-3 w-3" />pro required
+                </Button>
+                <button
+                  onClick={async () => {
+                    try {
+                      const response = await fetch("https://screenpi.pe/api/subscription/checkout", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ plan: "monthly", origin: "desktop-gmail-gate" }),
+                      });
+                      const data = await response.json();
+                      if (data.url) { await openUrl(data.url); return; }
+                    } catch {}
+                    await openUrl("https://screenpi.pe");
+                  }}
+                  className="text-[10px] text-muted-foreground hover:text-foreground underline"
+                >
+                  upgrade to pro to connect
+                </button>
+              </div>
+            ) : (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleConnect}
+                disabled={isConnecting}
+                className="text-xs"
+              >
+                {isConnecting ? (
+                  <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+                ) : connected ? (
+                  <Plus className="h-3 w-3 mr-1.5" />
+                ) : (
+                  <Mail className="h-3 w-3 mr-1.5" />
+                )}
+                {isConnecting
+                  ? "Waiting for Google..."
+                  : connected
+                  ? "Add another account"
+                  : "Connect Gmail"}
+              </Button>
+            )}
           </div>
         </div>
 

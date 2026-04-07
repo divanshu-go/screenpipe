@@ -16,34 +16,34 @@ const PATHS = [
   {
     id: "memory",
     icon: Brain,
-    title: "i forget everything",
-    subtitle: "daily summaries · search history · never miss a follow-up",
-    pipes: ["obsidian-daily-summary", "follow-up-reminders"],
+    title: "I forget everything",
+    subtitle: "Daily summaries · search history · never miss a follow-up",
+    pipes: ["obsidian-daily-summary", "todo-list-assistant"],
     notification: {
-      title: "🧠 memory enabled",
-      body: "screenpipe will now:\n\n- summarize your day automatically\n- remind you about things you forgot\n\nfirst summary tonight.",
+      title: "🧠 Memory enabled",
+      body: "Screenpipe will now:\n\n- Summarize your day automatically\n- Remind you about things you forgot\n\nFirst summary tonight.",
     },
   },
   {
     id: "time",
     icon: Clock,
-    title: "i waste too much time",
-    subtitle: "automatic time tracking · meeting notes · smart reminders",
-    pipes: ["toggl-time-tracker", "follow-up-reminders"],
+    title: "I waste too much time",
+    subtitle: "Automatic time tracking · meeting notes · smart reminders",
+    pipes: ["toggl-time-tracker", "todo-list-assistant"],
     notification: {
-      title: "⏱ time tracking enabled",
-      body: "screenpipe will now:\n\n- track time across every app automatically\n- remind you about follow-ups\n\nfirst report in a few hours.",
+      title: "⏱ Time tracking enabled",
+      body: "Screenpipe will now:\n\n- Track time across every app automatically\n- Remind you about follow-ups\n\nFirst report in a few hours.",
     },
   },
   {
     id: "people",
     icon: Users,
-    title: "i lose track of people",
-    subtitle: "remember every conversation · auto-CRM · relationship insights",
-    pipes: ["personal-crm", "follow-up-reminders"],
+    title: "I lose track of people",
+    subtitle: "Remember every conversation · auto-CRM · relationship insights",
+    pipes: ["personal-crm", "todo-list-assistant"],
     notification: {
-      title: "👥 people tracking enabled",
-      body: "screenpipe will now:\n\n- remember everyone you meet\n- track what you discussed\n- remind you to follow up\n\nfirst update in a few hours.",
+      title: "👥 People tracking enabled",
+      body: "Screenpipe will now:\n\n- Remember everyone you meet\n- Track what you discussed\n- Remind you to follow up\n\nFirst update in a few hours.",
     },
   },
 ] as const;
@@ -135,7 +135,7 @@ export default function PickPipe() {
         } catch {}
       } catch (err) {
         console.error("failed to enable pipes:", err);
-        setError("couldn't enable — try again or skip");
+        setError("Couldn't enable — try again or skip");
         setPhase("choose");
         setSelected(null);
       }
@@ -151,8 +151,8 @@ export default function PickPipe() {
     posthog.capture("onboarding_completed");
 
     try {
-      // still enable follow-up-reminders as default
-      await installAndEnable("follow-up-reminders").catch(() => {});
+      // still enable todo-list-assistant as default
+      await installAndEnable("todo-list-assistant").catch(() => {});
       await completeOnboarding();
     } catch {}
     try {
@@ -192,7 +192,7 @@ export default function PickPipe() {
         >
           <Loader className="w-5 h-5 animate-spin text-muted-foreground" />
           <p className="font-mono text-sm text-muted-foreground">
-            setting things up...
+            Setting things up...
           </p>
         </motion.div>
       </div>
@@ -209,8 +209,8 @@ export default function PickPipe() {
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.2, duration: 0.5 }}
       >
-        <h2 className="font-mono text-lg font-bold lowercase text-center">
-          what brings you here?
+        <h2 className="font-mono text-lg font-bold text-center">
+          What brings you here?
         </h2>
 
         <div className="flex flex-col gap-3 w-full">
@@ -230,7 +230,7 @@ export default function PickPipe() {
                     <Icon className="w-4 h-4 text-foreground/60 group-hover:text-foreground transition-colors" />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="font-mono text-sm font-semibold lowercase">
+                    <p className="font-mono text-sm font-semibold">
                       {path.title}
                     </p>
                     <p className="font-mono text-[11px] text-muted-foreground mt-0.5">
@@ -265,13 +265,13 @@ export default function PickPipe() {
               onClick={handleSkip}
               className="font-mono text-[10px] text-muted-foreground/40 hover:text-muted-foreground transition-colors"
             >
-              just let me explore →
+              Just let me explore →
             </motion.button>
           )}
         </AnimatePresence>
 
         <p className="font-mono text-[9px] text-muted-foreground/30 text-center">
-          you can add more from the pipe store anytime.
+          You can add more from the pipe store anytime.
         </p>
       </motion.div>
     </div>
