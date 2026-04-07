@@ -4,7 +4,7 @@
 
 use crate::{
     native_notification, native_shortcut_reminder,
-    store::{OnboardingStore, SettingsStore},
+    store::OnboardingStore,
     updates::is_enterprise_build,
     window::{RewindWindowId, ShowRewindWindow},
 };
@@ -1023,15 +1023,7 @@ pub async fn show_shortcut_reminder(
 
         if native_shortcut_reminder::is_available() {
             info!("Using native SwiftUI shortcut reminder");
-            let size = SettingsStore::get(&app_handle)
-                .unwrap_or_default()
-                .unwrap_or_default()
-                .shortcut_overlay_size;
-            let json = serde_json::json!({
-                "overlay": &shortcut,
-                "size": &size,
-            }).to_string();
-            if native_shortcut_reminder::show(Some(&json)) {
+            if native_shortcut_reminder::show(Some(&shortcut)) {
                 return Ok(());
             }
             warn!("Native shortcut reminder failed, falling back to webview");
