@@ -629,12 +629,16 @@ impl SettingsStore {
     /// comes from the User auth object, user_name has a fallback chain).
     pub fn to_recording_settings(&self) -> screenpipe_config::RecordingSettings {
         let mut settings = self.recording.clone();
-        // Override user_id from auth user object (not the flat userId field)
+        // Override user_id with the Clerk JWT token from the auth user object.
+        // This token is used as the Bearer credential for screenpipe cloud
+        // (transcription proxy, Pi agent, etc.), not as a database ID.
+        // Fallback to user.id if token is unavailable.
         settings.user_id = self
             .user
-            .id
+            .token
             .as_ref()
-            .filter(|id| !id.is_empty())
+            .filter(|t| !t.is_empty())
+            .or(self.user.id.as_ref().filter(|id| !id.is_empty()))
             .cloned()
             .unwrap_or_default();
         // Fallback chain: userName setting → cloud name → cloud email
