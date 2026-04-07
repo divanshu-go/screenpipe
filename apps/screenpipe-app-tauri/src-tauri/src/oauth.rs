@@ -8,6 +8,7 @@
 //! screenpipe-connect is automatically handled by these commands.
 //! Adding a new OAuth provider requires zero changes here.
 
+use base64::Engine;
 use crate::store::SettingsStore;
 use screenpipe_connect::connections::all_integrations;
 use screenpipe_connect::oauth::{self, OAUTH_REDIRECT_URI, PENDING_OAUTH};
@@ -121,25 +122,35 @@ pub async fn oauth_connect(
         .build()
         .map_err(|e| format!("http client: {}", e))?;
 
-    let token_data = oauth::exchange_code(&client, &integration_id, &code, redirect_uri)
+    let mut token_data = oauth::exchange_code(&client, &integration_id, &code, redirect_uri)
         .await
         .map_err(|e| {
             error!("token exchange failed for {}: {}", integration_id, e);
             format!("token exchange failed: {}", e)
         })?;
 
+    // Extract email from id_token JWT if not already at the root (Google puts it in the JWT)
+    if token_data["email"].is_null() {
+        if let Some(id_token) = token_data["id_token"].as_str() {
+            if let Some(email) = extract_email_from_jwt(id_token) {
+                token_data["email"] = serde_json::Value::String(email);
+            }
+        }
+    }
+
     // Auto-derive instance name from email in token response (for Google)
     let effective_instance = instance.or_else(|| {
         token_data["email"].as_str().map(String::from)
     });
 
-    // If this is the first account (no existing instances), store as default (None).
-    // Otherwise store with the instance name.
+    // If no instance was explicitly provided and we couldn't derive one from the
+    // token, always store as the default instance (None) to avoid creating
+    // orphaned "default" named instances that oauthStatus can't find.
     let existing = oauth::list_oauth_instances(&integration_id);
-    let store_instance = if existing.is_empty() {
+    let store_instance = if existing.is_empty() || effective_instance.is_none() {
         None
     } else {
-        effective_instance.as_deref().or(Some("default"))
+        effective_instance.as_deref()
     };
 
     oauth::write_oauth_token_instance(&integration_id, store_instance, &token_data)
@@ -230,4 +241,16 @@ pub async fn oauth_list_instances(integration_id: String) -> Result<Vec<OAuthIns
     }
 
     Ok(result)
+}
+
+/// Extract email from an id_token JWT by decoding the payload (no signature verification).
+fn extract_email_from_jwt(jwt: &str) -> Option<String> {
+    let payload = jwt.split('.').nth(1)?;
+    // JWT uses base64url encoding (no padding)
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(payload))
+        .ok()?;
+    let v: serde_json::Value = serde_json::from_slice(&decoded).ok()?;
+    v["email"].as_str().map(String::from)
 }
