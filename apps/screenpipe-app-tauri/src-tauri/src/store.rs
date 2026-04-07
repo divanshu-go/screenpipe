@@ -201,6 +201,10 @@ pub struct SettingsStore {
     /// Auto-update store-installed pipes that haven't been locally modified.
     #[serde(rename = "autoUpdatePipes", default = "default_true")]
     pub auto_update_pipes: bool,
+    /// Use screenpipe cloud for AI-powered features like suggestions.
+    /// Better quality but sends activity context to the cloud (zero data retention).
+    #[serde(rename = "enhancedAI", default)]
+    pub enhanced_ai: bool,
     /// Timeline overlay mode: "fullscreen" (floating panel above everything) or
     /// "window" (normal resizable window with title bar).
     #[serde(rename = "overlayMode", default = "default_overlay_mode")]
@@ -529,6 +533,7 @@ Rules:
             device_id: uuid::Uuid::new_v4().to_string(),
             auto_update: true,
             auto_update_pipes: true,
+            enhanced_ai: false,
             #[cfg(target_os = "macos")]
             overlay_mode: "fullscreen".to_string(),
             #[cfg(not(target_os = "macos"))]

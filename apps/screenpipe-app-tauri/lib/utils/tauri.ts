@@ -1353,7 +1353,9 @@ autoUpdate?: boolean;
 /**
  * Auto-update store-installed pipes that haven't been locally modified.
  */
-autoUpdatePipes?: boolean; 
+autoUpdatePipes?: boolean;
+/** Use screenpipe cloud for AI features like suggestions (zero data retention). */
+enhancedAI?: boolean;
 /**
  * Timeline overlay mode: "fullscreen" (floating panel above everything) or
  * "window" (normal resizable window with title bar).
