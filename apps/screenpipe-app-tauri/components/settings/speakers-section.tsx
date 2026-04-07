@@ -885,7 +885,18 @@ export function SpeakersSection() {
         method: "POST",
       });
       if (res.ok) {
-        toast({ title: "duplicate speakers merged", description: "similar unnamed speakers have been consolidated" });
+        const data = await res.json() as { merges_count: number; merges: { kept_id: number; removed_id: number; kept_chunks: number; removed_chunks: number }[] };
+        if (data.merges_count === 0) {
+          toast({ title: "no duplicates found", description: "all unnamed speakers look distinct" });
+        } else {
+          const summary = data.merges
+            .map(m => `Speaker #${m.removed_id} (${m.removed_chunks} clips) → Speaker #${m.kept_id} (${m.kept_chunks} clips)`)
+            .join("\n");
+          toast({
+            title: `merged ${data.merges_count} duplicate${data.merges_count !== 1 ? "s" : ""}`,
+            description: summary,
+          });
+        }
         await fetchSpeakers();
       } else {
         toast({ title: "defragment failed", variant: "destructive" });

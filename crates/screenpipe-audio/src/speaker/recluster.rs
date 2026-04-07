@@ -37,19 +37,28 @@ fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
     1.0 - dot / (norm_a * norm_b)
 }
 
+/// A single merge operation: `discard_id` was folded into `keep_id`.
+pub struct MergeResult {
+    pub keep_id: i64,
+    pub discard_id: i64,
+    pub distance: f32,
+    pub keep_count: i64,
+    pub discard_count: i64,
+}
+
 /// Run a de-fragmentation pass over unnamed speakers.
 ///
 /// For every pair of unnamed speakers whose centroids are within `MERGE_DISTANCE_THRESHOLD`,
 /// merge the smaller (fewer transcriptions) into the larger. Named speakers are never touched.
 ///
-/// Safe to call multiple times — converges after one or two passes.
-pub async fn merge_fragmented_unnamed_speakers(db: &Arc<DatabaseManager>) {
+/// Returns the list of merges performed. Safe to call multiple times — converges after one pass.
+pub async fn merge_fragmented_unnamed_speakers(db: &Arc<DatabaseManager>) -> Vec<MergeResult> {
     // (speaker_id, centroid, transcription_count)
     let speakers = match db.get_unnamed_speakers_with_centroids().await {
         Ok(s) => s,
         Err(e) => {
             warn!("recluster: failed to load unnamed speakers: {}", e);
-            return;
+            return vec![];
         }
     };
 
@@ -60,7 +69,7 @@ pub async fn merge_fragmented_unnamed_speakers(db: &Arc<DatabaseManager>) {
 
     if reliable.len() < 2 {
         debug!("recluster: fewer than 2 reliable unnamed speakers, nothing to merge");
-        return;
+        return vec![];
     }
 
     info!(
@@ -69,7 +78,7 @@ pub async fn merge_fragmented_unnamed_speakers(db: &Arc<DatabaseManager>) {
     );
 
     let mut merged: std::collections::HashSet<i64> = std::collections::HashSet::new();
-    let mut merge_count = 0;
+    let mut results: Vec<MergeResult> = Vec::new();
 
     for i in 0..reliable.len() {
         let (id_i, centroid_i, count_i) = reliable[i];
@@ -103,7 +112,13 @@ pub async fn merge_fragmented_unnamed_speakers(db: &Arc<DatabaseManager>) {
             match db.merge_speakers(*keep_id, *discard_id).await {
                 Ok(_) => {
                     merged.insert(*discard_id);
-                    merge_count += 1;
+                    results.push(MergeResult {
+                        keep_id: *keep_id,
+                        discard_id: *discard_id,
+                        distance: dist,
+                        keep_count: *keep_count,
+                        discard_count: *discard_count,
+                    });
                 }
                 Err(e) => {
                     warn!(
@@ -115,12 +130,14 @@ pub async fn merge_fragmented_unnamed_speakers(db: &Arc<DatabaseManager>) {
         }
     }
 
-    if merge_count > 0 {
+    if !results.is_empty() {
         info!(
             "recluster: merged {} fragmented speaker pair(s) into unified identities",
-            merge_count
+            results.len()
         );
     } else {
         debug!("recluster: no fragmented speakers found");
     }
+
+    results
 }

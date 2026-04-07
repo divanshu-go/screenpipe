@@ -385,8 +385,24 @@ fn default_voices_limit() -> u32 {
 pub(crate) async fn defragment_speakers_handler(
     State(state): State<Arc<AppState>>,
 ) -> Result<JsonResponse<Value>, (StatusCode, JsonResponse<Value>)> {
-    merge_fragmented_unnamed_speakers(&state.db).await;
-    Ok(JsonResponse(json!({"success": true, "message": "speaker de-fragmentation complete"})))
+    let merges = merge_fragmented_unnamed_speakers(&state.db).await;
+    let merge_details: Vec<Value> = merges
+        .iter()
+        .map(|m| {
+            json!({
+                "kept_id": m.keep_id,
+                "removed_id": m.discard_id,
+                "distance": m.distance,
+                "kept_chunks": m.keep_count,
+                "removed_chunks": m.discard_count,
+            })
+        })
+        .collect();
+    Ok(JsonResponse(json!({
+        "success": true,
+        "merges_count": merges.len(),
+        "merges": merge_details,
+    })))
 }
 
 #[oasgen]

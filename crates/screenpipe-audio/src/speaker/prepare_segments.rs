@@ -38,7 +38,11 @@ pub async fn prepare_segments(
         filter_music_frames(&mut audio_data);
     }
 
-    if noise_suppression {
+    // RNNoise is a microphone noise suppressor — it's tuned for voice-band
+    // stationary noise (fans, HVAC, keyboards). Applying it to system audio
+    // output (YouTube, Spotify, Zoom speaker) causes audible artifacts and
+    // degrades Whisper accuracy. Only run on input (mic) devices.
+    if noise_suppression && !is_output_device {
         audio_data = denoise_audio(&audio_data);
     }
 
