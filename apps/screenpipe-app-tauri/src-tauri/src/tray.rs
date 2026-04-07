@@ -398,7 +398,7 @@ fn create_dynamic_menu(
         || effective_status == RecordingStatus::Starting
     {
         menu_builder = menu_builder.item(
-            &MenuItemBuilder::with_id("privacy_info", "your data stays local")
+            &MenuItemBuilder::with_id("privacy_info", "Your Data Stays Local")
                 .enabled(false)
                 .build(app)?,
         );
