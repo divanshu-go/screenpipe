@@ -1337,8 +1337,13 @@ impl PipeManager {
                     let locally_modified = config.source_hash.as_ref().map(|expected_hash| {
                         let pipe_path = self.pipes_dir.join(name).join("pipe.md");
                         if let Ok(content) = std::fs::read_to_string(&pipe_path) {
-                            let actual_hash = simple_hash(&content);
-                            actual_hash != *expected_hash
+                            // Hash only the body (prompt) so config changes (schedule,
+                            // preset, etc.) don't trigger locally_modified.
+                            if let Ok((_, file_body)) = parse_frontmatter(&content) {
+                                simple_hash(&file_body) != *expected_hash
+                            } else {
+                                simple_hash(&content) != *expected_hash
+                            }
                         } else {
                             false
                         }
@@ -1398,8 +1403,13 @@ impl PipeManager {
                 let locally_modified = config.source_hash.as_ref().map(|expected_hash| {
                     let pipe_path = self.pipes_dir.join(name).join("pipe.md");
                     if let Ok(content) = std::fs::read_to_string(&pipe_path) {
-                        let actual_hash = simple_hash(&content);
-                        actual_hash != *expected_hash
+                        // Hash only the body (prompt) so config changes don't
+                        // trigger locally_modified.
+                        if let Ok((_, file_body)) = parse_frontmatter(&content) {
+                            simple_hash(&file_body) != *expected_hash
+                        } else {
+                            simple_hash(&content) != *expected_hash
+                        }
                     } else {
                         false
                     }
@@ -2652,9 +2662,8 @@ impl PipeManager {
         config.source_slug = Some(slug.to_string());
         config.installed_version = Some(version);
 
-        // Hash the source_md content
-        let source_hash = simple_hash(source_md);
-        config.source_hash = Some(source_hash);
+        // Hash only the body (prompt) so config changes don't trigger locally_modified
+        config.source_hash = Some(simple_hash(&body));
 
         // Derive name from slug
         let name = slug.to_string();
@@ -2686,21 +2695,31 @@ impl PipeManager {
 
         let (mut config, body) = parse_frontmatter(source_md)?;
 
-        // Preserve user's enabled state and schedule from current config
+        // Preserve user's enabled state, schedule, preset, and connections from current config
         let current_path = dest_dir.join("pipe.md");
         if let Ok(current_content) = std::fs::read_to_string(&current_path) {
+            // Backup existing pipe.md before overwriting
+            let backup_path = dest_dir.join("pipe.md.bak");
+            if let Err(e) = std::fs::copy(&current_path, &backup_path) {
+                warn!("failed to backup pipe.md for '{}': {}", name, e);
+            }
+
             if let Ok((current_config, _)) = parse_frontmatter(&current_content) {
                 config.enabled = current_config.enabled;
                 config.preset = current_config.preset.clone();
+                config.schedule = current_config.schedule.clone();
+                config.connections = current_config.connections.clone();
             }
         }
 
         config.source_slug = Some(slug.to_string());
         config.installed_version = Some(version);
-        config.source_hash = Some(simple_hash(source_md));
+        // Hash only the prompt body so config changes (schedule, preset, etc.)
+        // don't trigger locally_modified — only actual prompt edits do.
+        config.source_hash = Some(simple_hash(&body));
 
         let content = serialize_pipe(&config, &body)?;
-        std::fs::write(current_path, &content)?;
+        std::fs::write(&current_path, &content)?;
 
         self.load_pipes().await?;
         info!("updated pipe '{}' to store v{}", name, version);

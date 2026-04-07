@@ -195,6 +195,9 @@ pub struct SettingsStore {
     /// When disabled, users must click "update now" in the tray menu.
     #[serde(rename = "autoUpdate", default = "default_true")]
     pub auto_update: bool,
+    /// Auto-update store-installed pipes that haven't been locally modified.
+    #[serde(rename = "autoUpdatePipes", default = "default_true")]
+    pub auto_update_pipes: bool,
     /// Timeline overlay mode: "fullscreen" (floating panel above everything) or
     /// "window" (normal resizable window with title bar).
     #[serde(rename = "overlayMode", default = "default_overlay_mode")]
@@ -517,6 +520,7 @@ Rules:
             show_shortcut_overlay: true,
             device_id: uuid::Uuid::new_v4().to_string(),
             auto_update: true,
+            auto_update_pipes: true,
             #[cfg(target_os = "macos")]
             overlay_mode: "fullscreen".to_string(),
             #[cfg(not(target_os = "macos"))]

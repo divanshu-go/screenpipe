@@ -1320,7 +1320,9 @@ deviceId?: string;
  * Auto-install updates and restart when a new version is available.
  * When disabled, users must click "update now" in the tray menu.
  */
-autoUpdate?: boolean; 
+autoUpdate?: boolean;
+/** Auto-update store-installed pipes that haven't been locally modified. */
+autoUpdatePipes?: boolean;
 /**
  * Timeline overlay mode: "fullscreen" (floating panel above everything) or
  * "window" (normal resizable window with title bar).

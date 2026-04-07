@@ -676,6 +676,10 @@ impl SCServer {
                     axum::routing::get(crate::routes::pipe_store::pipe_store_check_updates),
                 )
                 .route(
+                    "/store/auto-update",
+                    axum::routing::post(crate::routes::pipe_store::pipe_store_auto_update),
+                )
+                .route(
                     "/store/:slug",
                     axum::routing::get(crate::routes::pipe_store::pipe_store_detail)
                         .delete(crate::routes::pipe_store::pipe_store_unpublish),
