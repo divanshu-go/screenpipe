@@ -383,17 +383,8 @@ fn create_dynamic_menu(
         );
     }
 
-    // --- Privacy indicator + Recording status + devices ---
+    // --- Recording status + devices ---
     let effective_status = get_effective_recording_status();
-    if effective_status == RecordingStatus::Recording
-        || effective_status == RecordingStatus::Starting
-    {
-        menu_builder = menu_builder.item(
-            &MenuItemBuilder::with_id("privacy_info", "🔒 your data stays local")
-                .enabled(false)
-                .build(app)?,
-        );
-    }
     let status_text = match effective_status {
         RecordingStatus::Starting => "○ Starting…",
         RecordingStatus::Recording => "● Recording",
@@ -401,8 +392,19 @@ fn create_dynamic_menu(
         RecordingStatus::Error => "○ Error",
     };
     menu_builder = menu_builder
-        .item(&PredefinedMenuItem::separator(app)?)
-        .item(
+        .item(&PredefinedMenuItem::separator(app)?);
+
+    if effective_status == RecordingStatus::Recording
+        || effective_status == RecordingStatus::Starting
+    {
+        menu_builder = menu_builder.item(
+            &MenuItemBuilder::with_id("privacy_info", "your data stays local")
+                .enabled(false)
+                .build(app)?,
+        );
+    }
+
+    menu_builder = menu_builder.item(
             &MenuItemBuilder::with_id("recording_status", status_text)
                 .enabled(false)
                 .build(app)?,
