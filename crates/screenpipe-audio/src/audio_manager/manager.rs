@@ -263,6 +263,32 @@ impl AudioManager {
 
         stop_device_monitor().await?;
 
+        // Stop producers FIRST: abort per-device recording tasks and the OS audio streams.
+        // This must happen before killing the consumer so any audio already queued in the
+        // crossbeam channel (including the final 30s flush) can still be drained.
+        for pair in self.recording_handles.iter() {
+            let handle = pair.value();
+            handle.lock().await.abort();
+        }
+        self.recording_handles.clear();
+        self.device_manager.stop_all_devices().await?;
+
+        // Drain the channel: wait until the pipeline handler has consumed all queued chunks
+        // (or a hard timeout expires). The early persist — file write + DB insert — happens
+        // at the very start of each chunk's processing, before any deferral decision.
+        // A 5s window is enough: the persist itself takes <100ms per chunk.
+        const DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+        const DRAIN_POLL: Duration = Duration::from_millis(100);
+        let drain_start = std::time::Instant::now();
+        while drain_start.elapsed() < DRAIN_TIMEOUT {
+            if self.recording_receiver.is_empty() {
+                break;
+            }
+            tokio::time::sleep(DRAIN_POLL).await;
+        }
+
+        // Now it is safe to kill the consumer — any remaining chunks are already persisted
+        // to disk and the DB, so the background reconciliation sweep will transcribe them.
         let mut recording_receiver_handle = self.recording_receiver_handle.write().await;
         if let Some(handle) = recording_receiver_handle.take() {
             handle.abort();
@@ -273,13 +299,6 @@ impl AudioManager {
             handle.abort();
         }
 
-        for pair in self.recording_handles.iter() {
-            let handle = pair.value();
-            handle.lock().await.abort();
-        }
-
-        self.recording_handles.clear();
-        self.device_manager.stop_all_devices().await?;
         info!("audio manager stopped");
 
         Ok(())
