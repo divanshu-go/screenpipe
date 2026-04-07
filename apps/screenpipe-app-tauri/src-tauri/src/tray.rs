@@ -17,7 +17,7 @@ use std::sync::Mutex;
 use tauri::tray::{TrayIcon, TrayIconBuilder};
 use tauri::Emitter;
 use tauri::{
-    menu::{MenuBuilder, MenuItem, MenuItemBuilder, PredefinedMenuItem},
+    menu::{CheckMenuItemBuilder, MenuBuilder, MenuItem, MenuItemBuilder, PredefinedMenuItem},
     AppHandle, Manager, Wry,
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
@@ -505,17 +505,11 @@ fn create_dynamic_menu(
     if !is_tray_item_hidden("tray_recording_controls") {
         menu_builder = menu_builder.item(&PredefinedMenuItem::separator(app)?);
 
-        let mut start_builder = MenuItemBuilder::with_id("start_recording", "Start recording");
-        if !start_rec_shortcut.is_empty() {
-            start_builder = start_builder.accelerator(&to_accelerator(&start_rec_shortcut));
-        }
-        menu_builder = menu_builder.item(&start_builder.build(app)?);
-
-        let mut stop_builder = MenuItemBuilder::with_id("stop_recording", "Stop recording");
-        if !stop_rec_shortcut.is_empty() {
-            stop_builder = stop_builder.accelerator(&to_accelerator(&stop_rec_shortcut));
-        }
-        menu_builder = menu_builder.item(&stop_builder.build(app)?);
+        let is_recording = effective_status == RecordingStatus::Recording;
+        let toggle = CheckMenuItemBuilder::with_id("toggle_recording", "Recording")
+            .checked(is_recording)
+            .build(app)?;
+        menu_builder = menu_builder.item(&toggle);
     }
 
     // TODO: vault lock tray item disabled — CLI-only for now
@@ -622,26 +616,17 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
                 let _ = app.emit("tray-show-chat", ());
             });
         }
-        "start_recording" => {
-            set_optimistic_status(RecordingStatus::Starting);
-            let app = app_handle.clone();
-            // Spawn async so the menu handler returns immediately (no blocking)
-            tauri::async_runtime::spawn(async move {
-                let _ = app.emit("shortcut-start-recording", ());
-            });
-            // Rebuild tray on main thread with optimistic status
-            let app2 = app_handle.clone();
-            let _ = app_handle.run_on_main_thread(move || {
-                if let Err(e) = force_tray_rebuild(&app2) {
-                    error!("tray rebuild failed: {}", e);
-                }
-            });
-        }
-        "stop_recording" => {
-            set_optimistic_status(RecordingStatus::Stopped);
+        "start_recording" | "stop_recording" | "toggle_recording" => {
+            let is_recording = get_recording_status() == RecordingStatus::Recording;
+            let (optimistic, event) = if is_recording {
+                (RecordingStatus::Stopped, "shortcut-stop-recording")
+            } else {
+                (RecordingStatus::Starting, "shortcut-start-recording")
+            };
+            set_optimistic_status(optimistic);
             let app = app_handle.clone();
             tauri::async_runtime::spawn(async move {
-                let _ = app.emit("shortcut-stop-recording", ());
+                let _ = app.emit(event, ());
             });
             let app2 = app_handle.clone();
             let _ = app_handle.run_on_main_thread(move || {
