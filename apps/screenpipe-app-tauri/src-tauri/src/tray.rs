@@ -419,6 +419,17 @@ fn create_dynamic_menu(
         }
     }
 
+    // Privacy indicator
+    if effective_status == RecordingStatus::Recording
+        || effective_status == RecordingStatus::Starting
+    {
+        menu_builder = menu_builder.item(
+            &MenuItemBuilder::with_id("privacy_info", "  🔒 data stays on this mac")
+                .enabled(false)
+                .build(app)?,
+        );
+    }
+
     // Show "fix permissions" when recording is in error state
     if effective_status == RecordingStatus::Error {
         let perms = crate::permissions::do_permissions_check(false);
