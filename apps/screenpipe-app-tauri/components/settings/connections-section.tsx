@@ -994,14 +994,26 @@ function OAuthPanel({ integrationId, integrationName }: { integrationId: string;
   const [status, setStatus] = useState<"idle" | "loading" | "connected">("idle");
   const [displayName, setDisplayName] = useState<string | null>(null);
 
-  useEffect(() => {
-    commands.oauthStatus(integrationId).then(res => {
+  const fetchStatus = useCallback(async () => {
+    try {
+      // Try list instances first for richer info
+      const listRes = await commands.oauthListInstances(integrationId);
+      if (listRes.status === "ok" && listRes.data.length > 0) {
+        setStatus("connected");
+        setDisplayName(listRes.data.map(i => i.display_name || i.instance).filter(Boolean).join(", ") || null);
+        return;
+      }
+    } catch { /* fallback below */ }
+    try {
+      const res = await commands.oauthStatus(integrationId);
       if (res.status === "ok" && res.data.connected) {
         setStatus("connected");
         setDisplayName(res.data.display_name ?? null);
       }
-    });
+    } catch { /* ignore */ }
   }, [integrationId]);
+
+  useEffect(() => { fetchStatus(); }, [fetchStatus]);
 
   const handleConnect = async () => {
     setStatus("loading");
@@ -1009,7 +1021,7 @@ function OAuthPanel({ integrationId, integrationName }: { integrationId: string;
       const res = await commands.oauthConnect(integrationId);
       if (res.status === "ok" && res.data.connected) {
         setStatus("connected");
-        setDisplayName(res.data.display_name ?? null);
+        await fetchStatus();
       } else {
         setStatus("idle");
       }
@@ -1032,7 +1044,7 @@ function OAuthPanel({ integrationId, integrationName }: { integrationId: string;
       <div className="flex flex-wrap gap-2">
         {status === "connected" ? (
           <Button onClick={handleDisconnect} variant="outline" size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
-            <LogOut className="h-3 w-3" />disconnect
+            <LogOut className="h-3 w-3" />disconnect{displayName ? ` (${displayName})` : ""}
           </Button>
         ) : !isPro ? (
           <div className="flex flex-col gap-1.5">

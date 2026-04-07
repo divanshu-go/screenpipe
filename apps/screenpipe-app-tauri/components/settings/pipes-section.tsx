@@ -1528,10 +1528,12 @@ export function PipesSection() {
               <>
                 <p>no pipes installed</p>
                 <p className="text-sm mt-2">
-                  create a pipe at{" "}
-                  <code className="text-xs bg-muted px-1 py-0.5 rounded">
-                    ~/.screenpipe/pipes/my-pipe/pipe.md
-                  </code>
+                  <a
+                    href="?section=pipes&tab=discover"
+                    className="underline text-foreground hover:text-foreground/80 transition-colors"
+                  >
+                    browse the store
+                  </a>
                 </p>
               </>
             ) : pipeFilter === "team" ? (
