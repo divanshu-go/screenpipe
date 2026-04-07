@@ -295,7 +295,7 @@ pub struct RecordArgs {
     pub filter_music: bool,
 
     /// Apply RNNoise neural noise suppression before transcription (fans, HVAC, keyboards)
-    #[arg(long, default_value_t = false)]
+    #[arg(long, default_value_t = true)]
     pub noise_suppression: bool,
 
     /// Disable vision recording

@@ -100,7 +100,7 @@ impl Default for AudioManagerOptions {
             deepgram_url,
             use_pii_removal: false,
             filter_music: false,
-            noise_suppression: false,
+            noise_suppression: true,
             use_system_default_audio: true,
             transcription_mode: TranscriptionMode::default(),
             meeting_detector: None,

@@ -1720,7 +1720,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 </div>
                 <Switch
                   id="noiseSuppression"
-                  checked={settings.noiseSuppression ?? false}
+                  checked={settings.noiseSuppression ?? true}
                   onCheckedChange={(checked) =>
                     handleSettingsChange({ noiseSuppression: checked }, true)
                   }
