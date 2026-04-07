@@ -3741,12 +3741,14 @@ pub fn parse_schedule(schedule: &str) -> Option<ParsedSchedule> {
 }
 
 /// Parse human-readable schedules like "every day at 9am", "every monday at 6pm".
+/// Times are interpreted as local time and converted to UTC for the cron expression,
+/// since the cron library evaluates against UTC.
 fn parse_human_schedule(s: &str) -> Option<CronSchedule> {
     let s = s.to_lowercase();
     let s = s.strip_prefix("every").unwrap_or(&s).trim();
 
     // Extract "at Xam/pm" from the end
-    let (prefix, hour) = if let Some(at_pos) = s.find(" at ") {
+    let (prefix, local_hour) = if let Some(at_pos) = s.find(" at ") {
         let time_str = s[at_pos + 4..].trim();
         let h = parse_time_str(time_str)?;
         (s[..at_pos].trim(), h)
@@ -3754,21 +3756,33 @@ fn parse_human_schedule(s: &str) -> Option<CronSchedule> {
         return None;
     };
 
+    // Convert local hour to UTC using current system timezone offset
+    let utc_hour = local_hour_to_utc(local_hour);
+
     // "day" → every day at that hour
     // "monday", "tuesday", etc. → specific weekday
     let cron_str = match prefix {
-        "day" => format!("0 0 {} * * * *", hour),
-        "monday" | "mon" => format!("0 0 {} * * 1 *", hour),
-        "tuesday" | "tue" => format!("0 0 {} * * 2 *", hour),
-        "wednesday" | "wed" => format!("0 0 {} * * 3 *", hour),
-        "thursday" | "thu" => format!("0 0 {} * * 4 *", hour),
-        "friday" | "fri" => format!("0 0 {} * * 5 *", hour),
-        "saturday" | "sat" => format!("0 0 {} * * 6 *", hour),
-        "sunday" | "sun" => format!("0 0 {} * * 0 *", hour),
+        "day" => format!("0 0 {} * * * *", utc_hour),
+        "monday" | "mon" => format!("0 0 {} * * 1 *", utc_hour),
+        "tuesday" | "tue" => format!("0 0 {} * * 2 *", utc_hour),
+        "wednesday" | "wed" => format!("0 0 {} * * 3 *", utc_hour),
+        "thursday" | "thu" => format!("0 0 {} * * 4 *", utc_hour),
+        "friday" | "fri" => format!("0 0 {} * * 5 *", utc_hour),
+        "saturday" | "sat" => format!("0 0 {} * * 6 *", utc_hour),
+        "sunday" | "sun" => format!("0 0 {} * * 0 *", utc_hour),
         _ => return None,
     };
 
     CronSchedule::from_str(&cron_str).ok()
+}
+
+/// Convert a local hour (0-23) to UTC hour using the system's current timezone offset.
+fn local_hour_to_utc(local_hour: u32) -> u32 {
+    let now = chrono::Local::now();
+    let offset_secs = now.offset().local_minus_utc(); // positive = east of UTC
+    let offset_hours = offset_secs / 3600;
+    // local_hour - offset = utc_hour, wrapped to 0-23
+    ((local_hour as i32 - offset_hours).rem_euclid(24)) as u32
 }
 
 /// Parse "9am", "12pm", "6pm", "14", "9" into a 24-hour number.
@@ -4360,6 +4374,15 @@ mod tests {
         assert_eq!(parse_time_str("6pm"), Some(18));
         assert_eq!(parse_time_str("1pm"), Some(13));
         assert_eq!(parse_time_str("14"), Some(14));
+    }
+
+    #[test]
+    fn test_local_hour_to_utc() {
+        // Just verify it returns valid hours and doesn't panic
+        for h in 0..24 {
+            let utc = local_hour_to_utc(h);
+            assert!(utc < 24, "local_hour_to_utc({}) returned {}", h, utc);
+        }
     }
 
     #[test]
