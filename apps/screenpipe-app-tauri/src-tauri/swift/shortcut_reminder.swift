@@ -226,7 +226,7 @@ struct ShortcutReminderView: View {
             }
         }
         .padding(.horizontal, 5)
-        .frame(height: kCollapsedH)
+        .frame(height: kBaseCollapsedH)
         .background(Capsule().fill(Color.black.opacity(0.75)))
         .overlay(Capsule().stroke(.white.opacity(0.15), lineWidth: 0.5))
     }
@@ -269,7 +269,7 @@ struct ShortcutReminderView: View {
                 onAction("close")
             }
         }
-        .frame(height: kExpandedH)
+        .frame(height: kBaseExpandedH)
         .background(Capsule().fill(Color.black.opacity(0.8)))
         .overlay(Capsule().stroke(.white.opacity(0.15), lineWidth: 0.5))
         .clipShape(Capsule()) // clip hover highlights to capsule shape
