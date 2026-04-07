@@ -506,7 +506,8 @@ fn create_dynamic_menu(
         menu_builder = menu_builder.item(&PredefinedMenuItem::separator(app)?);
 
         let is_recording = effective_status == RecordingStatus::Recording;
-        let toggle = CheckMenuItemBuilder::with_id("toggle_recording", "Recording")
+        let label = if is_recording { "Recording" } else { "Record" };
+        let toggle = CheckMenuItemBuilder::with_id("toggle_recording", label)
             .checked(is_recording)
             .build(app)?;
         menu_builder = menu_builder.item(&toggle);
