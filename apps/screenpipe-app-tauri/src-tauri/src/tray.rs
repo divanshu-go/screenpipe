@@ -383,8 +383,17 @@ fn create_dynamic_menu(
         );
     }
 
-    // --- Recording status + devices ---
+    // --- Privacy indicator + Recording status + devices ---
     let effective_status = get_effective_recording_status();
+    if effective_status == RecordingStatus::Recording
+        || effective_status == RecordingStatus::Starting
+    {
+        menu_builder = menu_builder.item(
+            &MenuItemBuilder::with_id("privacy_info", "🔒 data stays on this mac")
+                .enabled(false)
+                .build(app)?,
+        );
+    }
     let status_text = match effective_status {
         RecordingStatus::Starting => "○ Starting…",
         RecordingStatus::Recording => "● Recording",
@@ -417,17 +426,6 @@ fn create_dynamic_menu(
                     .build(app)?,
             );
         }
-    }
-
-    // Privacy indicator
-    if effective_status == RecordingStatus::Recording
-        || effective_status == RecordingStatus::Starting
-    {
-        menu_builder = menu_builder.item(
-            &MenuItemBuilder::with_id("privacy_info", "  🔒 data stays on this mac")
-                .enabled(false)
-                .build(app)?,
-        );
     }
 
     // Show "fix permissions" when recording is in error state
