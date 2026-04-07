@@ -271,6 +271,8 @@ export function DisplaySection() {
                           handleSettingsChange({ shortcutOverlaySize: option.value });
                           try {
                             await invoke("hide_shortcut_reminder");
+                            // Wait for store.bin to flush to disk before re-showing
+                            await new Promise(r => setTimeout(r, 500));
                             await invoke("show_shortcut_reminder", { shortcut: settings.showScreenpipeShortcut });
                           } catch {}
                         }}
