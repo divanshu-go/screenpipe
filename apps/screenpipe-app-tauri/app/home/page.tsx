@@ -291,7 +291,7 @@ function SettingsPageContent() {
 
   // Settings modal state
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
-  const [modalSection, setModalSection] = useState<SettingsModalSection>("general");
+  const [modalSection, setModalSection] = useState<SettingsModalSection>("display");
 
   // Open modal when URL points to a modal section
   useEffect(() => {

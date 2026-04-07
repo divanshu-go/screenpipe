@@ -896,6 +896,9 @@ function WhatsAppPanel() {
       <p className="text-xs text-muted-foreground">
         Connect your personal WhatsApp by scanning a QR code, just like WhatsApp Web. Requires <a href="https://nodejs.org" target="_blank" rel="noopener noreferrer" className="underline">Node.js</a> installed.
       </p>
+      <p className="text-xs text-destructive">
+        ⚠️ WhatsApp may ban accounts using unofficial integrations. Use at your own risk.
+      </p>
       {status === "idle" && (
         <Button onClick={handlePair} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
           pair with QR code

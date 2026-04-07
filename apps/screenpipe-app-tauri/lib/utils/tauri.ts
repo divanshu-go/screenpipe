@@ -812,10 +812,11 @@ async chatgptOauthModels() : Promise<Result<string[], string>> {
 /**
  * Start the OAuth flow for any integration that has `oauth_config()` set.
  * `integration_id` must match the integration's `def().id`.
+ * `instance` is an optional name for multi-account support (e.g. email address).
  */
-async oauthConnect(integrationId: string, instance?: string | null) : Promise<Result<OAuthStatus, string>> {
+async oauthConnect(integrationId: string, instance: string | null) : Promise<Result<OAuthStatus, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("oauth_connect", { integrationId, instance: instance ?? null }) };
+    return { status: "ok", data: await TAURI_INVOKE("oauth_connect", { integrationId, instance }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -824,20 +825,20 @@ async oauthConnect(integrationId: string, instance?: string | null) : Promise<Re
 /**
  * Check whether a valid (non-expired) OAuth token exists for the given integration.
  */
-async oauthStatus(integrationId: string, instance?: string | null) : Promise<Result<OAuthStatus, string>> {
+async oauthStatus(integrationId: string, instance: string | null) : Promise<Result<OAuthStatus, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("oauth_status", { integrationId, instance: instance ?? null }) };
+    return { status: "ok", data: await TAURI_INVOKE("oauth_status", { integrationId, instance }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
 },
 /**
- * Remove the stored OAuth token for the given integration.
+ * Remove the stored OAuth token for the given integration instance.
  */
-async oauthDisconnect(integrationId: string, instance?: string | null) : Promise<Result<boolean, string>> {
+async oauthDisconnect(integrationId: string, instance: string | null) : Promise<Result<boolean, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("oauth_disconnect", { integrationId, instance: instance ?? null }) };
+    return { status: "ok", data: await TAURI_INVOKE("oauth_disconnect", { integrationId, instance }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1215,9 +1216,15 @@ ignoredUrls?: string[];
  */
 ignoreIncognitoWindows: boolean; 
 /**
- * Pause all screen capture when a DRM streaming app (Netflix, etc.) is focused.
+ * Experimental: pause screen capture when a DRM streaming app or site is focused.
+ * Off by default; engine-only pause (no full app shutdown).
  */
 pauseOnDrmContent?: boolean; 
+/**
+ * Automatically append text typed during a meeting to the meeting's note
+ * when the meeting ends. Groups typed text by app/window context.
+ */
+appendTypedTextToMeetingNotes?: boolean; 
 /**
  * Languages for transcription (ISO 639-1 codes).
  */
@@ -1332,9 +1339,11 @@ deviceId?: string;
  * Auto-install updates and restart when a new version is available.
  * When disabled, users must click "update now" in the tray menu.
  */
-autoUpdate?: boolean;
-/** Auto-update store-installed pipes that haven't been locally modified. */
-autoUpdatePipes?: boolean;
+autoUpdate?: boolean; 
+/**
+ * Auto-update store-installed pipes that haven't been locally modified.
+ */
+autoUpdatePipes?: boolean; 
 /**
  * Timeline overlay mode: "fullscreen" (floating panel above everything) or
  * "window" (normal resizable window with title bar).
