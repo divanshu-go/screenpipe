@@ -386,7 +386,6 @@ function RuleEditor({ rule, onUpdate, onRemove }: RuleEditorProps) {
         type="time"
         value={startInput}
         onChange={(e) => {
-          setStartInput(e.target.value);
           const validated = validateTimeInput(e.target.value);
           if (validated) onUpdate({ startTime: validated });
         }}
@@ -399,7 +398,6 @@ function RuleEditor({ rule, onUpdate, onRemove }: RuleEditorProps) {
         type="time"
         value={endInput}
         onChange={(e) => {
-          setEndInput(e.target.value);
           const validated = validateTimeInput(e.target.value);
           if (validated) onUpdate({ endTime: validated });
         }}
