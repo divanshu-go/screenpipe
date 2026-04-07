@@ -43,12 +43,18 @@ static OPTIMISTIC_STATUS: Lazy<Mutex<Option<(RecordingStatus, std::time::Instant
 
 fn set_optimistic_status(status: RecordingStatus) {
     let mut opt = OPTIMISTIC_STATUS.lock().unwrap_or_else(|e| e.into_inner());
-    *opt = Some((status, std::time::Instant::now() + std::time::Duration::from_secs(15)));
+    *opt = Some((
+        status,
+        std::time::Instant::now() + std::time::Duration::from_secs(15),
+    ));
 }
 
 /// Immediately rebuild the tray menu (called from main thread after optimistic status set).
 fn force_tray_rebuild(app: &AppHandle) -> Result<()> {
-    let update_item = UPDATE_MENU_ITEM.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let update_item = UPDATE_MENU_ITEM
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
     let state = {
         let mut last = LAST_MENU_STATE.lock().unwrap_or_else(|e| e.into_inner());
         // Reset to force rebuild
@@ -391,8 +397,7 @@ fn create_dynamic_menu(
         RecordingStatus::Stopped => "○ Stopped",
         RecordingStatus::Error => "○ Error",
     };
-    menu_builder = menu_builder
-        .item(&PredefinedMenuItem::separator(app)?);
+    menu_builder = menu_builder.item(&PredefinedMenuItem::separator(app)?);
 
     if effective_status == RecordingStatus::Recording
         || effective_status == RecordingStatus::Starting
@@ -405,10 +410,10 @@ fn create_dynamic_menu(
     }
 
     menu_builder = menu_builder.item(
-            &MenuItemBuilder::with_id("recording_status", status_text)
-                .enabled(false)
-                .build(app)?,
-        );
+        &MenuItemBuilder::with_id("recording_status", status_text)
+            .enabled(false)
+            .build(app)?,
+    );
 
     if effective_status == RecordingStatus::Recording
         || effective_status == RecordingStatus::Starting
@@ -531,10 +536,10 @@ fn create_dynamic_menu(
         );
     }
     menu_builder = menu_builder.item(
-            &MenuItemBuilder::with_id("quit", "Quit screenpipe")
-                .accelerator("CmdOrCtrl+Q")
-                .build(app)?,
-        );
+        &MenuItemBuilder::with_id("quit", "Quit screenpipe")
+            .accelerator("CmdOrCtrl+Q")
+            .build(app)?,
+    );
 
     menu_builder.build().map_err(Into::into)
 }

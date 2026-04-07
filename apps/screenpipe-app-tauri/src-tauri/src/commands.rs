@@ -122,7 +122,10 @@ pub fn get_enterprise_license_key() -> Option<String> {
     // Fallback: ~/.screenpipe/enterprise.json (manually entered by employee)
     let user_path = screenpipe_core::paths::default_screenpipe_data_dir().join("enterprise.json");
     if user_path.exists() {
-        info!("enterprise: checking user config at {}", user_path.display());
+        info!(
+            "enterprise: checking user config at {}",
+            user_path.display()
+        );
         return read_enterprise_key_from_path(&user_path);
     }
 
@@ -150,7 +153,10 @@ fn read_enterprise_key_from_exe_dir() -> Option<String> {
     };
 
     if !config_path.exists() {
-        info!("enterprise: no enterprise.json at {}", config_path.display());
+        info!(
+            "enterprise: no enterprise.json at {}",
+            config_path.display()
+        );
         return None;
     }
 
@@ -180,7 +186,10 @@ fn read_enterprise_key_from_path(path: &std::path::Path) -> Option<String> {
         .map(|s| s.to_string());
 
     match &key {
-        Some(k) => info!("enterprise: license key loaded ({}...)", &k[..k.len().min(8)]),
+        Some(k) => info!(
+            "enterprise: license key loaded ({}...)",
+            &k[..k.len().min(8)]
+        ),
         None => warn!("enterprise: enterprise.json missing 'license_key' field"),
     }
 
