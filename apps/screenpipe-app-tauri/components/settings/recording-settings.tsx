@@ -1657,9 +1657,9 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   <div>
                     <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
                       Full-chunk transcription
-                      <HelpTooltip text="When on (recommended), each capture chunk is transcribed as a whole. When off, legacy mode splits audio by speaker segmentation before STT, which can cut words at segment boundaries." />
+                      <HelpTooltip text="Each capture chunk is transcribed as a whole before speaker diarization. When off, legacy mode splits audio by speaker segmentation before STT, which can cut words at segment boundaries." />
                     </h3>
-                    <p className="text-xs text-muted-foreground">Best accuracy — avoids mid-word cuts from segmentation</p>
+                    <p className="text-xs text-muted-foreground">Transcribes full audio before splitting by speaker</p>
                   </div>
                 </div>
                 <Switch
@@ -1713,9 +1713,9 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   <div>
                     <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
                       Noise suppression
-                      <HelpTooltip text="Apply RNNoise neural noise suppression before transcription. Reduces fan, HVAC, and keyboard background noise. Adds ~50ms processing per 30s chunk." />
+                      <HelpTooltip text="Filters out background noise (fans, HVAC, keyboard clicks) from your microphone before transcription. Does not affect system audio (music, calls)." />
                     </h3>
-                    <p className="text-xs text-muted-foreground">Remove mic background noise from transcriptions</p>
+                    <p className="text-xs text-muted-foreground">Cleans up mic background noise before transcription</p>
                   </div>
                 </div>
                 <Switch
