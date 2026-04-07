@@ -1031,9 +1031,19 @@ pub async fn show_shortcut_reminder(
     }
 
     // Window dimensions: 2-row grid (3 shortcuts + activity viz)
-    // 3 columns: timeline, chat, search. Auto-sized columns shrink to content.
-    let window_width = 160.0;
-    let window_height = 40.0;
+    // Scale based on overlay size setting
+    let scale = match crate::store::SettingsStore::get(&app_handle)
+        .unwrap_or_default()
+        .unwrap_or_default()
+        .shortcut_overlay_size
+        .as_str()
+    {
+        "large" => 2.0_f64,
+        "medium" => 1.5,
+        _ => 1.0,
+    };
+    let window_width = 160.0 * scale;
+    let window_height = 40.0 * scale;
 
     // Position at top center of the screen where the cursor is
     let (x, y) = {
