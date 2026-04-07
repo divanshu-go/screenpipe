@@ -15,7 +15,7 @@ use image::DynamicImage;
 use std::fs;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 use tracing::{debug, error};
 
 /// Writes JPEG snapshots to disk for event-driven capture.

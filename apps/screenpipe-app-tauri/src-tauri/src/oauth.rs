@@ -8,8 +8,8 @@
 //! screenpipe-connect is automatically handled by these commands.
 //! Adding a new OAuth provider requires zero changes here.
 
-use base64::Engine;
 use crate::store::SettingsStore;
+use base64::Engine;
 use screenpipe_connect::connections::all_integrations;
 use screenpipe_connect::oauth::{self, OAUTH_REDIRECT_URI, PENDING_OAUTH};
 use serde::{Deserialize, Serialize};
@@ -74,8 +74,8 @@ pub async fn oauth_connect(
 
     let redirect_uri = config.redirect_uri_override.unwrap_or(OAUTH_REDIRECT_URI);
 
-    let mut auth_url = reqwest::Url::parse(config.auth_url)
-        .map_err(|e| format!("bad auth_url: {}", e))?;
+    let mut auth_url =
+        reqwest::Url::parse(config.auth_url).map_err(|e| format!("bad auth_url: {}", e))?;
     {
         let mut pairs = auth_url.query_pairs_mut();
         pairs
@@ -139,9 +139,7 @@ pub async fn oauth_connect(
     }
 
     // Auto-derive instance name from email in token response (for Google)
-    let effective_instance = instance.or_else(|| {
-        token_data["email"].as_str().map(String::from)
-    });
+    let effective_instance = instance.or_else(|| token_data["email"].as_str().map(String::from));
 
     // If no instance was explicitly provided and we couldn't derive one from the
     // token, always store as the default instance (None) to avoid creating
@@ -162,7 +160,10 @@ pub async fn oauth_connect(
         .or_else(|| token_data["name"].as_str())
         .map(String::from);
 
-    info!("OAuth connected: {} (instance={:?}, display={:?})", integration_id, store_instance, display_name);
+    info!(
+        "OAuth connected: {} (instance={:?}, display={:?})",
+        integration_id, store_instance, display_name
+    );
 
     Ok(OAuthStatus {
         connected: true,
@@ -210,14 +211,19 @@ pub async fn oauth_disconnect(
 ) -> Result<bool, String> {
     oauth::delete_oauth_token_instance(&integration_id, instance.as_deref())
         .map_err(|e| format!("failed to remove token: {}", e))?;
-    info!("OAuth disconnected: {} (instance={:?})", integration_id, instance);
+    info!(
+        "OAuth disconnected: {} (instance={:?})",
+        integration_id, instance
+    );
     Ok(true)
 }
 
 /// List all connected OAuth instances for a given integration.
 #[tauri::command]
 #[specta::specta]
-pub async fn oauth_list_instances(integration_id: String) -> Result<Vec<OAuthInstanceInfo>, String> {
+pub async fn oauth_list_instances(
+    integration_id: String,
+) -> Result<Vec<OAuthInstanceInfo>, String> {
     let instances = oauth::list_oauth_instances(&integration_id);
     let mut result = Vec::new();
 
