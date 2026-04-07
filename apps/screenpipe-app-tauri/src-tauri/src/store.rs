@@ -188,6 +188,9 @@ pub struct SettingsStore {
     pub disable_ocr: bool,
     #[serde(rename = "showShortcutOverlay", default = "default_true")]
     pub show_shortcut_overlay: bool,
+    /// Overlay size: "small" (default), "medium" (1.5x), "large" (2x)
+    #[serde(rename = "shortcutOverlaySize", default = "default_overlay_size")]
+    pub shortcut_overlay_size: String,
     /// Unique device ID for AI usage tracking (generated on first launch)
     #[serde(rename = "deviceId", default = "generate_device_id")]
     pub device_id: String,
@@ -237,6 +240,10 @@ fn generate_device_id() -> String {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_overlay_size() -> String {
+    "small".to_string()
 }
 
 fn default_ui_theme() -> String {
@@ -518,6 +525,7 @@ Rules:
             lock_vault_shortcut: "Super+Shift+L".to_string(),
             disable_ocr: false,
             show_shortcut_overlay: true,
+            shortcut_overlay_size: "small".to_string(),
             device_id: uuid::Uuid::new_v4().to_string(),
             auto_update: true,
             auto_update_pipes: true,

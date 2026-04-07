@@ -350,6 +350,7 @@ class ShortcutReminderController: NSObject {
     private var overlayShortcut = "⌘⌃S"
     private var chatShortcut = "⌘⌃L"
     private var searchShortcut = "⌘⌃K"
+    private var scaleFactor: CGFloat = 1.0
     private var metrics = OverlayMetrics()
     @Published var isExpanded = false
     private var wsTask: URLSessionWebSocketTask?
@@ -360,10 +361,15 @@ class ShortcutReminderController: NSObject {
 
     func show(shortcuts: String?) {
         DispatchQueue.main.async { [self] in
+            let prevScale = scaleFactor
             if let shortcuts = shortcuts {
                 parseShortcuts(shortcuts)
             }
-            if panel == nil {
+            if panel == nil || prevScale != scaleFactor {
+                panel?.orderOut(nil)
+                panel = nil
+                hostingView = nil
+                trackingView = nil
                 createPanel()
             }
             updateContent()
@@ -478,19 +484,28 @@ class ShortcutReminderController: NSObject {
     }
 
     private func parseShortcuts(_ json: String) {
-        // Simple parse — expects {"overlay":"⌘⌃S","chat":"⌘⌃L","search":"⌘⌃K"}
+        // Simple parse — expects {"overlay":"⌘⌃S","chat":"⌘⌃L","search":"⌘⌃K","size":"small"}
         guard let data = json.data(using: .utf8),
               let dict = try? JSONDecoder().decode([String: String].self, from: data) else { return }
         if let s = dict["overlay"] { overlayShortcut = s }
         if let s = dict["chat"] { chatShortcut = s }
         if let s = dict["search"] { searchShortcut = s }
+        if let size = dict["size"] {
+            switch size {
+            case "large": scaleFactor = 2.0
+            case "medium": scaleFactor = 1.5
+            default: scaleFactor = 1.0
+            }
+        }
     }
 
     private func createPanel() {
         // Start with expanded size — the content will be smaller but the panel
         // needs room so the hover area catches mouse events during animation
+        let scaledW = kExpandedW * scaleFactor
+        let scaledH = kExpandedH * scaleFactor
         let p = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: Int(kExpandedW), height: Int(kExpandedH)),
+            contentRect: NSRect(x: 0, y: 0, width: Int(scaledW), height: Int(scaledH)),
             styleMask: [.nonactivatingPanel, .borderless],
             backing: .buffered,
             defer: false
@@ -507,7 +522,7 @@ class ShortcutReminderController: NSObject {
         p.isReleasedWhenClosed = false
         p.sharingType = .readOnly
 
-        let tracking = ReminderTrackingView(frame: NSRect(x: 0, y: 0, width: Int(kExpandedW), height: Int(kExpandedH)))
+        let tracking = ReminderTrackingView(frame: NSRect(x: 0, y: 0, width: Int(scaledW), height: Int(scaledH)))
         tracking.autoresizingMask = [.width, .height]
         p.contentView = tracking
         self.trackingView = tracking
@@ -521,8 +536,10 @@ class ShortcutReminderController: NSObject {
         for screen in NSScreen.screens {
             if NSMouseInRect(mouseLocation, screen.frame, false) {
                 let visible = screen.visibleFrame
-                let x = screen.frame.origin.x + (screen.frame.size.width - kExpandedW) / 2
-                let y = visible.origin.y + visible.size.height - kExpandedH - 4
+                let scaledW = kExpandedW * scaleFactor
+                let scaledH = kExpandedH * scaleFactor
+                let x = screen.frame.origin.x + (screen.frame.size.width - scaledW) / 2
+                let y = visible.origin.y + visible.size.height - scaledH - 4
                 panel.setFrameOrigin(NSPoint(x: x, y: y))
                 break
             }
@@ -532,6 +549,7 @@ class ShortcutReminderController: NSObject {
     private func updateContent() {
         guard let panel = panel else { return }
         let controller = self
+        let scale = scaleFactor
         let view = ShortcutReminderView(
             overlayShortcut: overlayShortcut,
             chatShortcut: chatShortcut,
@@ -545,11 +563,12 @@ class ShortcutReminderController: NSObject {
                 set: { controller.isExpanded = $0 }
             )
         )
+        let scaled = AnyView(view.scaleEffect(scale, anchor: .center))
         let contentView = panel.contentView!
         if let hosting = hostingView {
-            hosting.rootView = AnyView(view)
+            hosting.rootView = scaled
         } else {
-            let hosting = NSHostingView(rootView: AnyView(view))
+            let hosting = NSHostingView(rootView: scaled)
             hosting.frame = contentView.bounds
             hosting.autoresizingMask = [.width, .height]
             contentView.addSubview(hosting)
