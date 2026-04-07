@@ -93,6 +93,11 @@ pub struct RecordingSettings {
     #[serde(rename = "noiseSuppression", default = "default_true")]
     pub noise_suppression: bool,
 
+    /// Filter out Whisper repetition hallucinations (looping phrases on near-silent audio).
+    /// When true (default), transcriptions consisting of repeated phrases are discarded.
+    #[serde(rename = "filterHallucinations", default = "default_true")]
+    pub filter_hallucinations: bool,
+
     /// STT segmentation: "quality" (default) = transcribe full chunk before pyannote slicing;
     /// "fast" = legacy pyannote-defined STT segments when models are available.
     #[serde(
@@ -301,6 +306,7 @@ impl Default for RecordingSettings {
             vad_sensitivity: "high".to_string(),
             filter_music: false,
             noise_suppression: true,
+            filter_hallucinations: true,
             transcription_pipeline_mode: "quality".to_string(),
             batch_max_duration_secs: None,
             vocabulary: vec![],

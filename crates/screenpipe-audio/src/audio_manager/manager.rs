@@ -754,6 +754,7 @@ impl AudioManager {
         let options = self.options.read().await;
         let transcription_engine = options.transcription_engine.clone();
         let use_pii_removal = options.use_pii_removal;
+        let filter_hallucinations = options.filter_hallucinations;
         drop(options); // Release lock before spawning
         let metrics = self.metrics.clone();
         let on_insert = self.on_transcription_insert.clone();
@@ -762,6 +763,7 @@ impl AudioManager {
             transcription_receiver,
             transcription_engine,
             use_pii_removal,
+            filter_hallucinations,
             metrics,
             on_insert,
         )))

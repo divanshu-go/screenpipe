@@ -148,6 +148,8 @@ export type Settings = SettingsStore & {
 	filterMusic?: boolean;
 	/** Apply RNNoise neural noise suppression before transcription (fans, HVAC, keyboards) */
 	noiseSuppression?: boolean;
+	/** Filter out Whisper repetition hallucinations (looping phrases on near-silent audio) */
+	filterHallucinations?: boolean;
 	/** Maximum batch transcription duration in seconds (0 = engine default: Deepgram 5000s, OpenAI 3000s, Whisper 600s) */
 	batchMaxDurationSecs?: number;
 	/** Show periodic notifications suggesting pipe ideas based on user's data (default: true) */

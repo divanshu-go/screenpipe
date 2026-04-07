@@ -59,6 +59,8 @@ pub struct AudioManagerOptions {
     pub filter_music: bool,
     /// Apply RNNoise neural noise suppression before transcription (fans, HVAC, keyboards)
     pub noise_suppression: bool,
+    /// Filter out Whisper repetition hallucinations (looping phrases on near-silent/degraded audio)
+    pub filter_hallucinations: bool,
     /// When true, automatically follow system default audio devices
     /// and switch when the system default changes (e.g., device plug/unplug)
     pub use_system_default_audio: bool,
@@ -101,6 +103,7 @@ impl Default for AudioManagerOptions {
             use_pii_removal: false,
             filter_music: false,
             noise_suppression: true,
+            filter_hallucinations: true,
             use_system_default_audio: true,
             transcription_mode: TranscriptionMode::default(),
             meeting_detector: None,
@@ -192,6 +195,11 @@ impl AudioManagerBuilder {
 
     pub fn noise_suppression(mut self, noise_suppression: bool) -> Self {
         self.options.noise_suppression = noise_suppression;
+        self
+    }
+
+    pub fn filter_hallucinations(mut self, filter_hallucinations: bool) -> Self {
+        self.options.filter_hallucinations = filter_hallucinations;
         self
     }
 

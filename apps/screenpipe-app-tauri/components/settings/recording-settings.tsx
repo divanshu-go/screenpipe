@@ -1730,6 +1730,33 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
           </Card>
         )}
 
+        {/* Hallucination filter */}
+        {!settings.disableAudio && (
+          <Card className="border-border bg-card">
+            <CardContent className="px-3 py-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2.5">
+                  <AlertCircle className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <div>
+                    <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                      Filter hallucinations
+                      <HelpTooltip text="Whisper sometimes loops a phrase repeatedly when audio is near-silent or acoustically degraded. This filter detects and discards those repetition hallucinations before saving to the database." />
+                    </h3>
+                    <p className="text-xs text-muted-foreground">Discard looping Whisper artifacts on silent audio</p>
+                  </div>
+                </div>
+                <Switch
+                  id="filterHallucinations"
+                  checked={settings.filterHallucinations ?? true}
+                  onCheckedChange={(checked) =>
+                    handleSettingsChange({ filterHallucinations: checked }, true)
+                  }
+                />
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* System Default Audio */}
         {!settings.disableAudio && (
         <Card className="border-border bg-card">

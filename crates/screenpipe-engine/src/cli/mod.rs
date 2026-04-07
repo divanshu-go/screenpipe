@@ -298,6 +298,10 @@ pub struct RecordArgs {
     #[arg(long, default_value_t = true)]
     pub noise_suppression: bool,
 
+    /// Filter out Whisper repetition hallucinations (looping phrases on near-silent audio)
+    #[arg(long, default_value_t = true)]
+    pub filter_hallucinations: bool,
+
     /// Disable vision recording
     #[arg(long, default_value_t = false)]
     pub disable_vision: bool,
@@ -404,6 +408,7 @@ impl RecordArgs {
             use_pii_removal: self.use_pii_removal,
             filter_music: self.filter_music,
             noise_suppression: self.noise_suppression,
+            filter_hallucinations: self.filter_hallucinations,
             #[allow(deprecated)]
             enable_input_capture: true,
             #[allow(deprecated)]

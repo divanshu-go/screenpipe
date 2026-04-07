@@ -34,6 +34,8 @@ pub struct RecordingConfig {
     pub filter_music: bool,
     /// Apply RNNoise neural noise suppression (fans, HVAC, keyboards) before transcription
     pub noise_suppression: bool,
+    /// Filter out Whisper repetition hallucinations (looping phrases on near-silent audio)
+    pub filter_hallucinations: bool,
     // enable_input_capture and enable_accessibility removed — always true
 
     // Engines (typed, not strings)
@@ -139,6 +141,7 @@ impl RecordingConfig {
             use_pii_removal: settings.use_pii_removal,
             filter_music: settings.filter_music,
             noise_suppression: settings.noise_suppression,
+            filter_hallucinations: settings.filter_hallucinations,
             // enable_input_capture / enable_accessibility removed — always true
             enable_workflow_events: settings.enable_workflow_events,
             audio_transcription_engine: engine_str
@@ -238,6 +241,7 @@ impl RecordingConfig {
             .use_pii_removal(self.use_pii_removal)
             .filter_music(self.filter_music)
             .noise_suppression(self.noise_suppression)
+            .filter_hallucinations(self.filter_hallucinations)
             .transcription_mode(self.transcription_mode.clone())
             .transcription_pipeline_mode(self.transcription_pipeline_mode)
             .vocabulary(self.vocabulary.clone())

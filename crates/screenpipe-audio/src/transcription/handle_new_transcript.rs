@@ -42,6 +42,7 @@ pub async fn handle_new_transcript(
     transcription_receiver: Arc<crossbeam::channel::Receiver<TranscriptionResult>>,
     transcription_engine: Arc<AudioTranscriptionEngine>,
     use_pii_removal: bool,
+    filter_hallucinations: bool,
     metrics: Arc<AudioPipelineMetrics>,
     on_insert: Option<AudioInsertCallback>,
 ) {
@@ -121,16 +122,18 @@ pub async fn handle_new_transcript(
 
         // Discard Whisper repetition hallucinations (model stuck looping on a phrase
         // when audio is near-silent or acoustically degraded).
-        if let Some(ref t) = current_transcript {
-            if is_repetition_hallucination(t, 3) {
-                metrics.record_transcription_empty();
-                warn!(
-                    "device {} discarding repetition hallucination ({} chars): {:?}",
-                    transcription.input.device,
-                    t.len(),
-                    t.chars().take(120).collect::<String>()
-                );
-                continue;
+        if filter_hallucinations {
+            if let Some(ref t) = current_transcript {
+                if is_repetition_hallucination(t, 3) {
+                    metrics.record_transcription_empty();
+                    warn!(
+                        "device {} discarding repetition hallucination ({} chars): {:?}",
+                        transcription.input.device,
+                        t.len(),
+                        t.chars().take(120).collect::<String>()
+                    );
+                    continue;
+                }
             }
         }
 
