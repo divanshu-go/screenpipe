@@ -229,6 +229,7 @@ export function IntegrationIcon({ icon }: { icon: string }) {
     perplexity: <img src="/images/perplexity.svg" alt="Perplexity" className="w-5 h-5" />,
     n8n: <img src="/images/n8n.png" alt="n8n" className="w-5 h-5 rounded" />,
     make: <img src="/images/make.png" alt="Make" className="w-5 h-5 rounded" />,
+    glean: <img src="/images/glean.svg" alt="Glean" className="w-5 h-5 rounded" />,
     zapier: <img src="/images/zapier.png" alt="Zapier" className="w-5 h-5 rounded" />,
     github: <img src="/images/github.png" alt="GitHub" className="w-5 h-5 rounded" />,
     jira: <img src="/images/jira.png" alt="Jira" className="w-5 h-5 rounded" />,
