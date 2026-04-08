@@ -7,6 +7,11 @@ description: Manage screenpipe pipes (scheduled AI automations) and connections 
 
 Use `bun x screenpipe@latest` to run CLI commands. No separate install needed.
 
+**IMPORTANT**: Always run `bun x` commands from a clean temp directory to avoid node_modules conflicts:
+```bash
+cd "$(mktemp -d)" && bun x screenpipe@latest <command>
+```
+
 ## Shell
 
 - **All platforms** → `bash` (on Windows, the bundled git-portable bash is used automatically)
