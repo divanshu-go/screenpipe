@@ -736,7 +736,7 @@ export function PipesSection() {
     return "all";
   });
   const [searchQuery, setSearchQuery] = useState("");
-  const [pipeTypeFilter, setPipeTypeFilter] = useState<"scheduled" | "manual">("scheduled");
+  const [pipeTypeFilter, setPipeTypeFilter] = useState<"scheduled" | "triggered" | "manual">("scheduled");
   const [availableConnections, setAvailableConnections] = useState<AvailableConnection[]>([]);
   const [connectionModal, setConnectionModal] = useState<{ pipeName: string; connections: string[] } | null>(null);
   const [availableUpdates, setAvailableUpdates] = useState<Record<string, { latest_version: number; installed_version: number; locally_modified: boolean }>>({});
@@ -756,12 +756,13 @@ export function PipesSection() {
       .map((c) => c.key)
   );
 
-  const isManualPipe = (p: PipeStatus) =>
-    !p.config.schedule || p.config.schedule === "manual";
+  const isTriggeredPipe = (p: PipeStatus) =>
+    !!(p.config.trigger?.events?.length) ||
+    !!(p.config.trigger?.custom?.length);
   const isScheduledPipe = (p: PipeStatus) =>
-    (!!p.config.schedule && p.config.schedule !== "manual") ||
-    (!!p.config.trigger?.events?.length) ||
-    (!!p.config.trigger?.custom?.length);
+    !!p.config.schedule && p.config.schedule !== "manual" && !isTriggeredPipe(p);
+  const isManualPipe = (p: PipeStatus) =>
+    (!p.config.schedule || p.config.schedule === "manual") && !isTriggeredPipe(p);
 
   const filteredPipes = pipes
     .filter((p) => {
@@ -775,8 +776,9 @@ export function PipesSection() {
         if (!p.config.name.toLowerCase().includes(q)) return false;
       }
 
-      // Filter by pipe type (scheduled vs manual)
+      // Filter by pipe type (scheduled / triggered / manual)
       if (pipeTypeFilter === "scheduled" && !isScheduledPipe(p)) return false;
+      if (pipeTypeFilter === "triggered" && !isTriggeredPipe(p)) return false;
       if (pipeTypeFilter === "manual" && !isManualPipe(p)) return false;
 
       return true;
@@ -1458,6 +1460,8 @@ export function PipesSection() {
         <p className="text-sm text-muted-foreground">
           {pipeTypeFilter === "scheduled"
             ? "scheduled agents that run on your screen data"
+            : pipeTypeFilter === "triggered"
+            ? "pipes triggered by events like meetings or other pipes"
             : "pipes you trigger manually"}
           {" · "}
           <a
@@ -1472,13 +1476,13 @@ export function PipesSection() {
         </p>
       </div>
 
-      {/* Scheduled / Manual sub-tabs */}
+      {/* Scheduled / Triggered / Manual sub-tabs */}
       <div className="flex items-center gap-4 border-b border-border">
-        {(["scheduled", "manual"] as const).map((tab) => {
+        {(["scheduled", "triggered", "manual"] as const).map((tab) => {
           const count = pipes.filter((p) => {
             if (pipeFilter === "team" && !sharedPipeNames.has(p.config.name)) return false;
             if (pipeFilter === "personal" && sharedPipeNames.has(p.config.name)) return false;
-            return tab === "scheduled" ? isScheduledPipe(p) : isManualPipe(p);
+            return tab === "scheduled" ? isScheduledPipe(p) : tab === "triggered" ? isTriggeredPipe(p) : isManualPipe(p);
           }).length;
           return (
             <button
@@ -1543,6 +1547,17 @@ export function PipesSection() {
           <CardContent className="py-8 text-center text-muted-foreground">
             {searchQuery ? (
               <p>no pipes match your search</p>
+            ) : pipeTypeFilter === "triggered" ? (
+              <>
+                <p>no triggered pipes installed</p>
+                <p className="text-sm mt-2">
+                  triggered pipes use{" "}
+                  <code className="text-xs bg-muted px-1 py-0.5 rounded">
+                    trigger.events
+                  </code>
+                  {" "}in their frontmatter (e.g. meeting_started, meeting_ended)
+                </p>
+              </>
             ) : pipeTypeFilter === "manual" ? (
               <>
                 <p>no manual pipes installed</p>
