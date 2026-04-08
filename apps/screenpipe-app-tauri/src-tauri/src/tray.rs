@@ -952,7 +952,13 @@ pub fn setup_tray_menu_updater(app: AppHandle, update_item: &tauri::menu::MenuIt
                 break;
             }
             if let Err(e) = update_menu_if_needed(&app, &update_item).await {
-                error!("Failed to update tray menu: {:#}", e);
+                let msg = format!("{:#}", e);
+                error!("Failed to update tray menu: {}", msg);
+                // Tauri resource table can go stale after in-place updates on
+                // Windows — invalidate the cached store so the next tick rebuilds it.
+                if msg.contains("resource id") && msg.contains("invalid") {
+                    crate::store::invalidate_store_cache();
+                }
             }
         }
     });

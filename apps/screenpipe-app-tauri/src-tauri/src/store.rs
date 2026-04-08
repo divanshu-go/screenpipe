@@ -2,57 +2,93 @@ use super::get_base_dir;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use specta::Type;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex};
 use tauri::AppHandle;
 use tauri_plugin_store::StoreBuilder;
 use tracing::error;
 
-/// Cached store instance — built once, reused for the lifetime of the process.
-/// Avoids TOCTOU race in StoreBuilder::build() when called multiple times during
-/// startup (settings init, onboarding init, tray setup all call get_store).
-static STORE_CACHE: OnceLock<Arc<tauri_plugin_store::Store<tauri::Wry>>> = OnceLock::new();
+/// Cached store instance — reusable across the process lifetime.
+/// Uses Mutex instead of OnceLock so the cache can be invalidated when the
+/// Tauri resource table drops the underlying store (e.g. after an in-place
+/// update restart on Windows where resource IDs become stale).
+static STORE_CACHE: Mutex<Option<Arc<tauri_plugin_store::Store<tauri::Wry>>>> =
+    Mutex::new(None);
+
+/// Build (or rebuild) the store, retrying on TOCTOU races and stale resource IDs.
+fn build_store(app: &AppHandle) -> anyhow::Result<Arc<tauri_plugin_store::Store<tauri::Wry>>> {
+    let base_dir = get_base_dir(app, None)?;
+    let store_path = base_dir.join("store.bin");
+
+    let mut last_err = None;
+    for attempt in 0..3u32 {
+        match StoreBuilder::new(app, store_path.clone()).build() {
+            Ok(s) => return Ok(s),
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("os error 17") || msg.contains("File exists") {
+                    tracing::warn!(
+                        "store build race (attempt {}): {}, retrying",
+                        attempt + 1,
+                        msg
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(
+                        100 * (attempt as u64 + 1),
+                    ));
+                    last_err = Some(e);
+                    continue;
+                }
+                // After cleanup_before_exit or in-place update on Windows, the
+                // resources_table is cleared but StoreState.stores still holds the
+                // old resource ID. Force a fresh store via create_new to evict it.
+                if msg.contains("resource id") && msg.contains("invalid") {
+                    tracing::warn!(
+                        "store resource stale (attempt {}): {}, rebuilding fresh",
+                        attempt + 1,
+                        msg
+                    );
+                    match StoreBuilder::new(app, store_path.clone())
+                        .create_new()
+                        .build()
+                    {
+                        Ok(s) => return Ok(s),
+                        Err(e2) => {
+                            tracing::warn!("fresh store build also failed: {}", e2);
+                            last_err = Some(e);
+                            continue;
+                        }
+                    }
+                }
+                return Err(anyhow::anyhow!(e));
+            }
+        }
+    }
+    Err(anyhow::anyhow!(last_err.unwrap()))
+}
 
 pub fn get_store(
     app: &AppHandle,
     _profile_name: Option<String>, // Keep parameter for API compatibility but ignore it
 ) -> anyhow::Result<Arc<tauri_plugin_store::Store<tauri::Wry>>> {
-    if let Some(cached) = STORE_CACHE.get() {
+    let mut guard = STORE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+
+    if let Some(ref cached) = *guard {
         return Ok(cached.clone());
     }
 
-    let base_dir = get_base_dir(app, None)?;
-    let store_path = base_dir.join("store.bin");
+    let store = build_store(app)?;
+    *guard = Some(store.clone());
+    Ok(store)
+}
 
-    // Retry with backoff to handle TOCTOU race (EEXIST / os error 17)
-    // when multiple instances or threads race to create store.bin.
-    let mut last_err = None;
-    let store = 'retry: {
-        for attempt in 0..3u32 {
-            match StoreBuilder::new(app, store_path.clone()).build() {
-                Ok(s) => break 'retry s,
-                Err(e) => {
-                    let msg = e.to_string();
-                    if msg.contains("os error 17") || msg.contains("File exists") {
-                        tracing::warn!(
-                            "store build race (attempt {}): {}, retrying",
-                            attempt + 1,
-                            msg
-                        );
-                        std::thread::sleep(std::time::Duration::from_millis(
-                            100 * (attempt as u64 + 1),
-                        ));
-                        last_err = Some(e);
-                        continue;
-                    }
-                    return Err(anyhow::anyhow!(e));
-                }
-            }
+/// Invalidate the cached store so the next `get_store` call rebuilds it.
+/// Called when a "resource id … is invalid" error is detected.
+pub fn invalidate_store_cache() {
+    if let Ok(mut guard) = STORE_CACHE.lock() {
+        if guard.is_some() {
+            tracing::warn!("store cache invalidated — will rebuild on next access");
+            *guard = None;
         }
-        return Err(anyhow::anyhow!(last_err.unwrap()));
-    };
-
-    // If another thread raced us, use their instance
-    Ok(STORE_CACHE.get_or_init(|| store).clone())
+    }
 }
 
 #[derive(Serialize, Deserialize, Type, Clone)]
