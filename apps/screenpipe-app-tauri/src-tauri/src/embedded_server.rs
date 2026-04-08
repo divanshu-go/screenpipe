@@ -491,25 +491,9 @@ pub async fn start_embedded_server(
     let pipe_manager_for_shutdown = shared_pipe_manager.clone();
     let server = server.with_pipe_manager(shared_pipe_manager);
 
-    // Start workflow event classifier if enabled (cloud feature)
-    if config.enable_workflow_events {
-        if let Some(ref token) = config.user_id {
-            if !token.is_empty() {
-                let token_for_classifier = token.clone();
-                let local_port = config.port;
-                tokio::spawn(async move {
-                    screenpipe_engine::workflow_classifier::start_workflow_classifier(
-                        screenpipe_engine::workflow_classifier::DEFAULT_CLASSIFIER_URL.to_string(),
-                        token_for_classifier,
-                        local_port,
-                        std::time::Duration::from_secs(30),
-                    )
-                    .await;
-                });
-                tracing::info!("workflow event classifier started (30s polling)");
-            }
-        }
-    }
+    // Cloud workflow classifier disabled — using local heuristic events only
+    // (meeting_started, meeting_ended, pipe_completed).
+    // Classifier code preserved in workflow_classifier.rs for future use.
 
     // Install pi agent in background
     tokio::spawn(async move {

@@ -2910,11 +2910,10 @@ impl PipeManager {
                 }
             }
 
-            // Subscribe to workflow events for event-triggered pipes
+            // Subscribe to all events for trigger matching (meeting_started,
+            // meeting_ended, pipe_completed:*, workflow_event, etc.)
             use futures::StreamExt;
-            let mut workflow_rx = screenpipe_events::subscribe_to_event::<
-                screenpipe_events::WorkflowEvent,
-            >("workflow_event");
+            let mut event_rx = screenpipe_events::subscribe_to_all_events();
 
             loop {
                 // Check for shutdown
@@ -2942,21 +2941,41 @@ impl PipeManager {
                         .collect()
                 };
 
-                // Drain pending workflow events and mark matching pipes for immediate execution.
-                // We reset their last_run to epoch so the existing should_run() check
-                // passes on this tick, reusing the full execution path without duplication.
+                // Drain pending events and mark matching pipes for immediate execution.
+                // Matches against trigger.events which can be:
+                //   "meeting_started", "meeting_ended" (local heuristic)
+                //   "pipe_completed:pipe-name" (chain triggers)
+                //   "workflow_event" type (future: cloud classifier)
                 let mut event_triggered: std::collections::HashSet<String> =
                     std::collections::HashSet::new();
                 {
                     use futures::FutureExt;
-                    while let Some(event) = workflow_rx.next().now_or_never().flatten() {
-                        let event_type = &event.data.event_type;
+                    while let Some(event) = event_rx.next().now_or_never().flatten() {
+                        // event.name is the bus topic (e.g. "meeting_started",
+                        // "pipe_completed:identity-memory", "workflow_event").
+                        // For workflow_event, also check the inner event_type field.
+                        let event_names: Vec<String> = {
+                            let mut names = vec![event.name.clone()];
+                            // For workflow_event, also expose the inner event_type
+                            if event.name == "workflow_event" {
+                                if let Some(et) = event.data.get("event_type").and_then(|v| v.as_str()) {
+                                    names.push(et.to_string());
+                                }
+                            }
+                            names
+                        };
+
                         for (name, config, _body) in &pipe_snapshot {
                             if !config.enabled {
                                 continue;
                             }
                             if let Some(ref trigger) = config.trigger {
-                                if trigger.events.iter().any(|e| e == event_type) {
+                                let matched_event = trigger.events.iter().find(|e| event_names.iter().any(|n| n == *e));
+                                if let Some(matched) = matched_event {
+                                    // Don't let a pipe trigger itself
+                                    if event.name == format!("pipe_completed:{}", name) {
+                                        continue;
+                                    }
                                     let already_running = {
                                         let r = running.lock().await;
                                         r.contains_key(name)
@@ -2964,17 +2983,14 @@ impl PipeManager {
                                     if already_running {
                                         debug!(
                                             "scheduler: event '{}' skipped pipe '{}' (already running)",
-                                            event_type, name
+                                            matched, name
                                         );
                                         continue;
                                     }
                                     info!(
-                                        "scheduler: event '{}' ({:.0}%) triggered pipe '{}'",
-                                        event_type,
-                                        event.data.confidence * 100.0,
-                                        name
+                                        "scheduler: event '{}' triggered pipe '{}'",
+                                        matched, name
                                     );
-                                    // Reset last_run so should_run() passes for "manual" pipes too
                                     last_run.remove(name);
                                     event_triggered.insert(name.clone());
                                 }
@@ -3412,6 +3428,18 @@ impl PipeManager {
                             entry.pop_front();
                         }
                         drop(l);
+
+                        // Emit pipe_completed event so other pipes can chain
+                        let event_name = format!("pipe_completed:{}", name_for_cb);
+                        let _ = screenpipe_events::send_event(
+                            &event_name,
+                            screenpipe_events::PipeCompletedEvent {
+                                pipe_name: name_for_cb.clone(),
+                                success,
+                                duration_secs,
+                                timestamp: chrono::Utc::now(),
+                            },
+                        );
 
                         // Fire run-complete callback (analytics, etc.)
                         if let Some(ref cb) = on_complete {
