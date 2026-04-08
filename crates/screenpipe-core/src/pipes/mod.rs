@@ -2555,6 +2555,19 @@ impl PipeManager {
                             .collect();
                     }
                 }
+                "timeout" => {
+                    config.timeout = v.as_u64();
+                }
+                "trigger" => {
+                    if v.is_null() {
+                        config.trigger = None;
+                    } else {
+                        match serde_json::from_value::<TriggerConfig>(v.clone()) {
+                            Ok(t) => config.trigger = Some(t),
+                            Err(e) => warn!("invalid trigger config for '{}': {}", name, e),
+                        }
+                    }
+                }
                 _ => {
                     config.config.insert(k.clone(), v.clone());
                 }
@@ -3623,6 +3636,7 @@ pub fn serialize_pipe(config: &PipeConfig, body: &str) -> Result<String> {
         "connections",
         "permissions",
         "timeout",
+        "trigger",
         "source_slug",
         "installed_version",
         "source_hash",
