@@ -377,7 +377,6 @@ jobs:
         tauriScript: bunx tauri -v
 
     - name: Run E2E Tests
-      shell: bash
       working-directory: ./apps/screenpipe-app-tauri
       env:
         RECORD_VIDEO: "true"
