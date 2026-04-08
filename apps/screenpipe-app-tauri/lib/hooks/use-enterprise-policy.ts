@@ -6,6 +6,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useIsEnterpriseBuild } from "./use-is-enterprise-build";
 import { commands } from "@/lib/utils/tauri";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+import { getStore } from "./use-settings";
 
 interface ManagedAiPreset {
   provider: string;
@@ -108,6 +109,50 @@ export function useEnterprisePolicy() {
         `[enterprise] policy loaded: org=${result.orgName}, hidden=[${result.hiddenSections.join(",")}], locked=[${lockedKeys.join(",")}]`
       );
       cachePolicy(result);
+
+      // Apply managed AI preset to settings store if configured
+      if (result.managedAiPreset) {
+        try {
+          const store = await getStore();
+          const settings = (await store.get<Record<string, unknown>>("settings")) || {};
+          const presets = (settings.aiPresets as any[]) || [];
+          const managedId = "enterprise-managed";
+          const mp = result.managedAiPreset;
+
+          // Map provider string to AIProviderType
+          const providerMap: Record<string, string> = {
+            openai: "openai",
+            anthropic: "anthropic",
+            "native-ollama": "native-ollama",
+            custom: "custom",
+          };
+
+          const managedPreset = {
+            id: managedId,
+            prompt: "",
+            provider: providerMap[mp.provider] || "openai",
+            url: mp.url || "",
+            model: mp.model || "",
+            defaultPreset: true,
+            apiKey: mp.api_key || undefined,
+            maxContextChars: 512000,
+            maxTokens: 4096,
+          };
+
+          // Replace existing managed preset or prepend
+          const filtered = presets.filter((p: any) => p.id !== managedId);
+          // Unset defaultPreset on all others
+          const updated = filtered.map((p: any) => ({ ...p, defaultPreset: false }));
+          const newPresets = [managedPreset, ...updated];
+
+          await store.set("settings", { ...settings, aiPresets: newPresets });
+          await store.save();
+          console.log(`[enterprise] applied managed AI preset: ${mp.provider}/${mp.model}`);
+        } catch (e) {
+          console.warn("[enterprise] failed to apply managed AI preset:", e);
+        }
+      }
+
       // Push hidden sections to Rust so tray menu can use them
       try {
         await commands.setEnterprisePolicy(result.hiddenSections);
