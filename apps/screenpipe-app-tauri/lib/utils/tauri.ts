@@ -878,6 +878,17 @@ async pipeSuggestionsUpdateSettings(enabled: boolean, frequencyHours: number) : 
 }
 },
 /**
+ * Enable or disable enhanced AI suggestions (uses screenpipe cloud).
+ */
+async setEnhancedAiSuggestions(enabled: boolean, token: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_enhanced_ai_suggestions", { enabled, token }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Check Calendar authorization status (no popup).
  */
 async calendarStatus() : Promise<Result<CalendarStatus, string>> {
