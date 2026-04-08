@@ -2910,10 +2910,20 @@ impl PipeManager {
                 }
             }
 
-            // Subscribe to all events for trigger matching (meeting_started,
-            // meeting_ended, pipe_completed:*, workflow_event, etc.)
+            // Subscribe to trigger-relevant events only.
+            // We subscribe to individual topics to avoid processing high-frequency
+            // system events (ui_frame, window_ocr, realtime_transcription).
             use futures::StreamExt;
-            let mut event_rx = screenpipe_events::subscribe_to_all_events();
+            let mut meeting_start_rx = screenpipe_events::subscribe_to_event::<serde_json::Value>("meeting_started");
+            let mut meeting_end_rx = screenpipe_events::subscribe_to_event::<serde_json::Value>("meeting_ended");
+            let mut workflow_rx = screenpipe_events::subscribe_to_event::<serde_json::Value>("workflow_event");
+            // pipe_completed:* uses subscribe_to_all with prefix filtering below
+            let mut pipe_completed_rx = screenpipe_events::subscribe_to_all_events();
+
+            // Circular chain detection: track recently-triggered pipe→pipe chains.
+            // If A→B→A would fire, suppress the second link.
+            let mut recent_chain: std::collections::HashMap<String, Instant> = std::collections::HashMap::new();
+            const CHAIN_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(60);
 
             loop {
                 // Check for shutdown
@@ -2942,58 +2952,89 @@ impl PipeManager {
                 };
 
                 // Drain pending events and mark matching pipes for immediate execution.
-                // Matches against trigger.events which can be:
-                //   "meeting_started", "meeting_ended" (local heuristic)
-                //   "pipe_completed:pipe-name" (chain triggers)
-                //   "workflow_event" type (future: cloud classifier)
+                // Collect events from targeted subscriptions to avoid processing
+                // high-frequency system events (ui_frame, window_ocr, etc.).
                 let mut event_triggered: std::collections::HashSet<String> =
                     std::collections::HashSet::new();
                 {
                     use futures::FutureExt;
-                    while let Some(event) = event_rx.next().now_or_never().flatten() {
-                        // event.name is the bus topic (e.g. "meeting_started",
-                        // "pipe_completed:identity-memory", "workflow_event").
-                        // For workflow_event, also check the inner event_type field.
-                        let event_names: Vec<String> = {
-                            let mut names = vec![event.name.clone()];
-                            // For workflow_event, also expose the inner event_type
-                            if event.name == "workflow_event" {
-                                if let Some(et) = event.data.get("event_type").and_then(|v| v.as_str()) {
-                                    names.push(et.to_string());
-                                }
-                            }
-                            names
-                        };
 
+                    // Collect events from all targeted subscriptions into one vec
+                    let mut pending_events: Vec<(String, serde_json::Value)> = Vec::new();
+                    while let Some(e) = meeting_start_rx.next().now_or_never().flatten() {
+                        pending_events.push((e.name, e.data));
+                    }
+                    while let Some(e) = meeting_end_rx.next().now_or_never().flatten() {
+                        pending_events.push((e.name, e.data));
+                    }
+                    while let Some(e) = workflow_rx.next().now_or_never().flatten() {
+                        // For workflow_event, expose the inner event_type as the match key
+                        let event_type = e.data.get("event_type")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("workflow_event")
+                            .to_string();
+                        pending_events.push((event_type, e.data));
+                    }
+                    // pipe_completed:* — filter from all-events subscription
+                    while let Some(e) = pipe_completed_rx.next().now_or_never().flatten() {
+                        if e.name.starts_with("pipe_completed:") {
+                            pending_events.push((e.name, e.data));
+                        }
+                    }
+
+                    // Expire old chain cooldowns
+                    recent_chain.retain(|_, ts| ts.elapsed() < CHAIN_COOLDOWN);
+
+                    for (event_name, _data) in &pending_events {
                         for (name, config, _body) in &pipe_snapshot {
                             if !config.enabled {
                                 continue;
                             }
                             if let Some(ref trigger) = config.trigger {
-                                let matched_event = trigger.events.iter().find(|e| event_names.iter().any(|n| n == *e));
-                                if let Some(matched) = matched_event {
-                                    // Don't let a pipe trigger itself
-                                    if event.name == format!("pipe_completed:{}", name) {
-                                        continue;
-                                    }
-                                    let already_running = {
-                                        let r = running.lock().await;
-                                        r.contains_key(name)
-                                    };
-                                    if already_running {
+                                if !trigger.events.iter().any(|e| e == event_name) {
+                                    continue;
+                                }
+
+                                // Don't let a pipe trigger itself
+                                if *event_name == format!("pipe_completed:{}", name) {
+                                    continue;
+                                }
+
+                                // Circular chain detection: if pipe X was triggered by
+                                // pipe_completed:Y within the cooldown, don't let
+                                // pipe_completed:X trigger Y back.
+                                if event_name.starts_with("pipe_completed:") {
+                                    let source_pipe = &event_name["pipe_completed:".len()..];
+                                    let reverse_key = format!("{}→{}", name, source_pipe);
+                                    if recent_chain.contains_key(&reverse_key) {
                                         debug!(
-                                            "scheduler: event '{}' skipped pipe '{}' (already running)",
-                                            matched, name
+                                            "scheduler: suppressing circular chain {} → {} → {}",
+                                            source_pipe, name, source_pipe
                                         );
                                         continue;
                                     }
-                                    info!(
-                                        "scheduler: event '{}' triggered pipe '{}'",
-                                        matched, name
-                                    );
-                                    last_run.remove(name);
-                                    event_triggered.insert(name.clone());
+                                    // Record this chain link
+                                    let chain_key = format!("{}→{}", source_pipe, name);
+                                    recent_chain.insert(chain_key, Instant::now());
                                 }
+
+                                let already_running = {
+                                    let r = running.lock().await;
+                                    r.contains_key(name)
+                                };
+                                if already_running {
+                                    debug!(
+                                        "scheduler: event '{}' skipped pipe '{}' (already running)",
+                                        event_name, name
+                                    );
+                                    continue;
+                                }
+                                info!(
+                                    "scheduler: event '{}' triggered pipe '{}'",
+                                    event_name, name
+                                );
+                                last_run.remove(name);
+                                event_triggered.insert(name.clone());
                             }
                         }
                     }
