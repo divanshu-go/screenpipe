@@ -2445,7 +2445,7 @@ impl PipeManager {
         let (mut config, body) = parse_frontmatter(&content)?;
         config.enabled = enabled;
         let new_content = serialize_pipe(&config, &body)?;
-        std::fs::write(&pipe_md, &new_content)?;
+        atomic_write(&pipe_md, &new_content)?;
 
         // Persist to local overrides so reload_pipes() doesn't revert this
         if let Err(e) = set_local_override(&self.pipes_dir, name, enabled) {
@@ -2487,7 +2487,7 @@ impl PipeManager {
             // Validate it parses correctly
             let (mut config, body) = parse_frontmatter(raw)?;
             config.name = name.to_string(); // preserve directory name
-            std::fs::write(&pipe_md, raw)?;
+            atomic_write(&pipe_md, raw)?;
 
             // Update in-memory
             let mut pipes = self.pipes.lock().await;
@@ -2575,7 +2575,7 @@ impl PipeManager {
         }
 
         let new_content = serialize_pipe(&config, &new_body)?;
-        std::fs::write(&pipe_md, &new_content)?;
+        atomic_write(&pipe_md, &new_content)?;
 
         // Update in-memory
         let mut pipes = self.pipes.lock().await;
@@ -2670,7 +2670,7 @@ impl PipeManager {
                 ));
             }
             let content = response.text().await?;
-            std::fs::write(dest_dir.join("pipe.md"), &content)?;
+            atomic_write(&dest_dir.join("pipe.md"), &content)?;
             self.load_pipes().await?;
             let _ = remove_tombstone(&self.pipes_dir, &name);
             info!("installed pipe '{}' from URL", name);
@@ -2707,7 +2707,7 @@ impl PipeManager {
 
         // Re-serialize with tracking fields included
         let content = serialize_pipe(&config, &body)?;
-        std::fs::write(dest_dir.join("pipe.md"), &content)?;
+        atomic_write(&dest_dir.join("pipe.md"), &content)?;
 
         self.load_pipes().await?;
         let _ = remove_tombstone(&self.pipes_dir, &name);
@@ -2754,7 +2754,7 @@ impl PipeManager {
         config.source_hash = Some(simple_hash(&body));
 
         let content = serialize_pipe(&config, &body)?;
-        std::fs::write(&current_path, &content)?;
+        atomic_write(&current_path, &content)?;
 
         self.load_pipes().await?;
         info!("updated pipe '{}' to store v{}", name, version);
@@ -3544,7 +3544,7 @@ impl PipeManager {
                     }
                 }
                 std::fs::create_dir_all(&dir)?;
-                std::fs::write(&pipe_md, content)?;
+                atomic_write(&pipe_md, content)?;
                 info!("installed built-in pipe: {}", name);
             }
         }
@@ -3612,6 +3612,22 @@ pub fn parse_frontmatter(content: &str) -> Result<(PipeConfig, String)> {
     let config: PipeConfig = serde_yaml::from_str(yaml_str)?;
 
     Ok((config, body))
+}
+
+/// Atomic file write: write to a temp file in the same directory, then rename.
+/// On Unix, rename is atomic. On Windows, this avoids the partial-write window
+/// where a concurrent reader (e.g. the scheduler) sees a truncated file.
+fn atomic_write(path: &Path, content: &str) -> Result<()> {
+    use std::io::Write;
+    let dir = path
+        .parent()
+        .ok_or_else(|| anyhow!("cannot determine parent dir of {:?}", path))?;
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    tmp.write_all(content.as_bytes())?;
+    tmp.flush()?;
+    // persist atomically (rename on Unix, MoveFileEx on Windows)
+    tmp.persist(path)?;
+    Ok(())
 }
 
 /// Serialize a PipeConfig + body back to pipe.md format.
@@ -4755,5 +4771,207 @@ mod tests {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
         assert!(!history, "history should default to false");
+    }
+
+    // -- frontmatter round-trip tests (trigger/duplicate detection) -----------
+
+    #[test]
+    fn test_roundtrip_minimal_config() {
+        let content = "---\nschedule: every 30m\nenabled: true\n---\n\nDo stuff";
+        let (config, body) = parse_frontmatter(content).unwrap();
+        assert_eq!(config.schedule, "every 30m");
+        assert!(config.enabled);
+        assert_eq!(body, "Do stuff");
+
+        let serialized = serialize_pipe(&config, &body).unwrap();
+        let (config2, body2) = parse_frontmatter(&serialized).unwrap();
+        assert_eq!(config2.schedule, "every 30m");
+        assert!(config2.enabled);
+        assert_eq!(body2, "Do stuff");
+    }
+
+    #[test]
+    fn test_roundtrip_with_trigger() {
+        let content = "---\nschedule: manual\nenabled: true\ntrigger:\n  events:\n    - crm_update\n    - meeting_end\n  custom:\n    - when I open slack\n---\n\nHandle events";
+        let (config, body) = parse_frontmatter(content).unwrap();
+        assert_eq!(config.schedule, "manual");
+        let trigger = config.trigger.as_ref().unwrap();
+        assert_eq!(trigger.events, vec!["crm_update", "meeting_end"]);
+        assert_eq!(trigger.custom, vec!["when I open slack"]);
+
+        let serialized = serialize_pipe(&config, &body).unwrap();
+
+        // Must not contain duplicate trigger keys
+        let trigger_count = serialized.matches("trigger:").count();
+        assert_eq!(trigger_count, 1, "serialized YAML has duplicate 'trigger:' keys:\n{}", serialized);
+
+        // Round-trip must parse back identically
+        let (config2, body2) = parse_frontmatter(&serialized).unwrap();
+        assert_eq!(body2, "Handle events");
+        let trigger2 = config2.trigger.as_ref().unwrap();
+        assert_eq!(trigger2.events, vec!["crm_update", "meeting_end"]);
+        assert_eq!(trigger2.custom, vec!["when I open slack"]);
+    }
+
+    #[test]
+    fn test_roundtrip_trigger_none() {
+        let content = "---\nschedule: every 1h\nenabled: true\n---\n\nNo trigger";
+        let (config, body) = parse_frontmatter(content).unwrap();
+        assert!(config.trigger.is_none());
+
+        let serialized = serialize_pipe(&config, &body).unwrap();
+        assert!(!serialized.contains("trigger:"), "trigger: should not appear when None:\n{}", serialized);
+
+        let (config2, _) = parse_frontmatter(&serialized).unwrap();
+        assert!(config2.trigger.is_none());
+    }
+
+    #[test]
+    fn test_no_duplicate_keys_all_fields() {
+        let content = "---\nschedule: every 2h\nenabled: true\nmodel: claude-haiku-4-5\nprovider: openai\npreset: my-preset\nconnections:\n  - slack\n  - gmail\ntimeout: 600\ntrigger:\n  events:\n    - test_event\nsource_slug: my-pipe\ninstalled_version: 5\nsource_hash: abc123\n---\n\nFull config";
+        let (config, body) = parse_frontmatter(content).unwrap();
+
+        let serialized = serialize_pipe(&config, &body).unwrap();
+
+        // Check no known field appears more than once
+        for field in &["schedule:", "enabled:", "model:", "provider:", "preset:", "connections:", "timeout:", "trigger:", "source_slug:", "installed_version:", "source_hash:"] {
+            let count = serialized.matches(field).count();
+            assert!(count <= 1, "field '{}' appears {} times in serialized YAML:\n{}", field, count, serialized);
+        }
+
+        // Must round-trip
+        let (config2, _) = parse_frontmatter(&serialized).unwrap();
+        assert_eq!(config2.schedule, "every 2h");
+        assert!(config2.trigger.is_some());
+        assert_eq!(config2.trigger.unwrap().events, vec!["test_event"]);
+    }
+
+    #[test]
+    fn test_trigger_in_extras_gets_cleaned() {
+        // Simulate the bug: trigger lands in both the struct field AND the extras HashMap
+        let content = "---\nschedule: every 1h\nenabled: true\n---\n\nTest";
+        let (mut config, body) = parse_frontmatter(content).unwrap();
+
+        // Set trigger on the struct
+        config.trigger = Some(TriggerConfig {
+            events: vec!["my_event".to_string()],
+            custom: vec![],
+        });
+
+        // Also sneak it into the extras HashMap (simulating the bug)
+        config.config.insert(
+            "trigger".to_string(),
+            serde_json::json!({"events": ["my_event"], "custom": []}),
+        );
+
+        let serialized = serialize_pipe(&config, &body).unwrap();
+
+        // serialize_pipe should have cleaned the duplicate from extras
+        let trigger_count = serialized.matches("trigger:").count();
+        assert_eq!(trigger_count, 1, "duplicate trigger: not cleaned from extras:\n{}", serialized);
+
+        // Must still parse correctly
+        let (config2, _) = parse_frontmatter(&serialized).unwrap();
+        let t = config2.trigger.unwrap();
+        assert_eq!(t.events, vec!["my_event"]);
+    }
+
+    #[test]
+    fn test_all_known_fields_cleaned_from_extras() {
+        let content = "---\nschedule: every 1h\nenabled: true\n---\n\nTest";
+        let (mut config, body) = parse_frontmatter(content).unwrap();
+
+        // Insert every known field into extras HashMap (worst case scenario)
+        config.config.insert("schedule".to_string(), serde_json::json!("every 2h"));
+        config.config.insert("enabled".to_string(), serde_json::json!(false));
+        config.config.insert("model".to_string(), serde_json::json!("gpt-4"));
+        config.config.insert("provider".to_string(), serde_json::json!("openai"));
+        config.config.insert("trigger".to_string(), serde_json::json!({"events": ["x"]}));
+        config.config.insert("connections".to_string(), serde_json::json!(["slack"]));
+        config.config.insert("timeout".to_string(), serde_json::json!(300));
+        config.config.insert("source_slug".to_string(), serde_json::json!("test"));
+        config.config.insert("installed_version".to_string(), serde_json::json!(1));
+        config.config.insert("source_hash".to_string(), serde_json::json!("abc"));
+        config.config.insert("preset".to_string(), serde_json::json!("my-preset"));
+        config.config.insert("name".to_string(), serde_json::json!("test-pipe"));
+        config.config.insert("config".to_string(), serde_json::json!({"old": true}));
+
+        let serialized = serialize_pipe(&config, &body).unwrap();
+
+        // Every known field should appear at most once
+        for field in &["schedule:", "enabled:", "model:", "trigger:", "connections:", "timeout:", "source_slug:", "installed_version:", "source_hash:"] {
+            let count = serialized.matches(field).count();
+            assert!(count <= 1, "field '{}' appears {} times after cleanup:\n{}", field, count, serialized);
+        }
+
+        // "config:" and "name:" should not appear at all (they're stripped)
+        assert!(!serialized.contains("\nconfig:"), "legacy 'config:' not cleaned:\n{}", serialized);
+        assert!(!serialized.contains("\nname:"), "'name:' should be stripped:\n{}", serialized);
+
+        // Must still parse without error
+        parse_frontmatter(&serialized).expect("round-trip parse failed after extras cleanup");
+    }
+
+    #[test]
+    fn test_update_config_trigger_does_not_leak_to_extras() {
+        // Simulate what update_config does when receiving a trigger update
+        let content = "---\nschedule: every 1h\nenabled: true\n---\n\nTest";
+        let (mut config, body) = parse_frontmatter(content).unwrap();
+
+        // Simulate the update_config match arm for "trigger"
+        let trigger_json = serde_json::json!({"events": ["new_event"], "custom": ["when I open chrome"]});
+        match serde_json::from_value::<TriggerConfig>(trigger_json.clone()) {
+            Ok(t) => config.trigger = Some(t),
+            Err(_) => panic!("trigger deserialization should succeed"),
+        }
+
+        // Verify trigger is NOT in extras
+        assert!(!config.config.contains_key("trigger"), "trigger leaked into extras HashMap");
+
+        let serialized = serialize_pipe(&config, &body).unwrap();
+        let trigger_count = serialized.matches("trigger:").count();
+        assert_eq!(trigger_count, 1, "trigger duplicated:\n{}", serialized);
+
+        let (config2, _) = parse_frontmatter(&serialized).unwrap();
+        let t = config2.trigger.unwrap();
+        assert_eq!(t.events, vec!["new_event"]);
+        assert_eq!(t.custom, vec!["when I open chrome"]);
+    }
+
+    #[test]
+    fn test_multiple_trigger_updates_no_accumulation() {
+        let content = "---\nschedule: manual\nenabled: true\ntrigger:\n  events:\n    - old_event\n---\n\nTest";
+        let (mut config, body) = parse_frontmatter(content).unwrap();
+
+        // Update trigger 3 times in a row
+        for i in 0..3 {
+            let trigger_json = serde_json::json!({"events": [format!("event_{}", i)]});
+            config.trigger = Some(serde_json::from_value::<TriggerConfig>(trigger_json).unwrap());
+
+            let serialized = serialize_pipe(&config, &body).unwrap();
+            let trigger_count = serialized.matches("trigger:").count();
+            assert_eq!(trigger_count, 1, "trigger duplicated on iteration {}:\n{}", i, serialized);
+
+            // Re-parse for next iteration (simulates read-modify-write cycle)
+            let (new_config, _) = parse_frontmatter(&serialized).unwrap();
+            config = new_config;
+        }
+
+        // Final state should have event_2
+        let t = config.trigger.unwrap();
+        assert_eq!(t.events, vec!["event_2"]);
+    }
+
+    #[test]
+    fn test_unknown_extra_fields_preserved() {
+        // Extra fields that are NOT known should survive round-trip
+        let content = "---\nschedule: every 1h\nenabled: true\nmy_custom_field: hello\nanother: 42\n---\n\nTest";
+        let (config, body) = parse_frontmatter(content).unwrap();
+        assert_eq!(config.config.get("my_custom_field").and_then(|v| v.as_str()), Some("hello"));
+
+        let serialized = serialize_pipe(&config, &body).unwrap();
+        let (config2, _) = parse_frontmatter(&serialized).unwrap();
+        assert_eq!(config2.config.get("my_custom_field").and_then(|v| v.as_str()), Some("hello"));
+        assert_eq!(config2.config.get("another").and_then(|v| v.as_i64()), Some(42));
     }
 }
