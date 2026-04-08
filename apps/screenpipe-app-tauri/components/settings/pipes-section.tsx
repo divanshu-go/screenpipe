@@ -413,8 +413,16 @@ function formatDuration(ms: number): string {
  *  - LLM errors (credits_exhausted, rate limits, etc.) */
 export function cleanPipeStdout(raw: string): string {
   const parts: string[] = [];
+  let textBuf = "";       // accumulates text_delta fragments
   let errorMessage: string | null = null;
   let hasTextDelta = false;
+
+  function flushText() {
+    if (textBuf) {
+      parts.push(textBuf);
+      textBuf = "";
+    }
+  }
 
   for (const line of raw.split("\n")) {
     const trimmed = line.trim();
@@ -437,11 +445,14 @@ export function cleanPipeStdout(raw: string): string {
 
           // text_delta — the main assistant text stream
           if (ae.type === "text_delta" && ae.delta) {
-            parts.push(ae.delta);
+            textBuf += ae.delta;
             hasTextDelta = true;
           }
-          // All other sub-types skipped: thinking_start, thinking_delta,
-          // thinking_end, text_start, text_end, toolcall_start/delta/end
+          // tool call — show a brief indicator so the user sees what the agent did
+          if (ae.type === "toolcall_start" && ae.toolName) {
+            flushText();
+            parts.push(`> *running \`${ae.toolName}\`...*`);
+          }
           continue;
         }
 
@@ -449,6 +460,7 @@ export function cleanPipeStdout(raw: string): string {
         // Text content is skipped because text_delta already streamed it
         // (extracting both would double-count).
         if (evtType === "message_start" || evtType === "message_end") {
+          flushText();
           const msg = evt.message;
           if (msg?.role !== "assistant") continue;
           if (msg.stopReason === "error" && msg.errorMessage) {
@@ -516,6 +528,7 @@ export function cleanPipeStdout(raw: string): string {
     parts.push(trimmed);
   }
 
+  flushText();
   const text = parts.join("\n\n").trim();
   if (!text && errorMessage) {
     return `error: ${errorMessage}`;
