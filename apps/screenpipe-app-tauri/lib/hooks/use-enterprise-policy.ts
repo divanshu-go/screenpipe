@@ -7,15 +7,24 @@ import { useIsEnterpriseBuild } from "./use-is-enterprise-build";
 import { commands } from "@/lib/utils/tauri";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 
+interface ManagedAiPreset {
+  provider: string;
+  url: string;
+  model: string;
+  api_key: string;
+}
+
 interface EnterprisePolicy {
   hiddenSections: string[];
   lockedSettings: Record<string, unknown>;
+  managedAiPreset: ManagedAiPreset | null;
   orgName: string;
 }
 
 const EMPTY_POLICY: EnterprisePolicy = {
   hiddenSections: [],
   lockedSettings: {},
+  managedAiPreset: null,
   orgName: "",
 };
 
@@ -92,6 +101,7 @@ export function useEnterprisePolicy() {
       const result: EnterprisePolicy = {
         hiddenSections: [...new Set(allHidden)],
         lockedSettings: data.lockedSettings || {},
+        managedAiPreset: data.managedAiPreset || null,
         orgName: data.orgName || "",
       };
       console.log(
