@@ -218,14 +218,6 @@ pub async fn start_embedded_server(
         .transcription_mode(config.transcription_mode.clone())
         .openai_compatible_config(openai_compatible_config);
 
-    // When audio is disabled, override transcription engine to Disabled.
-    // This downloads a 40MB tiny placeholder instead of the 834MB default model.
-    // The AudioManager type still requires a model path, but it's never used for inference.
-    if config.disable_audio {
-        audio_manager_builder =
-            audio_manager_builder.transcription_engine(AudioTranscriptionEngine::Disabled);
-    }
-
     if let Some(ref detector) = meeting_detector {
         audio_manager_builder = audio_manager_builder.meeting_detector(detector.clone());
     }
