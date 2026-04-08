@@ -2511,7 +2511,13 @@ mod tests {
         });
         assert!(teams.is_some(), "Teams profile not found");
         let teams_profile = teams.unwrap();
-        assert!(teams_profile.app_identifiers.macos_app_names.contains(&"msteams"), "MSTeams not added to macos_app_names");
+        assert!(
+            teams_profile
+                .app_identifiers
+                .macos_app_names
+                .contains(&"msteams"),
+            "MSTeams not added to macos_app_names"
+        );
     }
 
     #[test]
