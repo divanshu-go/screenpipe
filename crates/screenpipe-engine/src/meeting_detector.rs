@@ -337,6 +337,91 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
             ],
             min_signals_required: 1,
         },
+        // Signal — voice/video calls
+        // macOS: "Signal" app with "End Call" / "Hang Up" button during active calls.
+        // Windows: "Signal.exe" Electron app, same button patterns.
+        // Signal also shows a call status bar with duration when a call is active.
+        MeetingDetectionProfile {
+            app_identifiers: AppIdentifiers {
+                macos_app_names: &["signal"],
+                windows_process_names: &["signal.exe"],
+                browser_url_patterns: &[],
+                browser_title_patterns: &[],
+            },
+            call_signals: vec![
+                CallSignal::RoleWithName {
+                    role: "AXButton",
+                    name_contains: "end call",
+                },
+                CallSignal::RoleWithName {
+                    role: "AXButton",
+                    name_contains: "hang up",
+                },
+                CallSignal::NameContains("End Call"),
+                CallSignal::NameContains("Hang Up"),
+                // Windows UIA button patterns
+                CallSignal::RoleWithName {
+                    role: "Button",
+                    name_contains: "End call",
+                },
+                CallSignal::RoleWithName {
+                    role: "Button",
+                    name_contains: "Hang up",
+                },
+            ],
+            min_signals_required: 1,
+        },
+        // WhatsApp — voice/video calls
+        MeetingDetectionProfile {
+            app_identifiers: AppIdentifiers {
+                macos_app_names: &["whatsapp"],
+                windows_process_names: &["whatsapp.exe"],
+                browser_url_patterns: &["web.whatsapp.com"],
+                browser_title_patterns: &[],
+            },
+            call_signals: vec![
+                CallSignal::RoleWithName {
+                    role: "AXButton",
+                    name_contains: "end call",
+                },
+                CallSignal::RoleWithName {
+                    role: "AXButton",
+                    name_contains: "hang up",
+                },
+                CallSignal::NameContains("End call"),
+                CallSignal::RoleWithName {
+                    role: "Button",
+                    name_contains: "End call",
+                },
+            ],
+            min_signals_required: 1,
+        },
+        // Telegram — voice/video calls
+        MeetingDetectionProfile {
+            app_identifiers: AppIdentifiers {
+                macos_app_names: &["telegram"],
+                windows_process_names: &["telegram.exe"],
+                browser_url_patterns: &["web.telegram.org"],
+                browser_title_patterns: &[],
+            },
+            call_signals: vec![
+                CallSignal::RoleWithName {
+                    role: "AXButton",
+                    name_contains: "end call",
+                },
+                CallSignal::RoleWithName {
+                    role: "AXButton",
+                    name_contains: "hang up",
+                },
+                CallSignal::NameContains("End Call"),
+                CallSignal::NameContains("Hang Up"),
+                CallSignal::RoleWithName {
+                    role: "Button",
+                    name_contains: "End call",
+                },
+            ],
+            min_signals_required: 1,
+        },
         // Generic fallback — catches apps like Skype, Around, Whereby, etc.
         MeetingDetectionProfile {
             app_identifiers: AppIdentifiers {
