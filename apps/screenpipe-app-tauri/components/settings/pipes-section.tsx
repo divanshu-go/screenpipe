@@ -622,6 +622,10 @@ function PipePresetSelector({
     const presetValue: string | string[] | null =
       newList.length === 0 ? null : newList.length === 1 ? newList[0] : newList;
 
+    // Register guard BEFORE optimistic update so background fetchPipes
+    // never overwrites with stale server data during the save.
+    pendingConfigSaves.current[pipeName] = true;
+
     setPipes((prev: any[]) =>
       prev.map((p: any) =>
         p.config.name === pipeName
@@ -630,19 +634,21 @@ function PipePresetSelector({
       )
     );
 
-    const savePromise = fetch(`${apiBase}/pipes/${pipeName}/config`, {
+    fetch(`${apiBase}/pipes/${pipeName}/config`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ preset: presetValue }),
     })
-      .then(() => {
+      .then(async () => {
+        // Wait for the config write to become durable before re-fetching.
+        // The server debounces reload_pipes at 2s, so give it time.
+        await new Promise((r) => setTimeout(r, 500));
         delete pendingConfigSaves.current[pipeName];
         fetchPipes();
       })
       .catch(() => {
         delete pendingConfigSaves.current[pipeName];
       });
-    pendingConfigSaves.current[pipeName] = savePromise;
   };
 
   return (
@@ -1921,7 +1927,8 @@ export function PipesSection() {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
                             body: JSON.stringify({ schedule: value }),
-                          }).then(() => {
+                          }).then(async () => {
+                            await new Promise((r) => setTimeout(r, 500));
                             delete pendingConfigSaves.current[pipeName];
                             fetchPipes();
                           }).catch(() => {
@@ -2466,7 +2473,8 @@ export function PipesSection() {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
                             body: JSON.stringify({ history: checked }),
-                          }).then(() => {
+                          }).then(async () => {
+                            await new Promise((r) => setTimeout(r, 500));
                             delete pendingConfigSaves.current[pipeName];
                             fetchPipes();
                           }).catch(() => {
