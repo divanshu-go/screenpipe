@@ -878,13 +878,9 @@ mod tests {
     #[test]
     fn test_check_and_update_drm_state_clears_flag_on_non_drm() {
         DRM_CONTENT_PAUSED.store(true, Ordering::SeqCst);
-        let result =
-            check_and_update_drm_state(true, Some("Finder"), Some("https://google.com"));
+        let result = check_and_update_drm_state(true, Some("Finder"), Some("https://google.com"));
         assert!(!result, "should return false for non-DRM content");
-        assert!(
-            !drm_content_paused(),
-            "global flag should be cleared"
-        );
+        assert!(!drm_content_paused(), "global flag should be cleared");
         DRM_CONTENT_PAUSED.store(false, Ordering::SeqCst);
     }
 
@@ -918,12 +914,18 @@ mod tests {
         DRM_CONTENT_PAUSED.store(false, Ordering::SeqCst);
         let result = check_and_update_drm_state(true, None, None);
         // With flag=false and no DRM info, it returns false (current state)
-        assert!(!result, "should return false when flag was false and app unknown");
+        assert!(
+            !result,
+            "should return false when flag was false and app unknown"
+        );
 
         DRM_CONTENT_PAUSED.store(true, Ordering::SeqCst);
         let result = check_and_update_drm_state(true, None, None);
         // With flag=true and no DRM info, it preserves true (unknown = keep)
-        assert!(result, "should return true when flag was true and app unknown");
+        assert!(
+            result,
+            "should return true when flag was true and app unknown"
+        );
         DRM_CONTENT_PAUSED.store(false, Ordering::SeqCst);
     }
 }

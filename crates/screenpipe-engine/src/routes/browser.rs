@@ -148,10 +148,8 @@ pub async fn browser_eval_handler(
 
     let send_result = {
         let mut sink = ext_tx.lock().await;
-        sink.send(Message::Text(
-            serde_json::to_string(&ws_msg).unwrap().into(),
-        ))
-        .await
+        sink.send(Message::Text(serde_json::to_string(&ws_msg).unwrap()))
+            .await
     };
 
     if let Err(e) = send_result {

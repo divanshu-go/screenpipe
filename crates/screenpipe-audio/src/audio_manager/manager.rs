@@ -204,27 +204,15 @@ impl AudioManager {
                     if let Some(ref transcription_engine) = *engine_guard {
                         let opts = options_ref.read().await;
                         let audio_engine = opts.transcription_engine.clone();
-                        let key = opts.deepgram_api_key.clone();
-                        let openai_config = opts.openai_compatible_config.clone();
-                        let langs = opts.languages.clone();
-                        let vocab = opts.vocabulary.clone();
                         let batch_max_dur = opts.batch_max_duration_secs;
                         drop(opts);
-
-                        // Get whisper context from transcription engine
-                        let whisper_ctx = transcription_engine.whisper_context();
 
                         let data_dir = output_path_bg.as_deref();
                         let count = super::reconciliation::reconcile_untranscribed(
                             &db,
                             transcription_engine,
                             on_insert_bg.as_ref(),
-                            whisper_ctx,
                             audio_engine,
-                            key,
-                            openai_config,
-                            langs,
-                            &vocab,
                             Some(seg_mgr.clone()),
                             data_dir,
                             batch_max_dur,
@@ -628,18 +616,12 @@ impl AudioManager {
                                     "batch mode: audio session ended, transcribing accumulated audio"
                                 );
                             }
-                            let whisper_ctx = engine.whisper_context();
                             let data_dir = output_path.as_deref();
                             let count = super::reconciliation::reconcile_untranscribed(
                                 &db,
                                 &engine,
                                 on_insert_session.as_ref(),
-                                whisper_ctx,
                                 audio_transcription_engine.clone(),
-                                deepgram_api_key.clone(),
-                                openai_compatible_config.clone(),
-                                languages.clone(),
-                                &vocabulary,
                                 Some(segmentation_manager.clone()),
                                 data_dir,
                                 batch_max_duration_secs,
@@ -665,10 +647,6 @@ impl AudioManager {
                                 embedding_manager.clone(),
                                 embedding_extractor.clone(),
                                 &output_path.clone().unwrap(),
-                                audio_transcription_engine.clone(),
-                                deepgram_api_key.clone(),
-                                openai_compatible_config.clone(),
-                                languages.clone(),
                                 &transcription_sender.clone(),
                                 &mut session,
                                 metrics.clone(),
@@ -690,10 +668,6 @@ impl AudioManager {
                             embedding_manager.clone(),
                             embedding_extractor.clone(),
                             &output_path.clone().unwrap(),
-                            audio_transcription_engine.clone(),
-                            deepgram_api_key.clone(),
-                            openai_compatible_config.clone(),
-                            languages.clone(),
                             &transcription_sender.clone(),
                             &mut session,
                             metrics.clone(),
@@ -715,10 +689,6 @@ impl AudioManager {
                         embedding_manager.clone(),
                         embedding_extractor.clone(),
                         &output_path.clone().unwrap(),
-                        audio_transcription_engine.clone(),
-                        deepgram_api_key.clone(),
-                        openai_compatible_config.clone(),
-                        languages.clone(),
                         &transcription_sender.clone(),
                         &mut session,
                         metrics.clone(),

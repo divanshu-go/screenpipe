@@ -709,7 +709,9 @@ impl ShowRewindWindow {
                                     tauri::webview::PageLoadEvent::Finished
                                 ) {
                                     #[cfg(target_os = "windows")]
-                                    if let Err(e) = crate::windows_overlay::set_display_affinity(&win, capturable) {
+                                    if let Err(e) = crate::windows_overlay::set_display_affinity(
+                                        &win, capturable,
+                                    ) {
                                         tracing::error!("Failed to set display affinity: {}", e);
                                     }
                                     win.show().ok();
@@ -1016,7 +1018,9 @@ impl ShowRewindWindow {
                                     tracing::error!("Failed to setup Windows overlay: {}", e);
                                 }
                                 // Apply display affinity so OBS/screen recorders respect the setting
-                                if let Err(e) = crate::windows_overlay::set_display_affinity(&win, capturable) {
+                                if let Err(e) =
+                                    crate::windows_overlay::set_display_affinity(&win, capturable)
+                                {
                                     tracing::error!("Failed to set display affinity: {}", e);
                                 }
                                 // Activate so keyboard focus goes to the webview

@@ -432,8 +432,7 @@ mod tests {
         // Simulate stop_monitor logic
         if let Some((_, handle)) = tasks.remove(&1) {
             handle.abort();
-            let result =
-                tokio::time::timeout(std::time::Duration::from_secs(3), handle).await;
+            let result = tokio::time::timeout(std::time::Duration::from_secs(3), handle).await;
             // Should complete well before 3s
             assert!(result.is_ok(), "normal task should finish within timeout");
         }
@@ -457,8 +456,7 @@ mod tests {
         if let Some((_, handle)) = tasks.remove(&1) {
             handle.abort();
             let start = std::time::Instant::now();
-            let result =
-                tokio::time::timeout(std::time::Duration::from_secs(3), handle).await;
+            let result = tokio::time::timeout(std::time::Duration::from_secs(3), handle).await;
             let elapsed = start.elapsed();
 
             // The timeout should fire around 3s, not 30s
@@ -484,8 +482,7 @@ mod tests {
 
         if let Some((_, handle)) = tasks.remove(&1) {
             handle.abort();
-            let result =
-                tokio::time::timeout(std::time::Duration::from_secs(3), handle).await;
+            let result = tokio::time::timeout(std::time::Duration::from_secs(3), handle).await;
             assert!(
                 result.is_ok(),
                 "already-finished task should resolve instantly"

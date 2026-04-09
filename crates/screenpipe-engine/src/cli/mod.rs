@@ -711,8 +711,7 @@ mod tests {
 
     #[test]
     fn test_pause_on_drm_content_flag_sets_true() {
-        let cli =
-            Cli::try_parse_from(["screenpipe", "record", "--pause-on-drm-content"]).unwrap();
+        let cli = Cli::try_parse_from(["screenpipe", "record", "--pause-on-drm-content"]).unwrap();
         match cli.command {
             Command::Record(args) => {
                 assert!(args.pause_on_drm_content, "flag should set to true");
@@ -723,8 +722,7 @@ mod tests {
 
     #[test]
     fn test_pause_on_drm_content_flows_to_recording_settings() {
-        let cli =
-            Cli::try_parse_from(["screenpipe", "record", "--pause-on-drm-content"]).unwrap();
+        let cli = Cli::try_parse_from(["screenpipe", "record", "--pause-on-drm-content"]).unwrap();
         match cli.command {
             Command::Record(args) => {
                 let settings = args.to_recording_settings();

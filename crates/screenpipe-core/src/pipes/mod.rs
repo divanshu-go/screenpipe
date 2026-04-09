@@ -3009,8 +3009,9 @@ impl PipeManager {
                                 // Circular chain detection: if pipe X was triggered by
                                 // pipe_completed:Y within the cooldown, don't let
                                 // pipe_completed:X trigger Y back.
-                                if event_name.starts_with("pipe_completed:") {
-                                    let source_pipe = &event_name["pipe_completed:".len()..];
+                                if let Some(source_pipe) =
+                                    event_name.strip_prefix("pipe_completed:")
+                                {
                                     let reverse_key = format!("{}→{}", name, source_pipe);
                                     if recent_chain.contains_key(&reverse_key) {
                                         debug!(

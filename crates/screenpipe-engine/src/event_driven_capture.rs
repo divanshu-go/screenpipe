@@ -27,6 +27,22 @@ use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, watch};
 use tracing::{debug, error, info, warn};
 
+/// Stable configuration for a single capture invocation.
+///
+/// Groups parameters that don't change between captures on the same monitor,
+/// keeping `do_capture`'s argument list manageable.
+pub struct CaptureParams<'a> {
+    pub db: &'a DatabaseManager,
+    pub monitor: &'a SafeMonitor,
+    pub monitor_id: u32,
+    pub device_name: &'a str,
+    pub snapshot_writer: &'a SnapshotWriter,
+    pub tree_walker_config: &'a TreeWalkerConfig,
+    pub use_pii_removal: bool,
+    pub pause_on_drm_content: bool,
+    pub languages: &'a [screenpipe_core::Language],
+}
+
 /// Types of events that trigger a capture.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CaptureTrigger {
@@ -259,6 +275,18 @@ pub async fn event_driven_capture_loop(
     // Sentry with 100k+ identical events.
     let mut consecutive_capture_errors: u32 = 0;
 
+    let capture_params = CaptureParams {
+        db: &db,
+        monitor: &monitor,
+        monitor_id,
+        device_name: &device_name,
+        snapshot_writer: &snapshot_writer,
+        tree_walker_config: &tree_walker_config,
+        use_pii_removal,
+        pause_on_drm_content,
+        languages: &languages,
+    };
+
     // Capture immediately on startup so the timeline has a frame right away.
     // Also seeds the frame comparer so subsequent visual-change checks work.
     // Skip if screen is locked — avoids storing black frames from sleep/lock.
@@ -272,16 +300,8 @@ pub async fn event_driven_capture_loop(
             .checked_sub(Duration::from_millis(500))
             .unwrap_or(Instant::now()); // allow capture
         match do_capture(
-            &db,
-            &monitor,
-            monitor_id,
-            &device_name,
-            &snapshot_writer,
-            &tree_walker_config,
+            &capture_params,
             &CaptureTrigger::Manual,
-            use_pii_removal,
-            pause_on_drm_content,
-            &languages,
             None, // first capture — no previous hash
             last_db_write,
             None, // first capture — no elements ref
@@ -510,16 +530,8 @@ pub async fn event_driven_capture_loop(
                 let capture_result = tokio::time::timeout(
                     Duration::from_secs(15),
                     do_capture(
-                        &db,
-                        &monitor,
-                        monitor_id,
-                        &device_name,
-                        &snapshot_writer,
-                        &tree_walker_config,
+                        &capture_params,
                         &trigger,
-                        use_pii_removal,
-                        pause_on_drm_content,
-                        &languages,
                         last_content_hash,
                         last_db_write,
                         elements_ref,
@@ -746,16 +758,8 @@ fn resolve_capture_metadata(
 /// `CaptureOutput.result` will be `None` in that case — the caller should still
 /// update the frame comparer with the image but skip DB/metrics work.
 async fn do_capture(
-    db: &DatabaseManager,
-    monitor: &SafeMonitor,
-    monitor_id: u32,
-    device_name: &str,
-    snapshot_writer: &SnapshotWriter,
-    tree_walker_config: &TreeWalkerConfig,
+    params: &CaptureParams<'_>,
     trigger: &CaptureTrigger,
-    use_pii_removal: bool,
-    pause_on_drm_content: bool,
-    languages: &[screenpipe_core::Language],
     previous_content_hash: Option<i64>,
     last_db_write: Instant,
     elements_ref_frame_id: Option<i64>,
@@ -764,16 +768,16 @@ async fn do_capture(
     let captured_at = Utc::now();
 
     // Take screenshot
-    let (image, capture_dur) = capture_monitor_image(monitor).await?;
+    let (image, capture_dur) = capture_monitor_image(params.monitor).await?;
     debug!(
         "screenshot captured in {:?} for monitor {}",
-        capture_dur, monitor_id
+        capture_dur, params.monitor_id
     );
 
     // Walk accessibility tree on blocking thread (AX APIs are synchronous).
     // Apply adaptive budget overrides: expensive apps (Electron/Discord) get
     // reduced max_nodes and timeout to avoid blocking their UI thread.
-    let mut config = tree_walker_config.clone();
+    let mut config = params.tree_walker_config.clone();
 
     // Get the focused app name for budget decisions. AppSwitch triggers carry
     // the name directly; for all other triggers (visual change, idle, manual)
@@ -841,7 +845,7 @@ async fn do_capture(
         TreeWalkResult::Skipped(reason) => {
             debug!(
                 "skipping capture: window filtered ({}) on monitor {}",
-                reason, monitor_id
+                reason, params.monitor_id
             );
             return Ok(CaptureOutput {
                 result: None,
@@ -866,7 +870,7 @@ async fn do_capture(
                     if prev == new_hash && new_hash != 0 {
                         info!(
                             "content dedup: skipping capture for monitor {} (hash={}, trigger={})",
-                            monitor_id,
+                            params.monitor_id,
                             new_hash,
                             trigger.as_str()
                         );
@@ -897,7 +901,7 @@ async fn do_capture(
         {
             warn!(
                 "skipping capture: lock screen app '{}' on monitor {}",
-                app, monitor_id
+                app, params.monitor_id
             );
             crate::sleep_monitor::set_screen_locked(true);
             return Ok(CaptureOutput {
@@ -909,7 +913,7 @@ async fn do_capture(
             // Screen was marked locked but now a real app is focused — unlock
             debug!(
                 "screen unlocked: app '{}' detected on monitor {}",
-                app, monitor_id
+                app, params.monitor_id
             );
             crate::sleep_monitor::set_screen_locked(false);
         }
@@ -919,7 +923,7 @@ async fn do_capture(
         // can't read loginwindow's UI so app_name comes back None/"Unknown".
         warn!(
             "skipping capture: no app detected and screen is locked on monitor {}",
-            monitor_id
+            params.monitor_id
         );
         return Ok(CaptureOutput {
             result: None,
@@ -932,7 +936,7 @@ async fn do_capture(
     // When detected, set the global pause flag so ALL monitors stop capture
     // and the monitor watcher releases all SCK handles.
     if crate::drm_detector::check_and_update_drm_state(
-        pause_on_drm_content,
+        params.pause_on_drm_content,
         app_name_owned.as_deref(),
         browser_url_owned.as_deref(),
     ) {
@@ -944,19 +948,19 @@ async fn do_capture(
     }
 
     let ctx = CaptureContext {
-        db,
-        snapshot_writer,
+        db: params.db,
+        snapshot_writer: params.snapshot_writer,
         image: Arc::new(image),
         captured_at,
-        monitor_id,
-        device_name,
+        monitor_id: params.monitor_id,
+        device_name: params.device_name,
         app_name: app_name_owned.as_deref(),
         window_name: window_name_owned.as_deref(),
         browser_url: browser_url_owned.as_deref(),
         focused: true, // event-driven captures are always for the focused window
         capture_trigger: trigger.as_str(),
-        use_pii_removal,
-        languages: languages.to_vec(),
+        use_pii_removal: params.use_pii_removal,
+        languages: params.languages.to_vec(),
         elements_ref_frame_id,
     };
 

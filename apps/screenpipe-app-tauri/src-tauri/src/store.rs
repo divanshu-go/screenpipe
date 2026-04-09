@@ -11,8 +11,7 @@ use tracing::error;
 /// Uses Mutex instead of OnceLock so the cache can be invalidated when the
 /// Tauri resource table drops the underlying store (e.g. after an in-place
 /// update restart on Windows where resource IDs become stale).
-static STORE_CACHE: Mutex<Option<Arc<tauri_plugin_store::Store<tauri::Wry>>>> =
-    Mutex::new(None);
+static STORE_CACHE: Mutex<Option<Arc<tauri_plugin_store::Store<tauri::Wry>>>> = Mutex::new(None);
 
 /// Build (or rebuild) the store, retrying on TOCTOU races and stale resource IDs.
 fn build_store(app: &AppHandle) -> anyhow::Result<Arc<tauri_plugin_store::Store<tauri::Wry>>> {

@@ -109,7 +109,7 @@ pub async fn transcribe_handler(
 
     // Write to temp file so ffmpeg can decode it
     let ext = filename.rsplit('.').next().unwrap_or("bin");
-    let tmp = match NamedTempFile::with_suffix(&format!(".{}", ext)) {
+    let tmp = match NamedTempFile::with_suffix(format!(".{}", ext)) {
         Ok(t) => t,
         Err(e) => {
             error!("failed to create temp file: {}", e);

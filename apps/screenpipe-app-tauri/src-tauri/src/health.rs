@@ -313,7 +313,6 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
     let mut consecutive_failures: u32 = 0;
     let mut consecutive_unhealthy: u32 = 0;
 
-
     // Capture stall detection state
     let mut consecutive_audio_stall: u32 = 0;
     let mut consecutive_vision_stall: u32 = 0;
