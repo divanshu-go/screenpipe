@@ -622,10 +622,6 @@ function PipePresetSelector({
     const presetValue: string | string[] | null =
       newList.length === 0 ? null : newList.length === 1 ? newList[0] : newList;
 
-    // Register guard BEFORE optimistic update so background fetchPipes
-    // never overwrites with stale server data during the save.
-    pendingConfigSaves.current[pipeName] = true;
-
     setPipes((prev: any[]) =>
       prev.map((p: any) =>
         p.config.name === pipeName
@@ -634,14 +630,12 @@ function PipePresetSelector({
       )
     );
 
-    fetch(`${apiBase}/pipes/${pipeName}/config`, {
+    const savePromise = fetch(`${apiBase}/pipes/${pipeName}/config`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ preset: presetValue }),
     })
       .then(async () => {
-        // Wait for the config write to become durable before re-fetching.
-        // The server debounces reload_pipes at 2s, so give it time.
         await new Promise((r) => setTimeout(r, 500));
         delete pendingConfigSaves.current[pipeName];
         fetchPipes();
@@ -649,6 +643,9 @@ function PipePresetSelector({
       .catch(() => {
         delete pendingConfigSaves.current[pipeName];
       });
+
+    // Register guard so background fetchPipes never overwrites with stale data.
+    pendingConfigSaves.current[pipeName] = savePromise;
   };
 
   return (
