@@ -6787,6 +6787,15 @@ LIMIT ? OFFSET ?
         Ok(row.0 > 0)
     }
 
+    pub async fn get_most_recent_active_meeting_id(&self) -> Result<Option<i64>, SqlxError> {
+        let row: Option<(i64,)> = sqlx::query_as(
+            "SELECT id FROM meetings WHERE meeting_end IS NULL ORDER BY id DESC LIMIT 1",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| r.0))
+    }
+
     pub async fn list_meetings(
         &self,
         start_time: Option<&str>,
