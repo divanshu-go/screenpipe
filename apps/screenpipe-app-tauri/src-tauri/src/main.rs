@@ -517,19 +517,24 @@ async fn main() {
         const CREATE_NO_WINDOW: u32 = 0x08000000;
 
         if env::var("OLLAMA_ORIGINS").is_err() {
-            let output = std::process::Command::new("setx")
+            match std::process::Command::new("setx")
                 .args(&["OLLAMA_ORIGINS", "*"])
                 .creation_flags(CREATE_NO_WINDOW)
                 .output()
-                .expect("failed to execute process");
-
-            if !output.status.success() {
-                error!(
-                    "failed to set OLLAMA_ORIGINS: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                );
-            } else {
-                info!("permanently set OLLAMA_ORIGINS=* for user");
+            {
+                Ok(output) => {
+                    if !output.status.success() {
+                        error!(
+                            "failed to set OLLAMA_ORIGINS: {}",
+                            String::from_utf8_lossy(&output.stderr)
+                        );
+                    } else {
+                        info!("permanently set OLLAMA_ORIGINS=* for user");
+                    }
+                }
+                Err(e) => {
+                    warn!("setx not available, skipping OLLAMA_ORIGINS setup: {}", e);
+                }
             }
         }
     }
