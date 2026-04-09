@@ -577,7 +577,7 @@ class ShortcutReminderController: NSObject {
         if let hosting = hostingView {
             hosting.rootView = AnyView(view)
         } else {
-            let hosting = NSHostingView(rootView: AnyView(view))
+            let hosting = DraggableHostingView(rootView: AnyView(view))
             hosting.frame = contentView.bounds
             hosting.autoresizingMask = [.width, .height]
             contentView.addSubview(hosting)
@@ -591,12 +591,10 @@ class ShortcutReminderController: NSObject {
     }
 }
 
-// MARK: - Tracking view for hover/drag
+// MARK: - Tracking view for hover
 
 @available(macOS 13.0, *)
 private class ReminderTrackingView: NSView {
-    private var dragOrigin: NSPoint?
-
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
         return true
     }
@@ -625,26 +623,22 @@ private class ReminderTrackingView: NSView {
         window?.enableCursorRects()
         NSCursor.arrow.set()
     }
+}
 
-    // Manual drag — isMovableByWindowBackground doesn't work when
-    // NSHostingView fills the panel and captures all mouse events.
+// MARK: - Draggable hosting view
+// NSHostingView swallows mouseDown so isMovableByWindowBackground can't work.
+// This subclass implements window drag for any mouseDown that SwiftUI doesn't
+// handle (i.e. not on buttons). performWindowDrag is the native Cocoa API for
+// this — no manual delta tracking needed.
+
+@available(macOS 13.0, *)
+private class DraggableHostingView<Content: View>: NSHostingView<Content> {
     override func mouseDown(with event: NSEvent) {
-        dragOrigin = event.locationInWindow
-    }
-
-    override func mouseDragged(with event: NSEvent) {
-        guard let origin = dragOrigin, let window = window else { return }
-        let current = event.locationInWindow
-        let dx = current.x - origin.x
-        let dy = current.y - origin.y
-        var frame = window.frame
-        frame.origin.x += dx
-        frame.origin.y += dy
-        window.setFrameOrigin(frame.origin)
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        dragOrigin = nil
+        // Let SwiftUI handle first (buttons etc.)
+        super.mouseDown(with: event)
+        // Then start a window drag — if a button already handled the click
+        // this is a no-op because the run loop already processed the event.
+        window?.performDrag(with: event)
     }
 }
 
