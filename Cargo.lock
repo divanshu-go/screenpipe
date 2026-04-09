@@ -272,6 +272,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "arc-swap"
+version = "1.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a3a1fd6f75306b68087b831f025c712524bcb19aad54e557b1129cfa0a2b207"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "arg_enum_proc_macro"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6720,6 +6729,7 @@ name = "screenpipe-a11y"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "chrono",
  "cidre 0.13.1",
  "crossbeam-channel",
@@ -6755,7 +6765,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio"
-version = "0.3.274"
+version = "0.3.275"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -6815,7 +6825,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
-version = "0.3.274"
+version = "0.3.275"
 dependencies = [
  "dirs 6.0.0",
  "serde",
@@ -6828,7 +6838,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.3.274"
+version = "0.3.275"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6856,7 +6866,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.3.274"
+version = "0.3.275"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -6902,7 +6912,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-db"
-version = "0.3.274"
+version = "0.3.275"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6928,7 +6938,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-engine"
-version = "0.3.274"
+version = "0.3.275"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6998,7 +7008,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.3.274"
+version = "0.3.275"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7016,7 +7026,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.3.274"
+version = "0.3.275"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -7056,7 +7066,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-vault"
-version = "0.3.274"
+version = "0.3.275"
 dependencies = [
  "argon2",
  "chacha20poly1305",
