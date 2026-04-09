@@ -36,7 +36,11 @@ struct TranscriptionResponse {
 }
 
 fn error_response(status: StatusCode, message: String) -> Response {
-    (status, JsonResponse(json!({ "error": { "message": message, "type": "invalid_request_error" } }))).into_response()
+    (
+        status,
+        JsonResponse(json!({ "error": { "message": message, "type": "invalid_request_error" } })),
+    )
+        .into_response()
 }
 
 /// POST /v1/audio/transcriptions
@@ -101,17 +105,10 @@ pub async fn transcribe_handler(
         return error_response(StatusCode::BAD_REQUEST, "uploaded file is empty".into());
     }
 
-    info!(
-        "transcribe request: {} ({} bytes)",
-        filename,
-        bytes.len()
-    );
+    info!("transcribe request: {} ({} bytes)", filename, bytes.len());
 
     // Write to temp file so ffmpeg can decode it
-    let ext = filename
-        .rsplit('.')
-        .next()
-        .unwrap_or("bin");
+    let ext = filename.rsplit('.').next().unwrap_or("bin");
     let tmp = match NamedTempFile::with_suffix(&format!(".{}", ext)) {
         Ok(t) => t,
         Err(e) => {
@@ -132,27 +129,24 @@ pub async fn transcribe_handler(
 
     // Decode audio via ffmpeg (any format → f32 PCM 16kHz mono)
     let tmp_path = tmp.path().to_path_buf();
-    let (samples, sample_rate) = match tokio::task::spawn_blocking(move || {
-        read_audio_from_file(&tmp_path)
-    })
-    .await
-    {
-        Ok(Ok(result)) => result,
-        Ok(Err(e)) => {
-            error!("ffmpeg decode failed: {}", e);
-            return error_response(
-                StatusCode::BAD_REQUEST,
-                format!("failed to decode audio file: {}", e),
-            );
-        }
-        Err(e) => {
-            error!("spawn_blocking panicked: {}", e);
-            return error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal error decoding audio".into(),
-            );
-        }
-    };
+    let (samples, sample_rate) =
+        match tokio::task::spawn_blocking(move || read_audio_from_file(&tmp_path)).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(e)) => {
+                error!("ffmpeg decode failed: {}", e);
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    format!("failed to decode audio file: {}", e),
+                );
+            }
+            Err(e) => {
+                error!("spawn_blocking panicked: {}", e);
+                return error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal error decoding audio".into(),
+                );
+            }
+        };
 
     if samples.is_empty() {
         return error_response(

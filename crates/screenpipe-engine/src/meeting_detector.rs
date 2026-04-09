@@ -1488,9 +1488,15 @@ fn is_browser_app(app_name: &str) -> bool {
     let lower = app_name.to_lowercase();
     BROWSER_NAMES.iter().any(|b| lower.contains(b))
         || lower.ends_with(".exe")
-            && ["chrome.exe", "firefox.exe", "msedge.exe", "brave.exe", "opera.exe"]
-                .iter()
-                .any(|b| lower.contains(b))
+            && [
+                "chrome.exe",
+                "firefox.exe",
+                "msedge.exe",
+                "brave.exe",
+                "opera.exe",
+            ]
+            .iter()
+            .any(|b| lower.contains(b))
 }
 
 /// Advance the state machine based on scan results.
@@ -1594,7 +1600,11 @@ pub fn advance_state(
                     None,
                 )
             } else {
-                let timeout = if is_browser { ENDING_TIMEOUT_BROWSER } else { ENDING_TIMEOUT };
+                let timeout = if is_browser {
+                    ENDING_TIMEOUT_BROWSER
+                } else {
+                    ENDING_TIMEOUT
+                };
                 info!(
                     "meeting v2: Active -> Ending (no controls, app={}, id={}, grace={:?})",
                     app, meeting_id, timeout
@@ -1619,7 +1629,11 @@ pub fn advance_state(
             since,
             is_browser,
         } => {
-            let timeout = if is_browser { ENDING_TIMEOUT_BROWSER } else { ENDING_TIMEOUT };
+            let timeout = if is_browser {
+                ENDING_TIMEOUT_BROWSER
+            } else {
+                ENDING_TIMEOUT
+            };
             if let Some(result) = best_active {
                 info!(
                     "meeting v2: Ending -> Active (controls reappeared, app={}, id={})",
@@ -2510,9 +2524,16 @@ fn handle_no_apps_running(state: MeetingState) -> (MeetingState, Option<i64>) {
             started_at,
             is_browser,
         } => {
-            let timeout = if is_browser { ENDING_TIMEOUT_BROWSER } else { ENDING_TIMEOUT };
+            let timeout = if is_browser {
+                ENDING_TIMEOUT_BROWSER
+            } else {
+                ENDING_TIMEOUT
+            };
             if since.elapsed() >= timeout {
-                info!("meeting v2: Ending -> Idle (timeout={:?}, app={})", timeout, app);
+                info!(
+                    "meeting v2: Ending -> Idle (timeout={:?}, app={})",
+                    timeout, app
+                );
                 let ended_id = if meeting_id >= 0 {
                     Some(meeting_id)
                 } else {

@@ -212,7 +212,13 @@ pub async fn get_activity_summary(
     );
 
     // Execute all queries
-    let (apps_result, windows_result, texts_result, audio_speakers_result, audio_transcripts_result) = tokio::join!(
+    let (
+        apps_result,
+        windows_result,
+        texts_result,
+        audio_speakers_result,
+        audio_transcripts_result,
+    ) = tokio::join!(
         state.db.execute_raw_sql(&apps_query),
         state.db.execute_raw_sql(&windows_query),
         state.db.execute_raw_sql(&texts_query),
@@ -352,6 +358,9 @@ fn str_field(row: &Value, key: &str) -> String {
 
 fn num_field(row: &Value, key: &str) -> f64 {
     row.get(key)
-        .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .and_then(|v| {
+            v.as_f64()
+                .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+        })
         .unwrap_or(0.0)
 }

@@ -8,7 +8,11 @@
 //! per-record `synced_at` tracking. The cleanup loop only deletes data before
 //! `min(watermark, now - retention_days)`.
 
-use axum::{extract::{Json, State}, http::StatusCode, response::Json as JsonResponse};
+use axum::{
+    extract::{Json, State},
+    http::StatusCode,
+    response::Json as JsonResponse,
+};
 use chrono::{DateTime, Duration, Utc};
 use oasgen::{oasgen, OaSchema};
 use screenpipe_core::sync::{BlobType, SyncClientConfig, SyncManager};

@@ -299,10 +299,9 @@ pub(crate) async fn stop_meeting_handler(
     }
 
     // Emit event so triggered pipes can react
-    if let Err(e) = screenpipe_events::send_event(
-        "meeting_ended",
-        serde_json::json!({ "meeting_id": id }),
-    ) {
+    if let Err(e) =
+        screenpipe_events::send_event("meeting_ended", serde_json::json!({ "meeting_id": id }))
+    {
         tracing::warn!("failed to emit meeting_ended event: {}", e);
     }
 

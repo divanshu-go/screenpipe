@@ -2914,15 +2914,19 @@ impl PipeManager {
             // We subscribe to individual topics to avoid processing high-frequency
             // system events (ui_frame, window_ocr, realtime_transcription).
             use futures::StreamExt;
-            let mut meeting_start_rx = screenpipe_events::subscribe_to_event::<serde_json::Value>("meeting_started");
-            let mut meeting_end_rx = screenpipe_events::subscribe_to_event::<serde_json::Value>("meeting_ended");
-            let mut workflow_rx = screenpipe_events::subscribe_to_event::<serde_json::Value>("workflow_event");
+            let mut meeting_start_rx =
+                screenpipe_events::subscribe_to_event::<serde_json::Value>("meeting_started");
+            let mut meeting_end_rx =
+                screenpipe_events::subscribe_to_event::<serde_json::Value>("meeting_ended");
+            let mut workflow_rx =
+                screenpipe_events::subscribe_to_event::<serde_json::Value>("workflow_event");
             // pipe_completed:* uses subscribe_to_all with prefix filtering below
             let mut pipe_completed_rx = screenpipe_events::subscribe_to_all_events();
 
             // Circular chain detection: track recently-triggered pipe→pipe chains.
             // If A→B→A would fire, suppress the second link.
-            let mut recent_chain: std::collections::HashMap<String, Instant> = std::collections::HashMap::new();
+            let mut recent_chain: std::collections::HashMap<String, Instant> =
+                std::collections::HashMap::new();
             const CHAIN_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(60);
 
             loop {
@@ -2969,7 +2973,9 @@ impl PipeManager {
                     }
                     while let Some(e) = workflow_rx.next().now_or_never().flatten() {
                         // For workflow_event, expose the inner event_type as the match key
-                        let event_type = e.data.get("event_type")
+                        let event_type = e
+                            .data
+                            .get("event_type")
                             .and_then(|v| v.as_str())
                             .unwrap_or("workflow_event")
                             .to_string();
