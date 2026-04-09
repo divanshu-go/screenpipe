@@ -1447,6 +1447,8 @@ pub enum MeetingState {
         app: String,
         started_at: DateTime<Utc>,
         last_seen: Instant,
+        /// Whether this meeting was detected in a browser (longer grace period on end).
+        is_browser: bool,
     },
     /// Meeting controls disappeared — waiting before marking ended.
     Ending {
@@ -1454,6 +1456,8 @@ pub enum MeetingState {
         app: String,
         started_at: DateTime<Utc>,
         since: Instant,
+        /// Whether this meeting was detected in a browser (longer grace period on end).
+        is_browser: bool,
     },
 }
 
@@ -1474,6 +1478,20 @@ const CONFIRM_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Timeout for ending a meeting (how long controls must be absent before we end).
 const ENDING_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Longer timeout for browser-based meetings — tab switching hides AX controls,
+/// so we wait much longer before declaring the meeting ended.
+const ENDING_TIMEOUT_BROWSER: Duration = Duration::from_secs(300); // 5 minutes
+
+/// Check if an app name is a known browser.
+fn is_browser_app(app_name: &str) -> bool {
+    let lower = app_name.to_lowercase();
+    BROWSER_NAMES.iter().any(|b| lower.contains(b))
+        || lower.ends_with(".exe")
+            && ["chrome.exe", "firefox.exe", "msedge.exe", "brave.exe", "opera.exe"]
+                .iter()
+                .any(|b| lower.contains(b))
+}
 
 /// Advance the state machine based on scan results.
 ///
@@ -1515,9 +1533,10 @@ pub fn advance_state(
             profile_index,
         } => {
             if let Some(result) = best_active {
+                let browser = is_browser_app(&result.app_name);
                 info!(
-                    "meeting v2: Confirming -> Active (app={}, signals={})",
-                    result.app_name, result.signals_found
+                    "meeting v2: Confirming -> Active (app={}, signals={}, browser={})",
+                    result.app_name, result.signals_found, browser
                 );
                 (
                     // meeting_id=-1 is a placeholder; the loop fills it after DB insert
@@ -1526,6 +1545,7 @@ pub fn advance_state(
                         app: result.app_name.clone(),
                         started_at: Utc::now(),
                         last_seen: Instant::now(),
+                        is_browser: browser,
                     },
                     Some(StateAction::StartMeeting {
                         app: result.app_name.clone(),
@@ -1555,6 +1575,7 @@ pub fn advance_state(
             meeting_id,
             app,
             started_at,
+            is_browser,
             ..
         } => {
             if let Some(result) = best_active {
@@ -1568,13 +1589,15 @@ pub fn advance_state(
                         app: result.app_name.clone(),
                         started_at,
                         last_seen: Instant::now(),
+                        is_browser,
                     },
                     None,
                 )
             } else {
+                let timeout = if is_browser { ENDING_TIMEOUT_BROWSER } else { ENDING_TIMEOUT };
                 info!(
-                    "meeting v2: Active -> Ending (no controls, app={}, id={})",
-                    app, meeting_id
+                    "meeting v2: Active -> Ending (no controls, app={}, id={}, grace={:?})",
+                    app, meeting_id, timeout
                 );
                 (
                     MeetingState::Ending {
@@ -1582,6 +1605,7 @@ pub fn advance_state(
                         app,
                         started_at,
                         since: Instant::now(),
+                        is_browser,
                     },
                     None,
                 )
@@ -1593,7 +1617,9 @@ pub fn advance_state(
             app,
             started_at,
             since,
+            is_browser,
         } => {
+            let timeout = if is_browser { ENDING_TIMEOUT_BROWSER } else { ENDING_TIMEOUT };
             if let Some(result) = best_active {
                 info!(
                     "meeting v2: Ending -> Active (controls reappeared, app={}, id={})",
@@ -1605,13 +1631,14 @@ pub fn advance_state(
                         app: result.app_name.clone(),
                         started_at, // preserve original start time
                         last_seen: Instant::now(),
+                        is_browser,
                     },
                     None,
                 )
-            } else if since.elapsed() >= ENDING_TIMEOUT {
+            } else if since.elapsed() >= timeout {
                 info!(
-                    "meeting v2: Ending -> Idle (timeout, app={}, id={})",
-                    app, meeting_id
+                    "meeting v2: Ending -> Idle (timeout={:?}, app={}, id={})",
+                    timeout, app, meeting_id
                 );
                 (
                     MeetingState::Idle,
@@ -1619,10 +1646,11 @@ pub fn advance_state(
                 )
             } else {
                 debug!(
-                    "meeting v2: Ending (app={}, id={}, elapsed={:?})",
+                    "meeting v2: Ending (app={}, id={}, elapsed={:?}/{:?})",
                     app,
                     meeting_id,
-                    since.elapsed()
+                    since.elapsed(),
+                    timeout,
                 );
                 (
                     MeetingState::Ending {
@@ -1630,6 +1658,7 @@ pub fn advance_state(
                         app,
                         started_at,
                         since,
+                        is_browser,
                     },
                     None,
                 )
@@ -2376,6 +2405,7 @@ pub async fn run_meeting_detection_loop(
                         app: ref a,
                         started_at,
                         last_seen,
+                        is_browser,
                         ..
                     } = state
                     {
@@ -2384,6 +2414,7 @@ pub async fn run_meeting_detection_loop(
                             app: a.clone(),
                             started_at,
                             last_seen,
+                            is_browser,
                         };
                     }
                 }
@@ -2448,6 +2479,8 @@ fn handle_no_apps_running(state: MeetingState) -> (MeetingState, Option<i64>) {
             started_at,
             ..
         } => {
+            // When the app process exits, use a short timeout (not the browser one)
+            // because the process is actually gone, not just a tab switch.
             info!(
                 "meeting v2: Active -> Ending (app process exited, app={})",
                 app
@@ -2458,6 +2491,7 @@ fn handle_no_apps_running(state: MeetingState) -> (MeetingState, Option<i64>) {
                     app,
                     started_at,
                     since: Instant::now(),
+                    is_browser: false, // process exited → use short timeout
                 },
                 None,
             )
@@ -2474,9 +2508,11 @@ fn handle_no_apps_running(state: MeetingState) -> (MeetingState, Option<i64>) {
             since,
             app,
             started_at,
+            is_browser,
         } => {
-            if since.elapsed() >= ENDING_TIMEOUT {
-                info!("meeting v2: Ending -> Idle (timeout, app={})", app);
+            let timeout = if is_browser { ENDING_TIMEOUT_BROWSER } else { ENDING_TIMEOUT };
+            if since.elapsed() >= timeout {
+                info!("meeting v2: Ending -> Idle (timeout={:?}, app={})", timeout, app);
                 let ended_id = if meeting_id >= 0 {
                     Some(meeting_id)
                 } else {
@@ -2490,6 +2526,7 @@ fn handle_no_apps_running(state: MeetingState) -> (MeetingState, Option<i64>) {
                         since,
                         app,
                         started_at,
+                        is_browser,
                     },
                     None,
                 )
@@ -2887,6 +2924,7 @@ mod tests {
             app: "Zoom".to_string(),
             started_at: Utc::now(),
             last_seen: Instant::now(),
+            is_browser: false,
         };
         let results = vec![make_scan_result("Zoom", true, 1)];
         let (new_state, action) = advance_state(state, &results);
@@ -2905,6 +2943,7 @@ mod tests {
             app: "Zoom".to_string(),
             started_at: Utc::now(),
             last_seen: Instant::now(),
+            is_browser: false,
         };
         let results: Vec<ScanResult> = vec![];
         let (new_state, action) = advance_state(state, &results);
@@ -2924,6 +2963,7 @@ mod tests {
             app: "Zoom".to_string(),
             started_at: original_start,
             last_seen: Instant::now(),
+            is_browser: false,
         };
         // Transition to Ending
         let results: Vec<ScanResult> = vec![];
@@ -2951,6 +2991,7 @@ mod tests {
             app: "Zoom".to_string(),
             started_at: started,
             since: Instant::now(),
+            is_browser: false,
         };
         let results = vec![make_scan_result("Zoom", true, 1)];
         let (new_state, action) = advance_state(state, &results);
@@ -2971,6 +3012,7 @@ mod tests {
             since: Instant::now()
                 .checked_sub(ENDING_TIMEOUT + Duration::from_secs(1))
                 .unwrap_or(Instant::now()),
+            is_browser: false,
         };
         let results: Vec<ScanResult> = vec![];
         let (new_state, action) = advance_state(state, &results);
@@ -2990,6 +3032,7 @@ mod tests {
             app: "Zoom".to_string(),
             started_at: Utc::now(),
             since,
+            is_browser: false,
         };
         let results: Vec<ScanResult> = vec![];
         let (new_state, action) = advance_state(state, &results);
@@ -3011,6 +3054,7 @@ mod tests {
             app: "Zoom".to_string(),
             started_at: Utc::now(),
             last_seen: Instant::now(),
+            is_browser: false,
         };
 
         // First: Active -> Ending (no controls found)
@@ -3026,6 +3070,7 @@ mod tests {
             since: Instant::now()
                 .checked_sub(ENDING_TIMEOUT + Duration::from_secs(1))
                 .unwrap_or(Instant::now()),
+            is_browser: false,
         };
         let (state, action) = advance_state(state, &[]);
         assert!(matches!(state, MeetingState::Idle));
@@ -3076,6 +3121,7 @@ mod tests {
             app: "Zoom".to_string(),
             started_at: Utc::now(),
             last_seen: Instant::now(),
+            is_browser: false,
         };
         let (new_state, ended_id) = handle_no_apps_running(state);
         assert!(matches!(new_state, MeetingState::Ending { .. }));
@@ -3103,6 +3149,7 @@ mod tests {
             since: Instant::now()
                 .checked_sub(ENDING_TIMEOUT + Duration::from_secs(1))
                 .unwrap_or(Instant::now()),
+            is_browser: false,
         };
         let (new_state, ended_id) = handle_no_apps_running(state);
         assert!(matches!(new_state, MeetingState::Idle));
@@ -3116,6 +3163,7 @@ mod tests {
             app: "Zoom".to_string(),
             started_at: Utc::now(),
             since: Instant::now(),
+            is_browser: false,
         };
         let (new_state, ended_id) = handle_no_apps_running(state);
         assert!(matches!(new_state, MeetingState::Ending { .. }));
@@ -3132,6 +3180,7 @@ mod tests {
             since: Instant::now()
                 .checked_sub(ENDING_TIMEOUT + Duration::from_secs(1))
                 .unwrap_or(Instant::now()),
+            is_browser: false,
         };
         let (_, ended_id) = handle_no_apps_running(state);
         assert!(ended_id.is_none(), "should not end meeting with id=-1");
