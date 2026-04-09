@@ -632,10 +632,12 @@ impl SettingsStore {
                                     "unknown AI provider '{}' in preset, falling back to 'custom'",
                                     provider
                                 );
-                                preset.as_object_mut().unwrap().insert(
-                                    "provider".to_string(),
-                                    Value::String("custom".to_string()),
-                                );
+                                if let Some(obj) = preset.as_object_mut() {
+                                    obj.insert(
+                                        "provider".to_string(),
+                                        Value::String("custom".to_string()),
+                                    );
+                                }
                             }
                         }
                     }
@@ -1001,5 +1003,29 @@ impl PipeSuggestionsSettingsStore {
         let store = get_store(app, None).map_err(|e| e.to_string())?;
         store.set("pipe_suggestions", json!(self));
         store.save().map_err(|e| e.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_sanitize_legacy_fields_does_not_panic() {
+        let mut corrupted = json!({
+            "aiPresets": ["corrupted_string_not_an_object"]
+        });
+        
+        let sanitized = SettingsStore::sanitize_legacy_fields(corrupted);
+        
+        // And let's test a valid object with missing/unknown provider to prove it works
+        let mut valid = json!({
+            "aiPresets": [{"provider": "unknown_provider"}]
+        });
+        let sanitized2 = SettingsStore::sanitize_legacy_fields(valid);
+        
+        let presets = sanitized2.get("aiPresets").unwrap().as_array().unwrap();
+        assert_eq!(presets[0].get("provider").unwrap().as_str().unwrap(), "custom");
     }
 }
