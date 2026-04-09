@@ -1503,9 +1503,13 @@ fn is_browser_app(app_name: &str) -> bool {
 ///
 /// Returns the new state plus an optional action to perform (DB insert/update).
 /// This function is pure — it does not perform side effects, making it easy to test.
+///
+/// `has_output_audio`: when true, audio output device has recent data — keeps
+/// browser meetings alive even when AX controls are hidden (tab switched).
 pub fn advance_state(
     state: MeetingState,
     scan_results: &[ScanResult],
+    has_output_audio: bool,
 ) -> (MeetingState, Option<StateAction>) {
     // Find the best scan result (one that found the most signals and is in-call)
     let best_active = scan_results
@@ -1644,6 +1648,23 @@ pub fn advance_state(
                         meeting_id,
                         app: result.app_name.clone(),
                         started_at, // preserve original start time
+                        last_seen: Instant::now(),
+                        is_browser,
+                    },
+                    None,
+                )
+            } else if is_browser && has_output_audio {
+                // Audio output is still active — the user likely just switched
+                // tabs/apps while the meeting continues. Keep alive.
+                info!(
+                    "meeting v2: Ending -> Active (output audio still active, app={}, id={})",
+                    app, meeting_id
+                );
+                (
+                    MeetingState::Active {
+                        meeting_id,
+                        app,
+                        started_at,
                         last_seen: Instant::now(),
                         is_browser,
                     },
@@ -2330,8 +2351,17 @@ pub async fn run_meeting_detection_loop(
             scan_results.iter().filter(|r| r.is_in_call).count()
         );
 
+        // 2b. Check output audio when in Ending state for browser meetings.
+        // If the audio output device still has data, the meeting is likely
+        // still going — the user just switched tabs/apps.
+        let has_output_audio = if matches!(state, MeetingState::Ending { is_browser: true, .. }) {
+            db.has_recent_output_audio(30).await.unwrap_or(false)
+        } else {
+            false
+        };
+
         // 3. Advance state machine
-        let (new_state, action) = advance_state(state, &scan_results);
+        let (new_state, action) = advance_state(state, &scan_results, has_output_audio);
         state = new_state;
 
         // Adaptive interval based on state
@@ -2867,7 +2897,7 @@ mod tests {
     fn test_idle_to_confirming() {
         let state = MeetingState::Idle;
         let results = vec![make_scan_result("Zoom", true, 1)];
-        let (new_state, action) = advance_state(state, &results);
+        let (new_state, action) = advance_state(state, &results, false);
 
         assert!(matches!(new_state, MeetingState::Confirming { .. }));
         assert!(action.is_none());
@@ -2877,7 +2907,7 @@ mod tests {
     fn test_idle_stays_idle_no_results() {
         let state = MeetingState::Idle;
         let results: Vec<ScanResult> = vec![];
-        let (new_state, action) = advance_state(state, &results);
+        let (new_state, action) = advance_state(state, &results, false);
 
         assert!(matches!(new_state, MeetingState::Idle));
         assert!(action.is_none());
@@ -2887,7 +2917,7 @@ mod tests {
     fn test_idle_stays_idle_no_call() {
         let state = MeetingState::Idle;
         let results = vec![make_scan_result("Zoom", false, 0)];
-        let (new_state, action) = advance_state(state, &results);
+        let (new_state, action) = advance_state(state, &results, false);
 
         assert!(matches!(new_state, MeetingState::Idle));
         assert!(action.is_none());
@@ -2901,7 +2931,7 @@ mod tests {
             profile_index: 0,
         };
         let results = vec![make_scan_result("Zoom", true, 2)];
-        let (new_state, action) = advance_state(state, &results);
+        let (new_state, action) = advance_state(state, &results, false);
 
         assert!(matches!(new_state, MeetingState::Active { .. }));
         assert!(matches!(action, Some(StateAction::StartMeeting { .. })));
@@ -2917,7 +2947,7 @@ mod tests {
             profile_index: 0,
         };
         let results: Vec<ScanResult> = vec![];
-        let (new_state, action) = advance_state(state, &results);
+        let (new_state, action) = advance_state(state, &results, false);
 
         assert!(matches!(new_state, MeetingState::Idle));
         assert!(action.is_none());
@@ -2932,7 +2962,7 @@ mod tests {
             profile_index: 0,
         };
         let results: Vec<ScanResult> = vec![];
-        let (new_state, action) = advance_state(state, &results);
+        let (new_state, action) = advance_state(state, &results, false);
 
         assert!(matches!(new_state, MeetingState::Confirming { .. }));
         assert!(action.is_none());
@@ -2948,7 +2978,7 @@ mod tests {
             is_browser: false,
         };
         let results = vec![make_scan_result("Zoom", true, 1)];
-        let (new_state, action) = advance_state(state, &results);
+        let (new_state, action) = advance_state(state, &results, false);
 
         assert!(matches!(
             new_state,
@@ -2967,7 +2997,7 @@ mod tests {
             is_browser: false,
         };
         let results: Vec<ScanResult> = vec![];
-        let (new_state, action) = advance_state(state, &results);
+        let (new_state, action) = advance_state(state, &results, false);
 
         assert!(matches!(
             new_state,
@@ -2988,11 +3018,11 @@ mod tests {
         };
         // Transition to Ending
         let results: Vec<ScanResult> = vec![];
-        let (ending_state, _) = advance_state(state, &results);
+        let (ending_state, _) = advance_state(state, &results, false);
 
         // Transition back to Active (controls reappear)
         let results = vec![make_scan_result("Zoom", true, 1)];
-        let (active_again, _) = advance_state(ending_state, &results);
+        let (active_again, _) = advance_state(ending_state, &results, false);
 
         if let MeetingState::Active { started_at, .. } = active_again {
             assert_eq!(
@@ -3015,7 +3045,7 @@ mod tests {
             is_browser: false,
         };
         let results = vec![make_scan_result("Zoom", true, 1)];
-        let (new_state, action) = advance_state(state, &results);
+        let (new_state, action) = advance_state(state, &results, false);
 
         assert!(matches!(
             new_state,
@@ -3036,7 +3066,7 @@ mod tests {
             is_browser: false,
         };
         let results: Vec<ScanResult> = vec![];
-        let (new_state, action) = advance_state(state, &results);
+        let (new_state, action) = advance_state(state, &results, false);
 
         assert!(matches!(new_state, MeetingState::Idle));
         assert!(matches!(
@@ -3056,13 +3086,52 @@ mod tests {
             is_browser: false,
         };
         let results: Vec<ScanResult> = vec![];
-        let (new_state, action) = advance_state(state, &results);
+        let (new_state, action) = advance_state(state, &results, false);
 
         assert!(matches!(
             new_state,
             MeetingState::Ending { meeting_id: 42, .. }
         ));
         assert!(action.is_none());
+    }
+
+    #[test]
+    fn test_browser_ending_stays_active_with_output_audio() {
+        // Browser meeting: user switched tabs but audio output is still active
+        let state = MeetingState::Ending {
+            meeting_id: 42,
+            app: "Google Chrome".to_string(),
+            started_at: Utc::now(),
+            since: Instant::now(),
+            is_browser: true,
+        };
+        let results: Vec<ScanResult> = vec![];
+        let (new_state, action) = advance_state(state, &results, true);
+
+        assert!(
+            matches!(new_state, MeetingState::Active { meeting_id: 42, is_browser: true, .. }),
+            "browser meeting should stay Active when output audio is flowing"
+        );
+        assert!(action.is_none());
+    }
+
+    #[test]
+    fn test_native_ending_ignores_output_audio() {
+        // Native app: output audio should NOT prevent ending (controls are reliable)
+        let state = MeetingState::Ending {
+            meeting_id: 42,
+            app: "Zoom".to_string(),
+            started_at: Utc::now(),
+            since: Instant::now()
+                .checked_sub(ENDING_TIMEOUT + Duration::from_secs(1))
+                .unwrap_or(Instant::now()),
+            is_browser: false,
+        };
+        let results: Vec<ScanResult> = vec![];
+        let (new_state, action) = advance_state(state, &results, true);
+
+        assert!(matches!(new_state, MeetingState::Idle));
+        assert!(matches!(action, Some(StateAction::EndMeeting { meeting_id: 42 })));
     }
 
     // ── Edge case tests ────────────────────────────────────────────────
@@ -3079,7 +3148,7 @@ mod tests {
         };
 
         // First: Active -> Ending (no controls found)
-        let (state, action) = advance_state(state, &[]);
+        let (state, action) = advance_state(state, &[], false);
         assert!(matches!(state, MeetingState::Ending { .. }));
         assert!(action.is_none());
 
@@ -3093,7 +3162,7 @@ mod tests {
                 .unwrap_or(Instant::now()),
             is_browser: false,
         };
-        let (state, action) = advance_state(state, &[]);
+        let (state, action) = advance_state(state, &[], false);
         assert!(matches!(state, MeetingState::Idle));
         assert!(matches!(
             action,
@@ -3109,17 +3178,17 @@ mod tests {
         // Scan 1: Teams detected
         let state = MeetingState::Idle;
         let results = vec![make_scan_result("Teams", true, 1)];
-        let (state, _) = advance_state(state, &results);
+        let (state, _) = advance_state(state, &results, false);
         assert!(matches!(state, MeetingState::Confirming { .. }));
 
         // Scan 2: No controls (switched to VS Code, Teams AX tree inaccessible)
-        let (state, _) = advance_state(state, &[]);
+        let (state, _) = advance_state(state, &[], false);
         // Still confirming (within timeout)
         assert!(matches!(state, MeetingState::Confirming { .. }));
 
         // Scan 3: Teams detected again
         let results = vec![make_scan_result("Teams", true, 1)];
-        let (state, action) = advance_state(state, &results);
+        let (state, action) = advance_state(state, &results, false);
         // Should transition to Active
         assert!(matches!(state, MeetingState::Active { .. }));
         assert!(matches!(action, Some(StateAction::StartMeeting { .. })));
@@ -3131,7 +3200,7 @@ mod tests {
         // Should stay Idle.
         let state = MeetingState::Idle;
         let results = vec![make_scan_result("Teams", false, 0)];
-        let (state, _) = advance_state(state, &results);
+        let (state, _) = advance_state(state, &results, false);
         assert!(matches!(state, MeetingState::Idle));
     }
 
@@ -3253,7 +3322,7 @@ mod tests {
             make_scan_result("Zoom", true, 3),
             make_scan_result("Chrome", false, 0),
         ];
-        let (new_state, _) = advance_state(state, &results);
+        let (new_state, _) = advance_state(state, &results, false);
         if let MeetingState::Confirming { app, .. } = new_state {
             assert_eq!(app, "Zoom", "should pick the result with most signals");
         } else {
@@ -3595,7 +3664,7 @@ mod tests {
             signals_found: 1,
             matched_signals: vec!["menu_bar_item=Meeting".to_string()],
         }];
-        let (new_state, _) = advance_state(state, &results);
+        let (new_state, _) = advance_state(state, &results, false);
         assert!(
             matches!(new_state, MeetingState::Idle),
             "Zoom with only 1 signal should stay Idle, got {:?}",
@@ -3618,7 +3687,7 @@ mod tests {
                 "role=AXButton name=End Meeting".to_string(),
             ],
         }];
-        let (new_state, _) = advance_state(state, &results);
+        let (new_state, _) = advance_state(state, &results, false);
         assert!(
             matches!(new_state, MeetingState::Confirming { .. }),
             "Zoom with 2 signals should transition to Confirming, got {:?}",
