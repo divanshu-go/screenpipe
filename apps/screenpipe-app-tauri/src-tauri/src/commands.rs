@@ -940,7 +940,7 @@ pub async fn complete_onboarding(app_handle: tauri::AppHandle) -> Result<(), Str
 
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     close_window(app_handle.clone(), ShowRewindWindow::Onboarding).await?;
-    show_window(app_handle.clone(), ShowRewindWindow::Main).await?;
+    show_window(app_handle.clone(), ShowRewindWindow::Home { page: None }).await?;
 
     Ok(())
 }
