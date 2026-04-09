@@ -119,9 +119,10 @@ const TOOLS: Tool[] = [
   {
     name: "activity-summary",
     description:
-      "Lightweight activity overview (~200-500 tokens): app usage with active minutes, audio speakers, recent texts. " +
+      "Rich activity overview: app usage, window/tab titles with URLs and time spent, key text per context, audio transcriptions. " +
       "USE THIS FIRST for broad questions: 'what was I doing?', 'how long on X?', 'which apps?'. " +
-      "Only escalate to search-content if you need specific text content.",
+      "The 'windows' field shows exactly what the user worked on (e.g. 'Debug crash issue — 20 min', 'Stripe pricing page — 5 min'). " +
+      "Usually sufficient without further searches.",
     annotations: { title: "Activity Summary", readOnlyHint: true, openWorldHint: false, idempotentHint: true },
     inputSchema: {
       type: "object",
