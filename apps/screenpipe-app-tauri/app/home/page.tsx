@@ -283,6 +283,15 @@ function SettingsPageContent() {
     }
   }, [meetingState]);
 
+  // Native overlay: toggle meeting when user clicks phone icon in Swift overlay
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    listen("native-shortcut-toggle-meeting", () => {
+      toggleMeeting();
+    }).then((fn) => { unlisten = fn; });
+    return () => { unlisten?.(); };
+  }, [toggleMeeting]);
+
   // Watch pipe: navigate to chat when user clicks "watch" on a running pipe
   useEffect(() => {
     let unlisten: (() => void) | null = null;

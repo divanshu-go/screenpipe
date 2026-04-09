@@ -2137,8 +2137,18 @@ pub async fn run_meeting_detection_loop(
             state = new_state;
             if let Some(meeting_id) = ended_id {
                 let now = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
-                if let Err(e) = db.end_meeting_with_typed_text(meeting_id, &now, true).await {
-                    error!("meeting v2: failed to end meeting {}: {}", meeting_id, e);
+                match db.end_meeting_with_typed_text(meeting_id, &now, true).await {
+                    Ok(()) => {
+                        if let Err(e) = screenpipe_events::send_event(
+                            "meeting_ended",
+                            serde_json::json!({ "meeting_id": meeting_id }),
+                        ) {
+                            warn!("meeting v2: failed to emit meeting_ended event: {}", e);
+                        }
+                    }
+                    Err(e) => {
+                        error!("meeting v2: failed to end meeting {}: {}", meeting_id, e);
+                    }
                 }
             }
             sync_meeting_flag(
@@ -2298,6 +2308,13 @@ pub async fn run_meeting_detection_loop(
                         match db.end_meeting_with_typed_text(meeting_id, &now, true).await {
                             Ok(()) => {
                                 info!("meeting v2: meeting ended (id={})", meeting_id);
+                                // Emit event so triggered pipes can react
+                                if let Err(e) = screenpipe_events::send_event(
+                                    "meeting_ended",
+                                    serde_json::json!({ "meeting_id": meeting_id }),
+                                ) {
+                                    warn!("meeting v2: failed to emit meeting_ended event: {}", e);
+                                }
                             }
                             Err(e) => {
                                 error!("meeting v2: failed to end meeting {}: {}", meeting_id, e);
@@ -2464,6 +2481,13 @@ async fn insert_new_meeting(
                 "meeting v2: meeting started (id={}, app={}, title={:?})",
                 id, app, title
             );
+            // Emit event so triggered pipes can react
+            if let Err(e) = screenpipe_events::send_event(
+                "meeting_started",
+                serde_json::json!({ "meeting_id": id, "app": app, "title": title }),
+            ) {
+                warn!("meeting v2: failed to emit meeting_started event: {}", e);
+            }
             id
         }
         Err(e) => {
