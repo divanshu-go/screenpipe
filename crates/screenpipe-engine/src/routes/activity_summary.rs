@@ -160,33 +160,32 @@ pub async fn get_activity_summary(
          ORDER BY minutes DESC LIMIT 30"
     );
 
-    // Query 3: Key text — sample meaningful text across the FULL time range.
-    // Strategy: pick texts from multiple time buckets (not just the last frame),
-    // filter for substantial content (>20 chars), prefer paragraphs/blocks,
-    // and deduplicate.
+    // Query 3: Key text — one representative text per app+window context.
+    // Strategy: pick the most meaningful text from each distinct window/tab,
+    // preferring user input fields (AXTextArea/AXTextField) over static text,
+    // capped at 300 chars to avoid marketing copy walls.
     let texts_query = format!(
         "SELECT text, app_name, window_name, timestamp FROM ( \
            SELECT e.text, f.app_name, \
              COALESCE(f.window_name, '') as window_name, \
              f.timestamp, \
              ROW_NUMBER() OVER ( \
-               PARTITION BY ( \
-                 CAST((JULIANDAY(f.timestamp) - JULIANDAY('{start}')) * 24 AS INTEGER) \
-               ) \
-               ORDER BY LENGTH(e.text) DESC \
+               PARTITION BY f.app_name, f.window_name \
+               ORDER BY \
+                 CASE WHEN e.role IN ('AXTextArea', 'AXTextField') THEN 0 ELSE 1 END, \
+                 LENGTH(e.text) DESC \
              ) as rn \
            FROM elements e \
            JOIN frames f ON f.id = e.frame_id \
            WHERE f.timestamp BETWEEN '{start}' AND '{end}'{app_filter_f} \
            AND e.text IS NOT NULL \
-           AND e.source IN ('accessibility', 'ocr') \
-           AND e.role IN ('AXStaticText', 'paragraph', 'block', 'line') \
-           AND LENGTH(e.text) > 20 \
-           AND e.text NOT LIKE '%http%' \
-           AND e.text NOT GLOB '*[0-9][0-9][0-9][0-9][0-9]*' \
+           AND e.source = 'accessibility' \
+           AND LENGTH(e.text) BETWEEN 30 AND 300 \
+           AND e.text NOT LIKE 'http%' \
+           AND e.text NOT LIKE 'cdn.%' \
          ) ranked \
-         WHERE rn <= 3 \
-         ORDER BY timestamp ASC LIMIT 30"
+         WHERE rn = 1 \
+         ORDER BY timestamp DESC LIMIT 20"
     );
 
     // Query 4: Audio — actual transcriptions, not just counts
