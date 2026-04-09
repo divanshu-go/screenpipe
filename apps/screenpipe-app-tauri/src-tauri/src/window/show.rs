@@ -436,7 +436,7 @@ impl ShowRewindWindow {
 
             if id.label() == RewindWindowId::Onboarding.label() {
                 if onboarding_store.is_completed {
-                    return ShowRewindWindow::Main.show(app);
+                    return ShowRewindWindow::Home { page: None }.show(app);
                 }
             }
 
@@ -1388,7 +1388,7 @@ impl ShowRewindWindow {
             }
             ShowRewindWindow::Onboarding => {
                 if onboarding_store.is_completed {
-                    return ShowRewindWindow::Main.show(app);
+                    return ShowRewindWindow::Home { page: None }.show(app);
                 }
 
                 // Clamp onboarding window size to primary monitor to prevent min > max panic
