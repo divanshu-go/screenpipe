@@ -1679,16 +1679,22 @@ export function PipesSection() {
                   </button>
                 )}
 
-                {/* Schedule */}
+                {/* Schedule + triggers */}
                 <span
-                  className="text-xs text-muted-foreground shrink-0 text-right font-mono truncate max-w-[140px]"
-                  title={pipe.config.trigger?.events?.length || pipe.config.trigger?.custom?.length
-                    ? `triggers: ${[...(pipe.config.trigger?.events || []), ...(pipe.config.trigger?.custom || [])].join(", ")}`
-                    : pipe.config.schedule || "manual"}
+                  className="text-xs text-muted-foreground shrink-0 text-right font-mono truncate max-w-[180px]"
+                  title={[
+                    pipe.config.trigger?.events?.length || pipe.config.trigger?.custom?.length
+                      ? `triggers: ${[...(pipe.config.trigger?.events || []), ...(pipe.config.trigger?.custom || [])].join(", ")}`
+                      : "",
+                    pipe.config.schedule && pipe.config.schedule !== "manual" ? `schedule: ${pipe.config.schedule}` : "",
+                  ].filter(Boolean).join(" | ") || "manual"}
                 >
                   {(pipe.config.trigger?.events?.length || 0) + (pipe.config.trigger?.custom?.length || 0) > 0
                     ? `› ${(pipe.config.trigger?.events?.length || 0) + (pipe.config.trigger?.custom?.length || 0)} trigger${((pipe.config.trigger?.events?.length || 0) + (pipe.config.trigger?.custom?.length || 0)) > 1 ? "s" : ""}`
                     : humanizeSchedule(pipe.config.schedule)}
+                  {(pipe.config.trigger?.events?.length || 0) + (pipe.config.trigger?.custom?.length || 0) > 0 && pipe.config.schedule && pipe.config.schedule !== "manual" ? (
+                    <span className="text-muted-foreground/50"> + {humanizeSchedule(pipe.config.schedule)}</span>
+                  ) : null}
                 </span>
 
                 {/* Last run time */}
@@ -1894,6 +1900,12 @@ export function PipesSection() {
 
                         {/* Schedule */}
                         <div>
+                      <Label className="text-xs flex items-center gap-1.5 mb-1 cursor-help" title={((pipe.config.trigger?.events?.length || 0) + (pipe.config.trigger?.custom?.length || 0)) > 0 ? "runs on this schedule in addition to triggers" : "how often to run this pipe"}>
+                        schedule
+                        {((pipe.config.trigger?.events?.length || 0) + (pipe.config.trigger?.custom?.length || 0)) > 0 && pipe.config.schedule && pipe.config.schedule !== "manual" && (
+                          <span className="text-muted-foreground font-normal">+ triggers</span>
+                        )}
+                      </Label>
                       <Select
                         value={pipe.config.schedule || "manual"}
                         onValueChange={(value) => {
@@ -1920,8 +1932,6 @@ export function PipesSection() {
                       >
                         <SelectTrigger
                           className="mt-1 h-8 text-xs"
-                          disabled={((pipe.config.trigger?.events?.length || 0) + (pipe.config.trigger?.custom?.length || 0)) > 0}
-                          title={((pipe.config.trigger?.events?.length || 0) + (pipe.config.trigger?.custom?.length || 0)) > 0 ? "schedule is overridden by triggers" : undefined}
                         >
                           <SelectValue />
                         </SelectTrigger>
