@@ -766,7 +766,8 @@ async fn get_archive_chunk(
 
     // Get OCR for frames (include app_name/window_name for cross-machine sync)
     let ocr_records = if !frame_ids.is_empty() {
-        let ocr_results: Vec<(i64, String, bool, Option<String>, Option<String>)> = sqlx::query_as(
+        type OcrRow = (i64, String, bool, Option<String>, Option<String>);
+        let ocr_results: Vec<OcrRow> = sqlx::query_as(
             r#"
             SELECT frame_id, text, focused, app_name, window_name
             FROM ocr_text

@@ -976,6 +976,21 @@ async fn do_capture(
     })
 }
 
+/// Cheaply get the focused app name via AX APIs without walking the tree.
+/// Used to apply the walk budget to non-AppSwitch triggers (visual change,
+/// idle, manual) so that expensive apps like Chrome get throttled even
+/// when the capture wasn't triggered by an app switch.
+#[cfg(target_os = "macos")]
+fn get_focused_app_name_lightweight() -> Option<String> {
+    use cidre::{ax, ns};
+    let sys = ax::UiElement::sys_wide();
+    let app = sys.focused_app().ok()?;
+    let pid = app.pid().ok()?;
+    ns::RunningApp::with_pid(pid)
+        .and_then(|app| app.localized_name())
+        .map(|s| s.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1085,19 +1100,4 @@ mod tests {
         assert_eq!(config.visual_check_interval_ms, 3_000);
         assert!((config.visual_change_threshold - 0.05).abs() < f64::EPSILON);
     }
-}
-
-/// Cheaply get the focused app name via AX APIs without walking the tree.
-/// Used to apply the walk budget to non-AppSwitch triggers (visual change,
-/// idle, manual) so that expensive apps like Chrome get throttled even
-/// when the capture wasn't triggered by an app switch.
-#[cfg(target_os = "macos")]
-fn get_focused_app_name_lightweight() -> Option<String> {
-    use cidre::{ax, ns};
-    let sys = ax::UiElement::sys_wide();
-    let app = sys.focused_app().ok()?;
-    let pid = app.pid().ok()?;
-    ns::RunningApp::with_pid(pid)
-        .and_then(|app| app.localized_name())
-        .map(|s| s.to_string())
 }

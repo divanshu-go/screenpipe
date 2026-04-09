@@ -514,6 +514,7 @@ impl DatabaseManager {
     }
 
     /// Insert a synced frame via the write queue. Returns the frame ID (0 if skipped due to conflict).
+    #[allow(clippy::too_many_arguments)]
     pub async fn sync_insert_frame(
         &self,
         sync_id: &str,
@@ -570,6 +571,7 @@ impl DatabaseManager {
     }
 
     /// Insert a synced transcription via the write queue. Returns the audio_chunk_id.
+    #[allow(clippy::too_many_arguments)]
     pub async fn sync_insert_transcription(
         &self,
         sync_id: &str,
@@ -600,6 +602,7 @@ impl DatabaseManager {
     }
 
     /// Insert a synced accessibility record via the write queue.
+    #[allow(clippy::too_many_arguments)]
     pub async fn sync_insert_accessibility(
         &self,
         sync_id: &str,
@@ -1119,6 +1122,7 @@ impl DatabaseManager {
     /// Replace all transcription rows for an audio chunk with a single new transcription.
     /// Used by the re-transcribe endpoint. Deletes existing rows first to avoid
     /// UNIQUE constraint violations on (audio_chunk_id, transcription).
+    #[allow(clippy::too_many_arguments)]
     pub async fn replace_audio_transcription(
         &self,
         audio_chunk_id: i64,
@@ -6848,6 +6852,7 @@ LIMIT ? OFFSET ?
         Ok(rows)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn update_meeting(
         &self,
         id: i64,
@@ -7101,6 +7106,7 @@ LIMIT ? OFFSET ?
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn list_memories(
         &self,
         query: Option<&str>,

@@ -26,6 +26,7 @@ use tracing::{debug, info, warn};
 /// Shared state for the browser bridge.
 pub struct BrowserBridge {
     /// Sender to the connected extension (None if disconnected)
+    #[allow(clippy::type_complexity)]
     extension_tx: RwLock<Option<Arc<Mutex<futures::stream::SplitSink<WebSocket, Message>>>>>,
     /// Pending eval requests keyed by request ID
     pending: Mutex<std::collections::HashMap<String, oneshot::Sender<EvalResult>>>,

@@ -752,6 +752,7 @@ impl MeetingUiScanner {
 /// Uses `PrecomputedSignal` to avoid per-signal `.to_lowercase()` allocations.
 /// Lowercases node title/desc/identifier ONCE per node, not once per signal.
 #[cfg(target_os = "macos")]
+#[allow(clippy::too_many_arguments)]
 fn walk_for_signals(
     elem: &cidre::ax::UiElement,
     signals: &[PrecomputedSignal],
@@ -883,15 +884,15 @@ fn check_signal_match(
 ) -> bool {
     match signal {
         CallSignal::AutomationId(id) => {
-            identifier.map_or(false, |ident| ident.eq_ignore_ascii_case(id))
+            identifier.is_some_and(|ident| ident.eq_ignore_ascii_case(id))
         }
-        CallSignal::AutomationIdContains(substr) => identifier.map_or(false, |ident| {
-            ident.to_lowercase().contains(&substr.to_lowercase())
-        }),
+        CallSignal::AutomationIdContains(substr) => {
+            identifier.is_some_and(|ident| ident.to_lowercase().contains(&substr.to_lowercase()))
+        }
         CallSignal::KeyboardShortcut(shortcut) => {
             let shortcut_lower = shortcut.to_lowercase();
-            let in_desc = desc.map_or(false, |d| d.to_lowercase().contains(&shortcut_lower));
-            let in_title = title.map_or(false, |t| t.to_lowercase().contains(&shortcut_lower));
+            let in_desc = desc.is_some_and(|d| d.to_lowercase().contains(&shortcut_lower));
+            let in_title = title.is_some_and(|t| t.to_lowercase().contains(&shortcut_lower));
             in_desc || in_title
         }
         CallSignal::RoleWithName {
@@ -902,8 +903,8 @@ fn check_signal_match(
                 return false;
             }
             let name_lower = name_contains.to_lowercase();
-            let in_title = title.map_or(false, |t| t.to_lowercase().contains(&name_lower));
-            let in_desc = desc.map_or(false, |d| d.to_lowercase().contains(&name_lower));
+            let in_title = title.is_some_and(|t| t.to_lowercase().contains(&name_lower));
+            let in_desc = desc.is_some_and(|d| d.to_lowercase().contains(&name_lower));
             in_title || in_desc
         }
         CallSignal::MenuBarItem { title_contains } => {
@@ -912,26 +913,26 @@ fn check_signal_match(
                 return false;
             }
             let needle = title_contains.to_lowercase();
-            title.map_or(false, |t| t.to_lowercase().contains(&needle))
+            title.is_some_and(|t| t.to_lowercase().contains(&needle))
         }
         CallSignal::MenuItemId(expected_id) => {
             // Match AXMenuItem by automation ID (Zoom's "onMuteAudio:" etc.)
             if role != "AXMenuItem" {
                 return false;
             }
-            identifier.map_or(false, |ident| ident == *expected_id)
+            identifier == Some(*expected_id)
         }
         CallSignal::NameContains(needle) => {
             let needle_lower = needle.to_lowercase();
-            let in_title = title.map_or(false, |t| t.to_lowercase().contains(&needle_lower));
-            let in_desc = desc.map_or(false, |d| d.to_lowercase().contains(&needle_lower));
+            let in_title = title.is_some_and(|t| t.to_lowercase().contains(&needle_lower));
+            let in_desc = desc.is_some_and(|d| d.to_lowercase().contains(&needle_lower));
             in_title || in_desc
         }
         CallSignal::WindowTitle { title_contains } => {
             // WindowTitle is checked separately against the root window element,
             // not during descendant walking. But handle it here for completeness.
             let needle = title_contains.to_lowercase();
-            title.map_or(false, |t| t.to_lowercase().contains(&needle))
+            title.is_some_and(|t| t.to_lowercase().contains(&needle))
         }
     }
 }
@@ -3665,7 +3666,7 @@ mod tests {
         // Simulate Zoom idle: only "Meeting" menu bar item found (1 signal).
         // With min_signals_required=2, this should NOT trigger detection.
         let profiles = load_detection_profiles();
-        let zoom = profiles
+        let _zoom = profiles
             .iter()
             .find(|p| p.app_identifiers.macos_app_names.contains(&"zoom.us"))
             .expect("Zoom profile not found");
@@ -3753,8 +3754,7 @@ mod tests {
         let has_broad_pattern = meet
             .app_identifiers
             .browser_url_patterns
-            .iter()
-            .any(|p| *p == "google meet");
+            .contains(&"google meet");
         assert!(
             !has_broad_pattern,
             "Google Meet browser_url_patterns must NOT include bare 'google meet' — \
@@ -3861,7 +3861,7 @@ mod tests {
         // Cmd+D / Ctrl+D should NOT match any meeting signal for browser-based
         // profiles, because it's the universal bookmark shortcut.
         let signal_cmd_d = CallSignal::KeyboardShortcut("\u{2318}D");
-        let signal_ctrl_d = CallSignal::KeyboardShortcut("Ctrl+D");
+        let _signal_ctrl_d = CallSignal::KeyboardShortcut("Ctrl+D");
 
         // A random AXButton with ⌘D in its description (e.g. bookmark button)
         // should not be detected as a meeting signal
@@ -3909,7 +3909,7 @@ mod tests {
         // Patterns without dots should NOT match titles
         let non_domain_patterns = ["google meet", "zoom meeting", "slack huddle"];
         let title = "Join with Google Meet - Calendar";
-        let title_lower = title.to_lowercase();
+        let _title_lower = title.to_lowercase();
 
         for pattern in &non_domain_patterns {
             // Domain-only filter: patterns without dots are excluded from title matching

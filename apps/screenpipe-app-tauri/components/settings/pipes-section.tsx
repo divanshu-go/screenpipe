@@ -1322,19 +1322,22 @@ export function PipesSection() {
       if (pipeEvent?.type === "raw_line") {
         text = pipeEvent.text || "";
       } else if (pipeEvent) {
-        // For structured events (Pi NDJSON), show a summary line
+        // For structured events (Pi NDJSON), show only meaningful content
         if (pipeEvent.type === "message_update" && pipeEvent.assistantMessageEvent) {
           const evt = pipeEvent.assistantMessageEvent;
           if (evt.type === "text_delta" && evt.delta) {
             text = evt.delta;
           } else if (evt.type === "thinking" && evt.thinking) {
             text = `[thinking] ${evt.thinking}`;
+          } else if (evt.type === "toolcall_start" && evt.toolName) {
+            text = `\n> running ${evt.toolName}...\n`;
           }
         } else if (pipeEvent.type === "tool_use") {
-          text = `[tool] ${pipeEvent.name || "unknown"}`;
-        } else {
-          text = JSON.stringify(pipeEvent);
+          text = `\n> running ${pipeEvent.name || "unknown"}...\n`;
         }
+        // Silently skip all other event types (turn_start, turn_end,
+        // message_start, message_end, tool_execution_start/end/update,
+        // session, agent_start/end, etc.) — they are metadata, not content
       }
 
       if (text) {
