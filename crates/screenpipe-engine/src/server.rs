@@ -562,7 +562,8 @@ impl SCServer {
             )
             .route(
                 "/v1/audio/transcriptions",
-                axum::routing::post(crate::routes::transcribe::transcribe_handler),
+                axum::routing::post(crate::routes::transcribe::transcribe_handler)
+                    .layer(axum::extract::DefaultBodyLimit::max(250 * 1024 * 1024)), // 250MB
             );
 
         // Apple Intelligence — generic OpenAI-compatible endpoint (macOS only)
