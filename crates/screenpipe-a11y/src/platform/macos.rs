@@ -223,6 +223,16 @@ struct ContextCaptureRequest {
     tx: Sender<UiEvent>,
 }
 
+/// Clipboard capture request — processed by a dedicated worker thread.
+struct ClipboardRequest {
+    operation: char,
+    delay_ms: u64,
+    capture_content: bool,
+    apply_pii: bool,
+    start: Instant,
+    tx: Sender<UiEvent>,
+}
+
 struct TapState {
     tx: Sender<UiEvent>,
     start: Instant,
@@ -237,6 +247,9 @@ struct TapState {
     /// Bounded channel for context capture requests — a single worker thread
     /// processes these instead of spawning a thread per click.
     context_tx: Sender<ContextCaptureRequest>,
+    /// Bounded channel for clipboard capture — avoids spawning a thread per
+    /// Cmd+C/X/V and blocks the event tap with get_clipboard().
+    clipboard_tx: Sender<ClipboardRequest>,
 }
 
 struct TextBuffer {
@@ -334,6 +347,47 @@ fn run_event_tap(
         })
         .ok();
 
+    // Single worker thread for clipboard capture — avoids spawning a thread per
+    // Cmd+C/X and avoids blocking the event tap callback on Cmd+V.
+    let (clipboard_tx, clipboard_rx) = bounded::<ClipboardRequest>(4);
+    thread::Builder::new()
+        .name("clipboard-capture".into())
+        .spawn(move || {
+            while let Ok(req) = clipboard_rx.recv() {
+                if req.delay_ms > 0 {
+                    std::thread::sleep(std::time::Duration::from_millis(req.delay_ms));
+                }
+                let content = if req.capture_content {
+                    get_clipboard().map(|s| {
+                        let truncated = truncate(&s, 1000);
+                        if req.apply_pii {
+                            remove_pii(&truncated)
+                        } else {
+                            truncated
+                        }
+                    })
+                } else {
+                    None
+                };
+                let event = UiEvent {
+                    id: None,
+                    timestamp: Utc::now(),
+                    relative_ms: req.start.elapsed().as_millis() as u64,
+                    data: EventData::Clipboard {
+                        operation: req.operation,
+                        content,
+                    },
+                    app_name: None,
+                    window_title: None,
+                    browser_url: None,
+                    element: None,
+                    frame_id: None,
+                };
+                let _ = req.tx.try_send(event);
+            }
+        })
+        .ok();
+
     let state = Box::leak(Box::new(TapState {
         tx,
         start,
@@ -344,6 +398,7 @@ fn run_event_tap(
         current_window,
         activity_feed,
         context_tx,
+        clipboard_tx,
     }));
 
     let tap = cg::EventTap::new(
@@ -562,110 +617,24 @@ extern "C" fn tap_callback(
             let keycode = event.field_i64(cg::EventField::KEYBOARD_EVENT_KEYCODE) as u16;
 
             // Check for clipboard operations (Cmd+C, Cmd+X, Cmd+V)
+            // All routed to a single worker thread via bounded channel —
+            // no thread spawning, no blocking the event tap callback.
             if mods.has_cmd() && !mods.has_ctrl() && state.config.capture_clipboard {
-                match keycode {
-                    KEY_C => {
-                        let tx = state.tx.clone();
-                        let start = state.start;
-                        let capture_content = state.config.capture_clipboard_content;
-                        let apply_pii = state.config.apply_pii_removal;
-                        std::thread::spawn(move || {
-                            std::thread::sleep(std::time::Duration::from_millis(50));
-                            let content = if capture_content {
-                                get_clipboard().map(|s| {
-                                    let truncated = truncate(&s, 1000);
-                                    if apply_pii {
-                                        remove_pii(&truncated)
-                                    } else {
-                                        truncated
-                                    }
-                                })
-                            } else {
-                                None
-                            };
-                            let event = UiEvent {
-                                id: None,
-                                timestamp: Utc::now(),
-                                relative_ms: start.elapsed().as_millis() as u64,
-                                data: EventData::Clipboard {
-                                    operation: 'c',
-                                    content,
-                                },
-                                app_name: None,
-                                window_title: None,
-                                browser_url: None,
-                                element: None,
-                                frame_id: None,
-                            };
-                            let _ = tx.try_send(event);
-                        });
-                    }
-                    KEY_X => {
-                        let tx = state.tx.clone();
-                        let start = state.start;
-                        let capture_content = state.config.capture_clipboard_content;
-                        let apply_pii = state.config.apply_pii_removal;
-                        std::thread::spawn(move || {
-                            std::thread::sleep(std::time::Duration::from_millis(50));
-                            let content = if capture_content {
-                                get_clipboard().map(|s| {
-                                    let truncated = truncate(&s, 1000);
-                                    if apply_pii {
-                                        remove_pii(&truncated)
-                                    } else {
-                                        truncated
-                                    }
-                                })
-                            } else {
-                                None
-                            };
-                            let event = UiEvent {
-                                id: None,
-                                timestamp: Utc::now(),
-                                relative_ms: start.elapsed().as_millis() as u64,
-                                data: EventData::Clipboard {
-                                    operation: 'x',
-                                    content,
-                                },
-                                app_name: None,
-                                window_title: None,
-                                browser_url: None,
-                                element: None,
-                                frame_id: None,
-                            };
-                            let _ = tx.try_send(event);
-                        });
-                    }
-                    KEY_V => {
-                        let content = if state.config.capture_clipboard_content {
-                            get_clipboard().map(|s| {
-                                let truncated = truncate(&s, 1000);
-                                if state.config.apply_pii_removal {
-                                    remove_pii(&truncated)
-                                } else {
-                                    truncated
-                                }
-                            })
-                        } else {
-                            None
-                        };
-                        let event = UiEvent {
-                            id: None,
-                            timestamp,
-                            relative_ms: t,
-                            data: EventData::Clipboard {
-                                operation: 'v',
-                                content,
-                            },
-                            app_name: app_name.clone(),
-                            window_title: window_title.clone(),
-                            browser_url: None,
-                            element: None,
-                            frame_id: None,
-                        };
-                        let _ = state.tx.try_send(event);
-                    }
-                    _ => {}
+                let (op, delay) = match keycode {
+                    KEY_C => (Some('c'), 50),
+                    KEY_X => (Some('x'), 50),
+                    KEY_V => (Some('v'), 0), // paste: clipboard already set, no delay needed
+                    _ => (None, 0),
+                };
+                if let Some(operation) = op {
+                    let _ = state.clipboard_tx.try_send(ClipboardRequest {
+                        operation,
+                        delay_ms: delay,
+                        capture_content: state.config.capture_clipboard_content,
+                        apply_pii: state.config.apply_pii_removal,
+                        start: state.start,
+                        tx: state.tx.clone(),
+                    });
                 }
             }
 
