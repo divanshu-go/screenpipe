@@ -339,6 +339,10 @@ pub struct RecordArgs {
     /// Override the machine ID for this device
     #[arg(long)]
     pub sync_machine_id: Option<String>,
+
+    /// Pause screen and audio capture when DRM content (Netflix, Disney+, etc.) is detected
+    #[arg(long, default_value_t = false)]
+    pub pause_on_drm_content: bool,
 }
 
 impl RecordArgs {
@@ -402,6 +406,7 @@ impl RecordArgs {
             video_quality: self.video_quality.clone(),
             analytics_enabled: !self.disable_telemetry,
             ignore_incognito_windows: true,
+            pause_on_drm_content: self.pause_on_drm_content,
             ..screenpipe_config::RecordingSettings::default()
         }
     }
@@ -686,4 +691,64 @@ pub fn get_or_create_machine_id(override_id: Option<String>) -> String {
     }
 
     screenpipe_core::sync::get_or_create_machine_id()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn test_pause_on_drm_content_default_false() {
+        let cli = Cli::try_parse_from(["screenpipe", "record"]).unwrap();
+        match cli.command {
+            Command::Record(args) => {
+                assert!(!args.pause_on_drm_content, "default should be false");
+            }
+            _ => panic!("expected Record command"),
+        }
+    }
+
+    #[test]
+    fn test_pause_on_drm_content_flag_sets_true() {
+        let cli =
+            Cli::try_parse_from(["screenpipe", "record", "--pause-on-drm-content"]).unwrap();
+        match cli.command {
+            Command::Record(args) => {
+                assert!(args.pause_on_drm_content, "flag should set to true");
+            }
+            _ => panic!("expected Record command"),
+        }
+    }
+
+    #[test]
+    fn test_pause_on_drm_content_flows_to_recording_settings() {
+        let cli =
+            Cli::try_parse_from(["screenpipe", "record", "--pause-on-drm-content"]).unwrap();
+        match cli.command {
+            Command::Record(args) => {
+                let settings = args.to_recording_settings();
+                assert!(
+                    settings.pause_on_drm_content,
+                    "flag should propagate to RecordingSettings"
+                );
+            }
+            _ => panic!("expected Record command"),
+        }
+    }
+
+    #[test]
+    fn test_pause_on_drm_content_absent_flows_false() {
+        let cli = Cli::try_parse_from(["screenpipe", "record"]).unwrap();
+        match cli.command {
+            Command::Record(args) => {
+                let settings = args.to_recording_settings();
+                assert!(
+                    !settings.pause_on_drm_content,
+                    "absent flag should be false in settings"
+                );
+            }
+            _ => panic!("expected Record command"),
+        }
+    }
 }
