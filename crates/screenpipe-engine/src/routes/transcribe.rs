@@ -163,11 +163,15 @@ pub async fn transcribe_handler(
         sample_rate
     );
 
-    // Resolve transcription engine from user config (or override)
+    // Reuse the shared transcription engine to avoid loading a second model into
+    // GPU memory. Creating a new TranscriptionEngine per request would load another
+    // 0.6B MLX model on the GPU, causing Metal command buffer errors from memory pressure.
     let audio_manager = &state.audio_manager;
-    let engine = if let Some(ref engine_str) = engine_override {
+
+    let transcription_engine = if let Some(ref engine_str) = engine_override {
+        // Explicit engine override — must create a new instance
         use screenpipe_audio::core::engine::AudioTranscriptionEngine;
-        match engine_str.parse::<AudioTranscriptionEngine>() {
+        let engine = match engine_str.parse::<AudioTranscriptionEngine>() {
             Ok(e) => Arc::new(e),
             Err(_) => {
                 return error_response(
@@ -175,31 +179,39 @@ pub async fn transcribe_handler(
                     format!("unknown engine: {}", engine_str),
                 );
             }
+        };
+        let deepgram_api_key = audio_manager.deepgram_api_key().await;
+        let openai_compatible_config = audio_manager.openai_compatible_config().await;
+        let languages = audio_manager.languages().await;
+        match TranscriptionEngine::new(
+            engine,
+            deepgram_api_key,
+            openai_compatible_config,
+            languages,
+            vec![],
+        )
+        .await
+        {
+            Ok(e) => e,
+            Err(e) => {
+                error!("failed to create transcription engine: {}", e);
+                return error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("failed to initialize transcription engine: {}", e),
+                );
+            }
         }
     } else {
-        audio_manager.transcription_engine().await
-    };
-
-    let deepgram_api_key = audio_manager.deepgram_api_key().await;
-    let openai_compatible_config = audio_manager.openai_compatible_config().await;
-    let languages = audio_manager.languages().await;
-
-    let transcription_engine = match TranscriptionEngine::new(
-        engine.clone(),
-        deepgram_api_key,
-        openai_compatible_config,
-        languages,
-        vec![], // no custom vocabulary
-    )
-    .await
-    {
-        Ok(e) => e,
-        Err(e) => {
-            error!("failed to create transcription engine: {}", e);
-            return error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("failed to initialize transcription engine: {}", e),
-            );
+        // Use the shared engine (same GPU model as the audio pipeline)
+        match audio_manager.transcription_engine_instance().await {
+            Some(e) => e,
+            None => {
+                error!("transcription engine not initialized");
+                return error_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "transcription engine not ready yet".into(),
+                );
+            }
         }
     };
 
