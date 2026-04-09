@@ -7,8 +7,13 @@
 
 openapi: 3.0.3
 info:
-  title: 'Screenpipe API'
-  version: '1.0.0'
+  title: Screenpipe API
+  version: 1.0.0
+  description: 'Screenpipe captures everything you see, say, and hear on your computer. Use this API to search through captured
+    content, manage recordings, and build AI-powered automations on top of your screen data.
+
+
+    The server runs locally at `http://localhost:3030` by default.'
 paths:
   /search:
     get:
@@ -140,6 +145,11 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SearchResponse'
+      tags:
+      - Search
+      summary: Search screen and audio content
+      description: Query captured screen text (OCR), audio transcriptions, and UI elements with filters for time range, app,
+        window, content type, and more.
   /audio/list:
     get:
       operationId: routes_audio_api_list_audio_devices
@@ -152,6 +162,10 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/ListDeviceResponse'
+      tags:
+      - Audio
+      summary: List audio devices
+      description: Returns all available audio input and output devices.
   /vision/list:
     get:
       operationId: routes_health_api_list_monitors
@@ -164,11 +178,15 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/MonitorInfo'
+      tags:
+      - Vision
+      summary: List monitors
+      description: Returns all available monitors/displays.
   /tags/vision/batch:
     post:
-      description: |-
-        Batch fetch tags for multiple vision frame IDs.
-        POST /tags/vision/batch  { "frame_ids": [1, 2, 3] }
+      description: 'Batch fetch tags for multiple vision frame IDs.
+
+        POST /tags/vision/batch  { "frame_ids": [1, 2, 3] }'
       operationId: routes_content_get_tags_batch
       requestBody:
         content:
@@ -183,6 +201,9 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/GetTagsBatchResponse'
+      tags:
+      - Tags
+      summary: Get tags in batch
   /tags/{content_type}/{id}:
     post:
       operationId: routes_content_add_tags
@@ -212,6 +233,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AddTagsResponse'
+      tags:
+      - Tags
+      summary: Add tags
+      description: Add tags to a specific content item (frame or audio chunk).
     delete:
       operationId: routes_content_remove_tags
       parameters:
@@ -240,6 +265,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RemoveTagsResponse'
+      tags:
+      - Tags
+      summary: Remove tags
+      description: Remove tags from a specific content item.
   /frames/{frame_id}:
     get:
       operationId: routes_frames_get_frame_data
@@ -261,13 +290,19 @@ paths:
           content:
             application/json:
               schema: {}
+      tags:
+      - Frames
+      summary: Get frame by ID
+      description: Returns a captured screenshot frame with optional base64 image data.
   /frames/{frame_id}/text:
     get:
-      description: |-
-        Get OCR text positions with bounding boxes for a specific frame.
+      description: 'Get OCR text positions with bounding boxes for a specific frame.
+
         Falls back to accessibility tree node bounds when no OCR data exists.
+
         Both OCR and accessibility bounds are normalized to 0-1 relative to the
-        monitor (full-screen capture), so they align correctly with the screenshot.
+
+        monitor (full-screen capture), so they align correctly with the screenshot.'
       operationId: routes_frames_get_frame_text_data
       parameters:
       - name: frame_id
@@ -289,12 +324,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameTextResponse'
+      tags:
+      - Frames
+      summary: Get frame text (OCR)
     post:
-      description: |-
-        Run on-demand OCR on a frame that has no stored bounding boxes.
+      description: 'Run on-demand OCR on a frame that has no stored bounding boxes.
+
         Loads the snapshot JPEG, runs Apple Vision OCR, stores the result,
+
         and returns the text positions. Subsequent GET requests will hit the
-        cached DB row. If OCR data already exists, returns it without re-running.
+
+        cached DB row. If OCR data already exists, returns it without re-running.'
       operationId: routes_frames_run_frame_ocr
       parameters:
       - name: frame_id
@@ -310,13 +350,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameTextResponse'
+      tags:
+      - Frames
+      summary: Run OCR on frame
   /frames/{frame_id}/ocr:
     get:
-      description: |-
-        Get OCR text positions with bounding boxes for a specific frame.
+      description: 'Get OCR text positions with bounding boxes for a specific frame.
+
         Falls back to accessibility tree node bounds when no OCR data exists.
+
         Both OCR and accessibility bounds are normalized to 0-1 relative to the
-        monitor (full-screen capture), so they align correctly with the screenshot.
+
+        monitor (full-screen capture), so they align correctly with the screenshot.'
       operationId: routes_frames_get_frame_text_data
       parameters:
       - name: frame_id
@@ -338,12 +383,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameTextResponse'
+      tags:
+      - Frames
+      summary: Get frame OCR (deprecated)
     post:
-      description: |-
-        Run on-demand OCR on a frame that has no stored bounding boxes.
+      description: 'Run on-demand OCR on a frame that has no stored bounding boxes.
+
         Loads the snapshot JPEG, runs Apple Vision OCR, stores the result,
+
         and returns the text positions. Subsequent GET requests will hit the
-        cached DB row. If OCR data already exists, returns it without re-running.
+
+        cached DB row. If OCR data already exists, returns it without re-running.'
       operationId: routes_frames_run_frame_ocr
       parameters:
       - name: frame_id
@@ -359,11 +409,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameTextResponse'
+      tags:
+      - Frames
+      summary: Run frame OCR (deprecated)
   /frames/{frame_id}/context:
     get:
-      description: |-
-        Get frame context: accessibility text, tree nodes, and extracted URLs.
-        Falls back to OCR data for legacy frames without accessibility data.
+      description: 'Get frame context: accessibility text, tree nodes, and extracted URLs.
+
+        Falls back to OCR data for legacy frames without accessibility data.'
       operationId: routes_frames_get_frame_context
       parameters:
       - name: frame_id
@@ -379,6 +432,9 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameContextResponse'
+      tags:
+      - Frames
+      summary: Get frame context
   /frames/{frame_id}/metadata:
     get:
       description: Get frame metadata (timestamp) for deep link navigation. screenpipe://frame/123 → resolve to timestamp.
@@ -397,12 +453,16 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/FrameMetadataResponse'
+      tags:
+      - Frames
+      summary: Get frame metadata
   /frames/next-valid:
     get:
-      description: |-
-        Find the next frame that has a valid video file on disk.
+      description: 'Find the next frame that has a valid video file on disk.
+
         This allows the frontend to skip directly to a valid frame instead of
-        trying each frame one-by-one when frames fail to load.
+
+        trying each frame one-by-one when frames fail to load.'
       operationId: routes_frames_get_next_valid_frame
       parameters:
       - name: frame_id
@@ -427,6 +487,9 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/NextValidFrameResponse'
+      tags:
+      - Frames
+      summary: Get next valid frame
   /health:
     get:
       operationId: routes_health_health_check
@@ -437,6 +500,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HealthCheckResponse'
+      tags:
+      - System
+      summary: Health check
+      description: Returns system health status including audio/video pipeline state, device info, and version.
   /raw_sql:
     post:
       operationId: routes_content_execute_raw_sql
@@ -453,6 +520,10 @@ paths:
             application/json:
               schema:
                 type: object
+      tags:
+      - Database
+      summary: Execute raw SQL
+      description: Execute a raw SQL query against the screenpipe database. Use with caution.
   /add:
     post:
       operationId: routes_content_add_to_database
@@ -469,6 +540,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AddContentResponse'
+      tags:
+      - Database
+      summary: Add content to database
+      description: Manually insert screen or audio content into the database.
   /speakers/unnamed:
     get:
       operationId: routes_speakers_get_unnamed_speakers_handler
@@ -500,6 +575,10 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/Speaker'
+      tags:
+      - Speakers
+      summary: List unnamed speakers
+      description: Returns speakers that haven't been identified/named yet.
   /speakers/update:
     post:
       operationId: routes_speakers_update_speaker_handler
@@ -516,6 +595,9 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Speaker'
+      tags:
+      - Speakers
+      summary: Update speaker name
   /speakers/search:
     get:
       operationId: routes_speakers_search_speakers_handler
@@ -535,6 +617,9 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/Speaker'
+      tags:
+      - Speakers
+      summary: Search speakers
   /speakers/delete:
     post:
       operationId: routes_speakers_delete_speaker_handler
@@ -551,6 +636,9 @@ paths:
             application/json:
               schema:
                 type: object
+      tags:
+      - Speakers
+      summary: Delete speaker
   /speakers/hallucination:
     post:
       operationId: routes_speakers_mark_as_hallucination_handler
@@ -567,6 +655,10 @@ paths:
             application/json:
               schema:
                 type: object
+      tags:
+      - Speakers
+      summary: Mark speaker as hallucination
+      description: Flag a detected speaker as a false positive / hallucination.
   /speakers/merge:
     post:
       operationId: routes_speakers_merge_speakers_handler
@@ -583,6 +675,10 @@ paths:
             application/json:
               schema:
                 type: object
+      tags:
+      - Speakers
+      summary: Merge speakers
+      description: Merge two speaker identities into one.
   /speakers/similar:
     get:
       operationId: routes_speakers_get_similar_speakers_handler
@@ -606,6 +702,9 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/Speaker'
+      tags:
+      - Speakers
+      summary: Find similar speakers
   /speakers/reassign:
     post:
       operationId: routes_speakers_reassign_speaker_handler
@@ -622,6 +721,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ReassignSpeakerResponse'
+      tags:
+      - Speakers
+      summary: Reassign speaker
+      description: Reassign audio segments from one speaker to another.
   /speakers/undo-reassign:
     post:
       operationId: routes_speakers_undo_speaker_reassign_handler
@@ -638,6 +741,9 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/UndoSpeakerReassignResponse'
+      tags:
+      - Speakers
+      summary: Undo speaker reassignment
   /meetings:
     get:
       operationId: routes_meetings_list_meetings_handler
@@ -673,6 +779,10 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/MeetingRecord'
+      tags:
+      - Meetings
+      summary: List meetings
+      description: Returns detected and manually started meetings with transcriptions.
   /meetings/status:
     get:
       operationId: routes_meetings_meeting_status_handler
@@ -683,6 +793,9 @@ paths:
             application/json:
               schema:
                 type: object
+      tags:
+      - Meetings
+      summary: Get meeting detection status
   /meetings/merge:
     post:
       operationId: routes_meetings_merge_meetings_handler
@@ -699,6 +812,9 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/MeetingRecord'
+      tags:
+      - Meetings
+      summary: Merge meetings
   /meetings/bulk-delete:
     post:
       operationId: routes_meetings_bulk_delete_meetings_handler
@@ -715,6 +831,9 @@ paths:
             application/json:
               schema:
                 type: object
+      tags:
+      - Meetings
+      summary: Bulk delete meetings
   /meetings/start:
     post:
       operationId: routes_meetings_start_meeting_handler
@@ -731,6 +850,9 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/MeetingRecord'
+      tags:
+      - Meetings
+      summary: Start a manual meeting
   /meetings/stop:
     post:
       operationId: routes_meetings_stop_meeting_handler
@@ -741,6 +863,9 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/MeetingRecord'
+      tags:
+      - Meetings
+      summary: Stop a manual meeting
   /meetings/{id}:
     get:
       operationId: routes_meetings_get_meeting_handler
@@ -758,6 +883,9 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/MeetingRecord'
+      tags:
+      - Meetings
+      summary: Get meeting by ID
     put:
       operationId: routes_meetings_update_meeting_handler
       parameters:
@@ -780,6 +908,9 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/MeetingRecord'
+      tags:
+      - Meetings
+      summary: Update meeting
     delete:
       operationId: routes_meetings_delete_meeting_handler
       parameters:
@@ -796,6 +927,9 @@ paths:
             application/json:
               schema:
                 type: object
+      tags:
+      - Meetings
+      summary: Delete meeting
   /memories:
     get:
       operationId: routes_memories_list_memories_handler
@@ -865,6 +999,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/MemoryListResponse'
+      tags:
+      - Memories
+      summary: List memories
+      description: Returns saved AI memories / knowledge extracted from screen activity.
     post:
       operationId: routes_memories_create_memory_handler
       requestBody:
@@ -880,6 +1018,9 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/MemoryResponse'
+      tags:
+      - Memories
+      summary: Create memory
   /memories/{id}:
     get:
       operationId: routes_memories_get_memory_handler
@@ -897,6 +1038,9 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/MemoryResponse'
+      tags:
+      - Memories
+      summary: Get memory by ID
     put:
       operationId: routes_memories_update_memory_handler
       parameters:
@@ -919,6 +1063,9 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/MemoryResponse'
+      tags:
+      - Memories
+      summary: Update memory
     delete:
       operationId: routes_memories_delete_memory_handler
       parameters:
@@ -935,6 +1082,9 @@ paths:
             application/json:
               schema:
                 type: object
+      tags:
+      - Memories
+      summary: Delete memory
   /experimental/frames/merge:
     post:
       operationId: routes_content_merge_frames_handler
@@ -951,6 +1101,9 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/MergeVideosResponse'
+      tags:
+      - Experimental
+      summary: Merge video frames
   /experimental/validate/media:
     get:
       operationId: routes_content_validate_media_handler
@@ -967,6 +1120,9 @@ paths:
             application/json:
               schema:
                 type: object
+      tags:
+      - Experimental
+      summary: Validate media files
   /audio/start:
     post:
       operationId: routes_audio_start_audio
@@ -976,6 +1132,9 @@ paths:
           content:
             application/json:
               schema: {}
+      tags:
+      - Audio
+      summary: Start audio recording
   /audio/stop:
     post:
       operationId: routes_audio_stop_audio
@@ -985,6 +1144,9 @@ paths:
           content:
             application/json:
               schema: {}
+      tags:
+      - Audio
+      summary: Stop audio recording
   /search/keyword:
     get:
       operationId: routes_search_keyword_search_handler
@@ -1048,6 +1210,10 @@ paths:
             application/json:
               schema:
                 type: object
+      tags:
+      - Search
+      summary: Keyword search
+      description: Fast keyword-based search across all content types.
   /audio/device/start:
     post:
       operationId: routes_audio_start_audio_device
@@ -1064,6 +1230,9 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AudioDeviceControlResponse'
+      tags:
+      - Audio
+      summary: Start recording a specific audio device
   /audio/device/stop:
     post:
       operationId: routes_audio_stop_audio_device
@@ -1080,6 +1249,9 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AudioDeviceControlResponse'
+      tags:
+      - Audio
+      summary: Stop recording a specific audio device
   /elements:
     get:
       description: Search elements across all frames with optional FTS, time, and app filters.
@@ -1146,6 +1318,9 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ElementsListResponse'
+      tags:
+      - Elements
+      summary: Search UI elements
   /frames/{frame_id}/elements:
     get:
       description: Get all elements for a specific frame (full element tree).
@@ -1170,11 +1345,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ElementsListResponse'
+      tags:
+      - Frames
+      summary: Get frame UI elements
   /activity-summary:
     get:
-      description: |-
-        Lightweight compressed activity overview for a time range.
-        Returns app usage, recent accessibility texts, and audio summary (~200-500 tokens).
+      description: 'Lightweight compressed activity overview for a time range.
+
+        Returns app usage, recent accessibility texts, and audio summary (~200-500 tokens).'
       operationId: routes_activity_summary_get_activity_summary
       parameters:
       - name: start_time
@@ -1202,6 +1380,9 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ActivitySummaryResponse'
+      tags:
+      - Activity
+      summary: Get activity summary
   /vault/status:
     get:
       description: GET /vault/status
@@ -1213,6 +1394,9 @@ paths:
             application/json:
               schema:
                 type: object
+      tags:
+      - Vault
+      summary: Get vault status
   /vault/lock:
     post:
       description: POST /vault/lock
@@ -1224,6 +1408,9 @@ paths:
             application/json:
               schema:
                 type: object
+      tags:
+      - Vault
+      summary: Lock vault
   /vault/unlock:
     post:
       description: POST /vault/unlock
@@ -1241,6 +1428,9 @@ paths:
             application/json:
               schema:
                 type: object
+      tags:
+      - Vault
+      summary: Unlock vault
   /vault/setup:
     post:
       description: POST /vault/setup
@@ -1258,6 +1448,9 @@ paths:
             application/json:
               schema:
                 type: object
+      tags:
+      - Vault
+      summary: Set up vault
   /sync/init:
     post:
       description: Initialize sync at runtime with credentials.
@@ -1275,6 +1468,9 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SyncInitResponse'
+      tags:
+      - Cloud Sync
+      summary: Initialize cloud sync
   /sync/status:
     get:
       description: Get current sync status.
@@ -1286,6 +1482,9 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SyncStatusResponse'
+      tags:
+      - Cloud Sync
+      summary: Get sync status
   /sync/trigger:
     post:
       description: Trigger an immediate sync.
@@ -1297,6 +1496,9 @@ paths:
             application/json:
               schema:
                 type: object
+      tags:
+      - Cloud Sync
+      summary: Trigger sync
   /sync/lock:
     post:
       description: Lock sync (stop service and clear state).
@@ -1308,6 +1510,9 @@ paths:
             application/json:
               schema:
                 type: object
+      tags:
+      - Cloud Sync
+      summary: Lock sync
   /sync/download:
     post:
       description: Download and import data from other devices.
@@ -1325,6 +1530,9 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SyncDownloadResponse'
+      tags:
+      - Cloud Sync
+      summary: Download synced data
   /sync/pipes/push:
     post:
       description: Push local pipe manifest to cloud (merge with remote first).
@@ -1336,6 +1544,9 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PipeSyncResponse'
+      tags:
+      - Cloud Sync
+      summary: Push pipe configs to cloud
   /sync/pipes/pull:
     post:
       description: Pull pipe manifest from cloud, merge with local, apply to disk.
@@ -1347,6 +1558,9 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PipeSyncResponse'
+      tags:
+      - Cloud Sync
+      summary: Pull pipe configs from cloud
   /archive/init:
     post:
       description: POST /archive/init — initialize the archive system.
@@ -1364,6 +1578,9 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ArchiveInitResponse'
+      tags:
+      - Cloud Archive
+      summary: Initialize cloud archive
   /archive/configure:
     post:
       description: POST /archive/configure — update retention or disable.
@@ -1381,6 +1598,9 @@ paths:
             application/json:
               schema:
                 type: object
+      tags:
+      - Cloud Archive
+      summary: Configure archive settings
   /archive/status:
     get:
       description: GET /archive/status — return current state.
@@ -1392,6 +1612,9 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ArchiveStatusResponse'
+      tags:
+      - Cloud Archive
+      summary: Get archive status
   /archive/run:
     post:
       description: POST /archive/run — trigger an immediate archive run.
@@ -1403,6 +1626,9 @@ paths:
             application/json:
               schema:
                 type: object
+      tags:
+      - Cloud Archive
+      summary: Run archive now
   /retention/configure:
     post:
       description: POST /retention/configure — enable/disable local retention, set days.
@@ -1420,6 +1646,9 @@ paths:
             application/json:
               schema:
                 type: object
+      tags:
+      - Data Retention
+      summary: Configure retention policy
   /retention/status:
     get:
       description: GET /retention/status — return current retention state.
@@ -1431,6 +1660,9 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RetentionStatusResponse'
+      tags:
+      - Data Retention
+      summary: Get retention status
   /retention/run:
     post:
       description: POST /retention/run — trigger an immediate cleanup run.
@@ -1442,6 +1674,9 @@ paths:
             application/json:
               schema:
                 type: object
+      tags:
+      - Data Retention
+      summary: Run retention cleanup now
   /data/delete-range:
     post:
       operationId: routes_data_delete_time_range_handler
@@ -1458,6 +1693,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DeleteTimeRangeResponse'
+      tags:
+      - Data Management
+      summary: Delete data in time range
+      description: Permanently delete all captured data (frames, OCR, audio, etc.) within a time range.
   /data/delete-device:
     post:
       description: Delete all locally-stored data that was synced from a specific remote device.
@@ -1475,6 +1714,9 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DeleteTimeRangeResponse'
+      tags:
+      - Data Management
+      summary: Delete device data
   /data/device-storage:
     get:
       description: Get record counts per synced device.
@@ -1488,6 +1730,9 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/DeviceStorageEntry'
+      tags:
+      - Data Management
+      summary: Get device storage usage
 components:
   schemas:
     AccessibilityNode:
@@ -4636,3 +4881,40 @@ components:
       - duration
       - device_name
       - name
+tags:
+- name: Search
+  description: Search through captured screen and audio content
+- name: Frames
+  description: Access captured screenshots and their extracted text
+- name: Elements
+  description: Query captured UI accessibility tree data
+- name: Audio
+  description: Manage audio recording devices
+- name: Vision
+  description: Manage screen capture monitors
+- name: Meetings
+  description: Detected and manual meeting transcriptions
+- name: Speakers
+  description: Speaker identification and management
+- name: Memories
+  description: AI-extracted knowledge from screen activity
+- name: Tags
+  description: Tag content items for organization
+- name: Activity
+  description: Activity summaries and analytics
+- name: Vault
+  description: Encrypt/decrypt all data at rest
+- name: Cloud Sync
+  description: Sync data across devices via cloud
+- name: Cloud Archive
+  description: Archive old data to cloud storage
+- name: Data Retention
+  description: Auto-delete old data locally
+- name: Data Management
+  description: Manual data deletion and storage info
+- name: Database
+  description: Direct database access
+- name: System
+  description: Health checks and system status
+- name: Experimental
+  description: Experimental/unstable endpoints
