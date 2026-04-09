@@ -2376,28 +2376,26 @@ export function PipesSection() {
                                   <span className="text-muted-foreground/60">{exec.trigger_type}</span>
                                   {exec.model && <span className="text-muted-foreground/60 truncate max-w-[100px]">{exec.model}</span>}
                                   {exec.status === "completed" && exec.stdout && cleanPipeStdout(exec.stdout) && (
-                                    <button className="ml-auto text-muted-foreground hover:text-foreground" title="open in chat" onClick={async () => {
-                                      const conv = pipeExecutionToConversation(exec.pipe_name, exec.id, exec.stdout, exec.started_at);
-                                      await saveConversationFile(conv);
-                                      localStorage.setItem("pending-chat-conversation", conv.id);
-                                      const url = new URL(window.location.href);
-                                      url.searchParams.set("section", "home");
-                                      window.location.href = url.toString();
-                                    }}>
-                                      <MessageSquare className="w-3.5 h-3.5" />
-                                    </button>
+                                    <div className="ml-auto flex items-center gap-1">
+                                      <button className="text-muted-foreground hover:text-foreground p-0.5" title="copy" onClick={() => navigator.clipboard.writeText(cleanPipeStdout(exec.stdout))}>
+                                        <Copy className="w-3.5 h-3.5" />
+                                      </button>
+                                      <button className="text-muted-foreground hover:text-foreground p-0.5" title="open in chat" onClick={async () => {
+                                        const conv = pipeExecutionToConversation(exec.pipe_name, exec.id, exec.stdout, exec.started_at);
+                                        await saveConversationFile(conv);
+                                        localStorage.setItem("pending-chat-conversation", conv.id);
+                                        const url = new URL(window.location.href);
+                                        url.searchParams.set("section", "home");
+                                        window.location.href = url.toString();
+                                      }}>
+                                        <MessageSquare className="w-3.5 h-3.5" />
+                                      </button>
+                                    </div>
                                   )}
                                 </div>
                                 {exec.error_message && <p className="text-xs text-muted-foreground">{exec.error_message}</p>}
                                 {exec.status === "completed" && exec.stdout && cleanPipeStdout(exec.stdout) && (
-                                  <div className="relative group">
-                                    <button
-                                      className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-muted"
-                                      onClick={() => navigator.clipboard.writeText(cleanPipeStdout(exec.stdout))}
-                                      title="copy"
-                                    >
-                                      <Copy className="h-3 w-3 text-muted-foreground" />
-                                    </button>
+                                  <div>
                                     <div className="text-xs text-muted-foreground max-h-96 overflow-y-auto scrollbar-hide"><MemoizedReactMarkdown className="prose prose-xs dark:prose-invert max-w-none break-words text-xs [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_h1]:text-sm [&_h2]:text-xs [&_h3]:text-xs [&_p]:text-xs [&_li]:text-xs [&_code]:text-[10px]">{cleanPipeStdout(exec.stdout)}</MemoizedReactMarkdown></div>
                                   </div>
                                 )}
