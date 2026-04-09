@@ -2402,6 +2402,20 @@ export function PipesSection() {
                                 {exec.status === "failed" && exec.stderr && !exec.error_message && (
                                   <pre className="text-xs text-muted-foreground whitespace-pre-wrap break-words max-h-96 overflow-y-auto scrollbar-hide">{exec.stderr}</pre>
                                 )}
+                                {exec.status === "running" && (() => {
+                                  const key = `${exec.pipe_name}:${exec.id}`;
+                                  const lines = liveOutput[key];
+                                  if (!lines || lines.length === 0) return null;
+                                  return (
+                                    <pre
+                                      ref={(el) => { if (el) el.scrollTop = el.scrollHeight; }}
+                                      className="text-xs text-muted-foreground whitespace-pre-wrap break-words max-h-48 overflow-y-auto bg-muted/50 rounded p-2 font-mono"
+                                    >
+                                      {lines.slice(-200).join("")}
+                                      <span className="animate-pulse">▊</span>
+                                    </pre>
+                                  );
+                                })()}
                               </div>
                             ))
                           ) : (
