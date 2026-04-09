@@ -1458,7 +1458,8 @@ async fn main() {
 
                             if server_running {
                                 info!("Server already running, skipping embedded server start");
-                                return; // is_starting stays true — the running server is fine
+                                is_starting_clone.store(false, std::sync::atomic::Ordering::SeqCst);
+                                return;
                             }
 
                             // Check permissions before starting
