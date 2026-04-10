@@ -673,9 +673,7 @@ async fn gcal_token(client: &reqwest::Client, instance: Option<&str>) -> anyhow:
 }
 
 /// GET /connections/google-calendar/status — check connection + email.
-async fn gcal_status(
-    Query(q): Query<GoogleCalendarInstanceQuery>,
-) -> (StatusCode, Json<Value>) {
+async fn gcal_status(Query(q): Query<GoogleCalendarInstanceQuery>) -> (StatusCode, Json<Value>) {
     let client = reqwest::Client::new();
     let instance = q.instance.as_deref();
 
@@ -713,9 +711,7 @@ async fn gcal_status(
 }
 
 /// GET /connections/google-calendar/events — fetch Google Calendar events.
-async fn gcal_events(
-    Query(params): Query<GoogleCalendarEventsQuery>,
-) -> (StatusCode, Json<Value>) {
+async fn gcal_events(Query(params): Query<GoogleCalendarEventsQuery>) -> (StatusCode, Json<Value>) {
     let client = reqwest::Client::new();
     match gcal_events_inner(&client, params).await {
         Ok(events) => (StatusCode::OK, Json(json!(events))),
@@ -887,7 +883,10 @@ where
         // Google Calendar routes (must be before /:id to avoid conflict)
         .route("/google-calendar/events", get(gcal_events))
         .route("/google-calendar/status", get(gcal_status))
-        .route("/google-calendar/disconnect", axum::routing::delete(gcal_disconnect))
+        .route(
+            "/google-calendar/disconnect",
+            axum::routing::delete(gcal_disconnect),
+        )
         // Gmail-specific routes (must be before /:id to avoid conflict)
         .route("/gmail/instances", get(gmail_list_instances))
         .route("/gmail/messages", get(gmail_list_messages))

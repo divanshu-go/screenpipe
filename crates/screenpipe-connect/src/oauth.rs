@@ -121,10 +121,8 @@ pub fn read_oauth_token_instance(integration_id: &str, instance: Option<&str>) -
 /// Check if an OAuth instance is recoverable — has a valid token or a
 /// refresh token that can be used to obtain a new one.
 pub fn is_oauth_instance_connected(integration_id: &str, instance: Option<&str>) -> bool {
-    let content = match std::fs::read_to_string(oauth_token_path_instance(
-        integration_id,
-        instance,
-    )) {
+    let content = match std::fs::read_to_string(oauth_token_path_instance(integration_id, instance))
+    {
         Ok(c) => c,
         Err(_) => return false,
     };
