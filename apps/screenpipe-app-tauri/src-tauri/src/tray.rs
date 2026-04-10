@@ -362,7 +362,7 @@ fn create_dynamic_menu(
 
     // --- Open screenpipe ---
     menu_builder = menu_builder
-        .item(&MenuItemBuilder::with_id("settings_top", "Open screenpipe").build(app)?)
+        .item(&MenuItemBuilder::with_id("open_app", "Open screenpipe").build(app)?)
         .item(&PredefinedMenuItem::separator(app)?);
 
     // --- Primary actions (most-used first) ---
@@ -715,7 +715,13 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
                 }
             });
         }
-        "settings" | "settings_top" => {
+        "open_app" => {
+            let app = app_handle.clone();
+            let _ = app_handle.run_on_main_thread(move || {
+                let _ = ShowRewindWindow::Home { page: None }.show(&app);
+            });
+        }
+        "settings" => {
             let app = app_handle.clone();
             let page = Some("general".to_string());
             let _ = app_handle.run_on_main_thread(move || {
