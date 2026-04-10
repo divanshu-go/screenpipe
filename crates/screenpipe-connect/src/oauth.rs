@@ -118,6 +118,32 @@ pub fn read_oauth_token_instance(integration_id: &str, instance: Option<&str>) -
     v["access_token"].as_str().map(String::from)
 }
 
+/// Check if an OAuth instance is recoverable — has a valid token or a
+/// refresh token that can be used to obtain a new one.
+pub fn is_oauth_instance_connected(integration_id: &str, instance: Option<&str>) -> bool {
+    let content = match std::fs::read_to_string(oauth_token_path_instance(
+        integration_id,
+        instance,
+    )) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    let v: Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+
+    // Valid (non-expired) access token → connected
+    if let Some(expires_at) = v["expires_at"].as_u64() {
+        if unix_now() < expires_at.saturating_sub(60) {
+            return v["access_token"].as_str().is_some();
+        }
+    }
+
+    // Expired but has refresh token → recoverable (still "connected")
+    v["refresh_token"].as_str().is_some()
+}
+
 /// Write the raw provider token response to disk, augmenting it with a
 /// computed `expires_at` unix timestamp if `expires_in` is present.
 pub fn write_oauth_token(integration_id: &str, data: &Value) -> Result<()> {
@@ -237,9 +263,17 @@ pub async fn get_valid_token_instance(
     if let Some(token) = read_oauth_token_instance(integration_id, instance) {
         return Some(token);
     }
-    refresh_token_instance(client, integration_id, instance)
-        .await
-        .ok()
+    match refresh_token_instance(client, integration_id, instance).await {
+        Ok(token) => Some(token),
+        Err(e) => {
+            tracing::warn!(
+                "oauth refresh failed for {}(instance={:?}): {e:#}",
+                integration_id,
+                instance,
+            );
+            None
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

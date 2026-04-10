@@ -213,7 +213,14 @@ impl ConnectionManager {
                 let def = i.def();
                 let is_oauth = i.oauth_config().is_some();
                 let connected = if is_oauth {
-                    !oauth::list_oauth_instances(def.id).is_empty()
+                    oauth::list_oauth_instances(def.id)
+                        .iter()
+                        .any(|inst| {
+                            oauth::is_oauth_instance_connected(
+                                def.id,
+                                inst.as_deref(),
+                            )
+                        })
                 } else {
                     store
                         .get(def.id)
