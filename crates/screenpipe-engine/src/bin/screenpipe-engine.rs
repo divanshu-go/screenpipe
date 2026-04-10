@@ -666,7 +666,10 @@ async fn main() -> anyhow::Result<()> {
     let db_server = db.clone();
 
     let warning_audio_transcription_engine_clone = record_args.audio_transcription_engine.clone();
-    let monitor_ids: Vec<u32> = if config.monitor_ids.is_empty() {
+    let monitor_ids: Vec<u32> = if config.use_all_monitors || config.monitor_ids.is_empty() {
+        all_monitors.iter().map(|m| m.id()).collect::<Vec<_>>()
+    } else if config.monitor_ids == vec!["default"] {
+        // "default" means primary monitor only — show all for display, VisionManager filters
         all_monitors.iter().map(|m| m.id()).collect::<Vec<_>>()
     } else {
         config

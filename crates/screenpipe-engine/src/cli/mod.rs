@@ -419,6 +419,10 @@ impl RecordArgs {
         self,
         data_dir: PathBuf,
     ) -> crate::recording_config::RecordingConfig {
+        // Preserve explicit CLI monitor flags so tier defaults don't clobber them.
+        let cli_monitor_ids = self.monitor_id.clone();
+        let cli_use_all_monitors = self.use_all_monitors;
+
         let mut settings = self.to_recording_settings();
 
         // First-launch tier detection for CLI users
@@ -443,6 +447,22 @@ impl RecordArgs {
                 let is_fresh = !config_path.exists();
                 if is_fresh {
                     screenpipe_config::apply_tier_defaults(&mut settings, tier);
+
+                    // Restore CLI monitor flags — user's explicit --use-all-monitors or -m
+                    // must win over tier defaults (fixes #2897)
+                    if cli_use_all_monitors {
+                        settings.use_all_monitors = true;
+                        settings.monitor_ids = cli_monitor_ids
+                            .iter()
+                            .map(|id| id.to_string())
+                            .collect();
+                    } else if !cli_monitor_ids.is_empty() {
+                        settings.use_all_monitors = false;
+                        settings.monitor_ids = cli_monitor_ids
+                            .iter()
+                            .map(|id| id.to_string())
+                            .collect();
+                    }
                 }
                 settings.device_tier = Some(tier.as_str().to_string());
             }
