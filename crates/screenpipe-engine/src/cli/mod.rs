@@ -452,16 +452,12 @@ impl RecordArgs {
                     // must win over tier defaults (fixes #2897)
                     if cli_use_all_monitors {
                         settings.use_all_monitors = true;
-                        settings.monitor_ids = cli_monitor_ids
-                            .iter()
-                            .map(|id| id.to_string())
-                            .collect();
+                        settings.monitor_ids =
+                            cli_monitor_ids.iter().map(|id| id.to_string()).collect();
                     } else if !cli_monitor_ids.is_empty() {
                         settings.use_all_monitors = false;
-                        settings.monitor_ids = cli_monitor_ids
-                            .iter()
-                            .map(|id| id.to_string())
-                            .collect();
+                        settings.monitor_ids =
+                            cli_monitor_ids.iter().map(|id| id.to_string()).collect();
                     }
                 }
                 settings.device_tier = Some(tier.as_str().to_string());
