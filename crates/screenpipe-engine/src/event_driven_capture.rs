@@ -486,40 +486,6 @@ pub async fn event_driven_capture_loop(
                 continue;
             }
 
-            // Skip capture entirely when the focused app is an ignored window.
-            // SCK excludes the window pixels, but the resulting mostly-black
-            // frame still gets written to the timeline — ugly and wasteful.
-            {
-                let focused_app: Option<String> = match &trigger {
-                    CaptureTrigger::AppSwitch { app_name } => Some(app_name.clone()),
-                    _ => {
-                        #[cfg(target_os = "macos")]
-                        {
-                            get_focused_app_name_lightweight()
-                        }
-                        #[cfg(not(target_os = "macos"))]
-                        {
-                            None
-                        }
-                    }
-                };
-                if let Some(ref app) = focused_app {
-                    let ignored = &capture_params.tree_walker_config.ignored_windows;
-                    let app_lower = app.to_lowercase();
-                    if ignored
-                        .iter()
-                        .any(|ig| app_lower.contains(&ig.to_lowercase()))
-                    {
-                        debug!(
-                            "focused app '{}' is ignored — skipping capture on monitor {}",
-                            app, monitor_id
-                        );
-                        tokio::time::sleep(poll_interval).await;
-                        continue;
-                    }
-                }
-            }
-
             // Reset content hash on app/window change so the first frame
             // of a new context is never deduped by a stale hash
             if matches!(
@@ -833,6 +799,24 @@ async fn do_capture(
         capture_dur, params.monitor_id
     );
 
+    // When an ignored window covers most of a monitor, SCK replaces its
+    // pixels with black.  The resulting frame is nearly all-black — storing
+    // it wastes the tree walk, OCR, DB write, and produces ugly black frames
+    // in the timeline.  Detect this cheaply by sampling pixels: if >95% are
+    // near-black, skip everything but still return the image so the frame
+    // comparer stays updated (prevents re-triggering on the same black frame).
+    if is_frame_mostly_black(&image) {
+        debug!(
+            "captured frame is mostly black on monitor {} — skipping DB write (likely ignored window covering screen)",
+            params.monitor_id
+        );
+        return Ok(CaptureOutput {
+            result: None,
+            image,
+            elements_deduped: false,
+        });
+    }
+
     // Walk accessibility tree on blocking thread (AX APIs are synchronous).
     // Apply adaptive budget overrides: expensive apps (Electron/Discord) get
     // reduced max_nodes and timeout to avoid blocking their UI thread.
@@ -1050,6 +1034,49 @@ fn get_focused_app_name_lightweight() -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// Cheaply detect if a captured frame is predominantly black.
+///
+/// When ScreenCaptureKit excludes an ignored window, the excluded pixels
+/// become black.  If the window covers most of the monitor the frame is
+/// nearly all-black — we want to skip storing it.
+///
+/// Strategy: sample a grid of pixels (≈200 points) and check if >95% have
+/// an RGB sum below a threshold.  Real content — even dark-mode apps — has
+/// variation (scrollbars, text, status bar).  Pure SCK-excluded regions are
+/// exactly `(0, 0, 0)` or very close to it.
+fn is_frame_mostly_black(image: &image::DynamicImage) -> bool {
+    let rgb = image.to_rgb8();
+    let (w, h) = rgb.dimensions();
+    if w == 0 || h == 0 {
+        return true;
+    }
+
+    // Sample on a ~15×15 grid ≈ 225 points (sub-microsecond)
+    let step_x = (w / 15).max(1);
+    let step_y = (h / 15).max(1);
+    let mut total = 0u32;
+    let mut black = 0u32;
+
+    let mut y = 0;
+    while y < h {
+        let mut x = 0;
+        while x < w {
+            total += 1;
+            let px = rgb.get_pixel(x, y);
+            // Threshold: R+G+B < 15 — catches pure black and near-black
+            // from JPEG compression artifacts but not real dark-mode content.
+            if (px[0] as u16 + px[1] as u16 + px[2] as u16) < 15 {
+                black += 1;
+            }
+            x += step_x;
+        }
+        y += step_y;
+    }
+
+    let ratio = black as f64 / total as f64;
+    ratio > 0.95
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1158,5 +1185,64 @@ mod tests {
         assert!(config.capture_on_clipboard);
         assert_eq!(config.visual_check_interval_ms, 3_000);
         assert!((config.visual_change_threshold - 0.05).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_all_black_frame_detected() {
+        let img = image::DynamicImage::ImageRgb8(image::RgbImage::new(1920, 1080));
+        assert!(is_frame_mostly_black(&img));
+    }
+
+    #[test]
+    fn test_normal_frame_not_detected() {
+        let mut buf = image::RgbImage::new(1920, 1080);
+        // Fill with typical content colors
+        for px in buf.pixels_mut() {
+            *px = image::Rgb([120, 130, 140]);
+        }
+        let img = image::DynamicImage::ImageRgb8(buf);
+        assert!(!is_frame_mostly_black(&img));
+    }
+
+    #[test]
+    fn test_frame_with_visible_menubar_not_skipped() {
+        // A menu bar at y=0 gets sampled by the grid → enough non-black
+        // pixels to keep the frame (it has real content visible).
+        let mut buf = image::RgbImage::new(1920, 1080);
+        for y in 0..22 {
+            for x in 0..1920 {
+                buf.put_pixel(x, y, image::Rgb([200, 200, 200]));
+            }
+        }
+        let img = image::DynamicImage::ImageRgb8(buf);
+        // Menu bar is ~2% of pixels but hits a full grid row (~7% of samples)
+        // so the frame is NOT detected as mostly black — correct, it has content.
+        assert!(!is_frame_mostly_black(&img));
+    }
+
+    #[test]
+    fn test_pure_black_with_single_bright_pixel_still_black() {
+        // A single bright pixel shouldn't prevent detection
+        let mut buf = image::RgbImage::new(1920, 1080);
+        buf.put_pixel(960, 540, image::Rgb([255, 255, 255]));
+        let img = image::DynamicImage::ImageRgb8(buf);
+        assert!(is_frame_mostly_black(&img));
+    }
+
+    #[test]
+    fn test_dark_mode_app_not_falsely_detected() {
+        // Dark mode: dark grey background (30, 30, 30) — NOT pure black
+        let mut buf = image::RgbImage::new(1920, 1080);
+        for px in buf.pixels_mut() {
+            *px = image::Rgb([30, 30, 30]);
+        }
+        let img = image::DynamicImage::ImageRgb8(buf);
+        assert!(!is_frame_mostly_black(&img));
+    }
+
+    #[test]
+    fn test_empty_image_detected() {
+        let img = image::DynamicImage::ImageRgb8(image::RgbImage::new(0, 0));
+        assert!(is_frame_mostly_black(&img));
     }
 }
