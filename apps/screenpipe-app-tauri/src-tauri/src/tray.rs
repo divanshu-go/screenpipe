@@ -717,8 +717,9 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
         }
         "settings" | "settings_top" => {
             let app = app_handle.clone();
+            let page = Some("general".to_string());
             let _ = app_handle.run_on_main_thread(move || {
-                let _ = ShowRewindWindow::Home { page: None }.show(&app);
+                let _ = ShowRewindWindow::Home { page }.show(&app);
             });
         }
         "feedback" => {
