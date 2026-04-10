@@ -387,6 +387,11 @@ async fn do_local_cleanup(db: &Arc<DatabaseManager>, cutoff: DateTime<Utc>) -> a
         if let Err(e) = db.cleanup_orphaned_chunks().await {
             warn!("retention: orphan chunk cleanup failed: {}", e);
         }
+        // Reclaim disk space — without VACUUM, SQLite keeps deleted pages
+        info!("retention: running incremental vacuum to reclaim disk space");
+        if let Err(e) = db.execute_raw_sql("PRAGMA incremental_vacuum(1000)").await {
+            warn!("retention: incremental vacuum failed: {}", e);
+        }
     }
 
     Ok(total)

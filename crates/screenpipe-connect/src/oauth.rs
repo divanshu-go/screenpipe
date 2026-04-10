@@ -161,7 +161,13 @@ pub fn write_oauth_token_instance(
     if let Some(expires_in) = data["expires_in"].as_u64() {
         stored["expires_at"] = Value::from(unix_now() + expires_in);
     }
-    std::fs::write(path, serde_json::to_string_pretty(&stored)?)?;
+    std::fs::write(&path, serde_json::to_string_pretty(&stored)?)?;
+    // Restrict permissions — file contains OAuth credentials
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
     Ok(())
 }
 

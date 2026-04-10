@@ -18,7 +18,8 @@ use crate::{
     routes::{
         activity_summary::get_activity_summary,
         audio::{
-            api_list_audio_devices, start_audio, start_audio_device, stop_audio, stop_audio_device,
+            api_list_audio_devices, audio_device_status, start_audio, start_audio_device,
+            stop_audio, stop_audio_device,
         },
         content::{
             add_tags, add_to_database, execute_raw_sql, get_tags_batch, merge_frames_handler,
@@ -521,6 +522,7 @@ impl SCServer {
             .get("/search/keyword", keyword_search_handler)
             .post("/audio/device/start", start_audio_device)
             .post("/audio/device/stop", stop_audio_device)
+            .get("/audio/device/status", audio_device_status)
             .get("/elements", search_elements)
             .get("/frames/:frame_id/elements", get_frame_elements)
             .get("/activity-summary", get_activity_summary)

@@ -347,45 +347,25 @@ function HomeContent() {
               {/* Row 1: name + phone + collapse */}
               <div className={cn("flex items-center", sidebarCollapsed ? "justify-center" : "justify-between")}>
                 {!sidebarCollapsed && <h1 className={cn("text-lg font-bold", isTranslucent ? "vibrant-heading" : "text-foreground")}>screenpipe</h1>}
-                <div className="flex items-center gap-1.5">
-                  <NotificationBell />
-                  <button
-                    onClick={toggleMeeting}
-                    disabled={meetingLoading || (meetingState.active && !meetingState.manualActive)}
-                    className={cn("relative flex items-center justify-center h-5 w-5 transition-colors", isTranslucent ? "vibrant-nav-item" : "text-muted-foreground hover:text-foreground")}
-                    title={
-                      meetingState.manualActive
-                        ? "stop meeting"
-                        : meetingState.active
-                          ? "meeting detected"
-                          : "start meeting"
-                    }
-                  >
-                    {meetingState.active && (
-                      <span className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-foreground animate-pulse" />
-                    )}
-                    <Phone className="h-3.5 w-3.5" />
-                  </button>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        onClick={toggleSidebar}
-                        className={cn("transition-colors", isTranslucent ? "vibrant-nav-item" : "text-muted-foreground hover:text-foreground")}
-                      >
-                        {sidebarCollapsed ? (
-                          <PanelLeftOpen className="h-4 w-4" />
-                        ) : (
-                          <PanelLeftClose className="h-4 w-4" />
-                        )}
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom" className="text-xs">
-                      {sidebarCollapsed ? "expand sidebar" : "collapse sidebar"} <kbd className="ml-1 px-1 py-0.5 bg-muted rounded text-[10px]">⌘B</kbd>
-                    </TooltipContent>
-                  </Tooltip>
-                </div>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={toggleSidebar}
+                      className={cn("transition-colors", isTranslucent ? "vibrant-nav-item" : "text-muted-foreground hover:text-foreground")}
+                    >
+                      {sidebarCollapsed ? (
+                        <PanelLeftOpen className="h-4 w-4" />
+                      ) : (
+                        <PanelLeftClose className="h-4 w-4" />
+                      )}
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="text-xs">
+                    {sidebarCollapsed ? "expand sidebar" : "collapse sidebar"} <kbd className="ml-1 px-1 py-0.5 bg-muted rounded text-[10px]">⌘B</kbd>
+                  </TooltipContent>
+                </Tooltip>
               </div>
-              {/* Row 2: device icons */}
+              {/* Row 2: device status + action buttons */}
               {!sidebarCollapsed && (() => {
                 const monitors = recordingDevices.filter((d) => d.kind === "monitor");
                 const inputs = recordingDevices.filter((d) => d.kind === "input");
@@ -393,25 +373,79 @@ function HomeContent() {
                 const screenOpacity = overlayData.screenActive ? 0.5 + Math.min(overlayData.captureFps / 2, 0.5) : 0.2;
                 const audioOpacity = overlayData.audioActive ? 0.5 + Math.min(overlayData.speechRatio, 0.5) : 0.2;
 
-                const groups: { key: string; icon: typeof Monitor; count: number; title: string; opacity: number }[] = [];
-                if (monitors.length > 0) groups.push({ key: "monitor", icon: Monitor, count: monitors.length, title: monitors.map((d) => d.name).join(", "), opacity: screenOpacity });
-                if (inputs.length > 0) groups.push({ key: "mic", icon: Mic, count: inputs.length, title: inputs.map((d) => d.name).join(", "), opacity: audioOpacity });
-                if (outputs.length > 0) groups.push({ key: "output", icon: Volume2, count: outputs.length, title: outputs.map((d) => d.name).join(", "), opacity: audioOpacity });
+                const groups: { key: string; icon: typeof Monitor; count: number; title: string; opacity: number; devices: RecordingDevice[] }[] = [];
+                if (monitors.length > 0) groups.push({ key: "monitor", icon: Monitor, count: monitors.length, title: monitors.map((d) => d.name).join(", "), opacity: screenOpacity, devices: monitors });
+                if (inputs.length > 0) groups.push({ key: "mic", icon: Mic, count: inputs.length, title: inputs.map((d) => d.name).join(", "), opacity: audioOpacity, devices: inputs });
+                if (outputs.length > 0) groups.push({ key: "output", icon: Volume2, count: outputs.length, title: outputs.map((d) => d.name).join(", "), opacity: audioOpacity, devices: outputs });
 
-                if (groups.length === 0) return null;
                 return (
                   <div className="flex items-center gap-2 mt-1.5">
-                    {groups.map(({ key, icon: Icon, count, title, opacity }) => (
-                      <span key={key} className="flex items-center gap-0.5" title={title}>
-                        <Icon
-                          className={cn("h-3 w-3 transition-opacity duration-500", isTranslucent ? "vibrant-sidebar-fg" : "text-foreground")}
-                          style={{ opacity }}
-                        />
-                        {count > 1 && (
-                          <span className={cn("text-[9px] font-medium leading-none", isTranslucent ? "vibrant-sidebar-fg-muted" : "text-foreground/50")}>{count}</span>
-                        )}
-                      </span>
+                    {groups.map(({ key, icon: Icon, count, title, opacity, devices: groupDevices }) => (
+                      <Tooltip key={key}>
+                        <TooltipTrigger asChild>
+                          <button
+                            className={cn(
+                              "flex items-center gap-0.5 rounded px-0.5 transition-all",
+                              key === "monitor"
+                                ? "cursor-default"
+                                : cn(
+                                    "cursor-pointer",
+                                    isTranslucent ? "hover:bg-white/10" : "hover:bg-muted"
+                                  )
+                            )}
+                            onClick={key === "monitor" ? undefined : async () => {
+                              const allActive = groupDevices.every((d: RecordingDevice) => d.active);
+                              const endpoint = allActive
+                                ? "http://localhost:3030/audio/device/stop"
+                                : "http://localhost:3030/audio/device/start";
+                              for (const d of groupDevices) {
+                                if (allActive || !d.active) {
+                                  const suffix = d.kind === "input" ? "input" : "output";
+                                  await fetch(endpoint, {
+                                    method: "POST",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({ device_name: `${d.name} (${suffix})` }),
+                                  }).catch(() => {});
+                                }
+                              }
+                            }}
+                          >
+                            <Icon
+                              className={cn("h-3 w-3 transition-opacity duration-500", isTranslucent ? "vibrant-sidebar-fg" : "text-foreground")}
+                              style={{ opacity }}
+                            />
+                            {count > 1 && (
+                              <span className={cn("text-[9px] font-medium leading-none", isTranslucent ? "vibrant-sidebar-fg-muted" : "text-foreground/50")}>{count}</span>
+                            )}
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom" className="text-xs">
+                          {key === "monitor" ? title : `${title} — click to ${groupDevices.every((d: RecordingDevice) => d.active) ? "mute" : "unmute"}`}
+                        </TooltipContent>
+                      </Tooltip>
                     ))}
+                    <div className="w-px h-3 bg-border mx-0.5" />
+                    <NotificationBell />
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          onClick={toggleMeeting}
+                          disabled={meetingLoading || (meetingState.active && !meetingState.manualActive)}
+                          className={cn(
+                            "relative flex items-center justify-center h-5 w-5 rounded transition-colors",
+                            isTranslucent ? "vibrant-nav-item hover:bg-white/10" : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                          )}
+                        >
+                          {meetingState.active && (
+                            <span className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-foreground animate-pulse" />
+                          )}
+                          <Phone className="h-3 w-3" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom" className="text-xs">
+                        {meetingState.manualActive ? "stop meeting" : meetingState.active ? "meeting detected" : "start meeting"}
+                      </TooltipContent>
+                    </Tooltip>
                   </div>
                 );
               })()}

@@ -19,6 +19,13 @@ fn build_store(app: &AppHandle) -> anyhow::Result<Arc<tauri_plugin_store::Store<
     let store_path = base_dir.join("store.bin");
 
     let mut last_err = None;
+    // Ensure store.bin has restrictive permissions (contains API keys)
+    #[cfg(unix)]
+    if store_path.exists() {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&store_path, std::fs::Permissions::from_mode(0o600));
+    }
+
     for attempt in 0..3u32 {
         match StoreBuilder::new(app, store_path.clone()).build() {
             Ok(s) => return Ok(s),
@@ -1016,16 +1023,19 @@ mod tests {
         let mut corrupted = json!({
             "aiPresets": ["corrupted_string_not_an_object"]
         });
-        
+
         let sanitized = SettingsStore::sanitize_legacy_fields(corrupted);
-        
+
         // And let's test a valid object with missing/unknown provider to prove it works
         let mut valid = json!({
             "aiPresets": [{"provider": "unknown_provider"}]
         });
         let sanitized2 = SettingsStore::sanitize_legacy_fields(valid);
-        
+
         let presets = sanitized2.get("aiPresets").unwrap().as_array().unwrap();
-        assert_eq!(presets[0].get("provider").unwrap().as_str().unwrap(), "custom");
+        assert_eq!(
+            presets[0].get("provider").unwrap().as_str().unwrap(),
+            "custom"
+        );
     }
 }

@@ -4,7 +4,9 @@
 
 use crate::commands::{hide_main_window, show_main_window};
 use crate::enterprise_policy::is_tray_item_hidden;
-use crate::health::{get_recording_info, get_recording_status, DeviceKind, RecordingStatus};
+use crate::health::{
+    get_audio_device_status, get_recording_info, get_recording_status, DeviceKind, RecordingStatus,
+};
 use crate::recording::RecordingState;
 use crate::store::{get_store, OnboardingStore, SettingsStore};
 use crate::updates::{is_enterprise_build, is_source_build};
@@ -415,23 +417,54 @@ fn create_dynamic_menu(
             .build(app)?,
     );
 
-    if effective_status == RecordingStatus::Recording
-        || effective_status == RecordingStatus::Starting
     {
         let info = get_recording_info();
-        for (i, device) in info.devices.iter().enumerate() {
+
+        // Show monitors (non-clickable)
+        for device in info
+            .devices
+            .iter()
+            .filter(|d| d.kind == DeviceKind::Monitor)
+        {
             let dot = if device.active { "●" } else { "○" };
-            let icon = match device.kind {
-                DeviceKind::Monitor => "▣",
-                DeviceKind::AudioInput => "♪",
-                DeviceKind::AudioOutput => "♫",
-            };
-            let label = format!("  {} {} {}", dot, icon, device.name);
+            let label = format!("  {} ▣ {}", dot, device.name);
             menu_builder = menu_builder.item(
-                &MenuItemBuilder::with_id(format!("device_{}", i), label)
+                &MenuItemBuilder::with_id(format!("monitor_{}", device.name), label)
                     .enabled(false)
                     .build(app)?,
             );
+        }
+
+        // Show only the audio devices from get_recording_info (the ones
+        // the user configured in recording settings). User-disabled devices
+        // stay in the list but show as unchecked.
+        let device_status = get_audio_device_status();
+        for device in info
+            .devices
+            .iter()
+            .filter(|d| d.kind != DeviceKind::Monitor)
+        {
+            let suffix = if device.kind == DeviceKind::AudioInput {
+                "input"
+            } else {
+                "output"
+            };
+            let full_name = format!("{} ({})", device.name, suffix);
+            let icon = if device.kind == DeviceKind::AudioInput {
+                "♪"
+            } else {
+                "♫"
+            };
+            // Check if running from cached device status (reflects user-disable state)
+            let is_running = device_status
+                .iter()
+                .any(|d| d.name == full_name && d.is_running);
+            let label = format!("  {} {}", icon, device.name);
+            let toggle =
+                CheckMenuItemBuilder::with_id(format!("toggle_audio_device_{}", full_name), label)
+                    .checked(is_running)
+                    .build(app)?;
+            menu_builder = menu_builder.item(&toggle);
         }
     }
 
@@ -511,7 +544,11 @@ fn create_dynamic_menu(
         menu_builder = menu_builder.item(&PredefinedMenuItem::separator(app)?);
 
         let is_recording = effective_status == RecordingStatus::Recording;
-        let label = if is_recording { "Recording" } else { "Record" };
+        let label = if is_recording {
+            "Recording"
+        } else {
+            "Stopped — click to record"
+        };
         let toggle = CheckMenuItemBuilder::with_id("toggle_recording", label)
             .checked(is_recording)
             .build(app)?;
@@ -639,6 +676,41 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
                 if let Err(e) = force_tray_rebuild(&app2) {
                     error!("tray rebuild failed: {}", e);
                 }
+            });
+        }
+        id if id.starts_with("toggle_audio_device_") => {
+            let device_name = id
+                .strip_prefix("toggle_audio_device_")
+                .unwrap()
+                .to_string();
+
+            // Check current state from cached device status.
+            // Default to "running" if device isn't in cache yet (it's shown
+            // checked in the tray, so first click should pause it).
+            let cached = get_audio_device_status();
+            let is_running = cached
+                .iter()
+                .find(|d| d.name == device_name)
+                .map(|d| d.is_running)
+                .unwrap_or(true);
+
+            // macOS CheckMenuItem already toggles the visual check on click.
+            // Just fire the API call — the health poll (every 1s) will sync state.
+            let endpoint = if is_running {
+                "http://localhost:3030/audio/device/stop"
+            } else {
+                "http://localhost:3030/audio/device/start"
+            };
+            tauri::async_runtime::spawn(async move {
+                let client = reqwest::Client::new();
+                let _ = client
+                    .post(endpoint)
+                    .header("Content-Type", "application/json")
+                    .body(
+                        serde_json::json!({"device_name": device_name}).to_string(),
+                    )
+                    .send()
+                    .await;
             });
         }
         "lock_vault" => {
