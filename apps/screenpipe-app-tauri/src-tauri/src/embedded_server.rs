@@ -72,10 +72,10 @@ impl EmbeddedServerHandle {
         // device is released cleanly (avoids SIGABRT in C++ static destructors).
         if let Some(audio_manager) = self.audio_manager.take() {
             info!("Shutting down audio manager (releasing ggml Metal resources)...");
-            match tokio::time::timeout(Duration::from_secs(5), audio_manager.shutdown()).await {
+            match tokio::time::timeout(Duration::from_secs(15), audio_manager.shutdown()).await {
                 Ok(Ok(())) => info!("Audio manager shut down cleanly"),
                 Ok(Err(e)) => warn!("Audio manager shutdown error: {:?}", e),
-                Err(_) => warn!("Audio manager shutdown timed out after 5s"),
+                Err(_) => warn!("Audio manager shutdown timed out after 15s"),
             }
             drop(audio_manager);
         }

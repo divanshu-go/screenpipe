@@ -95,6 +95,8 @@ pub struct AudioManager {
     on_transcription_insert: Option<crate::transcription::AudioInsertCallback>,
     /// Unified transcription engine. Set after model loading in start_audio_receiver_handler.
     engine: Arc<RwLock<Option<TranscriptionEngine>>>,
+    /// Handle to the reconciliation background task so we can abort it on shutdown.
+    reconciliation_handle: Arc<RwLock<Option<JoinHandle<()>>>>,
     /// Output devices temporarily stopped due to DRM content detection.
     /// Stored so they can be restarted when DRM clears.
     drm_stopped_devices: Arc<RwLock<Vec<AudioDevice>>>,
@@ -158,6 +160,7 @@ impl AudioManager {
             transcription_paused: Arc::new(AtomicBool::new(false)),
             on_transcription_insert: None,
             engine: Arc::new(RwLock::new(None)),
+            reconciliation_handle: Arc::new(RwLock::new(None)),
             drm_stopped_devices: Arc::new(RwLock::new(Vec::new())),
         };
 
@@ -196,7 +199,7 @@ impl AudioManager {
             let options_ref = self.options.clone();
             let seg_mgr = self.segmentation_manager.clone();
             let output_path_bg = self.options.read().await.output_path.clone();
-            tokio::spawn(async move {
+            let handle = tokio::spawn(async move {
                 // Wait for model to load + initial recordings
                 tokio::time::sleep(Duration::from_secs(120)).await;
                 loop {
@@ -226,6 +229,7 @@ impl AudioManager {
                     tokio::time::sleep(Duration::from_secs(120)).await;
                 }
             });
+            *self.reconciliation_handle.write().await = Some(handle);
         }
 
         start_device_monitor(self_arc.clone(), self.device_manager.clone()).await?;
@@ -726,6 +730,13 @@ impl AudioManager {
 
     pub async fn shutdown(&self) -> Result<()> {
         self.stop().await?;
+
+        // Abort reconciliation first — it holds an engine read-lock during transcription,
+        // so it must be cancelled before we drop the engine to avoid use-after-free.
+        if let Some(handle) = self.reconciliation_handle.write().await.take() {
+            handle.abort();
+        }
+
         let rec = self.recording_handles.clone();
         let recording = self.recording_receiver_handle.clone();
         let transcript = self.transcription_receiver_handle.clone();
@@ -1220,9 +1231,14 @@ impl Drop for AudioManager {
         let rec = self.recording_handles.clone();
         let recording = self.recording_receiver_handle.clone();
         let transcript = self.transcription_receiver_handle.clone();
+        let reconciliation = self.reconciliation_handle.clone();
         let device_manager = self.device_manager.clone();
 
         tokio::spawn(async move {
+            // Abort reconciliation first to stop MLX usage before engine is dropped
+            if let Some(handle) = reconciliation.write().await.take() {
+                handle.abort();
+            }
             let _ = stop_device_monitor().await;
             let _ = device_manager.stop_all_devices().await;
             if let Some(handle) = recording.write().await.take() {
