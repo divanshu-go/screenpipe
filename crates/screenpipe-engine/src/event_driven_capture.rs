@@ -471,6 +471,21 @@ pub async fn event_driven_capture_loop(
         }
 
         if let Some(trigger) = trigger {
+            // Clipboard events don't need a full capture cycle (screenshot +
+            // tree walk + OCR). The clipboard text is already stored by the
+            // UI recorder's input event batch. Triggering a full paired
+            // capture here causes 250-800ms of blocking work (pbpaste +
+            // spawn_blocking tree walk + OCR semaphore) which saturates the
+            // thread pool and causes input lag on USB HID devices.
+            if matches!(trigger, CaptureTrigger::Clipboard) {
+                debug!(
+                    "clipboard trigger on monitor {} — skipping capture (text stored via input events)",
+                    monitor_id
+                );
+                tokio::time::sleep(poll_interval).await;
+                continue;
+            }
+
             // Reset content hash on app/window change so the first frame
             // of a new context is never deduped by a stale hash
             if matches!(
