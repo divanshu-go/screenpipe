@@ -526,20 +526,6 @@ fn create_dynamic_menu(
     );
 
     // --- Recording controls ---
-    let (default_start_rec, default_stop_rec) = if cfg!(target_os = "windows") {
-        ("Alt+Shift+U", "Alt+Shift+X")
-    } else {
-        ("Super+Ctrl+U", "Super+Ctrl+X")
-    };
-    let start_rec_shortcut = store
-        .get("startRecordingShortcut")
-        .and_then(|v| v.as_str().map(String::from))
-        .unwrap_or_else(|| default_start_rec.to_string());
-    let stop_rec_shortcut = store
-        .get("stopRecordingShortcut")
-        .and_then(|v| v.as_str().map(String::from))
-        .unwrap_or_else(|| default_stop_rec.to_string());
-
     if !is_tray_item_hidden("tray_recording_controls") {
         menu_builder = menu_builder.item(&PredefinedMenuItem::separator(app)?);
 
