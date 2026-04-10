@@ -472,6 +472,9 @@ struct WalkState {
     window_y: f64,
     window_w: f64,
     window_h: f64,
+    /// User-configured ignored window patterns (lowercase) for filtering browser
+    /// extension popups whose DocumentWeb name matches an ignored keyword.
+    ignored_windows_lower: Vec<String>,
 }
 
 impl WalkState {
@@ -491,6 +494,11 @@ impl WalkState {
             window_y: 0.0,
             window_w: 0.0,
             window_h: 0.0,
+            ignored_windows_lower: config
+                .ignored_windows
+                .iter()
+                .map(|s| s.to_lowercase())
+                .collect(),
         }
     }
 
@@ -533,6 +541,21 @@ fn walk_accessible(conn: &Connection, aref: &AccessibleRef, depth: usize, state:
     // Skip decorative roles
     if should_skip_role(role) {
         return;
+    }
+
+    // Browser extension popup detection: DocumentWeb/DocumentFrame nodes in
+    // Chromium carry the extension name as their accessible name. If it matches
+    // an ignored-window pattern, skip the entire subtree.
+    if matches!(role, 95 | 94 | 82) && !state.ignored_windows_lower.is_empty() {
+        let name = get_accessible_name(conn, aref).to_lowercase();
+        if !name.is_empty()
+            && state
+                .ignored_windows_lower
+                .iter()
+                .any(|ig| name.contains(ig.as_str()))
+        {
+            return;
+        }
     }
 
     // Extract text from text-bearing elements

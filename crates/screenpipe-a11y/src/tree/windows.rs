@@ -244,6 +244,12 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
         let mut text_buffer = String::with_capacity(4096);
         let mut nodes = Vec::with_capacity(256);
         let mut browser_url: Option<String> = None;
+        let ignored_lower: Vec<String> = self
+            .config
+            .ignored_windows
+            .iter()
+            .map(|s| s.to_lowercase())
+            .collect();
         extract_text_from_tree(
             &root,
             0,
@@ -252,6 +258,7 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
             &mut nodes,
             &mut browser_url,
             &monitor_rect,
+            &ignored_lower,
         );
 
         // Don't bail on empty text — we still need the app_name and window_name
@@ -401,6 +408,7 @@ fn extract_text_from_tree(
     nodes: &mut Vec<AccessibilityTreeNode>,
     browser_url: &mut Option<String>,
     monitor_rect: &Option<MonitorRect>,
+    ignored_windows_lower: &[String],
 ) {
     if depth > max_depth {
         return;
@@ -445,6 +453,22 @@ fn extract_text_from_tree(
         // node is the root of the entire web content tree — its children are the
         // actual UI elements (buttons, text, links, etc.).
         if ct.eq_ignore_ascii_case("Document") {
+            // Browser extension popup detection: Document nodes for Chrome extensions
+            // carry the extension name in `name` and a chrome-extension:// URL in `value`.
+            // If either matches an ignored-window pattern, skip the entire subtree.
+            if !ignored_windows_lower.is_empty() {
+                let matches = |val: &str| {
+                    let lower = val.to_lowercase();
+                    ignored_windows_lower
+                        .iter()
+                        .any(|ig| lower.contains(ig.as_str()))
+                };
+                if node.name.as_deref().is_some_and(|n| matches(n))
+                    || node.value.as_deref().is_some_and(|v| matches(v))
+                {
+                    return;
+                }
+            }
             if let Some(ref val) = node.value {
                 let trimmed = val.trim();
                 if !trimmed.is_empty() {
@@ -520,6 +544,7 @@ fn extract_text_from_tree(
             nodes,
             browser_url,
             monitor_rect,
+            ignored_windows_lower,
         );
     }
 }
@@ -627,7 +652,7 @@ mod tests {
         let mut buf = String::new();
         let mut nodes = Vec::new();
         let mut url = None;
-        extract_text_from_tree(&tree, 0, 10, &mut buf, &mut nodes, &mut url, &None);
+        extract_text_from_tree(&tree, 0, 10, &mut buf, &mut nodes, &mut url, &None, &[]);
 
         // Text node's name should be captured
         assert!(
@@ -719,7 +744,7 @@ mod tests {
         let mut buf = String::new();
         let mut nodes = Vec::new();
         let mut url = None;
-        extract_text_from_tree(&tree, 0, 30, &mut buf, &mut nodes, &mut url, &None);
+        extract_text_from_tree(&tree, 0, 30, &mut buf, &mut nodes, &mut url, &None, &[]);
 
         // URL should be captured as browser_url, NOT as text
         assert_eq!(
