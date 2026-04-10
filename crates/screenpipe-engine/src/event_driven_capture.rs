@@ -441,6 +441,9 @@ pub async fn event_driven_capture_loop(
         // Visual change detection: periodically screenshot + frame diff
         // Re-check DRM pause before touching SCK — the flag may have been set
         // between the top-of-loop check and here.
+        // Use the same window exclusions as the full capture so the diff image
+        // matches what we'd actually store — avoids triggering on excluded
+        // windows and seeing phantom "visual changes" from their pixels.
         if trigger.is_none()
             && visual_check_enabled
             && state.can_capture()
@@ -448,8 +451,14 @@ pub async fn event_driven_capture_loop(
             && last_visual_check.elapsed() >= visual_check_interval
         {
             last_visual_check = Instant::now();
+            let vc_filters = WindowFilters::new(
+                &capture_params.tree_walker_config.ignored_windows,
+                &capture_params.tree_walker_config.included_windows,
+                &[],
+            );
+            let vc_excluded = get_excluded_sck_window_ids(&vc_filters);
             if let Some(ref mut comparer) = frame_comparer {
-                match capture_monitor_image(&monitor, &[]).await {
+                match capture_monitor_image(&monitor, &vc_excluded).await {
                     Ok((image, _dur)) => {
                         let diff = comparer.compare(&image);
                         if diff > visual_change_threshold {

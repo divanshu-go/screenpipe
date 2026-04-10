@@ -1174,7 +1174,14 @@ async fn main() -> anyhow::Result<()> {
     let ui_recorder_handle = {
         if ui_recorder_config.enabled {
             info!("starting UI event capture");
-            match start_ui_recording(db.clone(), ui_recorder_config, capture_trigger_tx).await {
+            match start_ui_recording(
+                db.clone(),
+                ui_recorder_config,
+                capture_trigger_tx,
+                record_args.ignored_windows.clone(),
+            )
+            .await
+            {
                 Ok(handle) => Some(handle),
                 Err(e) => {
                     error!("failed to start UI event recording: {}", e);

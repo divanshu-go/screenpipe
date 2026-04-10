@@ -374,7 +374,7 @@ pub async fn start_embedded_server(
     let ui_recorder_handle = {
         let ui_config = config.to_ui_recorder_config();
         let db_clone = db.clone();
-        match start_ui_recording(db_clone, ui_config, capture_trigger_tx).await {
+        match start_ui_recording(db_clone, ui_config, capture_trigger_tx, config.ignored_windows.clone()).await {
             Ok(handle) => {
                 info!("UI event recording started successfully");
                 // Register stop flag with DRM detector so it can stop the UI recorder
