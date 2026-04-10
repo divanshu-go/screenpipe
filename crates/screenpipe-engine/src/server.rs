@@ -41,7 +41,7 @@ use crate::{
         },
         memories::{
             create_memory_handler, delete_memory_handler, get_memory_handler,
-            list_memories_handler, update_memory_handler,
+            list_memories_handler, list_memory_tags_handler, update_memory_handler,
         },
         search::{keyword_search_handler, search},
         speakers::{
@@ -510,6 +510,7 @@ impl SCServer {
             .put("/meetings/:id", update_meeting_handler)
             .post("/memories", create_memory_handler)
             .get("/memories", list_memories_handler)
+            .get("/memories/tags", list_memory_tags_handler)
             .get("/memories/:id", get_memory_handler)
             .put("/memories/:id", update_memory_handler)
             .delete("/memories/:id", delete_memory_handler)
