@@ -128,6 +128,7 @@ const STATE_EXPANDED: u32 = 9;
 const STATE_FOCUSABLE: u32 = 10;
 const STATE_FOCUSED: u32 = 12;
 const STATE_SELECTED: u32 = 18;
+const STATE_PASSWORD_TEXT: u32 = 30;
 
 fn has_state(state_set: &[u32], bit: u32) -> bool {
     let word = (bit / 32) as usize;
@@ -616,7 +617,12 @@ fn extract_text(
     let role_str = role_name(role);
 
     // For editable text (Entry, Text, ComboBox), prefer Text interface content
+    // Never extract the value of password fields
     if matches!(role, 79 | 61 | 11) {
+        let state_set = get_accessible_state(conn, aref);
+        if has_state(&state_set, STATE_PASSWORD_TEXT) {
+            return;
+        }
         if let Some(text) = get_text_content(conn, aref) {
             append_text(&mut state.text_buffer, &text);
             let mut node = AccessibilityTreeNode::new(

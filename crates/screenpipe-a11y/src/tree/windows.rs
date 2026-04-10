@@ -432,6 +432,10 @@ fn extract_text_from_tree(
         // Note: Document is handled separately below — its children are the
         // actual web content tree in Electron/browser apps, so we must recurse.
         if matches!(ct, "Edit" | "ComboBox") {
+            // Never extract the value of password fields
+            if node.is_password == Some(true) {
+                return;
+            }
             if let Some(ref val) = node.value {
                 if !val.trim().is_empty() {
                     append_text(buffer, val);
