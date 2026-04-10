@@ -1022,7 +1022,7 @@ async fn main() {
                             // Defer off event stack (same as tray: runs from tao::send_event).
                             let app_for_closure = app_handle.clone();
                             let _ = app_handle.run_on_main_thread(move || {
-                                let _ = ShowRewindWindow::Home { page: None }.show(&app_for_closure);
+                                let _ = ShowRewindWindow::Home { page: Some("general".to_string()) }.show(&app_for_closure);
                             });
                         }
                         "check_for_updates" => {
