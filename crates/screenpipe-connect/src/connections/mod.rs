@@ -19,6 +19,7 @@ pub mod email;
 pub mod github_issues;
 pub mod glean;
 pub mod gmail;
+pub mod google_calendar;
 pub mod granola;
 pub mod hubspot;
 pub mod intercom;
@@ -154,6 +155,7 @@ pub fn all_integrations() -> Vec<Box<dyn Integration>> {
         Box::new(calendly::Calendly),
         Box::new(glean::Glean),
         Box::new(gmail::Gmail),
+        Box::new(google_calendar::GoogleCalendar),
     ]
 }
 

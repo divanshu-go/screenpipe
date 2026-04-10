@@ -646,6 +646,169 @@ fn decode_base64url(data: Option<&str>) -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
+// Google Calendar routes (local OAuth, same pattern as Gmail)
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct GoogleCalendarEventsQuery {
+    pub hours_back: Option<i64>,
+    pub hours_ahead: Option<i64>,
+    pub instance: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct GoogleCalendarInstanceQuery {
+    pub instance: Option<String>,
+}
+
+/// Retrieve a valid Google Calendar OAuth token or return an error.
+async fn gcal_token(client: &reqwest::Client, instance: Option<&str>) -> anyhow::Result<String> {
+    oauth_store::get_valid_token_instance(client, "google-calendar", instance)
+        .await
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Google Calendar not connected — use 'Connect Google Calendar' in Settings > Connections"
+            )
+        })
+}
+
+/// GET /connections/google-calendar/status — check connection + email.
+async fn gcal_status(
+    Query(q): Query<GoogleCalendarInstanceQuery>,
+) -> (StatusCode, Json<Value>) {
+    let client = reqwest::Client::new();
+    let instance = q.instance.as_deref();
+
+    let connected = oauth_store::is_oauth_instance_connected("google-calendar", instance);
+    if !connected {
+        return (
+            StatusCode::OK,
+            Json(json!({ "connected": false, "email": null })),
+        );
+    }
+
+    let email = match gcal_token(&client, instance).await {
+        Ok(token) => {
+            match client
+                .get("https://www.googleapis.com/oauth2/v2/userinfo")
+                .bearer_auth(&token)
+                .send()
+                .await
+            {
+                Ok(r) => r
+                    .json::<Value>()
+                    .await
+                    .ok()
+                    .and_then(|v| v["email"].as_str().map(String::from)),
+                Err(_) => None,
+            }
+        }
+        Err(_) => None,
+    };
+
+    (
+        StatusCode::OK,
+        Json(json!({ "connected": connected, "email": email })),
+    )
+}
+
+/// GET /connections/google-calendar/events — fetch Google Calendar events.
+async fn gcal_events(
+    Query(params): Query<GoogleCalendarEventsQuery>,
+) -> (StatusCode, Json<Value>) {
+    let client = reqwest::Client::new();
+    match gcal_events_inner(&client, params).await {
+        Ok(events) => (StatusCode::OK, Json(json!(events))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        ),
+    }
+}
+
+async fn gcal_events_inner(
+    client: &reqwest::Client,
+    params: GoogleCalendarEventsQuery,
+) -> anyhow::Result<Vec<Value>> {
+    let token = gcal_token(client, params.instance.as_deref()).await?;
+    let hours_back = params.hours_back.unwrap_or(1);
+    let hours_ahead = params.hours_ahead.unwrap_or(8);
+
+    let now = chrono::Utc::now();
+    let time_min = (now - chrono::Duration::hours(hours_back)).to_rfc3339();
+    let time_max = (now + chrono::Duration::hours(hours_ahead)).to_rfc3339();
+
+    let resp: Value = client
+        .get("https://www.googleapis.com/calendar/v3/calendars/primary/events")
+        .bearer_auth(&token)
+        .query(&[
+            ("timeMin", time_min.as_str()),
+            ("timeMax", time_max.as_str()),
+            ("singleEvents", "true"),
+            ("orderBy", "startTime"),
+            ("maxResults", "50"),
+        ])
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+
+    let items = resp["items"].as_array().cloned().unwrap_or_default();
+    let events: Vec<Value> = items
+        .into_iter()
+        .map(|item| {
+            let start = item["start"]["dateTime"]
+                .as_str()
+                .or_else(|| item["start"]["date"].as_str())
+                .unwrap_or("")
+                .to_string();
+            let end = item["end"]["dateTime"]
+                .as_str()
+                .or_else(|| item["end"]["date"].as_str())
+                .unwrap_or("")
+                .to_string();
+            let is_all_day = item["start"]["date"].is_string();
+
+            let attendees: Vec<String> = item["attendees"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|a| a["email"].as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            json!({
+                "id": item["id"].as_str().unwrap_or(""),
+                "title": item["summary"].as_str().unwrap_or("(No title)"),
+                "start": start,
+                "end": end,
+                "attendees": attendees,
+                "location": item["location"].as_str(),
+                "calendarName": "primary",
+                "isAllDay": is_all_day,
+            })
+        })
+        .collect();
+
+    Ok(events)
+}
+
+/// DELETE /connections/google-calendar/disconnect — remove stored tokens.
+async fn gcal_disconnect(
+    Query(q): Query<GoogleCalendarInstanceQuery>,
+) -> (StatusCode, Json<Value>) {
+    match oauth_store::delete_oauth_token_instance("google-calendar", q.instance.as_deref()) {
+        Ok(()) => (StatusCode::OK, Json(json!({ "success": true }))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // OAuth callback route
 // ---------------------------------------------------------------------------
 
@@ -721,6 +884,10 @@ where
         // Calendar routes (must be before /:id to avoid conflict)
         .route("/calendar/events", get(calendar_events))
         .route("/calendar/status", get(calendar_status))
+        // Google Calendar routes (must be before /:id to avoid conflict)
+        .route("/google-calendar/events", get(gcal_events))
+        .route("/google-calendar/status", get(gcal_status))
+        .route("/google-calendar/disconnect", axum::routing::delete(gcal_disconnect))
         // Gmail-specific routes (must be before /:id to avoid conflict)
         .route("/gmail/instances", get(gmail_list_instances))
         .route("/gmail/messages", get(gmail_list_messages))
