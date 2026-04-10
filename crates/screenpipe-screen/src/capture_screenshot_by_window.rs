@@ -976,7 +976,10 @@ pub fn get_excluded_sck_window_ids(window_filters: &WindowFilters) -> Vec<u32> {
     let windows = match SckWindow::all() {
         Ok(w) => w,
         Err(e) => {
-            debug!("get_excluded_sck_window_ids: failed to enumerate windows: {}", e);
+            debug!(
+                "get_excluded_sck_window_ids: failed to enumerate windows: {}",
+                e
+            );
             return Vec::new();
         }
     };
@@ -998,7 +1001,11 @@ pub fn get_excluded_sck_window_ids(window_filters: &WindowFilters) -> Vec<u32> {
     }
 
     if !excluded.is_empty() {
-        debug!("resolved {} ignored window(s) to SCK IDs: {:?}", excluded.len(), excluded);
+        debug!(
+            "resolved {} ignored window(s) to SCK IDs: {:?}",
+            excluded.len(),
+            excluded
+        );
     }
 
     excluded

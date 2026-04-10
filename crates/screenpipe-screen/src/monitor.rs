@@ -316,13 +316,11 @@ impl SafeMonitor {
                 if use_sck {
                     let monitor = match cached_sck {
                         Some(m) => m,
-                        None => {
-                            SckMonitor::all()
-                                .map_err(|e| format!("{}", e))?
-                                .into_iter()
-                                .find(|m| m.id() == monitor_id)
-                                .ok_or_else(|| "Monitor not found".to_string())?
-                        }
+                        None => SckMonitor::all()
+                            .map_err(|e| format!("{}", e))?
+                            .into_iter()
+                            .find(|m| m.id() == monitor_id)
+                            .ok_or_else(|| "Monitor not found".to_string())?,
                     };
 
                     if monitor.width().unwrap_or(0) == 0 || monitor.height().unwrap_or(0) == 0 {
