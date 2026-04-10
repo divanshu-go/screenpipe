@@ -1016,7 +1016,10 @@ async fn do_capture(
     // didn't return Skipped (e.g. the trigger carried the app name, not the tree).
     {
         let check_app = app_name_owned.as_deref().unwrap_or_default().to_lowercase();
-        let check_win = window_name_owned.as_deref().unwrap_or_default().to_lowercase();
+        let check_win = window_name_owned
+            .as_deref()
+            .unwrap_or_default()
+            .to_lowercase();
         if params.tree_walker_config.ignored_windows.iter().any(|ig| {
             let ig_lower = ig.to_lowercase();
             (!check_app.is_empty() && check_app.contains(&ig_lower))
