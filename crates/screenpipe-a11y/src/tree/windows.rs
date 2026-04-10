@@ -669,7 +669,17 @@ mod tests {
         let mut buf = String::new();
         let mut nodes = Vec::new();
         let mut url = None;
-        extract_text_from_tree(&tree, 0, 10, &mut buf, &mut nodes, &mut url, &None, &[], &mut false);
+        extract_text_from_tree(
+            &tree,
+            0,
+            10,
+            &mut buf,
+            &mut nodes,
+            &mut url,
+            &None,
+            &[],
+            &mut false,
+        );
 
         // Text node's name should be captured
         assert!(
@@ -761,7 +771,17 @@ mod tests {
         let mut buf = String::new();
         let mut nodes = Vec::new();
         let mut url = None;
-        extract_text_from_tree(&tree, 0, 30, &mut buf, &mut nodes, &mut url, &None, &[], &mut false);
+        extract_text_from_tree(
+            &tree,
+            0,
+            30,
+            &mut buf,
+            &mut nodes,
+            &mut url,
+            &None,
+            &[],
+            &mut false,
+        );
 
         // URL should be captured as browser_url, NOT as text
         assert_eq!(
