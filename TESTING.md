@@ -63,6 +63,8 @@ commits that broke this area: `0752ea59`, `d89c5f14`, `4a64fd1a`, `fa591d6e`, `8
 - [ ] **Livetext single worker thread** — verify no GCD thread exhaustion freeze during heavy livetext analysis. (`a3e29d42a`)
 - [ ] **VisionKit semaphore timeouts** — verify no deadlocks in vision pipeline if VisionKit hangs (10s timeout). (`397f46133`)
 - [ ] **Notification panel order_out** — verify no ghost clicks after hiding notification/shortcut panels. (`32fed7c8c`)
+- [ ] **Excluded windows from screenshots** — Verify that windows specified in the ignore list are correctly excluded from full-monitor screenshots taken via ScreenCaptureKit (SCK). (`61212c429`)
+- [ ] **Swift overlay meeting toggle** — Verify that the meeting toggle in the Swift-based overlay works correctly and reflects the recording state. (`e5e955aa6`)
 
 
 ### 2. dock icon & tray icon (macOS)
@@ -97,6 +99,7 @@ commits: `28e5c247`
 - [ ] **specific monitor IDs setting** — with specific IDs configured, only those monitors are recorded. unplugging a non-configured monitor has no effect.
 - [ ] **resolution change (e.g., clamshell mode)** — closing MacBook lid with external monitor. recording continues on external.
 - [ ] **queue stats after unplug** — check logs. no queue stats for disconnected monitor after disconnect.
+- [ ] **--use-all-monitors flag override** — Verify that the `--use-all-monitors` CLI flag correctly overrides tier-based defaults (e.g., if a tier defaults to a single monitor, the flag should still enable all monitors). (`bd5b94328`)
 
 ### 4. audio device handling
 
@@ -161,6 +164,8 @@ commits: calendar_speaker_id.rs, meetings.rs, meeting_persister.rs
 - [ ] **meeting detection regardless of transcription mode** — Verify that meeting detection works even when transcription is disabled. (`ef39e728d`)
 - [ ] **Windows UI Automation meeting detection** — On Windows, join a meeting in a supported app (Zoom, Teams, etc.). Verify detection works via UI element scanning rather than just process focus. (`fe905d6af`, `01eb9cf33`)
 - [ ] **macOS Zoom menu bar detection** — On macOS, join a Zoom meeting. Verify detection works even if Zoom window is not focused, by scanning menu bar items. (`849372fa9`)
+- [ ] **Stop auto-detected meeting from overlay** — During an auto-detected meeting, verify that the stop button in the overlay correctly terminates the meeting session. (`403d5b732`)
+- [ ] **MLX transcription model reuse** — Verify that the MLX transcription model is reused across requests to prevent GPU memory spikes or crashes. (`59deeba19`)
 - [ ] **Meeting detection app coverage** — Verify detection works for 35+ supported apps and various browser URL patterns. (`e6740eb38`)
 - [ ] **Meeting detection UI labels** — Verify meeting status shows "starts in Xm" and filters all-day events correctly. (`ef470d9e1`)
 - [ ] **Meeting detection support for Signal, WhatsApp, Telegram, and Teams 2** — Verify that meetings from these apps are correctly detected and recorded. (`8d2f1a542`, `a74e393e1`)
@@ -286,6 +291,7 @@ commits: `eea0c865`, `cc09de61`, `e61501da`, `d25191d7`, `60096fb9`
 - [ ] **Pi's native auto-compaction for pipe session history** — Verify that Pi's native auto-compaction feature for pipe session history works as expected, preventing indefinite growth of history and maintaining performance. (`8f49e2cf`)
 - [ ] **UTF-8 panic with long multi-byte strings** — Introduce long strings with multi-byte UTF-8 characters (e.g., in window titles, chat input, search queries). Verify no panics occur when these strings are truncated, stored, or processed.
 - [ ] **fsync snapshots before DB commit** — verify data integrity by force-quitting during heavy capture; snapshots should match DB entries. (`2e63282b8`)
+- [ ] **Data directory setting location** — Verify that the data directory setting is now located in the "Storage" tab of the settings menu. (`0d3ffe30a`)
 
 - [ ] **slow DB insert warning** — check logs. "Slow DB batch insert" warnings should be <1s in normal operation. >3s indicates contention.
 - [ ] **concurrent DB access** — UI queries + recording inserts happening simultaneously. no "database is locked" errors.
@@ -308,6 +314,7 @@ commits: `8a5f51dd`, `0b0d8090`, `7e58564e`, `2522a7e2`, `f3e55dbc`, `79f2913f`
 - [ ] **language/OCR engine setting** — change OCR language. new language used on next capture cycle.
 - [ ] **video quality setting** — low/balanced/high/max. affects FFmpeg encoding params (`21bddd0f`).
 - [ ] **Settings UI sentence case** — All settings UI elements (billing, pipes, team) should use consistent sentence case.
+- [ ] **Sidebar text visibility in Auto theme** — On macOS, switch between Light, Dark, and Auto system theme modes. Verify that sidebar text remains visible and legible in all modes. (`16d38570d`)
 - [ ] **Billing page links to website** — Verify that the in-app billing page correctly links to the *new* website billing page.
 - [ ] **Non-pro subscriber Whisper fallback** — As a non-pro subscriber, verify that audio transcription defaults to `whisper-large-v3-turbo-quantized` and functions correctly.
 - [ ] **Pi restart on preset switch** — Switch between different AI presets. Verify that the Pi agent restarts if required by the new preset.
@@ -333,6 +340,7 @@ commits: `87abb00d`, `9464fdc9`, `0f9e43aa`, `7ea15f32`, `bf1f1004`
 - [ ] **fresh install flow** — onboarding appears, permissions requested, user completes setup.
 - [ ] **auto-advance after engine starts** — status screen advances automatically after 15-20 seconds once engine is running (`87abb00d`, `9464fdc9`).
 - [ ] **skip onboarding** — user can skip and get to main app. settings use defaults.
+- [ ] **Onboarding completion destination** — After completing onboarding, verify that the home window opens instead of the timeline overlay. (`6ddc33a94`, `3cf668c76`)
 - [ ] **shortcut gate** — onboarding teaches the shortcut. user must press it to proceed (`0f9e43aa`).
 - [ ] **onboarding window size** — window is correctly sized, no overflow (`7ea15f32`).
 - [ ] **onboarding doesn't re-show** — after completing onboarding, restart app. main window shows, not onboarding.
@@ -657,6 +665,10 @@ commits: `fa887407`, `815f52e6`, `60840155`, `e66c3ff8`, `c905ffbf`, `01147096`,
 - [ ] **local event triggers for pipes** — Verify that pipes can be triggered by local events such as meeting start/end and pipe chaining. (`508b68ff7`, `776587aa7`)
 - [ ] **tool call indicators in pipe run output** — Verify that tool call indicators are displayed in the pipe run output. (`dda33a6a7`)
 - [ ] **align copy and chat icons in pipe run history** — Verify that copy and chat icons are properly aligned in the pipe run history. (`f8fe5cff4`)
+- [ ] **Live pipe output streaming** — Open the "Runs" tab for a running pipe. Verify that the output streams live as the pipe executes. (`4c1fab276`)
+- [ ] **Rich activity-summary** — Verify that activity summaries include details about windows, URLs, and audio transcriptions. (`f2d8ba1dad3`)
+- [ ] **OpenAI-compatible transcription endpoint** — Verify that the `/v1/audio/transcriptions` endpoint works correctly with standard OpenAI clients. (`59deeba19`)
+- [ ] **Mermaid diagram XSS sanitization** — Verify that mermaid diagrams in the UI are correctly sanitized to prevent XSS attacks. (`3405e9793`)
 
 commits: `fa887407`, `815f52e6`, `60840155`, `e66c3ff8`, `c905ffbf`, `01147096`, `5908d7f4`, `46422869`, `4f43da70`, `71a1a537`, `6abaaa36`
 
@@ -719,6 +731,7 @@ commits: `ad431b513`, `d9722bccc`, `4df21e83d`
 - [ ] **Incognito window detection** — Verify that private browsing/incognito windows are correctly detected for major browsers (Chrome, Safari, Firefox, etc.). (`ad431b513`)
 - [ ] **Ignore incognito toggle** — Verify that the "Ignore Incognito Windows" toggle in settings correctly prevents recording of private windows. (`d9722bccc`)
 - [ ] **Incognito detection UI feedback** — Verify that the UI correctly reflects when an incognito window is being ignored.
+- [ ] **DRM pause behavior** — Play DRM-protected content (e.g., Netflix in Safari). Verify that Screenpipe pauses recording gracefully and resumes automatically once the DRM content is closed, without crashing the server. (`3d9f0e8bb`)
 
 commits: `fc830b43`
 
@@ -728,6 +741,7 @@ commits: `fc830b43`
 ### 23. GPU & Performance Telemetry
 
 - [ ] **GPU error handling & telemetry** — Verify that GPU errors are handled gracefully and CPU/GPU telemetry is correctly reported in logs. (`0d42ea221`)
+- [ ] **Clipboard thread leak** — Verify that long-running sessions do not exhibit gradual input lag or memory growth due to clipboard thread leaks. (`0718c2e03`, `f0adcddd0`)
 
 ### 24. Data Management
 
@@ -818,6 +832,7 @@ commits: `cf2dcd5f8`, `ad1d00d8f`, `6f623b30a`, `aaf031169`
 ### 23. Notifications
 
 - [ ] **Restart notifications toggle** — Toggle "restart notifications" in settings. Verify notifications only appear when enabled. (`f82b4f350`)
+- [ ] **Notification text selection** — Verify that text can be selected in notification inbox messages. (`3449197c3`)
 
 ### 26. Onboarding & Fleet UX
 
