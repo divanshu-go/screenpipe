@@ -345,6 +345,11 @@ pub async fn event_driven_capture_loop(
         );
     }
 
+    // Cache sorted excluded SCK window IDs to avoid recreating the persistent
+    // SCK stream every time a transient window (tooltip, popup, badge) appears
+    // or disappears.  Only update when the sorted set actually changes.
+    let mut cached_excluded_ids: Vec<u32> = Vec::new();
+
     loop {
         if stop_signal.load(Ordering::Relaxed) {
             info!("event-driven capture stopping for monitor {}", monitor_id);
@@ -456,9 +461,14 @@ pub async fn event_driven_capture_loop(
                 &capture_params.tree_walker_config.included_windows,
                 &[],
             );
-            let vc_excluded = get_excluded_sck_window_ids(&vc_filters);
+            let mut fresh_ids = get_excluded_sck_window_ids(&vc_filters);
+            fresh_ids.sort_unstable();
+            fresh_ids.dedup();
+            if fresh_ids != cached_excluded_ids {
+                cached_excluded_ids = fresh_ids;
+            }
             if let Some(ref mut comparer) = frame_comparer {
-                match capture_monitor_image(&monitor, &vc_excluded).await {
+                match capture_monitor_image(&monitor, &cached_excluded_ids).await {
                     Ok((image, _dur)) => {
                         let diff = comparer.compare(&image);
                         if diff > visual_change_threshold {
@@ -794,12 +804,16 @@ async fn do_capture(
 
     // Resolve ignored windows to SCK window IDs so ScreenCaptureKit
     // excludes them from the capture buffer (zero overhead, pixel-perfect).
+    // Sort + dedup so the persistent stream isn't needlessly recreated when
+    // transient windows (tooltips, popups) cause ordering changes.
     let window_filters = WindowFilters::new(
         &params.tree_walker_config.ignored_windows,
         &params.tree_walker_config.included_windows,
         &[],
     );
-    let excluded_ids = get_excluded_sck_window_ids(&window_filters);
+    let mut excluded_ids = get_excluded_sck_window_ids(&window_filters);
+    excluded_ids.sort_unstable();
+    excluded_ids.dedup();
 
     // Take screenshot (with ignored windows excluded at the OS level)
     let (image, capture_dur) = capture_monitor_image(params.monitor, &excluded_ids).await?;
