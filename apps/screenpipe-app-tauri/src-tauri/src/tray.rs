@@ -438,12 +438,15 @@ fn create_dynamic_menu(
         // Show only the audio devices from get_recording_info (the ones
         // the user configured in recording settings). User-disabled devices
         // stay in the list but show as unchecked.
+        // Sort by name so the order is stable when devices are paused/resumed.
         let device_status = get_audio_device_status();
-        for device in info
+        let mut audio_devices: Vec<_> = info
             .devices
             .iter()
             .filter(|d| d.kind != DeviceKind::Monitor)
-        {
+            .collect();
+        audio_devices.sort_by(|a, b| a.name.cmp(&b.name));
+        for device in audio_devices {
             let suffix = if device.kind == DeviceKind::AudioInput {
                 "input"
             } else {
