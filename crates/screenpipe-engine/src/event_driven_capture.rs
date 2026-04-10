@@ -908,6 +908,33 @@ async fn do_capture(
         TreeWalkResult::NotFound => None,
     };
 
+    // Safety net: when the tree walk returned NotFound (AX failure, budget skip,
+    // etc.) the Skipped(UserIgnored) path didn't fire.  If the focused app still
+    // matches an ignored-window pattern, bail out now to prevent OCR from
+    // capturing text from an excluded window (e.g. startup capture while
+    // Bitwarden is focused but AX hadn't initialized yet).
+    if tree_snapshot.is_none() {
+        if let Some(ref app) = trigger_app {
+            let app_lower = app.to_lowercase();
+            if params
+                .tree_walker_config
+                .ignored_windows
+                .iter()
+                .any(|ig| app_lower.contains(&ig.to_lowercase()))
+            {
+                debug!(
+                    "skipping capture: focused app '{}' matches ignored window on monitor {} (tree walk was NotFound)",
+                    app, params.monitor_id
+                );
+                return Ok(CaptureOutput {
+                    result: None,
+                    image,
+                    elements_deduped: false,
+                });
+            }
+        }
+    }
+
     // Content dedup: skip capture if accessibility text hasn't changed.
     // Never dedup Idle/Manual triggers — these are fallback captures that must
     // always write so the timeline is never completely empty.
@@ -982,6 +1009,29 @@ async fn do_capture(
             image,
             elements_deduped: false,
         });
+    }
+
+    // Final ignored-window gate: check resolved metadata (app + window) against
+    // ignored patterns. This catches edge cases where the tree walk succeeded but
+    // didn't return Skipped (e.g. the trigger carried the app name, not the tree).
+    {
+        let check_app = app_name_owned.as_deref().unwrap_or_default().to_lowercase();
+        let check_win = window_name_owned.as_deref().unwrap_or_default().to_lowercase();
+        if params.tree_walker_config.ignored_windows.iter().any(|ig| {
+            let ig_lower = ig.to_lowercase();
+            (!check_app.is_empty() && check_app.contains(&ig_lower))
+                || (!check_win.is_empty() && check_win.contains(&ig_lower))
+        }) {
+            debug!(
+                "skipping capture: resolved app='{}' / window='{}' matches ignored pattern on monitor {}",
+                check_app, check_win, params.monitor_id
+            );
+            return Ok(CaptureOutput {
+                result: None,
+                image,
+                elements_deduped: false,
+            });
+        }
     }
 
     // DRM content detection: check if the focused app/URL is a streaming service.

@@ -316,7 +316,24 @@ pub async fn start_ui_recording(
                     }
 
                     if record_input_events {
-                        batch.push(db_event);
+                        // Don't store input events from ignored windows/apps
+                        let app_lower = db_event
+                            .app_name
+                            .as_deref()
+                            .unwrap_or_default()
+                            .to_lowercase();
+                        let title_lower = db_event
+                            .window_title
+                            .as_deref()
+                            .unwrap_or_default()
+                            .to_lowercase();
+                        let is_ignored = ignored_windows.iter().any(|ig| {
+                            let ig_lower = ig.to_lowercase();
+                            app_lower.contains(&ig_lower) || title_lower.contains(&ig_lower)
+                        });
+                        if !is_ignored {
+                            batch.push(db_event);
+                        }
                     }
 
                     // Flush if batch is full
