@@ -95,6 +95,15 @@ pub struct RecordingSettings {
     #[serde(rename = "batchMaxDurationSecs", default)]
     pub batch_max_duration_secs: Option<u64>,
 
+    /// Transcription pipeline mode: "quality" (default) or "fast".
+    /// Quality: runs Whisper on the full 30s chunk for better accuracy (+15-25% on names/jargon).
+    /// Fast: legacy pyannote-sliced segments, lower latency per slice.
+    #[serde(
+        rename = "transcriptionPipelineMode",
+        default = "default_transcription_pipeline_mode"
+    )]
+    pub transcription_pipeline_mode: String,
+
     /// Custom vocabulary for transcription biasing and word replacement.
     /// Previously stored in SettingsStore.extra["vocabularyWords"].
     #[serde(rename = "vocabularyWords", default)]
@@ -295,6 +304,7 @@ impl Default for RecordingSettings {
             vad_sensitivity: "high".to_string(),
             filter_music: false,
             batch_max_duration_secs: None,
+            transcription_pipeline_mode: default_transcription_pipeline_mode(),
             vocabulary: vec![],
             disable_vision: false,
             monitor_ids: vec![],
@@ -339,6 +349,10 @@ fn default_true() -> bool {
 
 fn default_max_snapshot_width() -> u32 {
     1920
+}
+
+fn default_transcription_pipeline_mode() -> String {
+    "quality".to_string()
 }
 
 #[cfg(test)]

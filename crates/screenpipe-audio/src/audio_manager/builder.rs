@@ -14,6 +14,7 @@ use crate::{
         device::{default_input_device, default_output_device},
         engine::AudioTranscriptionEngine,
     },
+    pipeline_mode::TranscriptionPipelineMode,
     meeting_detector::MeetingDetector,
     transcription::{
         deepgram::CUSTOM_DEEPGRAM_API_TOKEN, stt::OpenAICompatibleConfig, VocabularyEntry,
@@ -74,6 +75,8 @@ pub struct AudioManagerOptions {
     pub channel_config: ChannelConfig,
     /// Disable all audio functionality (no device polling, no model downloads)
     pub is_disabled: bool,
+    /// Quality = full-chunk STT (default); Fast = pyannote-sliced STT when models available.
+    pub transcription_pipeline_mode: TranscriptionPipelineMode,
 }
 
 impl Default for AudioManagerOptions {
@@ -104,6 +107,7 @@ impl Default for AudioManagerOptions {
             batch_max_duration_secs: None,
             channel_config: ChannelConfig::default(),
             is_disabled: false,
+            transcription_pipeline_mode: TranscriptionPipelineMode::default(),
         }
     }
 }
@@ -213,6 +217,11 @@ impl AudioManagerBuilder {
 
     pub fn channel_config(mut self, config: ChannelConfig) -> Self {
         self.options.channel_config = config;
+        self
+    }
+
+    pub fn transcription_pipeline_mode(mut self, mode: TranscriptionPipelineMode) -> Self {
+        self.options.transcription_pipeline_mode = mode;
         self
     }
 

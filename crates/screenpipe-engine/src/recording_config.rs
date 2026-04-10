@@ -4,6 +4,7 @@
 
 use screenpipe_audio::audio_manager::builder::TranscriptionMode;
 use screenpipe_audio::audio_manager::AudioManagerBuilder;
+use screenpipe_audio::pipeline_mode::TranscriptionPipelineMode;
 use screenpipe_audio::core::engine::AudioTranscriptionEngine;
 use screenpipe_audio::transcription::VocabularyEntry;
 use screenpipe_audio::vad::VadEngineEnum;
@@ -109,6 +110,9 @@ pub struct RecordingConfig {
 
     /// Maximum width for stored snapshots (0 = no limit). Default: 1920.
     pub max_snapshot_width: u32,
+
+    /// "quality" or "fast". Quality feeds Whisper the full 30s chunk; fast uses pyannote slices.
+    pub transcription_pipeline_mode: String,
 }
 
 impl RecordingConfig {
@@ -180,6 +184,7 @@ impl RecordingConfig {
                 })
                 .collect(),
             batch_max_duration_secs: settings.batch_max_duration_secs.filter(|&v| v > 0),
+            transcription_pipeline_mode: settings.transcription_pipeline_mode.clone(),
             power_mode: settings.power_mode.clone(),
             db_config: settings
                 .device_tier
@@ -236,6 +241,9 @@ impl RecordingConfig {
             .vocabulary(self.vocabulary.clone())
             .batch_max_duration_secs(self.batch_max_duration_secs)
             .channel_config(self.channel_config.clone())
+            .transcription_pipeline_mode(TranscriptionPipelineMode::from_settings_str(
+                &self.transcription_pipeline_mode,
+            ))
     }
 
     /// Build a `VisionManagerConfig` from this config.

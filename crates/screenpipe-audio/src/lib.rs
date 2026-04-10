@@ -21,4 +21,5 @@ pub mod audio_manager;
 mod device;
 pub mod idle_detector;
 pub mod meeting_detector;
+pub mod pipeline_mode;
 mod segmentation;

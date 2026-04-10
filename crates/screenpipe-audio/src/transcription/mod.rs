@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use crate::core::device::AudioDevice;
 
+pub mod assign_speakers;
 pub mod deepgram;
 pub mod engine;
 pub mod openai_compatible;

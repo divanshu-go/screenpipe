@@ -146,6 +146,8 @@ export type Settings = SettingsStore & {
 	filterMusic?: boolean;
 	/** Maximum batch transcription duration in seconds (0 = engine default: Deepgram 5000s, OpenAI 3000s, Whisper 600s) */
 	batchMaxDurationSecs?: number;
+	/** Transcription pipeline mode: "quality" (default, full-chunk STT) or "fast" (legacy pyannote-sliced) */
+	transcriptionPipelineMode?: "quality" | "fast";
 	/** Show periodic notifications suggesting pipe ideas based on user's data (default: true) */
 	pipeSuggestionsEnabled?: boolean;
 	/** Hours between pipe suggestion notifications (default: 24) */

@@ -42,6 +42,21 @@ impl std::str::FromStr for AudioTranscriptionEngine {
     }
 }
 
+impl AudioTranscriptionEngine {
+    /// Returns true for any Whisper variant (not Deepgram, OpenAI-compatible, Parakeet, etc.)
+    pub fn is_whisper_variant(&self) -> bool {
+        matches!(
+            self,
+            Self::WhisperTiny
+                | Self::WhisperTinyQuantized
+                | Self::WhisperLargeV3
+                | Self::WhisperLargeV3Quantized
+                | Self::WhisperLargeV3Turbo
+                | Self::WhisperLargeV3TurboQuantized
+        )
+    }
+}
+
 impl fmt::Display for AudioTranscriptionEngine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

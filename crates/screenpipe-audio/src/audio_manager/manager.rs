@@ -447,6 +447,7 @@ impl AudioManager {
         let is_batch_mode = options.transcription_mode == TranscriptionMode::Batch;
         let batch_max_duration_secs = options.batch_max_duration_secs;
         let filter_music = options.filter_music;
+        let pipeline_mode = options.transcription_pipeline_mode;
         let vad_engine = self.vad_engine.clone();
         let whisper_receiver = self.recording_receiver.clone();
         let metrics = self.metrics.clone();
@@ -647,11 +648,13 @@ impl AudioManager {
                                 embedding_manager.clone(),
                                 embedding_extractor.clone(),
                                 &output_path.clone().unwrap(),
+                                audio_transcription_engine.clone(),
                                 &transcription_sender.clone(),
                                 &mut session,
                                 metrics.clone(),
                                 persisted_file_path.clone(),
                                 filter_music,
+                                pipeline_mode,
                             )
                             .await
                             {
@@ -668,11 +671,13 @@ impl AudioManager {
                             embedding_manager.clone(),
                             embedding_extractor.clone(),
                             &output_path.clone().unwrap(),
+                            audio_transcription_engine.clone(),
                             &transcription_sender.clone(),
                             &mut session,
                             metrics.clone(),
                             persisted_file_path.clone(),
                             filter_music,
+                            pipeline_mode,
                         )
                         .await
                         {
@@ -689,11 +694,13 @@ impl AudioManager {
                         embedding_manager.clone(),
                         embedding_extractor.clone(),
                         &output_path.clone().unwrap(),
+                        audio_transcription_engine.clone(),
                         &transcription_sender.clone(),
                         &mut session,
                         metrics.clone(),
                         persisted_file_path.clone(),
                         filter_music,
+                        pipeline_mode,
                     )
                     .await
                     {

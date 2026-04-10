@@ -54,6 +54,7 @@ import {
   Upload,
   Trash2,
   Search,
+  Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -1554,6 +1555,36 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   </div>
                 </div>
               )}
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Full-chunk transcription (quality pipeline) */}
+        {!settings.disableAudio && settings.audioTranscriptionEngine !== "disabled" && (
+          <Card className="border-border bg-card">
+            <CardContent className="px-3 py-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2.5">
+                  <Sparkles className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <div>
+                    <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                      Full-chunk transcription
+                      <HelpTooltip text="Each capture chunk is transcribed as a whole before speaker diarization. When off, legacy mode splits audio by speaker segmentation before STT, which can cut words at segment boundaries." />
+                    </h3>
+                    <p className="text-xs text-muted-foreground">Transcribes full audio before splitting by speaker</p>
+                  </div>
+                </div>
+                <Switch
+                  id="transcriptionPipelineMode"
+                  checked={(settings.transcriptionPipelineMode ?? "quality") === "quality"}
+                  onCheckedChange={(checked) =>
+                    handleSettingsChange(
+                      { transcriptionPipelineMode: checked ? "quality" : "fast" },
+                      true,
+                    )
+                  }
+                />
+              </div>
             </CardContent>
           </Card>
         )}
