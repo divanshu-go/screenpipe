@@ -486,6 +486,40 @@ pub async fn event_driven_capture_loop(
                 continue;
             }
 
+            // Skip capture entirely when the focused app is an ignored window.
+            // SCK excludes the window pixels, but the resulting mostly-black
+            // frame still gets written to the timeline — ugly and wasteful.
+            {
+                let focused_app: Option<String> = match &trigger {
+                    CaptureTrigger::AppSwitch { app_name } => Some(app_name.clone()),
+                    _ => {
+                        #[cfg(target_os = "macos")]
+                        {
+                            get_focused_app_name_lightweight()
+                        }
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            None
+                        }
+                    }
+                };
+                if let Some(ref app) = focused_app {
+                    let ignored = &capture_params.tree_walker_config.ignored_windows;
+                    let app_lower = app.to_lowercase();
+                    if ignored
+                        .iter()
+                        .any(|ig| app_lower.contains(&ig.to_lowercase()))
+                    {
+                        debug!(
+                            "focused app '{}' is ignored — skipping capture on monitor {}",
+                            app, monitor_id
+                        );
+                        tokio::time::sleep(poll_interval).await;
+                        continue;
+                    }
+                }
+            }
+
             // Reset content hash on app/window change so the first frame
             // of a new context is never deduped by a stale hash
             if matches!(
