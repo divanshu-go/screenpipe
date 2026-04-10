@@ -322,6 +322,17 @@ impl MacosTreeWalker {
         // Walk the accessibility tree
         walk_element(window, 0, &mut state);
 
+        // If a browser extension popup matching an ignored window was detected,
+        // skip the entire capture — including the screenshot — to prevent the
+        // popup content from appearing in the timeline.
+        if state.hit_ignored_extension {
+            debug!(
+                "skipping capture: browser extension popup matched ignored window in app={}",
+                app_name
+            );
+            return Ok(TreeWalkResult::Skipped(SkipReason::UserIgnored));
+        }
+
         let text_content = state.text_buffer;
         // Don't bail on empty text — we still need the app_name and window_name
         // for frame metadata. Some apps may return empty text on the first walk
@@ -404,6 +415,9 @@ struct WalkState {
     /// User-configured ignored window patterns (lowercase) for filtering browser
     /// extension popups whose AXWebArea title matches an ignored keyword.
     ignored_windows_lower: Vec<String>,
+    /// Set to true when a browser extension popup matching an ignored pattern is
+    /// detected. Signals the caller to skip the entire capture (including screenshot).
+    hit_ignored_extension: bool,
 }
 
 impl WalkState {
@@ -433,6 +447,7 @@ impl WalkState {
                 .iter()
                 .map(|s| s.to_lowercase())
                 .collect(),
+            hit_ignored_extension: false,
         }
     }
 
@@ -547,6 +562,7 @@ fn walk_element(elem: &ax::UiElement, depth: usize, state: &mut WalkState) {
             if get_string_attr(elem, ax::attr::title()).is_some_and(|t| matches(&t))
                 || get_string_attr(elem, ax::attr::url()).is_some_and(|u| matches(&u))
             {
+                state.hit_ignored_extension = true;
                 return;
             }
         }

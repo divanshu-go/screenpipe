@@ -476,6 +476,8 @@ struct WalkState {
     /// User-configured ignored window patterns (lowercase) for filtering browser
     /// extension popups whose DocumentWeb name matches an ignored keyword.
     ignored_windows_lower: Vec<String>,
+    /// Set to true when a browser extension popup matching an ignored pattern is detected.
+    hit_ignored_extension: bool,
 }
 
 impl WalkState {
@@ -500,6 +502,7 @@ impl WalkState {
                 .iter()
                 .map(|s| s.to_lowercase())
                 .collect(),
+            hit_ignored_extension: false,
         }
     }
 
@@ -555,6 +558,7 @@ fn walk_accessible(conn: &Connection, aref: &AccessibleRef, depth: usize, state:
                 .iter()
                 .any(|ig| name.contains(ig.as_str()))
         {
+            state.hit_ignored_extension = true;
             return;
         }
     }
@@ -967,6 +971,14 @@ impl TreeWalkerPlatform for LinuxTreeWalker {
 
         // Walk the accessibility tree
         walk_accessible(conn, &window_ref, 0, &mut state);
+
+        if state.hit_ignored_extension {
+            debug!(
+                "skipping capture: browser extension popup matched ignored window in app={}",
+                app_name
+            );
+            return Ok(TreeWalkResult::Skipped(SkipReason::UserIgnored));
+        }
 
         let text_content = state.text_buffer;
 

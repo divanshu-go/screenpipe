@@ -250,6 +250,7 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
             .iter()
             .map(|s| s.to_lowercase())
             .collect();
+        let mut hit_ignored_extension = false;
         extract_text_from_tree(
             &root,
             0,
@@ -259,7 +260,16 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
             &mut browser_url,
             &monitor_rect,
             &ignored_lower,
+            &mut hit_ignored_extension,
         );
+
+        if hit_ignored_extension {
+            debug!(
+                "skipping capture: browser extension popup matched ignored window in app={}",
+                app_name
+            );
+            return Ok(TreeWalkResult::Skipped(SkipReason::UserIgnored));
+        }
 
         // Don't bail on empty text — we still need the app_name and window_name
         // for frame metadata. Electron apps (Discord, Slack, etc.) often return
@@ -409,6 +419,7 @@ fn extract_text_from_tree(
     browser_url: &mut Option<String>,
     monitor_rect: &Option<MonitorRect>,
     ignored_windows_lower: &[String],
+    hit_ignored_extension: &mut bool,
 ) {
     if depth > max_depth {
         return;
@@ -470,6 +481,7 @@ fn extract_text_from_tree(
                 if node.name.as_deref().is_some_and(|n| matches(n))
                     || node.value.as_deref().is_some_and(|v| matches(v))
                 {
+                    *hit_ignored_extension = true;
                     return;
                 }
             }
@@ -549,6 +561,7 @@ fn extract_text_from_tree(
             browser_url,
             monitor_rect,
             ignored_windows_lower,
+            hit_ignored_extension,
         );
     }
 }
@@ -656,7 +669,7 @@ mod tests {
         let mut buf = String::new();
         let mut nodes = Vec::new();
         let mut url = None;
-        extract_text_from_tree(&tree, 0, 10, &mut buf, &mut nodes, &mut url, &None, &[]);
+        extract_text_from_tree(&tree, 0, 10, &mut buf, &mut nodes, &mut url, &None, &[], &mut false);
 
         // Text node's name should be captured
         assert!(
@@ -748,7 +761,7 @@ mod tests {
         let mut buf = String::new();
         let mut nodes = Vec::new();
         let mut url = None;
-        extract_text_from_tree(&tree, 0, 30, &mut buf, &mut nodes, &mut url, &None, &[]);
+        extract_text_from_tree(&tree, 0, 30, &mut buf, &mut nodes, &mut url, &None, &[], &mut false);
 
         // URL should be captured as browser_url, NOT as text
         assert_eq!(
