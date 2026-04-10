@@ -19,6 +19,7 @@ use screenpipe_db::DatabaseManager;
 use screenpipe_screen::frame_comparison::{FrameComparer, FrameComparisonConfig};
 use screenpipe_screen::monitor::SafeMonitor;
 use screenpipe_screen::snapshot_writer::SnapshotWriter;
+use screenpipe_screen::capture_screenshot_by_window::{get_excluded_sck_window_ids, WindowFilters};
 use screenpipe_screen::utils::capture_monitor_image;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -448,7 +449,7 @@ pub async fn event_driven_capture_loop(
         {
             last_visual_check = Instant::now();
             if let Some(ref mut comparer) = frame_comparer {
-                match capture_monitor_image(&monitor).await {
+                match capture_monitor_image(&monitor, &[]).await {
                     Ok((image, _dur)) => {
                         let diff = comparer.compare(&image);
                         if diff > visual_change_threshold {
@@ -767,8 +768,17 @@ async fn do_capture(
 ) -> Result<CaptureOutput> {
     let captured_at = Utc::now();
 
-    // Take screenshot
-    let (image, capture_dur) = capture_monitor_image(params.monitor).await?;
+    // Resolve ignored windows to SCK window IDs so ScreenCaptureKit
+    // excludes them from the capture buffer (zero overhead, pixel-perfect).
+    let window_filters = WindowFilters::new(
+        &params.tree_walker_config.ignored_windows,
+        &params.tree_walker_config.included_windows,
+        &[],
+    );
+    let excluded_ids = get_excluded_sck_window_ids(&window_filters);
+
+    // Take screenshot (with ignored windows excluded at the OS level)
+    let (image, capture_dur) = capture_monitor_image(params.monitor, &excluded_ids).await?;
     debug!(
         "screenshot captured in {:?} for monitor {}",
         capture_dur, params.monitor_id
