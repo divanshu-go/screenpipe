@@ -1,11 +1,96 @@
 use super::get_base_dir;
+use super::secrets;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use specta::Type;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tauri::AppHandle;
 use tauri_plugin_store::StoreBuilder;
 use tracing::error;
+
+/// Magic header for encrypted store.bin files.
+const STORE_MAGIC: &[u8; 8] = b"SPSTORE1";
+
+/// Decrypt store.bin in place if it's encrypted and keychain key is available.
+/// No-op if the file is already plain JSON or keychain is unavailable.
+fn decrypt_store_file(path: &Path) {
+    let data = match std::fs::read(path) {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+    if data.len() < 8 || &data[..8] != STORE_MAGIC {
+        return; // already plain JSON (or empty)
+    }
+    let key = match secrets::get_key() {
+        Some(k) => k,
+        None => {
+            tracing::warn!("store.bin is encrypted but keychain key unavailable — resetting to defaults");
+            // Remove the encrypted file so the plugin creates fresh defaults
+            let _ = std::fs::remove_file(path);
+            return;
+        }
+    };
+    match screenpipe_vault::crypto::decrypt_small(&data[8..], &key) {
+        Ok(plaintext) => {
+            // Atomic write: temp + rename
+            let tmp = path.with_extension("bin.dec.tmp");
+            if std::fs::write(&tmp, &plaintext).is_ok() {
+                let _ = std::fs::rename(&tmp, path);
+            }
+        }
+        Err(e) => {
+            tracing::error!("failed to decrypt store.bin: {} — resetting to defaults", e);
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+/// Encrypt store.bin in place if keychain key is available.
+/// No-op if already encrypted or keychain is unavailable.
+fn encrypt_store_file(path: &Path) {
+    let data = match std::fs::read(path) {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+    if data.len() >= 8 && &data[..8] == STORE_MAGIC {
+        return; // already encrypted
+    }
+    let key = match secrets::get_or_create_key() {
+        Some(k) => k,
+        None => return, // keychain unavailable, skip encryption
+    };
+    match screenpipe_vault::crypto::encrypt_small(&data, &key) {
+        Ok(ciphertext) => {
+            let mut out = Vec::with_capacity(8 + ciphertext.len());
+            out.extend_from_slice(STORE_MAGIC);
+            out.extend(ciphertext);
+            // Atomic write: temp + rename
+            let tmp = path.with_extension("bin.enc.tmp");
+            if std::fs::write(&tmp, &out).is_ok() {
+                let _ = std::fs::rename(&tmp, path);
+            }
+        }
+        Err(e) => {
+            tracing::error!("failed to encrypt store.bin: {}", e);
+        }
+    }
+}
+
+/// Re-encrypt store.bin on disk. Called after the Tauri store plugin writes plain JSON.
+pub fn reencrypt_store_file(app: &AppHandle) {
+    if let Ok(base_dir) = get_base_dir(app, None) {
+        encrypt_store_file(&base_dir.join("store.bin"));
+    }
+}
+
+/// Tauri command: re-encrypt store.bin after frontend saves.
+#[tauri::command]
+#[specta::specta]
+pub fn reencrypt_store(app: AppHandle) -> Result<(), String> {
+    reencrypt_store_file(&app);
+    Ok(())
+}
 
 /// Cached store instance — reusable across the process lifetime.
 /// Uses Mutex instead of OnceLock so the cache can be invalidated when the
@@ -18,6 +103,11 @@ fn build_store(app: &AppHandle) -> anyhow::Result<Arc<tauri_plugin_store::Store<
     let base_dir = get_base_dir(app, None)?;
     let store_path = base_dir.join("store.bin");
 
+    // Decrypt store.bin before the plugin reads it (no-op if plain JSON or keychain unavailable)
+    if store_path.exists() {
+        decrypt_store_file(&store_path);
+    }
+
     let mut last_err = None;
     // Ensure store.bin has restrictive permissions (contains API keys)
     #[cfg(unix)]
@@ -28,7 +118,11 @@ fn build_store(app: &AppHandle) -> anyhow::Result<Arc<tauri_plugin_store::Store<
 
     for attempt in 0..3u32 {
         match StoreBuilder::new(app, store_path.clone()).build() {
-            Ok(s) => return Ok(s),
+            Ok(s) => {
+                // Re-encrypt immediately after the plugin loaded the file
+                encrypt_store_file(&store_path);
+                return Ok(s);
+            }
             Err(e) => {
                 let msg = e.to_string();
                 if msg.contains("os error 17") || msg.contains("File exists") {
@@ -56,7 +150,10 @@ fn build_store(app: &AppHandle) -> anyhow::Result<Arc<tauri_plugin_store::Store<
                         .create_new()
                         .build()
                     {
-                        Ok(s) => return Ok(s),
+                        Ok(s) => {
+                            encrypt_store_file(&store_path);
+                            return Ok(s);
+                        }
                         Err(e2) => {
                             tracing::warn!("fresh store build also failed: {}", e2);
                             last_err = Some(e);
@@ -152,6 +249,7 @@ impl OnboardingStore {
         update(&mut onboarding);
         store.set("onboarding", json!(onboarding));
         store.save().map_err(|e| e.to_string())?;
+        reencrypt_store_file(app);
         Ok(())
     }
 
@@ -161,7 +259,9 @@ impl OnboardingStore {
         };
 
         store.set("onboarding", json!(self));
-        store.save().map_err(|e| e.to_string())
+        store.save().map_err(|e| e.to_string())?;
+        reencrypt_store_file(app);
+        Ok(())
     }
 
     pub fn complete(&mut self) {
@@ -666,6 +766,7 @@ impl SettingsStore {
                 if sanitized != raw {
                     store.set("settings", sanitized.clone());
                     let _ = store.save();
+                    reencrypt_store_file(app);
                 }
                 let settings = serde_json::from_value(sanitized);
                 match settings {
@@ -756,7 +857,9 @@ impl SettingsStore {
         };
 
         store.set("settings", json!(self));
-        store.save().map_err(|e| e.to_string())
+        store.save().map_err(|e| e.to_string())?;
+        reencrypt_store_file(app);
+        Ok(())
     }
 }
 
@@ -897,7 +1000,9 @@ impl CloudSyncSettingsStore {
     pub fn save(&self, app: &AppHandle) -> Result<(), String> {
         let store = get_store(app, None).map_err(|e| e.to_string())?;
         store.set("cloud_sync", json!(self));
-        store.save().map_err(|e| e.to_string())
+        store.save().map_err(|e| e.to_string())?;
+        reencrypt_store_file(app);
+        Ok(())
     }
 }
 
@@ -930,7 +1035,9 @@ impl CloudArchiveSettingsStore {
     pub fn save(&self, app: &AppHandle) -> Result<(), String> {
         let store = get_store(app, None).map_err(|e| e.to_string())?;
         store.set("cloud_archive", json!(self));
-        store.save().map_err(|e| e.to_string())
+        store.save().map_err(|e| e.to_string())?;
+        reencrypt_store_file(app);
+        Ok(())
     }
 }
 
@@ -964,7 +1071,9 @@ impl IcsCalendarSettingsStore {
     pub fn save(&self, app: &AppHandle) -> Result<(), String> {
         let store = get_store(app, None).map_err(|e| e.to_string())?;
         store.set("ics_calendars", json!(self));
-        store.save().map_err(|e| e.to_string())
+        store.save().map_err(|e| e.to_string())?;
+        reencrypt_store_file(app);
+        Ok(())
     }
 }
 
@@ -1009,7 +1118,9 @@ impl PipeSuggestionsSettingsStore {
     pub fn save(&self, app: &AppHandle) -> Result<(), String> {
         let store = get_store(app, None).map_err(|e| e.to_string())?;
         store.set("pipe_suggestions", json!(self));
-        store.save().map_err(|e| e.to_string())
+        store.save().map_err(|e| e.to_string())?;
+        reencrypt_store_file(app);
+        Ok(())
     }
 }
 

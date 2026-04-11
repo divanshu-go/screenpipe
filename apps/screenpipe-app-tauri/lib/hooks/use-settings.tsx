@@ -4,6 +4,7 @@
 
 import { homeDir } from "@tauri-apps/api/path";
 import { getVersion } from "@tauri-apps/api/app";
+import { invoke } from "@tauri-apps/api/core";
 import { platform } from "@tauri-apps/plugin-os";
 import { Store } from "@tauri-apps/plugin-store";
 import React, { createContext, useContext, useEffect, useState } from "react";
@@ -387,6 +388,12 @@ export const getStore = async () => {
 	return _store;
 };
 
+/** Save the store and re-encrypt store.bin on disk (keychain encryption). */
+export const saveAndEncrypt = async (store: Store) => {
+	await store.save();
+	await invoke("reencrypt_store").catch(() => {});
+};
+
 // Store utilities similar to Cap's implementation
 function createSettingsStore() {
 	const get = async (): Promise<Settings> => {
@@ -529,7 +536,7 @@ function createSettingsStore() {
 		// Save migrations if needed
 		if (needsUpdate) {
 			await store.set("settings", settings);
-			await store.save();
+			await saveAndEncrypt(store);
 		}
 
 		return settings;
@@ -540,13 +547,13 @@ function createSettingsStore() {
 		const current = await get();
 		const newSettings = { ...current, ...value };
 		await store.set("settings", newSettings);
-		await store.save();
+		await saveAndEncrypt(store);
 	};
 
 	const reset = async () => {
 		const store = await getStore();
 		await store.set("settings", createDefaultSettingsObject());
-		await store.save();
+		await saveAndEncrypt(store);
 	};
 
 	const resetSetting = async <K extends keyof Settings>(key: K) => {
