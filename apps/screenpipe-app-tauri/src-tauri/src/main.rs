@@ -375,7 +375,10 @@ async fn main() {
         .and_then(|data| {
             if data.len() >= 8 && &data[..8] == b"SPSTORE1" {
                 // Encrypted store — try to decrypt with keychain key
-                let key = secrets::get_key()?;
+                let key = match secrets::get_key() {
+                    secrets::KeyResult::Found(k) => k,
+                    _ => return None,
+                };
                 let plain = screenpipe_vault::crypto::decrypt_small(&data[8..], &key).ok()?;
                 serde_json::from_slice::<serde_json::Value>(&plain).ok()
             } else {

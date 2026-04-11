@@ -23,14 +23,21 @@ fn decrypt_store_file(path: &Path) {
         return; // already plain JSON (or empty)
     }
     let key = match secrets::get_key() {
-        Some(k) => k,
-        None => {
+        secrets::KeyResult::Found(k) => k,
+        secrets::KeyResult::AccessDenied => {
             tracing::warn!(
-                "store.bin is encrypted but keychain key unavailable — \
-                 writing empty JSON so the plugin can create fresh defaults. \
-                 The encrypted backup is saved as store.bin.encrypted.bak"
+                "store.bin is encrypted but keychain access was denied — \
+                 please grant keychain access and restart. \
+                 Your settings are preserved in the encrypted file."
             );
-            // Preserve the encrypted file as backup before overwriting
+            // Don't overwrite — the file is still valid, user just needs to grant access
+            return;
+        }
+        secrets::KeyResult::NotFound | secrets::KeyResult::Unavailable => {
+            tracing::warn!(
+                "store.bin is encrypted but keychain key not found — \
+                 saving backup as store.bin.encrypted.bak and resetting to defaults"
+            );
             let backup = path.with_extension("bin.encrypted.bak");
             let _ = std::fs::copy(path, &backup);
             let _ = std::fs::write(path, b"{}");
@@ -80,7 +87,21 @@ fn encrypt_store_file(path: &Path) {
     }
     let key = match secrets::get_or_create_key() {
         Some(k) => k,
-        None => return, // keychain unavailable, skip encryption
+        None => {
+            // Keychain access denied or unavailable — disable encryption
+            // and remove the opt-in flag so user isn't stuck in a broken state
+            if let Some(parent) = path.parent() {
+                let flag = parent.join(".encrypt-store");
+                if flag.exists() {
+                    let _ = std::fs::remove_file(&flag);
+                    tracing::warn!(
+                        "store encryption disabled — keychain access denied. \
+                         re-enable in Settings > Privacy after granting keychain access."
+                    );
+                }
+            }
+            return;
+        }
     };
     match screenpipe_vault::crypto::encrypt_small(&data, &key) {
         Ok(ciphertext) => {

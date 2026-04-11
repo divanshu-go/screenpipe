@@ -18,6 +18,19 @@ use tracing::{debug, info, warn};
 const SERVICE: &str = "com.screenpipe.app";
 const KEY_NAME: &str = "store-encryption-key";
 
+/// Result of a keychain key lookup.
+pub enum KeyResult {
+    /// Key found and returned.
+    Found([u8; 32]),
+    /// Key does not exist in the keychain (safe to create a new one).
+    NotFound,
+    /// Keychain access was denied (user cancelled prompt, keychain locked, etc.).
+    /// Do NOT create a new key — disable encryption instead.
+    AccessDenied,
+    /// Keychain is not available on this platform/environment.
+    Unavailable,
+}
+
 /// Cached availability check — probed once per process.
 static AVAILABLE: OnceLock<bool> = OnceLock::new();
 
@@ -26,7 +39,6 @@ pub fn is_keychain_available() -> bool {
     *AVAILABLE.get_or_init(|| {
         #[cfg(target_os = "macos")]
         {
-            // On macOS, just check that the security CLI exists
             std::process::Command::new("security")
                 .arg("help")
                 .stdout(std::process::Stdio::null())
@@ -54,35 +66,52 @@ pub fn is_keychain_available() -> bool {
     })
 }
 
-/// Retrieve the encryption key from the keychain.
-pub fn get_key() -> Option<[u8; 32]> {
+/// Retrieve the encryption key from the keychain (three-way result).
+pub fn get_key() -> KeyResult {
     if !is_keychain_available() {
-        return None;
+        return KeyResult::Unavailable;
     }
 
-    let b64 = get_password_from_keychain()?;
-    let bytes = B64.decode(&b64).ok()?;
-    if bytes.len() != 32 {
-        warn!(
-            "keychain: stored key has wrong length ({}), ignoring",
-            bytes.len()
-        );
-        return None;
+    match get_password_from_keychain() {
+        KeychainLookup::Found(b64) => {
+            let bytes = match B64.decode(&b64) {
+                Ok(b) => b,
+                Err(_) => {
+                    warn!("keychain: stored key is not valid base64, treating as not found");
+                    return KeyResult::NotFound;
+                }
+            };
+            if bytes.len() != 32 {
+                warn!(
+                    "keychain: stored key has wrong length ({}), treating as not found",
+                    bytes.len()
+                );
+                return KeyResult::NotFound;
+            }
+            let mut key = [0u8; 32];
+            key.copy_from_slice(&bytes);
+            debug!("keychain: retrieved existing store.bin encryption key");
+            KeyResult::Found(key)
+        }
+        KeychainLookup::NotFound => KeyResult::NotFound,
+        KeychainLookup::AccessDenied => KeyResult::AccessDenied,
     }
-    let mut key = [0u8; 32];
-    key.copy_from_slice(&bytes);
-    debug!("keychain: retrieved existing store.bin encryption key");
-    Some(key)
 }
 
 /// Get the encryption key, creating and storing a new one if it doesn't exist.
+/// Returns None if access was denied or keychain unavailable — caller should
+/// disable encryption and notify the user.
 pub fn get_or_create_key() -> Option<[u8; 32]> {
-    if !is_keychain_available() {
-        return None;
+    match get_key() {
+        KeyResult::Found(key) => return Some(key),
+        KeyResult::AccessDenied => {
+            warn!("keychain: access denied — cannot create or retrieve encryption key");
+            return None;
+        }
+        KeyResult::Unavailable => return None,
+        KeyResult::NotFound => {} // fall through to create
     }
-    if let Some(key) = get_key() {
-        return Some(key);
-    }
+
     // Generate a new random key
     let key = screenpipe_vault::crypto::generate_master_key();
     let b64 = B64.encode(key.as_ref());
@@ -121,9 +150,15 @@ pub fn delete_key() -> Result<(), String> {
 
 // ── Platform-specific keychain access ──────────────────────────────────
 
+enum KeychainLookup {
+    Found(String),
+    NotFound,
+    AccessDenied,
+}
+
 #[cfg(target_os = "macos")]
-fn get_password_from_keychain() -> Option<String> {
-    let output = std::process::Command::new("security")
+fn get_password_from_keychain() -> KeychainLookup {
+    let output = match std::process::Command::new("security")
         .args([
             "find-generic-password",
             "-s",
@@ -133,18 +168,32 @@ fn get_password_from_keychain() -> Option<String> {
             "-w", // print password only
         ])
         .output()
-        .ok()?;
+    {
+        Ok(o) => o,
+        Err(_) => return KeychainLookup::AccessDenied,
+    };
 
     if !output.status.success() {
-        debug!("keychain: key not found (security CLI returned non-zero)");
-        return None;
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // macOS security CLI returns specific error strings
+        if stderr.contains("could not be found")
+            || stderr.contains("SecItemNotFound")
+            || stderr.contains("The specified item could not be found")
+        {
+            debug!("keychain: key not found");
+            return KeychainLookup::NotFound;
+        }
+        // Anything else (user denied, keychain locked, etc.) = access denied
+        debug!("keychain: access denied or error: {}", stderr.trim());
+        return KeychainLookup::AccessDenied;
     }
 
-    let password = String::from_utf8(output.stdout).ok()?.trim().to_string();
+    let password = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if password.is_empty() {
-        return None;
+        KeychainLookup::NotFound
+    } else {
+        KeychainLookup::Found(password)
     }
-    Some(password)
 }
 
 #[cfg(target_os = "macos")]
@@ -182,9 +231,16 @@ fn set_password_in_keychain(password: &str) -> bool {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn get_password_from_keychain() -> Option<String> {
-    let entry = keyring::Entry::new(SERVICE, KEY_NAME).ok()?;
-    entry.get_password().ok()
+fn get_password_from_keychain() -> KeychainLookup {
+    let entry = match keyring::Entry::new(SERVICE, KEY_NAME) {
+        Ok(e) => e,
+        Err(_) => return KeychainLookup::AccessDenied,
+    };
+    match entry.get_password() {
+        Ok(p) => KeychainLookup::Found(p),
+        Err(keyring::Error::NoEntry) => KeychainLookup::NotFound,
+        Err(_) => KeychainLookup::AccessDenied,
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
