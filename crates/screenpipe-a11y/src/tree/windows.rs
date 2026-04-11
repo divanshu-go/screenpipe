@@ -484,6 +484,24 @@ fn extract_text_from_tree(
                     *hit_ignored_extension = true;
                     return;
                 }
+
+                // Fallback for sub-views where the page title doesn't include the
+                // extension brand name (e.g. Bitwarden shows "New Login" for the
+                // add-login route).  Scan 2 levels of children for any text that
+                // matches an ignored pattern — extension UIs always render their
+                // brand name visibly somewhere near the top of the tree.
+                let is_extension_popup = node
+                    .value
+                    .as_deref()
+                    .map_or(false, |v| v.starts_with("chrome-extension://")
+                        || v.starts_with("moz-extension://")
+                        || v.starts_with("ms-browser-extension://"));
+                if is_extension_popup
+                    && extension_subtree_matches_ignored(node, ignored_windows_lower)
+                {
+                    *hit_ignored_extension = true;
+                    return;
+                }
             }
             if let Some(ref val) = node.value {
                 let trimmed = val.trim();
@@ -566,6 +584,41 @@ fn extract_text_from_tree(
     }
 }
 
+/// Scan a chrome-extension:// Document node's subtree (up to 2 levels deep) for
+/// any text matching an ignored pattern.
+///
+/// Chrome extension popups sometimes have page titles that don't include the
+/// extension brand name (e.g. Bitwarden shows "New Login" for the add-login
+/// route).  In that case the top-level Document name check misses it, but the
+/// extension's own UI text always contains the brand name ("Bitwarden",
+/// "1Password", etc.) a few levels in.
+fn extension_subtree_matches_ignored(
+    node: &AccessibilityNode,
+    ignored_lower: &[String],
+) -> bool {
+    let matches = |val: &str| {
+        let lower = val.to_lowercase();
+        ignored_lower.iter().any(|ig| lower.contains(ig.as_str()))
+    };
+
+    for child in &node.children {
+        if child.name.as_deref().is_some_and(|n| matches(n))
+            || child.value.as_deref().is_some_and(|v| matches(v))
+        {
+            return true;
+        }
+        // One level deeper
+        for grandchild in &child.children {
+            if grandchild.name.as_deref().is_some_and(|n| matches(n))
+                || grandchild.value.as_deref().is_some_and(|v| matches(v))
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Append trimmed text to buffer with newline separator.
 fn append_text(buffer: &mut String, text: &str) {
     let trimmed = text.trim();
@@ -619,51 +672,25 @@ mod tests {
         let tree = AccessibilityNode {
             control_type: "Window".to_string(),
             name: Some("Test App".to_string()),
-            automation_id: None,
-            class_name: None,
-            value: None,
-            bounds: None,
-            is_enabled: true,
-            is_focused: None,
-            is_keyboard_focusable: None,
             children: vec![
                 AccessibilityNode {
                     control_type: "Text".to_string(),
                     name: Some("Hello World".to_string()),
-                    automation_id: None,
-                    class_name: None,
-                    value: None,
-                    bounds: None,
-                    is_enabled: true,
-                    is_focused: None,
-                    is_keyboard_focusable: None,
-                    children: vec![],
+                    ..Default::default()
                 },
                 AccessibilityNode {
                     control_type: "Edit".to_string(),
                     name: Some("Search".to_string()),
-                    automation_id: None,
-                    class_name: None,
                     value: Some("typed text".to_string()),
-                    bounds: None,
-                    is_enabled: true,
-                    is_focused: None,
-                    is_keyboard_focusable: None,
-                    children: vec![],
+                    ..Default::default()
                 },
                 AccessibilityNode {
                     control_type: "Image".to_string(),
                     name: Some("icon.png".to_string()),
-                    automation_id: None,
-                    class_name: None,
-                    value: None,
-                    bounds: None,
-                    is_enabled: true,
-                    is_focused: None,
-                    is_keyboard_focusable: None,
-                    children: vec![],
+                    ..Default::default()
                 },
             ],
+            ..Default::default()
         };
 
         let mut buf = String::new();
@@ -710,62 +737,29 @@ mod tests {
         let tree = AccessibilityNode {
             control_type: "Pane".to_string(),
             name: Some("Discord".to_string()),
-            automation_id: None,
-            class_name: None,
-            value: None,
-            bounds: None,
-            is_enabled: true,
-            is_focused: None,
-            is_keyboard_focusable: None,
             children: vec![AccessibilityNode {
                 control_type: "Document".to_string(),
-                name: None,
-                automation_id: None,
-                class_name: None,
                 value: Some("https://discordapp.com/channels/123/456".to_string()),
-                bounds: None,
-                is_enabled: true,
-                is_focused: None,
-                is_keyboard_focusable: None,
                 children: vec![
                     AccessibilityNode {
                         control_type: "Text".to_string(),
                         name: Some("Welcome to the server".to_string()),
-                        automation_id: None,
-                        class_name: None,
-                        value: None,
-                        bounds: None,
-                        is_enabled: true,
-                        is_focused: None,
-                        is_keyboard_focusable: None,
-                        children: vec![],
+                        ..Default::default()
                     },
                     AccessibilityNode {
                         control_type: "Button".to_string(),
                         name: Some("Send Message".to_string()),
-                        automation_id: None,
-                        class_name: None,
-                        value: None,
-                        bounds: None,
-                        is_enabled: true,
-                        is_focused: None,
-                        is_keyboard_focusable: None,
-                        children: vec![],
+                        ..Default::default()
                     },
                     AccessibilityNode {
                         control_type: "Custom".to_string(),
                         name: Some("User: john_doe".to_string()),
-                        automation_id: None,
-                        class_name: None,
-                        value: None,
-                        bounds: None,
-                        is_enabled: true,
-                        is_focused: None,
-                        is_keyboard_focusable: None,
-                        children: vec![],
+                        ..Default::default()
                     },
                 ],
+                ..Default::default()
             }],
+            ..Default::default()
         };
 
         let mut buf = String::new();
@@ -817,6 +811,70 @@ mod tests {
             nodes.len() >= 3,
             "Should capture at least 3 nodes from Document children, got {}",
             nodes.len()
+        );
+    }
+
+    #[test]
+    fn test_extension_popup_ignored_via_child_text() {
+        use crate::events::AccessibilityNode;
+
+        // Simulates Bitwarden's "New Login" sub-view where the Document node's
+        // name is the route title "New Login" (no brand name), but the brand
+        // "Bitwarden" appears in a child text element.
+        let bitwarden_popup = AccessibilityNode {
+            control_type: "Window".to_string(),
+            name: Some("".to_string()), // Chrome extension popups have empty window title
+            children: vec![AccessibilityNode {
+                control_type: "Document".to_string(),
+                name: Some("New Login".to_string()), // page title without brand name
+                value: Some(
+                    "chrome-extension://nngceckbapebfimnlniiiahkandclblb/popup.html#/add-login"
+                        .to_string(),
+                ),
+                children: vec![
+                    AccessibilityNode {
+                        control_type: "Text".to_string(),
+                        name: Some("Bitwarden".to_string()), // brand name in child
+                        ..Default::default()
+                    },
+                    AccessibilityNode {
+                        control_type: "Edit".to_string(),
+                        name: Some("Password".to_string()),
+                        value: Some("hunter2".to_string()),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let ignored = vec!["bit".to_string()];
+        let mut buf = String::new();
+        let mut nodes = Vec::new();
+        let mut url = None;
+        let mut hit = false;
+
+        extract_text_from_tree(
+            &bitwarden_popup,
+            0,
+            10,
+            &mut buf,
+            &mut nodes,
+            &mut url,
+            &None,
+            &ignored,
+            &mut hit,
+        );
+
+        assert!(
+            hit,
+            "should detect Bitwarden extension popup via child text even when page title is 'New Login'"
+        );
+        // Password value must not be in the buffer
+        assert!(
+            !buf.contains("hunter2"),
+            "password content must not be extracted, got: {buf}"
         );
     }
 

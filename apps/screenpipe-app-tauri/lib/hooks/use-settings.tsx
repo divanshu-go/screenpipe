@@ -221,7 +221,7 @@ const DEFAULT_IGNORED_WINDOWS_IN_ALL_OS = [
 	"Settings",
 	"Keepass",
 	"Recorder",
-	"Vaults",
+	"vault",
 	"OBS Studio",
 	"screenpipe",
 ];

@@ -553,7 +553,7 @@ impl Default for SettingsStore {
             "Settings".to_string(),
             "Keepass".to_string(),
             "Recorder".to_string(),
-            "Vaults".to_string(),
+            "vault".to_string(),
             "OBS Studio".to_string(),
             "screenpipe".to_string(),
         ];
