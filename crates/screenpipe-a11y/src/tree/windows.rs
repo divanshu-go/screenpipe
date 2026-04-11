@@ -490,12 +490,11 @@ fn extract_text_from_tree(
                 // add-login route).  Scan 2 levels of children for any text that
                 // matches an ignored pattern — extension UIs always render their
                 // brand name visibly somewhere near the top of the tree.
-                let is_extension_popup = node
-                    .value
-                    .as_deref()
-                    .map_or(false, |v| v.starts_with("chrome-extension://")
+                let is_extension_popup = node.value.as_deref().map_or(false, |v| {
+                    v.starts_with("chrome-extension://")
                         || v.starts_with("moz-extension://")
-                        || v.starts_with("ms-browser-extension://"));
+                        || v.starts_with("ms-browser-extension://")
+                });
                 if is_extension_popup
                     && extension_subtree_matches_ignored(node, ignored_windows_lower)
                 {
@@ -592,10 +591,7 @@ fn extract_text_from_tree(
 /// route).  In that case the top-level Document name check misses it, but the
 /// extension's own UI text always contains the brand name ("Bitwarden",
 /// "1Password", etc.) a few levels in.
-fn extension_subtree_matches_ignored(
-    node: &AccessibilityNode,
-    ignored_lower: &[String],
-) -> bool {
+fn extension_subtree_matches_ignored(node: &AccessibilityNode, ignored_lower: &[String]) -> bool {
     let matches = |val: &str| {
         let lower = val.to_lowercase();
         ignored_lower.iter().any(|ig| lower.contains(ig.as_str()))

@@ -25,30 +25,52 @@ fn decrypt_store_file(path: &Path) {
     let key = match secrets::get_key() {
         Some(k) => k,
         None => {
-            tracing::warn!("store.bin is encrypted but keychain key unavailable — resetting to defaults");
-            // Remove the encrypted file so the plugin creates fresh defaults
-            let _ = std::fs::remove_file(path);
+            tracing::warn!(
+                "store.bin is encrypted but keychain key unavailable — \
+                 writing empty JSON so the plugin can create fresh defaults. \
+                 The encrypted backup is saved as store.bin.encrypted.bak"
+            );
+            // Preserve the encrypted file as backup before overwriting
+            let backup = path.with_extension("bin.encrypted.bak");
+            let _ = std::fs::copy(path, &backup);
+            let _ = std::fs::write(path, b"{}");
             return;
         }
     };
     match screenpipe_vault::crypto::decrypt_small(&data[8..], &key) {
         Ok(plaintext) => {
-            // Atomic write: temp + rename
             let tmp = path.with_extension("bin.dec.tmp");
             if std::fs::write(&tmp, &plaintext).is_ok() {
                 let _ = std::fs::rename(&tmp, path);
             }
         }
         Err(e) => {
-            tracing::error!("failed to decrypt store.bin: {} — resetting to defaults", e);
-            let _ = std::fs::remove_file(path);
+            tracing::error!(
+                "failed to decrypt store.bin: {} — saving backup as store.bin.encrypted.bak",
+                e
+            );
+            let backup = path.with_extension("bin.encrypted.bak");
+            let _ = std::fs::copy(path, &backup);
+            let _ = std::fs::write(path, b"{}");
         }
     }
 }
 
-/// Encrypt store.bin in place if keychain key is available.
-/// No-op if already encrypted or keychain is unavailable.
+/// Encrypt store.bin in place if keychain key is available AND encryption is opted-in.
+///
+/// DISABLED BY DEFAULT — the macOS keychain doesn't reliably persist keys across
+/// app updates (code signing identity changes), causing settings loss on every update.
+/// The 0o600 file permissions are sufficient protection for now.
+///
+/// To opt in: create ~/.screenpipe/.encrypt-store or set SCREENPIPE_ENCRYPT_STORE=1.
 fn encrypt_store_file(path: &Path) {
+    // Check opt-in flag
+    let opted_in = std::env::var("SCREENPIPE_ENCRYPT_STORE").map(|v| v == "1").unwrap_or(false)
+        || path.parent().map(|p| p.join(".encrypt-store").exists()).unwrap_or(false);
+    if !opted_in {
+        return;
+    }
+
     let data = match std::fs::read(path) {
         Ok(d) => d,
         Err(_) => return,
@@ -65,7 +87,6 @@ fn encrypt_store_file(path: &Path) {
             let mut out = Vec::with_capacity(8 + ciphertext.len());
             out.extend_from_slice(STORE_MAGIC);
             out.extend(ciphertext);
-            // Atomic write: temp + rename
             let tmp = path.with_extension("bin.enc.tmp");
             if std::fs::write(&tmp, &out).is_ok() {
                 let _ = std::fs::rename(&tmp, path);
