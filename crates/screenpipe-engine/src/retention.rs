@@ -201,7 +201,7 @@ pub async fn retention_status(
     match guard.as_ref() {
         None => Ok(JsonResponse(RetentionStatusResponse {
             enabled: false,
-            retention_days: 30,
+            retention_days: 14,
             last_cleanup: None,
             last_error: None,
             total_deleted: 0,

@@ -163,7 +163,7 @@ export type Settings = SettingsStore & {
 	appendTypedTextToMeetingNotes?: boolean;
 	/** Auto-delete local data older than retention days (free alternative to cloud archive) */
 	localRetentionEnabled?: boolean;
-	/** Days to keep data locally before auto-deleting (default: 30) */
+	/** Days to keep data locally before auto-deleting (default: 14) */
 	localRetentionDays?: number;
 	/** Apply macOS vibrancy effect to sidebar for a translucent glass look */
 	translucentSidebar?: boolean;
