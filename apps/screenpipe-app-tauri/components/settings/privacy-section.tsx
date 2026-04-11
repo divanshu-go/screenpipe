@@ -1070,6 +1070,33 @@ export function PrivacySection() {
         </LockedSetting>
       </div>
 
+      {/* API Authentication */}
+      <div className="space-y-2">
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <Shield className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <h3 className="text-sm font-medium text-foreground">
+                    require API authentication
+                  </h3>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    remote devices must use the same account to access this API. localhost is always allowed.
+                  </p>
+                </div>
+              </div>
+              <Switch
+                checked={settings.apiAuth ?? false}
+                onCheckedChange={(checked) => {
+                  handleSettingsChange({ apiAuth: checked });
+                }}
+              />
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
       {/* Floating apply & restart button */}
       {hasUnsavedChanges && (
         <div className="sticky bottom-4 flex justify-end pointer-events-none z-50">
