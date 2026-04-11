@@ -711,7 +711,7 @@ export function MemoriesSection() {
                     return (
                       <div className="text-sm text-foreground">
                         <MemoizedReactMarkdown
-                          className="prose prose-sm dark:prose-invert max-w-none break-words [word-break:break-word] prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0 prose-headings:my-1.5 prose-pre:my-1 prose-blockquote:my-1 prose-hr:my-2"
+                          className="prose prose-sm dark:prose-invert max-w-none break-words [word-break:break-word] prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0 prose-headings:my-1.5 prose-pre:my-1 prose-pre:bg-muted prose-pre:text-foreground prose-code:bg-muted prose-code:text-foreground prose-code:before:content-none prose-code:after:content-none prose-blockquote:my-1 prose-hr:my-2"
                           remarkPlugins={[remarkGfm]}
                           components={{
                             p({ children }) {
