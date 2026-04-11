@@ -349,10 +349,6 @@ pub struct RecordArgs {
     /// Localhost requests are always allowed.
     #[arg(long, default_value_t = false)]
     pub api_auth: bool,
-
-    /// Encrypt store.bin at rest using an OS keychain-stored key.
-    #[arg(long, default_value_t = false)]
-    pub encrypt_store: bool,
 }
 
 impl RecordArgs {
@@ -501,14 +497,6 @@ impl RecordArgs {
                 let json: serde_json::Value = serde_json::from_str(&content).ok()?;
                 json["token"].as_str().map(|s| s.to_string())
             });
-        }
-
-        // Sync the .encrypt-store flag file
-        let flag_path = config.data_dir.join(".encrypt-store");
-        if self.encrypt_store && !flag_path.exists() {
-            let _ = std::fs::write(&flag_path, b"");
-        } else if !self.encrypt_store && flag_path.exists() {
-            let _ = std::fs::remove_file(&flag_path);
         }
 
         config
