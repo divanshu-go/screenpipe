@@ -189,6 +189,7 @@ export type Settings = SettingsStore & {
 		endTime: string;
 		recordMode: string;
 	}>;
+	apiAuth?: boolean;
 }
 
 export function getEffectiveFilters(settings: Settings) {

@@ -821,11 +821,20 @@ impl SettingsStore {
     ) -> screenpipe_engine::RecordingConfig {
         let resolved_engine = self.resolve_audio_engine();
         let settings = self.to_recording_settings();
-        screenpipe_engine::RecordingConfig::from_settings(
+        let mut config = screenpipe_engine::RecordingConfig::from_settings(
             &settings,
             data_dir,
             Some(&resolved_engine),
-        )
+        );
+        // Set the API auth key from the user's token/api_key for remote auth
+        if config.api_auth {
+            config.api_auth_key = self
+                .user
+                .api_key
+                .clone()
+                .or_else(|| self.user.token.clone());
+        }
+        config
     }
 
     fn resolve_audio_engine(&self) -> String {

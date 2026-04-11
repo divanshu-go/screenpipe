@@ -388,6 +388,32 @@ export default function GeneralSettings() {
         </CardContent>
       </Card>
 
+      {/* API Authentication */}
+      <Card>
+        <CardContent className="pt-6">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-3">
+              <Shield className="h-5 w-5 text-muted-foreground" />
+              <div>
+                <Label className="text-sm font-medium">
+                  require API authentication
+                </Label>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  remote devices must use the same account to access this API.
+                  localhost is always allowed.
+                </p>
+              </div>
+            </div>
+            <Switch
+              checked={settings.apiAuth ?? false}
+              onCheckedChange={(checked) => {
+                handleSettingsChange({ apiAuth: checked });
+              }}
+            />
+          </div>
+        </CardContent>
+      </Card>
+
     </div>
   );
 }

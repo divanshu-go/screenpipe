@@ -205,7 +205,7 @@ impl RecordingConfig {
             schedule_enabled: settings.schedule_enabled,
             schedule_rules: settings.schedule_rules.clone(),
             max_snapshot_width: settings.max_snapshot_width,
-            api_auth: false,
+            api_auth: settings.api_auth,
             api_auth_key: None,
         }
     }
