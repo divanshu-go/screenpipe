@@ -23,6 +23,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { AIPresetsSelector } from "@/components/rewind/ai-presets-selector";
 import { AIPreset } from "@/lib/utils/tauri";
 import remarkGfm from "remark-gfm";
+import rehypeRaw from "rehype-raw";
 // OpenAI SDK no longer used directly — all providers route through Pi agent
 import posthog from "posthog-js";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
@@ -132,7 +133,30 @@ BEHAVIOR RULES:
 - Act immediately on clear requests. NEVER ask for confirmation when the user's intent is obvious.
 - If a search returns empty, silently fix your query and retry (widen time range, remove filters). Do NOT list "possibilities" or ask the user what to do.
 - Be concise. Cite timestamps when relevant. Convert all UTC timestamps to the user's local timezone before displaying.
+- NEVER show raw Windows process names (.exe) to the user. Always translate to human-readable app names. Common mappings: msedge.exe → Microsoft Edge, WindowsTerminal.exe → Windows Terminal, explorer.exe → File Explorer, chrome.exe → Chrome, firefox.exe → Firefox, Code.exe → VS Code, cursor.exe → Cursor, slack.exe → Slack, discord.exe → Discord, obs64.exe/obs.exe → OBS Studio, Teams.exe → Microsoft Teams, Outlook.exe → Outlook, WINWORD.EXE → Word, EXCEL.EXE → Excel, POWERPNT.EXE → PowerPoint, wezterm-gui.exe → WezTerm, spotify.exe → Spotify, zoom.exe → Zoom, Photos.exe → Photos, cmd.exe → Command Prompt, powershell.exe → PowerShell, FlaUInspect.exe → FlaUInspect. For any unknown .exe, strip the suffix and title-case it (e.g. myapp.exe → Myapp).
 - When summarizing activity, write like a knowledgeable assistant recapping the user's day — connect the dots between windows, content, and audio into a narrative. Name specific projects, files, people, and URLs. Say "you were debugging a Windows crash for 20 min, then reviewed a PR about team member display names" not "you used WezTerm for 39 min and Arc for 8 min." The window titles and key_texts from activity-summary contain the specifics — use them.
+
+RESPONSE FORMAT FOR ACTIVITY SUMMARIES:
+When the user asks "what did I do", "what was I working on", "summarize my day/hour/week", or any broad activity overview:
+
+1. LEAD WITH THE BIGGEST THING. Open with the single most significant task or project in a bold header. Name the actual work, not the app or the time. Example: "**Debugging the Windows crash in screenpipe-vision**" not "**VS Code: 2h 15m**". If multiple significant things happened, pick the one with the most depth or impact.
+
+2. NARRATIVE SECTIONS (2–4 max). Divide the response into thematic sections with descriptive headers that name what was happening — not data categories.
+   - GOOD: "### Deep work on the auth refactor", "### Afternoon: PRs, reviews, and Slack"
+   - BAD: "### Time Spent by App", "### Active Apps", "### Audio Activity", "### Summary"
+   Each section should be 2–4 sentences of flowing prose connecting what you saw across windows, audio, and activity. Name specific files, PRs, URLs, people, decisions.
+
+3. PROSE, NOT BULLET METRICS. Write in sentences, not bullet lists of app names and durations. The goal is understanding what happened, not reading a spreadsheet. Duration numbers belong in the stats footnote, not the main body.
+
+4. RAW STATS FOOTNOTE. At the very end, append a collapsed block using this exact format:
+   <details>
+   <summary>Raw stats</summary>
+   <app-stats>
+   App Name|minutes_as_number
+   App Name|minutes_as_number
+   </app-stats>
+   </details>
+   Use the human-readable app name (already translated from .exe), and minutes as a plain decimal number (e.g. 20.4 not "20m"). Keep the main response clean — all time-per-app counts go here, not inline.
 
 TOOL SELECTION (use the right tool for the job):
 - "meeting", "call", "conversation", "what did I/they say" → search with content_type: "audio", NO q param
@@ -518,6 +542,98 @@ function ThinkingBlock({ text, isThinking, durationMs }: { text: string; isThink
   );
 }
 
+// --- App stats helpers ---
+
+const APP_STAT_COLORS = [
+  "#3b82f6", "#8b5cf6", "#ec4899", "#f97316", "#14b8a6",
+  "#06b6d4", "#84cc16", "#f59e0b", "#6366f1", "#ef4444",
+];
+
+function nameToColor(name: string): string {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = (hash * 31 + name.charCodeAt(i)) & 0xffffffff;
+  }
+  return APP_STAT_COLORS[Math.abs(hash) % APP_STAT_COLORS.length];
+}
+
+function formatMinutes(minutes: number): string {
+  if (minutes < 1) return "<1m";
+  if (minutes < 60) return `${Math.round(minutes)}m`;
+  const h = Math.floor(minutes / 60);
+  const m = Math.round(minutes % 60);
+  return m > 0 ? `${h}h ${m}m` : `${h}h`;
+}
+
+function AppIcon({ name }: { name: string }) {
+  const color = nameToColor(name);
+  const [iconFailed, setIconFailed] = React.useState(false);
+  const iconUrl = `http://localhost:11435/app-icon?name=${encodeURIComponent(name)}`;
+  return (
+    <div className="w-5 h-5 rounded-sm flex-shrink-0 flex items-center justify-center overflow-hidden">
+      {iconFailed ? (
+        <span
+          className="w-full h-full flex items-center justify-center text-[10px] font-semibold text-white rounded-sm"
+          style={{ backgroundColor: color }}
+        >
+          {name.charAt(0).toUpperCase()}
+        </span>
+      ) : (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={iconUrl}
+          alt={name}
+          className="w-full h-full object-contain"
+          onError={() => setIconFailed(true)}
+        />
+      )}
+    </div>
+  );
+}
+
+function AppStatsBlock({ content }: { content: string }) {
+  const items = content
+    .trim()
+    .split("\n")
+    .map((line) => {
+      const [app, mins] = line.split("|");
+      return { app: app?.trim() ?? "", minutes: parseFloat(mins?.trim() ?? "0") };
+    })
+    .filter((item) => item.app && !isNaN(item.minutes) && item.minutes > 0);
+
+  if (items.length === 0) return null;
+
+  const maxMinutes = Math.max(...items.map((i) => i.minutes));
+
+  return (
+    <div className="space-y-2 px-3 pt-1 pb-3">
+      {items.map(({ app, minutes }) => {
+        const color = nameToColor(app);
+        const pct = maxMinutes > 0 ? (minutes / maxMinutes) * 100 : 0;
+        return (
+          <div key={app} className="flex items-center gap-2.5">
+            <AppIcon name={app} />
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-xs text-foreground truncate">{app}</span>
+                <span className="text-xs tabular-nums text-muted-foreground ml-2 shrink-0">
+                  {formatMinutes(minutes)}
+                </span>
+              </div>
+              <div className="h-[2px] bg-border rounded-full overflow-hidden">
+                <div
+                  className="h-full rounded-full transition-all"
+                  style={{ width: `${pct}%`, backgroundColor: color, opacity: 0.6 }}
+                />
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // Markdown renderer for text blocks
 function MarkdownBlock({ text, isUser }: { text: string; isUser: boolean }) {
   return (
@@ -529,9 +645,46 @@ function MarkdownBlock({ text, isUser }: { text: string; isUser: boolean }) {
           : "dark:prose-invert"
       )}
       remarkPlugins={[remarkGfm]}
+      rehypePlugins={[rehypeRaw]}
       components={{
         p({ children }) {
           return <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>;
+        },
+        details({ children, ...props }) {
+          return (
+            <details
+              className="mt-4 border border-border rounded-md overflow-hidden not-prose"
+              {...(props as React.HTMLAttributes<HTMLDetailsElement>)}
+            >
+              {children}
+            </details>
+          );
+        },
+        summary({ children, ...props }) {
+          return (
+            <summary
+              className="px-3 py-2 text-xs font-medium text-muted-foreground cursor-pointer select-none list-none flex items-center gap-2 hover:bg-muted/50 hover:text-foreground transition-colors"
+              {...(props as React.HTMLAttributes<HTMLElement>)}
+            >
+              <svg
+                className="w-2.5 h-2.5 transition-transform [[open]_&]:rotate-90"
+                viewBox="0 0 6 10"
+                fill="currentColor"
+              >
+                <path d="M1 1l4 4-4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+              </svg>
+              {children}
+            </summary>
+          );
+        },
+        // @ts-expect-error — custom element handled via rehype-raw
+        "app-stats"({ children }) {
+          const text = typeof children === "string"
+            ? children
+            : Array.isArray(children)
+            ? children.map((c) => (typeof c === "string" ? c : "")).join("")
+            : "";
+          return <AppStatsBlock content={text} />;
         },
         a({ href, children, ...props }) {
           const isMediaLink = href?.toLowerCase().match(/\.(mp4|mp3|wav|webm)$/);
