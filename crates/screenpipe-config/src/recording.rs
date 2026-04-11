@@ -257,6 +257,10 @@ pub struct RecordingSettings {
     /// Require authentication for remote (non-localhost) API access.
     #[serde(rename = "apiAuth", default)]
     pub api_auth: bool,
+
+    /// Encrypt store.bin at rest using OS keychain-stored key.
+    #[serde(rename = "encryptStore", default)]
+    pub encrypt_store: bool,
 }
 
 impl RecordingSettings {
@@ -334,6 +338,7 @@ impl Default for RecordingSettings {
             schedule_enabled: false,
             schedule_rules: vec![],
             api_auth: false,
+            encrypt_store: false,
         }
     }
 }

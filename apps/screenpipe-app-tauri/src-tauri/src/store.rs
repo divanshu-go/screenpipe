@@ -120,9 +120,31 @@ fn encrypt_store_file(path: &Path) {
 }
 
 /// Re-encrypt store.bin on disk. Called after the Tauri store plugin writes plain JSON.
+/// Also syncs the .encrypt-store flag file from the encryptStore setting.
 pub fn reencrypt_store_file(app: &AppHandle) {
     if let Ok(base_dir) = get_base_dir(app, None) {
-        encrypt_store_file(&base_dir.join("store.bin"));
+        // Sync the flag file from the store's encryptStore setting
+        let flag_path = base_dir.join(".encrypt-store");
+        let store_path = base_dir.join("store.bin");
+
+        // Read the setting from the store JSON on disk
+        let encrypt_enabled = std::fs::read(&store_path)
+            .ok()
+            .and_then(|data| serde_json::from_slice::<serde_json::Value>(&data).ok())
+            .and_then(|json| {
+                json.get("settings")
+                    .and_then(|s| s.get("encryptStore"))
+                    .and_then(|v| v.as_bool())
+            })
+            .unwrap_or(false);
+
+        if encrypt_enabled && !flag_path.exists() {
+            let _ = std::fs::write(&flag_path, b"");
+        } else if !encrypt_enabled && flag_path.exists() {
+            let _ = std::fs::remove_file(&flag_path);
+        }
+
+        encrypt_store_file(&store_path);
     }
 }
 
