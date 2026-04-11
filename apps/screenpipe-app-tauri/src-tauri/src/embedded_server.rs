@@ -459,6 +459,8 @@ pub async fn start_embedded_server(
     server.hot_frame_cache = Some(hot_frame_cache);
     server.power_manager = Some(power_manager);
     server.manual_meeting = Some(manual_meeting);
+    server.api_auth = config.api_auth;
+    server.api_auth_key = config.api_auth_key.clone();
 
     // Initialize pipe manager
     let pipes_dir = config.data_dir.join("pipes");

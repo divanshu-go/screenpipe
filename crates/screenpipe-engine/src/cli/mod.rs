@@ -343,6 +343,12 @@ pub struct RecordArgs {
     /// Pause screen and audio capture when DRM content (Netflix, Disney+, etc.) is detected
     #[arg(long, default_value_t = false)]
     pub pause_on_drm_content: bool,
+
+    /// Require authentication for remote API access. When enabled, non-localhost
+    /// requests must include Authorization: Bearer <SCREENPIPE_API_KEY>.
+    /// Localhost requests are always allowed.
+    #[arg(long, default_value_t = false)]
+    pub api_auth: bool,
 }
 
 impl RecordArgs {
@@ -480,7 +486,19 @@ impl RecordArgs {
             settings.audio_transcription_engine = safe.to_string();
         }
 
-        crate::recording_config::RecordingConfig::from_settings(&settings, data_dir, None)
+        let mut config =
+            crate::recording_config::RecordingConfig::from_settings(&settings, data_dir, None);
+        config.api_auth = self.api_auth;
+        if config.api_auth {
+            // Load API key from env or auth.json
+            config.api_auth_key = std::env::var("SCREENPIPE_API_KEY").ok().or_else(|| {
+                let auth_path = dirs::home_dir()?.join(".screenpipe/auth.json");
+                let content = std::fs::read_to_string(auth_path).ok()?;
+                let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+                json["token"].as_str().map(|s| s.to_string())
+            });
+        }
+        config
     }
 }
 

@@ -856,6 +856,8 @@ async fn main() -> anyhow::Result<()> {
     server.hot_frame_cache = Some(hot_frame_cache);
     server.power_manager = Some(power_manager);
     server.manual_meeting = Some(manual_meeting.clone());
+    server.api_auth = config.api_auth;
+    server.api_auth_key = config.api_auth_key.clone();
 
     // Attach sync handle if sync is enabled
     let server = if let Some(ref handle) = sync_service_handle {

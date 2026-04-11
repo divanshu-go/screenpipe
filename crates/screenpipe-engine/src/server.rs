@@ -166,6 +166,10 @@ pub struct AppState {
     pub manual_meeting: Arc<tokio::sync::RwLock<Option<i64>>>,
     /// Browser extension bridge — relays JS eval requests to the connected extension
     pub browser_bridge: Arc<crate::routes::browser::BrowserBridge>,
+    /// When true, non-localhost requests require Authorization: Bearer <api_key>
+    pub api_auth: bool,
+    /// The API key to validate against (from SCREENPIPE_API_KEY or auth.json)
+    pub api_auth_key: Option<String>,
 }
 
 pub struct SCServer {
@@ -190,6 +194,10 @@ pub struct SCServer {
         Arc<DashMap<String, Arc<screenpipe_core::pipes::permissions::PipePermissions>>>,
     /// Shared manual meeting lock — pass in from binary so persister and server share the same state.
     pub manual_meeting: Option<Arc<tokio::sync::RwLock<Option<i64>>>>,
+    /// Require auth for remote API access
+    pub api_auth: bool,
+    /// API key for remote auth validation
+    pub api_auth_key: Option<String>,
 }
 
 impl SCServer {
@@ -222,6 +230,8 @@ impl SCServer {
             power_manager: None,
             pipe_permissions: Arc::new(DashMap::new()),
             manual_meeting: None,
+            api_auth: false,
+            api_auth_key: None,
         }
     }
 
@@ -463,6 +473,8 @@ impl SCServer {
                 .clone()
                 .unwrap_or_else(|| Arc::new(tokio::sync::RwLock::new(None))),
             browser_bridge: crate::routes::browser::BrowserBridge::new(),
+            api_auth: self.api_auth,
+            api_auth_key: self.api_auth_key.clone(),
         });
 
         let cors = CorsLayer::new()
@@ -772,6 +784,57 @@ impl SCServer {
             .layer(axum::middleware::from_fn(
                 crate::routes::timezone::timestamp_middleware,
             ))
+            .layer({
+                // Remote API auth middleware — when api_auth is enabled,
+                // non-localhost requests must include a valid bearer token.
+                let auth_enabled = self.api_auth;
+                let auth_key = self.api_auth_key.clone();
+                axum::middleware::from_fn(
+                    move |req: axum::extract::Request, next: axum::middleware::Next| {
+                        let auth_enabled = auth_enabled;
+                        let auth_key = auth_key.clone();
+                        async move {
+                            if !auth_enabled {
+                                return next.run(req).await;
+                            }
+
+                            // Always allow localhost
+                            let is_localhost = req
+                                .extensions()
+                                .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+                                .map(|ci| ci.0.ip().is_loopback())
+                                .unwrap_or(true); // default to allow if no connect info
+
+                            if is_localhost {
+                                return next.run(req).await;
+                            }
+
+                            // Check bearer token
+                            let authorized = req
+                                .headers()
+                                .get(axum::http::header::AUTHORIZATION)
+                                .and_then(|v| v.to_str().ok())
+                                .and_then(|v| v.strip_prefix("Bearer "))
+                                .map(|token| {
+                                    auth_key.as_deref() == Some(token)
+                                })
+                                .unwrap_or(false);
+
+                            if authorized {
+                                next.run(req).await
+                            } else {
+                                axum::response::Response::builder()
+                                    .status(403)
+                                    .header("Content-Type", "application/json")
+                                    .body(axum::body::Body::from(
+                                        r#"{"error":"unauthorized: remote API access requires authentication. Pass Authorization: Bearer <SCREENPIPE_API_KEY>"}"#,
+                                    ))
+                                    .unwrap()
+                            }
+                        }
+                    },
+                )
+            })
             .layer(cors)
             .layer(TraceLayer::new_for_http().make_span_with(DefaultMakeSpan::default()))
     }
