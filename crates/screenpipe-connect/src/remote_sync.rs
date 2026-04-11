@@ -115,12 +115,6 @@ FROM audio_transcriptions
 WHERE transcription LIKE '%search%' ORDER BY timestamp DESC LIMIT 20;
 ```
 
-**accessibility** — Accessibility tree text (macOS)
-```sql
-SELECT timestamp, app_name, window_name, text_content
-FROM accessibility WHERE text_content LIKE '%search%' ORDER BY timestamp DESC;
-```
-
 **speakers** — Identified speakers
 ```sql
 SELECT s.id, s.name, COUNT(at.id) as utterances
