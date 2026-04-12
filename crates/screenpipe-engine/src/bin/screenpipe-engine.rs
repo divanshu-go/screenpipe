@@ -866,6 +866,42 @@ async fn main() -> anyhow::Result<()> {
     server.api_auth = config.api_auth;
     server.api_auth_key = config.api_auth_key.clone();
 
+    // Initialize secret store for unified credential management
+    {
+        let secret_store_result = screenpipe_secrets::SecretStore::new(db.pool.clone(), None).await;
+        match secret_store_result {
+            Ok(store) => {
+                // Run startup permission sweep
+                let fixed = screenpipe_secrets::fix_secret_file_permissions(&local_data_dir);
+                if fixed > 0 {
+                    info!("fixed permissions on {} credential files", fixed);
+                }
+
+                // Run legacy migration
+                match screenpipe_secrets::migrate_legacy_secrets(&store, &local_data_dir).await {
+                    Ok(report) => {
+                        if !report.migrated.is_empty() {
+                            info!(
+                                "migrated {} legacy secrets: {:?}",
+                                report.migrated.len(),
+                                report.migrated
+                            );
+                        }
+                        if !report.errors.is_empty() {
+                            warn!("secret migration errors: {:?}", report.errors);
+                        }
+                    }
+                    Err(e) => warn!("legacy secret migration failed: {}", e),
+                }
+
+                server.secret_store = Some(Arc::new(store));
+            }
+            Err(e) => {
+                warn!("failed to initialize secret store: {}", e);
+            }
+        }
+    }
+
     // Attach sync handle if sync is enabled
     let server = if let Some(ref handle) = sync_service_handle {
         server.with_sync_handle_arc(handle.clone())

@@ -462,6 +462,38 @@ pub async fn start_embedded_server(
     server.api_auth = config.api_auth;
     server.api_auth_key = config.api_auth_key.clone();
 
+    // Initialize secret store for unified credential management
+    {
+        let secret_key = match crate::secrets::get_or_create_key() {
+            Some(k) => Some(k),
+            None => {
+                warn!("keychain unavailable — secret store will not encrypt");
+                None
+            }
+        };
+        match screenpipe_secrets::SecretStore::new(db.pool.clone(), secret_key).await {
+            Ok(store) => {
+                let fixed =
+                    screenpipe_secrets::fix_secret_file_permissions(&config.data_dir);
+                if fixed > 0 {
+                    info!("fixed permissions on {} credential files", fixed);
+                }
+                match screenpipe_secrets::migrate_legacy_secrets(&store, &config.data_dir).await {
+                    Ok(report) => {
+                        if !report.migrated.is_empty() {
+                            info!("migrated {} legacy secrets", report.migrated.len());
+                        }
+                    }
+                    Err(e) => warn!("legacy secret migration failed: {}", e),
+                }
+                server.secret_store = Some(std::sync::Arc::new(store));
+            }
+            Err(e) => {
+                warn!("failed to initialize secret store: {}", e);
+            }
+        }
+    }
+
     // Initialize pipe manager
     let pipes_dir = config.data_dir.join("pipes");
     std::fs::create_dir_all(&pipes_dir).ok();

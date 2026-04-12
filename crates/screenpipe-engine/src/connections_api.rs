@@ -13,6 +13,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use screenpipe_connect::connections::ConnectionManager;
 use screenpipe_connect::oauth::{self as oauth_store, PENDING_OAUTH};
 use screenpipe_connect::whatsapp::WhatsAppGateway;
+use screenpipe_secrets::SecretStore;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use std::sync::Arc;
@@ -25,6 +26,7 @@ pub type SharedWhatsAppGateway = Arc<Mutex<WhatsAppGateway>>;
 pub struct ConnectionsState {
     pub cm: SharedConnectionManager,
     pub wa: SharedWhatsAppGateway,
+    pub secret_store: Option<Arc<SecretStore>>,
 }
 
 #[derive(Deserialize)]
@@ -409,11 +411,13 @@ pub struct GmailSendRequest {
 
 /// GET /connections/gmail/messages — list or search Gmail messages.
 async fn gmail_list_messages(
+    State(state): State<ConnectionsState>,
     Query(params): Query<GmailMessagesQuery>,
 ) -> (StatusCode, Json<Value>) {
     let client = reqwest::Client::new();
     let instance = params.instance.clone();
-    match gmail_list_messages_inner(&client, params, instance.as_deref()).await {
+    match gmail_list_messages_inner(&client, params, instance.as_deref(), &state.secret_store).await
+    {
         Ok(data) => (StatusCode::OK, Json(json!({ "data": data }))),
         Err(e) => gmail_err(e),
     }
@@ -423,8 +427,9 @@ async fn gmail_list_messages_inner(
     client: &reqwest::Client,
     params: GmailMessagesQuery,
     instance: Option<&str>,
+    secret_store: &Option<Arc<SecretStore>>,
 ) -> anyhow::Result<Value> {
-    let token = gmail_token(client, instance).await?;
+    let token = gmail_token(client, instance, secret_store).await?;
     let max_results = params.max_results.unwrap_or(20).min(500);
     let mut url =
         reqwest::Url::parse("https://gmail.googleapis.com/gmail/v1/users/me/messages").unwrap();
@@ -451,11 +456,12 @@ async fn gmail_list_messages_inner(
 
 /// GET /connections/gmail/messages/:id — read a full Gmail message.
 async fn gmail_get_message(
+    State(state): State<ConnectionsState>,
     Path(id): Path<String>,
     Query(q): Query<GmailInstanceQuery>,
 ) -> (StatusCode, Json<Value>) {
     let client = reqwest::Client::new();
-    match gmail_get_message_inner(&client, &id, q.instance.as_deref()).await {
+    match gmail_get_message_inner(&client, &id, q.instance.as_deref(), &state.secret_store).await {
         Ok(data) => (StatusCode::OK, Json(json!({ "data": data }))),
         Err(e) => gmail_err(e),
     }
@@ -465,8 +471,9 @@ async fn gmail_get_message_inner(
     client: &reqwest::Client,
     id: &str,
     instance: Option<&str>,
+    secret_store: &Option<Arc<SecretStore>>,
 ) -> anyhow::Result<Value> {
-    let token = gmail_token(client, instance).await?;
+    let token = gmail_token(client, instance, secret_store).await?;
     let url = format!(
         "https://gmail.googleapis.com/gmail/v1/users/me/messages/{}?format=full",
         id
@@ -483,10 +490,13 @@ async fn gmail_get_message_inner(
 }
 
 /// POST /connections/gmail/send — send an email via Gmail.
-async fn gmail_send(Json(body): Json<GmailSendRequest>) -> (StatusCode, Json<Value>) {
+async fn gmail_send(
+    State(state): State<ConnectionsState>,
+    Json(body): Json<GmailSendRequest>,
+) -> (StatusCode, Json<Value>) {
     let client = reqwest::Client::new();
     let instance = body.instance.clone();
-    match gmail_send_inner(&client, body, instance.as_deref()).await {
+    match gmail_send_inner(&client, body, instance.as_deref(), &state.secret_store).await {
         Ok(data) => (StatusCode::OK, Json(json!({ "data": data }))),
         Err(e) => gmail_err(e),
     }
@@ -496,8 +506,9 @@ async fn gmail_send_inner(
     client: &reqwest::Client,
     body: GmailSendRequest,
     instance: Option<&str>,
+    secret_store: &Option<Arc<SecretStore>>,
 ) -> anyhow::Result<Value> {
-    let token = gmail_token(client, instance).await?;
+    let token = gmail_token(client, instance, secret_store).await?;
     let from = body.from.unwrap_or_default();
     let raw = build_rfc2822_message(&from, &body.to, &body.subject, &body.body);
     let encoded = URL_SAFE_NO_PAD.encode(raw.as_bytes());
@@ -514,7 +525,28 @@ async fn gmail_send_inner(
 }
 
 /// Retrieve a valid Gmail OAuth token or return an error.
-async fn gmail_token(client: &reqwest::Client, instance: Option<&str>) -> anyhow::Result<String> {
+///
+/// When a SecretStore is available, attempts to load the token from the
+/// encrypted store first (via `secret_oauth`), falling back to the legacy
+/// file-based path.
+async fn gmail_token(
+    client: &reqwest::Client,
+    instance: Option<&str>,
+    secret_store: &Option<Arc<SecretStore>>,
+) -> anyhow::Result<String> {
+    // Try SecretStore path first
+    if let Some(store) = secret_store {
+        if let Some(token_json) =
+            crate::secret_oauth::load_oauth_from_store_or_file(store, "gmail", instance).await
+        {
+            // The token JSON should contain an access_token field
+            if let Some(token) = token_json["access_token"].as_str() {
+                return Ok(token.to_string());
+            }
+        }
+    }
+
+    // Fall back to legacy file-based token retrieval (handles refresh etc.)
     oauth_store::get_valid_token_instance(client, "gmail", instance)
         .await
         .ok_or_else(|| {
@@ -525,15 +557,25 @@ async fn gmail_token(client: &reqwest::Client, instance: Option<&str>) -> anyhow
 }
 
 /// GET /connections/gmail/instances — list all connected Gmail accounts.
-async fn gmail_list_instances() -> (StatusCode, Json<Value>) {
+async fn gmail_list_instances(State(state): State<ConnectionsState>) -> (StatusCode, Json<Value>) {
     let instances = oauth_store::list_oauth_instances("gmail");
     let mut accounts = Vec::new();
     for inst in instances {
-        let path = oauth_store::oauth_token_path_instance("gmail", inst.as_deref());
-        let email = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-            .and_then(|v| v["email"].as_str().map(String::from));
+        // Try SecretStore first, then fall back to file
+        let email = if let Some(store) = &state.secret_store {
+            crate::secret_oauth::load_oauth_from_store_or_file(store, "gmail", inst.as_deref())
+                .await
+                .and_then(|v| v["email"].as_str().map(String::from))
+        } else {
+            None
+        };
+        let email = email.or_else(|| {
+            let path = oauth_store::oauth_token_path_instance("gmail", inst.as_deref());
+            std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+                .and_then(|v| v["email"].as_str().map(String::from))
+        });
         accounts.push(json!({
             "instance": inst,
             "email": email,
@@ -662,7 +704,28 @@ pub struct GoogleCalendarInstanceQuery {
 }
 
 /// Retrieve a valid Google Calendar OAuth token or return an error.
-async fn gcal_token(client: &reqwest::Client, instance: Option<&str>) -> anyhow::Result<String> {
+///
+/// When a SecretStore is available, attempts to load the token from the
+/// encrypted store first (via `secret_oauth`), falling back to the legacy
+/// file-based path.
+async fn gcal_token(
+    client: &reqwest::Client,
+    instance: Option<&str>,
+    secret_store: &Option<Arc<SecretStore>>,
+) -> anyhow::Result<String> {
+    // Try SecretStore path first
+    if let Some(store) = secret_store {
+        if let Some(token_json) =
+            crate::secret_oauth::load_oauth_from_store_or_file(store, "google-calendar", instance)
+                .await
+        {
+            if let Some(token) = token_json["access_token"].as_str() {
+                return Ok(token.to_string());
+            }
+        }
+    }
+
+    // Fall back to legacy file-based token retrieval (handles refresh etc.)
     oauth_store::get_valid_token_instance(client, "google-calendar", instance)
         .await
         .ok_or_else(|| {
@@ -673,11 +736,22 @@ async fn gcal_token(client: &reqwest::Client, instance: Option<&str>) -> anyhow:
 }
 
 /// GET /connections/google-calendar/status — check connection + email.
-async fn gcal_status(Query(q): Query<GoogleCalendarInstanceQuery>) -> (StatusCode, Json<Value>) {
+async fn gcal_status(
+    State(state): State<ConnectionsState>,
+    Query(q): Query<GoogleCalendarInstanceQuery>,
+) -> (StatusCode, Json<Value>) {
     let client = reqwest::Client::new();
     let instance = q.instance.as_deref();
 
-    let connected = oauth_store::is_oauth_instance_connected("google-calendar", instance);
+    // Check SecretStore first, then fall back to file-based check
+    let connected = if let Some(store) = &state.secret_store {
+        crate::secret_oauth::load_oauth_from_store_or_file(store, "google-calendar", instance)
+            .await
+            .is_some()
+            || oauth_store::is_oauth_instance_connected("google-calendar", instance)
+    } else {
+        oauth_store::is_oauth_instance_connected("google-calendar", instance)
+    };
     if !connected {
         return (
             StatusCode::OK,
@@ -685,7 +759,7 @@ async fn gcal_status(Query(q): Query<GoogleCalendarInstanceQuery>) -> (StatusCod
         );
     }
 
-    let email = match gcal_token(&client, instance).await {
+    let email = match gcal_token(&client, instance, &state.secret_store).await {
         Ok(token) => {
             match client
                 .get("https://www.googleapis.com/oauth2/v2/userinfo")
@@ -711,9 +785,12 @@ async fn gcal_status(Query(q): Query<GoogleCalendarInstanceQuery>) -> (StatusCod
 }
 
 /// GET /connections/google-calendar/events — fetch Google Calendar events.
-async fn gcal_events(Query(params): Query<GoogleCalendarEventsQuery>) -> (StatusCode, Json<Value>) {
+async fn gcal_events(
+    State(state): State<ConnectionsState>,
+    Query(params): Query<GoogleCalendarEventsQuery>,
+) -> (StatusCode, Json<Value>) {
     let client = reqwest::Client::new();
-    match gcal_events_inner(&client, params).await {
+    match gcal_events_inner(&client, params, &state.secret_store).await {
         Ok(events) => (StatusCode::OK, Json(json!(events))),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -725,8 +802,9 @@ async fn gcal_events(Query(params): Query<GoogleCalendarEventsQuery>) -> (Status
 async fn gcal_events_inner(
     client: &reqwest::Client,
     params: GoogleCalendarEventsQuery,
+    secret_store: &Option<Arc<SecretStore>>,
 ) -> anyhow::Result<Vec<Value>> {
-    let token = gcal_token(client, params.instance.as_deref()).await?;
+    let token = gcal_token(client, params.instance.as_deref(), secret_store).await?;
     let hours_back = params.hours_back.unwrap_or(1);
     let hours_ahead = params.hours_ahead.unwrap_or(8);
 
@@ -793,8 +871,18 @@ async fn gcal_events_inner(
 
 /// DELETE /connections/google-calendar/disconnect — remove stored tokens.
 async fn gcal_disconnect(
+    State(state): State<ConnectionsState>,
     Query(q): Query<GoogleCalendarInstanceQuery>,
 ) -> (StatusCode, Json<Value>) {
+    // Also remove from SecretStore if available
+    if let Some(store) = &state.secret_store {
+        let key = match q.instance.as_deref() {
+            Some(inst) => format!("oauth:google-calendar:{}", inst),
+            None => "oauth:google-calendar".to_string(),
+        };
+        let _ = store.delete(&key).await;
+    }
+
     match oauth_store::delete_oauth_token_instance("google-calendar", q.instance.as_deref()) {
         Ok(()) => (StatusCode::OK, Json(json!({ "success": true }))),
         Err(e) => (
@@ -868,11 +956,19 @@ async fn oauth_callback(Query(params): Query<OAuthCallbackQuery>) -> (StatusCode
     }
 }
 
-pub fn router<S>(cm: SharedConnectionManager, wa: SharedWhatsAppGateway) -> Router<S>
+pub fn router<S>(
+    cm: SharedConnectionManager,
+    wa: SharedWhatsAppGateway,
+    secret_store: Option<Arc<SecretStore>>,
+) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {
-    let state = ConnectionsState { cm, wa };
+    let state = ConnectionsState {
+        cm,
+        wa,
+        secret_store,
+    };
     Router::new()
         .route("/", get(list_connections))
         // OAuth callback (must be before /:id to avoid conflict)

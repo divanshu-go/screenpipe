@@ -7028,6 +7028,7 @@ dependencies = [
  "screenpipe-db",
  "screenpipe-events",
  "screenpipe-screen",
+ "screenpipe-secrets",
  "screenpipe-vault",
  "sentry",
  "serde",
@@ -7108,6 +7109,22 @@ dependencies = [
  "windows 0.58.0",
  "xcap",
  "zbus",
+]
+
+[[package]]
+name = "screenpipe-secrets"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "chacha20poly1305",
+ "rand 0.8.5",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
