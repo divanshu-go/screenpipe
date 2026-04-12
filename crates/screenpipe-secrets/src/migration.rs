@@ -207,10 +207,13 @@ pub fn fix_secret_file_permissions(screenpipe_dir: &Path) -> usize {
         }
     }
 
-    // Walk whatsapp-session/ directory recursively
+    // Walk whatsapp-session/ directory recursively — but only once.
+    // This can be 7000+ files; skip if already done (marker file).
     let whatsapp_dir = screenpipe_dir.join("whatsapp-session");
-    if whatsapp_dir.is_dir() {
+    let whatsapp_marker = screenpipe_dir.join(".whatsapp-perms-fixed");
+    if whatsapp_dir.is_dir() && !whatsapp_marker.exists() {
         count += fix_permissions_recursive(&whatsapp_dir);
+        let _ = std::fs::write(&whatsapp_marker, b"");
     }
 
     count

@@ -18,7 +18,9 @@ fn crackle(n_samples: usize, amplitude: f32) -> Vec<f32> {
     let mut state: u64 = 0xdeadbeef_cafebabe;
     (0..n_samples)
         .map(|_| {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             let norm = ((state >> 33) as f32 / u32::MAX as f32) * 2.0 - 1.0;
             norm * amplitude
         })
@@ -47,15 +49,22 @@ fn rms_gate_routes_silence_vs_crackle() {
     let silence_audio = silence(n);
     let silence_rms = rms(&silence_audio);
 
-    println!("crackle RMS: {:.6} (threshold: {:.6})", crackle_rms, MIN_RMS_ENERGY);
-    println!("silence RMS: {:.6} (threshold: {:.6})", silence_rms, MIN_RMS_ENERGY);
+    println!(
+        "crackle RMS: {:.6} (threshold: {:.6})",
+        crackle_rms, MIN_RMS_ENERGY
+    );
+    println!(
+        "silence RMS: {:.6} (threshold: {:.6})",
+        silence_rms, MIN_RMS_ENERGY
+    );
 
     // Crackle must exceed the RMS gate → it goes to Whisper → hallucination possible
     assert!(
         crackle_rms > MIN_RMS_ENERGY,
         "crackle RMS {:.6} should exceed MIN_RMS_ENERGY {:.6} — \
          crackle must reach Whisper for the test to be meaningful",
-        crackle_rms, MIN_RMS_ENERGY
+        crackle_rms,
+        MIN_RMS_ENERGY
     );
 
     // Silence must fall below the RMS gate → it is blocked before Whisper → no hallucination
@@ -63,7 +72,8 @@ fn rms_gate_routes_silence_vs_crackle() {
         silence_rms < MIN_RMS_ENERGY,
         "silence RMS {:.6} must be below MIN_RMS_ENERGY {:.6} — \
          silence must be filtered before reaching Whisper",
-        silence_rms, MIN_RMS_ENERGY
+        silence_rms,
+        MIN_RMS_ENERGY
     );
 
     // The ratio shows how much headroom the gate has
@@ -77,7 +87,9 @@ fn rms_gate_routes_silence_vs_crackle() {
 #[tokio::test]
 #[ignore = "Silero VAD model cached on first run"]
 async fn silero_rejects_silence() {
-    let mut vad = SileroVad::new().await.expect("failed to load Silero VAD model");
+    let mut vad = SileroVad::new()
+        .await
+        .expect("failed to load Silero VAD model");
 
     // 1 second chunks — long enough for Silero to build up frame history
     let n = SAMPLE_RATE as usize;
@@ -108,7 +120,11 @@ async fn silero_rejects_silence() {
     // and that crackle is *caught* by the RMS gate in process_with_whisper (Test 1).
     println!(
         "Silero on crackle: {} — Silero may reject it too, but RMS gate is the primary defence",
-        if crackle_is_speech { "classified as speech (reaches Whisper)" } else { "rejected (good extra filter)" }
+        if crackle_is_speech {
+            "classified as speech (reaches Whisper)"
+        } else {
+            "rejected (good extra filter)"
+        }
     );
 }
 
@@ -116,8 +132,8 @@ async fn silero_rejects_silence() {
 #[ignore = "Whisper tiny cached"]
 async fn whisper_hallucination_before_after() {
     use screenpipe_audio::core::engine::AudioTranscriptionEngine;
-    use screenpipe_audio::transcription::whisper::model::get_cached_whisper_model_path;
     use screenpipe_audio::transcription::whisper::model::create_whisper_context_parameters;
+    use screenpipe_audio::transcription::whisper::model::get_cached_whisper_model_path;
     use screenpipe_core::Language;
     use std::sync::Arc;
     use whisper_rs::WhisperContext;

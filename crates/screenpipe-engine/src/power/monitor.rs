@@ -16,9 +16,9 @@
 
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+use tracing::debug;
 #[cfg(target_os = "macos")]
 use tracing::warn;
-use tracing::debug;
 
 /// Thermal pressure level reported by the OS.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

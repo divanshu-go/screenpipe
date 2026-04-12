@@ -1348,7 +1348,11 @@ scheduleEnabled?: boolean;
 /**
  * Per-day schedule rules (only used when schedule_enabled is true)
  */
-scheduleRules?: ScheduleRule[] }) & 
+scheduleRules?: ScheduleRule[]; 
+/**
+ * Require authentication for remote (non-localhost) API access.
+ */
+apiAuth?: boolean }) & 
 /**
  * Catch-all for fields added by the frontend (e.g. chatHistory)
  * that the Rust struct doesn't know about. Without this, `save()` would

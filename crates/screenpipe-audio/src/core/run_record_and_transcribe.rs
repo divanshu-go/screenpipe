@@ -52,8 +52,7 @@ pub async fn run_record_and_transcribe(
     // Per-device source buffer: detects Bluetooth packet-drop gaps and inserts
     // digital silence in place of crackle/noise. Silence is filtered by VAD before
     // reaching Whisper, so it has no transcription impact.
-    let mut source_buffer =
-        SourceBuffer::new(device_name.as_str(), sample_rate as u32);
+    let mut source_buffer = SourceBuffer::new(device_name.as_str(), sample_rate as u32);
 
     info!(
         "starting continuous recording for {} ({} / {}s segments)",

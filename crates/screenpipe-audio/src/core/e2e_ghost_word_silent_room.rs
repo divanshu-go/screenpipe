@@ -22,10 +22,7 @@ use crate::{
         stream::AudioStream,
     },
     metrics::AudioPipelineMetrics,
-    transcription::{
-        engine::TranscriptionEngine,
-        whisper::model::get_cached_whisper_model_path,
-    },
+    transcription::{engine::TranscriptionEngine, whisper::model::get_cached_whisper_model_path},
     AudioInput,
 };
 use screenpipe_core::Language;
@@ -109,8 +106,8 @@ async fn silent_room_no_ghost_words() {
     });
 
     let chunk_samples = 320_usize;
-    let total_chunks = ((segment_secs as f64 * 1.5 * sample_rate as f64) / chunk_samples as f64)
-        .ceil() as usize;
+    let total_chunks =
+        ((segment_secs as f64 * 1.5 * sample_rate as f64) / chunk_samples as f64).ceil() as usize;
 
     tokio::time::sleep(Duration::from_millis(150)).await;
 
@@ -132,15 +129,10 @@ async fn silent_room_no_ghost_words() {
 
     let _ = tokio::time::timeout(Duration::from_secs(15), pipeline_handle).await;
 
-    let transcription_engine = TranscriptionEngine::new(
-        engine_config,
-        None,
-        None,
-        vec![Language::English],
-        vec![],
-    )
-    .await
-    .expect("failed to load Whisper tiny");
+    let transcription_engine =
+        TranscriptionEngine::new(engine_config, None, None, vec![Language::English], vec![])
+            .await
+            .expect("failed to load Whisper tiny");
 
     let mut session = transcription_engine
         .create_session()

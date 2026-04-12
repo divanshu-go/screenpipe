@@ -68,11 +68,7 @@ impl SourceBuffer {
     pub fn new(device_name: impl Into<String>, sample_rate: u32) -> Self {
         let name = device_name.into();
         let kind = InputDeviceKind::detect(&name);
-        debug!(
-            "SourceBuffer created for '{}' ({})",
-            name,
-            kind.label()
-        );
+        debug!("SourceBuffer created for '{}' ({})", name, kind.label());
         Self {
             device_name: name,
             device_kind: kind,
@@ -97,8 +93,7 @@ impl SourceBuffer {
         }
 
         let now = Instant::now();
-        let chunk_duration_ms =
-            (samples.len() as f64 / self.sample_rate as f64) * 1000.0;
+        let chunk_duration_ms = (samples.len() as f64 / self.sample_rate as f64) * 1000.0;
 
         // Update expected chunk duration using a simple exponential moving average.
         // This adapts if CPAL changes its callback chunk size mid-stream.
@@ -165,8 +160,7 @@ impl SourceBuffer {
         if self.chunks_received == 0 {
             return;
         }
-        let silence_ms =
-            (self.silence_inserted_samples as f64 / self.sample_rate as f64) * 1000.0;
+        let silence_ms = (self.silence_inserted_samples as f64 / self.sample_rate as f64) * 1000.0;
         debug!(
             "[{}] source-buffer stats: {} chunks, {} gaps, {:.0}ms silence inserted",
             self.device_name, self.chunks_received, self.gaps_detected, silence_ms
@@ -271,14 +265,16 @@ mod tests {
         buf.drain_all(); // consume, establish expected_chunk_duration
 
         // Simulate a 100ms wall-clock gap — Bluetooth packet drop
-        buf.last_chunk_time =
-            Some(Instant::now() - std::time::Duration::from_millis(100));
+        buf.last_chunk_time = Some(Instant::now() - std::time::Duration::from_millis(100));
 
         // Next real chunk arrives
         buf.push(real_chunk.clone());
         let out = buf.drain_all();
 
-        assert!(buf.gaps_detected > 0, "gap must be detected for this test to be valid");
+        assert!(
+            buf.gaps_detected > 0,
+            "gap must be detected for this test to be valid"
+        );
 
         let n_silence = buf.silence_inserted_samples as usize;
         assert!(n_silence > 0, "silence must have been inserted");
@@ -320,8 +316,7 @@ mod tests {
 
         // 150ms gap — at 16kHz, that's 2400 samples of missing audio
         let gap_ms = 150_u64;
-        buf.last_chunk_time =
-            Some(Instant::now() - std::time::Duration::from_millis(gap_ms));
+        buf.last_chunk_time = Some(Instant::now() - std::time::Duration::from_millis(gap_ms));
         buf.push(vec![0.1_f32; 320]);
         buf.drain_all();
 
