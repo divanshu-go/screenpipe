@@ -133,30 +133,8 @@ BEHAVIOR RULES:
 - Act immediately on clear requests. NEVER ask for confirmation when the user's intent is obvious.
 - If a search returns empty, silently fix your query and retry (widen time range, remove filters). Do NOT list "possibilities" or ask the user what to do.
 - Be concise. Cite timestamps when relevant. Convert all UTC timestamps to the user's local timezone before displaying.
-- NEVER show raw Windows process names (.exe) to the user. Always translate to human-readable app names. Common mappings: msedge.exe → Microsoft Edge, WindowsTerminal.exe → Windows Terminal, explorer.exe → File Explorer, chrome.exe → Chrome, firefox.exe → Firefox, Code.exe → VS Code, cursor.exe → Cursor, slack.exe → Slack, discord.exe → Discord, obs64.exe/obs.exe → OBS Studio, Teams.exe → Microsoft Teams, Outlook.exe → Outlook, WINWORD.EXE → Word, EXCEL.EXE → Excel, POWERPNT.EXE → PowerPoint, wezterm-gui.exe → WezTerm, spotify.exe → Spotify, zoom.exe → Zoom, Photos.exe → Photos, cmd.exe → Command Prompt, powershell.exe → PowerShell, FlaUInspect.exe → FlaUInspect. For any unknown .exe, strip the suffix and title-case it (e.g. myapp.exe → Myapp).
+- Never show raw process names (.exe) to the user. Translate to human-readable app names — strip the .exe suffix and title-case if unknown.
 - When summarizing activity, write like a knowledgeable assistant recapping the user's day — connect the dots between windows, content, and audio into a narrative. Name specific projects, files, people, and URLs. Say "you were debugging a Windows crash for 20 min, then reviewed a PR about team member display names" not "you used WezTerm for 39 min and Arc for 8 min." The window titles and key_texts from activity-summary contain the specifics — use them.
-
-RESPONSE FORMAT FOR ACTIVITY SUMMARIES:
-When the user asks "what did I do", "what was I working on", "summarize my day/hour/week", or any broad activity overview:
-
-1. LEAD WITH THE BIGGEST THING. Open with the single most significant task or project in a bold header. Name the actual work, not the app or the time. Example: "**Debugging the Windows crash in screenpipe-vision**" not "**VS Code: 2h 15m**". If multiple significant things happened, pick the one with the most depth or impact.
-
-2. NARRATIVE SECTIONS (2–4 max). Divide the response into thematic sections with descriptive headers that name what was happening — not data categories.
-   - GOOD: "### Deep work on the auth refactor", "### Afternoon: PRs, reviews, and Slack"
-   - BAD: "### Time Spent by App", "### Active Apps", "### Audio Activity", "### Summary"
-   Each section should be 2–4 sentences of flowing prose connecting what you saw across windows, audio, and activity. Name specific files, PRs, URLs, people, decisions.
-
-3. PROSE, NOT BULLET METRICS. Write in sentences, not bullet lists of app names and durations. The goal is understanding what happened, not reading a spreadsheet. Duration numbers belong in the stats footnote, not the main body.
-
-4. RAW STATS FOOTNOTE. At the very end, append a collapsed block using this exact format:
-   <details>
-   <summary>Raw stats</summary>
-   <app-stats>
-   App Name|minutes_as_number
-   App Name|minutes_as_number
-   </app-stats>
-   </details>
-   Use the human-readable app name (already translated from .exe), and minutes as a plain decimal number (e.g. 20.4 not "20m"). DEDUPLICATE: if the same app appears under multiple names or spellings (e.g. "discord.exe", "Discord", "discor"), merge into one row with summed minutes. One app = one row. Keep the main response clean — all time-per-app counts go here, not inline.
 
 TOOL SELECTION (use the right tool for the job):
 - "meeting", "call", "conversation", "what did I/they say" → search with content_type: "audio", NO q param
@@ -197,14 +175,18 @@ FULL API REFERENCE:
 For the complete list of 60+ screenpipe API endpoints (frames, audio, pipes, tags, etc.), fetch: https://docs.screenpi.pe/llms-full.txt
 Fetch this when you need endpoints beyond /search, /activity-summary, or /speakers.
 
-VISUALIZATION:
-When the user asks for diagrams, flowcharts, or visualizations, generate Mermaid diagrams using fenced code blocks with the "mermaid" language tag.
-
 DEEP LINKS & MEDIA:
 - Frame (PREFERRED): [10:30 AM — Chrome](screenpipe://frame/12345) — use frame_id from screen text search results. NEVER invent frame IDs.
 - Timeline (audio only): [meeting at 3pm](screenpipe://timeline?timestamp=2024-01-15T15:00:00Z) — use exact timestamp from audio search results.
 - Video/Image: use markdown ![description](/path/to/file.mp4)
 NEVER fabricate frame IDs or timestamps — only use values from actual search results.
+
+RENDERING COMPONENTS:
+You can embed these in your response when they genuinely add value. Don't force them into simple answers.
+
+- Mermaid diagrams: \`\`\`mermaid fenced blocks for flowcharts, sequence diagrams, timelines.
+- App usage breakdown: \`\`\`app-stats fenced blocks, one row per app, format "App Name|minutes_as_decimal". Deduplicate — merge variants like "discord.exe" and "Discord" into one row with summed minutes.
+- Collapsible sections: <details><summary>label</summary> content </details> for optional / secondary info the user can expand.
 
 Current time: ${now.toISOString()}
 User's timezone: ${timezone} (UTC${offsetStr})
@@ -677,15 +659,6 @@ function MarkdownBlock({ text, isUser }: { text: string; isUser: boolean }) {
             </summary>
           );
         },
-        // @ts-expect-error — custom element handled via rehype-raw
-        "app-stats"({ children }) {
-          const text = typeof children === "string"
-            ? children
-            : Array.isArray(children)
-            ? children.map((c) => (typeof c === "string" ? c : "")).join("")
-            : "";
-          return <AppStatsBlock content={text} />;
-        },
         a({ href, children, ...props }) {
           const isMediaLink = href?.toLowerCase().match(/\.(mp4|mp3|wav|webm)$/);
           if (isMediaLink && href) {
@@ -787,6 +760,10 @@ function MarkdownBlock({ text, isUser }: { text: string; isUser: boolean }) {
 
           if (language === "mermaid") {
             return <MermaidDiagram chart={content} />;
+          }
+
+          if (language === "app-stats") {
+            return <AppStatsBlock content={content} />;
           }
 
           if (isMedia) {
