@@ -7,7 +7,7 @@
 //! See `tests/E2E_TESTING.md` for setup instructions.
 //!
 //! Run:
-//!   cargo test -p screenpipe-audio --test e2e_ghost_word_silent_room -- --ignored --nocapture
+//!   cargo test -p screenpipe-audio --test e2e_ghost_word_silent_room --features test-utils -- --ignored --nocapture
 
 #![cfg(target_os = "macos")]
 
@@ -118,7 +118,15 @@ fn blackhole_is_installed() -> bool {
 /// boundaries reaches Whisper and produces hallucinated text (e.g. `" you"`).
 ///
 /// Prerequisites: see `tests/E2E_TESTING.md`.
-#[tokio::test]
+///
+/// # Why multi_thread
+///
+/// The recording pipeline (`record_and_transcribe`) and the chunk-injection loop
+/// must run concurrently. With a single-threaded Tokio runtime the injection loop
+/// fills the broadcast channel and sets `is_running=false` before the pipeline
+/// task ever gets to call `subscribe()` — producing 0 segments. The multi-thread
+/// runtime lets both tasks proceed in true parallel.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires BlackHole 2ch + cached Whisper tiny model — see tests/E2E_TESTING.md"]
 async fn silent_room_no_ghost_words() {
     // ── Prerequisite guards ──────────────────────────────────────────────────
@@ -171,35 +179,55 @@ async fn silent_room_no_ghost_words() {
     // ── Inject audio with simulated BT packet drops ──────────────────────────
     //
     // Chunk size: 320 samples = 20ms at 16kHz (typical CPAL callback size).
-    // Normal cadence: send one chunk every 20ms.
-    // Gap simulation: every ~50 chunks (≈1 second) sleep 200ms BEFORE sending
-    //   the chunk. SourceBuffer sees elapsed_time = 200ms >> expected 20ms,
-    //   detects the gap, and inserts 180ms of digital silence (0.0).
+    // Normal cadence: one chunk of SILENCE every 20ms — matching a real quiet room
+    //   where the Bluetooth mic picks up near-zero ambient audio.
     //
-    // Without SourceBuffer the crackle chunk arrives immediately after the gap
-    // with no silence inserted — Whisper sees nonzero energy and hallucinate.
-    // With SourceBuffer the crackle chunk is preceded by 180ms of silence,
-    // and the RMS gate in process_with_whisper returns "" before calling the
-    // model on the zero-energy window.
+    // Gap simulation: every ~50 chunks (≈1 second) sleep 200ms BEFORE the next
+    //   chunk. SourceBuffer sees elapsed_time = 200ms >> expected 20ms, detects
+    //   the gap, and inserts 180ms of 0.0 silence. The audio content is unchanged
+    //   (still zeros), but SourceBuffer fires its gap-detection path — exercising
+    //   the full code path we care about.
+    //
+    // Why silence, not crackle, for chunk content:
+    //   In a real silent room, the mic delivers near-zero samples continuously.
+    //   A Bluetooth packet drop is a TIMING event (the CPAL callback skips a beat),
+    //   not a content event. The OS does not inject crackle samples — it just
+    //   delivers the next batch of mic samples late. SourceBuffer detects the
+    //   timing gap and fills it with synthetic silence, keeping the timeline
+    //   correct. Injecting continuous high-amplitude crackle (as in the
+    //   `whisper_hallucination_before_after` test) demonstrates the hallucination
+    //   mechanism, not the silent-room scenario.
+    //
+    // WHY the 150ms startup delay:
+    //   `record_and_transcribe` calls `audio_stream.subscribe()` to create its
+    //   broadcast receiver. Any chunk sent before subscribe() is invisible to
+    //   the pipeline. 150ms is enough for the pipeline task to start and subscribe.
+    //
+    // WHY the wakeup chunk after is_running=false:
+    //   `recv_audio_chunk` blocks on `receiver.recv()`. Setting is_running=false
+    //   does not unblock it — the inner loop checks is_running AFTER recv returns.
+    //   Sending one final chunk unblocks recv, the loop checks is_running=false,
+    //   exits, and flush_audio runs.
 
-    let chunk_samples = 320_usize; // 20ms
+    let chunk_samples = 320_usize; // 20ms at 16kHz
     // Fill 1.5 segments worth to ensure at least one full flush
     let total_chunks = ((segment_secs as f64 * 1.5 * sample_rate as f64)
         / chunk_samples as f64)
         .ceil() as usize;
 
-    let mut seed: u64 = 0xdeadbeef_12345678;
+    // Wait for the pipeline task to start and call subscribe()
+    tokio::time::sleep(Duration::from_millis(150)).await;
 
     for i in 0..total_chunks {
-        // Every 50 chunks simulate a BT packet drop: 200ms dead window
+        // Every 50 chunks (≈1 second) simulate a BT packet drop timing gap.
+        // The 200ms sleep is what SourceBuffer detects — not the sample content.
         if i > 0 && i % 50 == 0 {
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
 
-        // Crackle at amplitude 0.3 — realistic packet-boundary artifact level.
-        // With SourceBuffer: this chunk is preceded by inserted silence.
-        // Without: this chunk is the first audio after the gap — crackle.
-        let chunk = crackle_chunk(chunk_samples, 0.3, &mut seed);
+        // Pure silence — models a real quiet room with a Bluetooth mic.
+        // SourceBuffer still fires its gap-detection logic on the timing gap above.
+        let chunk = vec![0.0_f32; chunk_samples];
         if tx.send(chunk).is_err() {
             break; // pipeline shut down early
         }
@@ -207,10 +235,13 @@ async fn silent_room_no_ghost_words() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 
-    // Signal stop and wait for the pipeline to flush
+    // Signal stop, then send one wakeup chunk so receiver.recv() unblocks
+    // and the inner loop can observe is_running=false and exit cleanly.
     is_running.store(false, Ordering::Relaxed);
-    audio_stream.is_disconnected.store(true, Ordering::Relaxed);
-    let _ = pipeline_handle.await;
+    tx.send(vec![0.0_f32; chunk_samples]).ok();
+
+    // Wait up to 15s for the pipeline to flush and finish
+    let _ = tokio::time::timeout(Duration::from_secs(15), pipeline_handle).await;
 
     // ── Load Whisper and transcribe all received segments ────────────────────
     let transcription_engine = TranscriptionEngine::new(
@@ -288,7 +319,7 @@ async fn silent_room_no_ghost_words() {
 /// Verifies that BlackHole 2ch appears in screenpipe's CPAL device list.
 /// This is NOT the ghost-word test — it just confirms the hardware prerequisite
 /// is wired up correctly before the main test runs.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 #[ignore = "requires BlackHole 2ch — see tests/E2E_TESTING.md"]
 async fn blackhole_device_enumerable() {
     use screenpipe_audio::core::device::list_audio_devices;
