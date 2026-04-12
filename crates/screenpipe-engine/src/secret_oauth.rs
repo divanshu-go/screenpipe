@@ -37,7 +37,7 @@ pub async fn load_oauth_from_store_or_file(
 
 /// Save an OAuth token JSON blob into the SecretStore AND the legacy file
 /// (dual-write for backward compatibility during migration).
-pub async fn save_oauth_to_store_and_file(
+pub async fn save_oauth_to_store(
     store: &SecretStore,
     integration_id: &str,
     instance: Option<&str>,
@@ -48,23 +48,7 @@ pub async fn save_oauth_to_store_and_file(
         None => format!("oauth:{}", integration_id),
     };
 
-    // Write to SecretStore
-    store.set_json(&key, value).await?;
-
-    // Also write to legacy file for backward compatibility
-    let path = screenpipe_connect::oauth::oauth_token_path_instance(integration_id, instance);
-    let json_bytes = serde_json::to_vec_pretty(value)?;
-    std::fs::write(&path, &json_bytes)?;
-
-    // Fix permissions on the file we just wrote
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = std::fs::Permissions::from_mode(0o600);
-        let _ = std::fs::set_permissions(&path, perms);
-    }
-
-    Ok(())
+    store.set_json(&key, value).await
 }
 
 #[cfg(test)]
