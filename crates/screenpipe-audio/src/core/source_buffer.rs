@@ -251,4 +251,95 @@ mod tests {
             max_silence
         );
     }
+
+    /// Core correctness proof: every sample the SourceBuffer inserts during a gap
+    /// must be exactly 0.0 — not noise, not the previous sample, not garbage.
+    ///
+    /// This is the difference between "before" and "after":
+    ///   Before: CPAL gap → no samples inserted → timeline compressed → crackle at boundary
+    ///   After:  CPAL gap → N × 0.0 inserted    → Silero VAD rejects silence → no hallucination
+    ///
+    /// If this test fails, Whisper will see nonzero noise in place of gaps and may hallucinate.
+    #[test]
+    fn gap_samples_are_exactly_zero() {
+        let sample_rate = 16000_u32;
+        let mut buf = SourceBuffer::new("AirPods Pro", sample_rate);
+
+        // Push real audio: 0.5 across 320 samples (20ms chunk at 16kHz, clearly nonzero)
+        let real_chunk = vec![0.5_f32; 320];
+        buf.push(real_chunk.clone());
+        buf.drain_all(); // consume, establish expected_chunk_duration
+
+        // Simulate a 100ms wall-clock gap — Bluetooth packet drop
+        buf.last_chunk_time =
+            Some(Instant::now() - std::time::Duration::from_millis(100));
+
+        // Next real chunk arrives
+        buf.push(real_chunk.clone());
+        let out = buf.drain_all();
+
+        assert!(buf.gaps_detected > 0, "gap must be detected for this test to be valid");
+
+        let n_silence = buf.silence_inserted_samples as usize;
+        assert!(n_silence > 0, "silence must have been inserted");
+
+        // ── The actual assertion ──────────────────────────────────────────────
+        // Every inserted sample must be exactly 0.0.
+        // Any other value would pass Silero VAD and potentially reach Whisper.
+        for (i, &s) in out[..n_silence].iter().enumerate() {
+            assert_eq!(
+                s, 0.0_f32,
+                "inserted sample at index {} is {:.6} — must be exactly 0.0 (silence)",
+                i, s
+            );
+        }
+
+        // Real audio follows silence unchanged
+        for (i, &s) in out[n_silence..].iter().enumerate() {
+            assert_eq!(
+                s, 0.5_f32,
+                "real audio sample at index {} was corrupted (got {:.6}, expected 0.5)",
+                i, s
+            );
+        }
+    }
+
+    /// Proportionality proof: for a known gap duration, the inserted silence
+    /// must be within ±10% of the expected sample count.
+    ///
+    /// If this fails, timestamps in the 30-second segment will be misaligned —
+    /// earlier audio will appear to happen later than it did.
+    #[test]
+    fn silence_duration_proportional_to_gap() {
+        let sample_rate = 16000_u32;
+        let mut buf = SourceBuffer::new("Sony WH-1000XM5", sample_rate);
+
+        // 20ms chunk (320 samples) — establish baseline
+        buf.push(vec![0.1_f32; 320]);
+        buf.drain_all();
+
+        // 150ms gap — at 16kHz, that's 2400 samples of missing audio
+        let gap_ms = 150_u64;
+        buf.last_chunk_time =
+            Some(Instant::now() - std::time::Duration::from_millis(gap_ms));
+        buf.push(vec![0.1_f32; 320]);
+        buf.drain_all();
+
+        let inserted = buf.silence_inserted_samples;
+        // Expected: gap_ms × sample_rate / 1000, minus the expected_chunk_duration
+        // (SourceBuffer inserts gap_ms - expected_ms worth of silence).
+        // Allow ±10% tolerance for EMA rounding.
+        let expected_roughly = ((gap_ms - 20) as f64 * sample_rate as f64 / 1000.0) as u64;
+        let tolerance = (expected_roughly as f64 * 0.10).ceil() as u64 + 1;
+
+        assert!(
+            inserted.abs_diff(expected_roughly) <= tolerance,
+            "silence inserted ({} samples = {:.1}ms) not within ±10% of expected ({} samples = {}ms). \
+             Timestamps would be misaligned.",
+            inserted,
+            inserted as f64 * 1000.0 / sample_rate as f64,
+            expected_roughly,
+            gap_ms - 20,
+        );
+    }
 }
