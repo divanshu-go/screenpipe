@@ -9,7 +9,11 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Loader, Brain, Clock, Users } from "lucide-react";
 import { useOnboarding } from "@/lib/hooks/use-onboarding";
 import { scheduleFirstRunNotification } from "@/lib/notifications";
+import { commands } from "@/lib/utils/tauri";
 import posthog from "posthog-js";
+
+// Gmail badge shown on paths that benefit from email context
+const GMAIL_BOOSTED_PATHS = new Set(["memory", "people"]);
 
 const PATHS = [
   {
@@ -97,6 +101,7 @@ export default function PickPipe() {
   const [seconds, setSeconds] = useState(0);
   const [showSkip, setShowSkip] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [gmailConnected, setGmailConnected] = useState(false);
   const { completeOnboarding } = useOnboarding();
   const isCompletingRef = useRef(false);
   const mountTimeRef = useRef(Date.now());
@@ -109,6 +114,17 @@ export default function PickPipe() {
   useEffect(() => {
     const timer = setTimeout(() => setShowSkip(true), 5000);
     return () => clearTimeout(timer);
+  }, []);
+
+  // Check if Gmail was connected in the previous connect-apps step
+  useEffect(() => {
+    commands.oauthStatus("gmail", null)
+      .then((res) => {
+        if (res.status === "ok" && res.data.connected) {
+          setGmailConnected(true);
+        }
+      })
+      .catch(() => {});
   }, []);
 
   const handleSelect = useCallback(
@@ -228,6 +244,7 @@ export default function PickPipe() {
         <div className="flex flex-col gap-3 w-full">
           {PATHS.map((path, i) => {
             const Icon = path.icon;
+            const showGmailBadge = gmailConnected && GMAIL_BOOSTED_PATHS.has(path.id);
             return (
               <motion.button
                 key={path.id}
@@ -242,9 +259,16 @@ export default function PickPipe() {
                     <Icon className="w-4 h-4 text-foreground/60 group-hover:text-foreground transition-colors" />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="font-mono text-sm font-semibold">
-                      {path.title}
-                    </p>
+                    <div className="flex items-center gap-2">
+                      <p className="font-mono text-sm font-semibold">
+                        {path.title}
+                      </p>
+                      {showGmailBadge && (
+                        <span className="font-mono text-[8px] px-1 py-0.5 border border-foreground/20 text-muted-foreground/60 leading-none shrink-0">
+                          + gmail
+                        </span>
+                      )}
+                    </div>
                     <p className="font-mono text-[11px] text-muted-foreground mt-0.5">
                       {path.subtitle}
                     </p>
