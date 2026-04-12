@@ -62,6 +62,9 @@ fn is_normal_shutdown(is_running: &Arc<AtomicBool>) -> bool {
     !is_running.load(Ordering::Relaxed)
 }
 
+#[cfg(all(test, target_os = "macos"))]
+mod e2e_ghost_word_silent_room;
+
 pub async fn record_and_transcribe(
     audio_stream: Arc<AudioStream>,
     duration: Duration,

@@ -219,7 +219,7 @@ impl AudioStream {
     /// The test can push audio chunks (and deliberate timing gaps) directly into
     /// the sender, driving the full pipeline without hardware. The returned sender
     /// is wrapped in `Arc` so multiple test threads can share it.
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(test)]
     #[doc(hidden)]
     pub fn from_sender_for_test(
         device: Arc<AudioDevice>,
