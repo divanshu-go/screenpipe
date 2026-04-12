@@ -462,10 +462,7 @@ async fn sync_to_remote_inner(config: &SyncConfig, data_dir: &Path) -> Result<Sy
             .arg(&db_path)
             .arg("PRAGMA wal_checkpoint(TRUNCATE);");
         #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            wal_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-        }
+        wal_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
         match wal_cmd.output().await {
             Ok(out) if out.status.success() => {
                 debug!("WAL checkpoint completed before sync");
@@ -787,10 +784,7 @@ async fn discover_tailscale() -> Vec<DiscoveredHost> {
     let mut ts_cmd = tokio::process::Command::new("tailscale");
     ts_cmd.args(["status", "--json"]);
     #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        ts_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    }
+    ts_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
     let out = match ts_cmd.output().await {
         Ok(o) if o.status.success() => o,
         _ => return vec![],
