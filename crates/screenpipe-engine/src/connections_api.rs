@@ -534,19 +534,16 @@ async fn gmail_token(
     instance: Option<&str>,
     secret_store: &Option<Arc<SecretStore>>,
 ) -> anyhow::Result<String> {
-    // Try SecretStore path first
+    // Use SecretStore with full refresh support
     if let Some(store) = secret_store {
-        if let Some(token_json) =
-            crate::secret_oauth::load_oauth_from_store_or_file(store, "gmail", instance).await
+        if let Some(token) =
+            crate::secret_oauth::get_valid_token(client, store, "gmail", instance).await
         {
-            // The token JSON should contain an access_token field
-            if let Some(token) = token_json["access_token"].as_str() {
-                return Ok(token.to_string());
-            }
+            return Ok(token);
         }
     }
 
-    // Fall back to legacy file-based token retrieval (handles refresh etc.)
+    // Fall back to legacy file-based token retrieval
     oauth_store::get_valid_token_instance(client, "gmail", instance)
         .await
         .ok_or_else(|| {
@@ -563,7 +560,7 @@ async fn gmail_list_instances(State(state): State<ConnectionsState>) -> (StatusC
     for inst in instances {
         // Try SecretStore first, then fall back to file
         let email = if let Some(store) = &state.secret_store {
-            crate::secret_oauth::load_oauth_from_store_or_file(store, "gmail", inst.as_deref())
+            crate::secret_oauth::load_oauth_json(store, "gmail", inst.as_deref())
                 .await
                 .and_then(|v| v["email"].as_str().map(String::from))
         } else {
@@ -713,19 +710,16 @@ async fn gcal_token(
     instance: Option<&str>,
     secret_store: &Option<Arc<SecretStore>>,
 ) -> anyhow::Result<String> {
-    // Try SecretStore path first
+    // Use SecretStore with full refresh support
     if let Some(store) = secret_store {
-        if let Some(token_json) =
-            crate::secret_oauth::load_oauth_from_store_or_file(store, "google-calendar", instance)
-                .await
+        if let Some(token) =
+            crate::secret_oauth::get_valid_token(client, store, "google-calendar", instance).await
         {
-            if let Some(token) = token_json["access_token"].as_str() {
-                return Ok(token.to_string());
-            }
+            return Ok(token);
         }
     }
 
-    // Fall back to legacy file-based token retrieval (handles refresh etc.)
+    // Fall back to legacy file-based token retrieval
     oauth_store::get_valid_token_instance(client, "google-calendar", instance)
         .await
         .ok_or_else(|| {
@@ -745,7 +739,7 @@ async fn gcal_status(
 
     // Check SecretStore first, then fall back to file-based check
     let connected = if let Some(store) = &state.secret_store {
-        crate::secret_oauth::load_oauth_from_store_or_file(store, "google-calendar", instance)
+        crate::secret_oauth::load_oauth_json(store, "google-calendar", instance)
             .await
             .is_some()
             || oauth_store::is_oauth_instance_connected("google-calendar", instance)
