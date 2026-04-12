@@ -64,13 +64,6 @@ pub async fn save_oauth_json(
     }
 
     store.set_json(&key, &stored).await?;
-
-    // Also write to legacy file — screenpipe-connect's refresh_token_instance
-    // still reads from files. This will be removed once refresh is fully
-    // migrated to SecretStore.
-    let _ =
-        screenpipe_connect::oauth::write_oauth_token_instance(integration_id, instance, &stored);
-
     Ok(())
 }
 
