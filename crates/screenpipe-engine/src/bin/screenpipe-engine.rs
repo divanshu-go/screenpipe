@@ -588,7 +588,14 @@ async fn main() -> anyhow::Result<()> {
         return Err(anyhow::anyhow!("port already in use"));
     }
 
-    let all_monitors = list_monitors().await;
+    // Only enumerate monitors when vision is enabled — on macOS, calling
+    // SCK's ShareableContent::current() triggers the "Currently Sharing"
+    // indicator in Control Center even if we never capture a frame (#2897).
+    let all_monitors = if config.disable_vision {
+        Vec::new()
+    } else {
+        list_monitors().await
+    };
 
     let mut audio_devices = Vec::new();
 
