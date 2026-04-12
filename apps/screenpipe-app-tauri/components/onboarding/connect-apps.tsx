@@ -5,12 +5,13 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Check, Loader, Lock, Calendar } from "lucide-react";
+import { Check, Loader, Lock } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { commands } from "@/lib/utils/tauri";
 import { useSettings } from "@/lib/hooks/use-settings";
-import { usePlatform } from "@/lib/hooks/use-platform";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { readTextFile, writeFile } from "@tauri-apps/plugin-fs";
+import { homeDir, join } from "@tauri-apps/api/path";
 import posthog from "posthog-js";
 
 // ─── Icons ───────────────────────────────────────────────────────────────────
@@ -26,19 +27,89 @@ function GmailIcon({ className = "w-5 h-5" }: { className?: string }) {
   );
 }
 
-function CalendlyIcon({ className = "w-5 h-5" }: { className?: string }) {
+function CalcomIcon({ className = "w-5 h-5" }: { className?: string }) {
   return (
-    <svg viewBox="0 0 24 24" className={className}>
-      <circle cx="12" cy="12" r="10" fill="#006BFF" />
-      <rect
-        x="7" y="9" width="10" height="8" rx="1"
-        fill="none" stroke="white" strokeWidth="1.5"
-      />
-      <line x1="7" y1="12" x2="17" y2="12" stroke="white" strokeWidth="1.2" />
-      <line x1="10" y1="7" x2="10" y2="10.5" stroke="white" strokeWidth="1.5" strokeLinecap="round" />
-      <line x1="14" y1="7" x2="14" y2="10.5" stroke="white" strokeWidth="1.5" strokeLinecap="round" />
+    <svg viewBox="0 0 24 24" className={className} fill="none">
+      <rect x="3" y="4" width="18" height="17" rx="2" stroke="currentColor" strokeWidth="1.5" />
+      <line x1="3" y1="9" x2="21" y2="9" stroke="currentColor" strokeWidth="1.5" />
+      <line x1="8" y1="2" x2="8" y2="6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <line x1="16" y1="2" x2="16" y2="6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <rect x="7" y="13" width="3" height="3" rx="0.5" fill="currentColor" />
+      <rect x="14" y="13" width="3" height="3" rx="0.5" fill="currentColor" />
     </svg>
   );
+}
+
+function CursorIcon({ className = "w-5 h-5" }: { className?: string }) {
+  return (
+    <svg fill="none" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" className={className}>
+      <g clipPath="url(#ob_cursor_clip0)">
+        <rect width="512" height="512" rx="122" fill="#000" />
+        <g clipPath="url(#ob_cursor_clip1)">
+          <mask id="ob_cursor_mask" style={{ maskType: "luminance" }} maskUnits="userSpaceOnUse" x="85" y="89" width="343" height="334">
+            <path d="M85 89h343v334H85V89z" fill="#fff" />
+          </mask>
+          <g mask="url(#ob_cursor_mask)">
+            <path d="M255.428 423l148.991-83.5L255.428 256l-148.99 83.5 148.99 83.5z" fill="url(#ob_cursor_grad0)" />
+            <path d="M404.419 339.5v-167L255.428 89v167l148.991 83.5z" fill="url(#ob_cursor_grad1)" />
+            <path d="M255.428 89l-148.99 83.5v167l148.99-83.5V89z" fill="url(#ob_cursor_grad2)" />
+            <path d="M404.419 172.5L255.428 423V256l148.991-83.5z" fill="#E4E4E4" />
+            <path d="M404.419 172.5L255.428 256l-148.99-83.5h297.981z" fill="#fff" />
+          </g>
+        </g>
+      </g>
+      <defs>
+        <linearGradient id="ob_cursor_grad0" x1="255.428" y1="256" x2="255.428" y2="423" gradientUnits="userSpaceOnUse">
+          <stop offset=".16" stopColor="#fff" stopOpacity=".39" />
+          <stop offset=".658" stopColor="#fff" stopOpacity=".8" />
+        </linearGradient>
+        <linearGradient id="ob_cursor_grad1" x1="404.419" y1="173.015" x2="257.482" y2="261.497" gradientUnits="userSpaceOnUse">
+          <stop offset=".182" stopColor="#fff" stopOpacity=".31" />
+          <stop offset=".715" stopColor="#fff" stopOpacity="0" />
+        </linearGradient>
+        <linearGradient id="ob_cursor_grad2" x1="255.428" y1="89" x2="112.292" y2="342.802" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#fff" stopOpacity=".6" />
+          <stop offset=".667" stopColor="#fff" stopOpacity=".22" />
+        </linearGradient>
+        <clipPath id="ob_cursor_clip0"><path fill="#fff" d="M0 0h512v512H0z" /></clipPath>
+        <clipPath id="ob_cursor_clip1"><path fill="#fff" transform="translate(85 89)" d="M0 0h343v334H0z" /></clipPath>
+      </defs>
+    </svg>
+  );
+}
+
+// ─── Cursor MCP helpers ───────────────────────────────────────────────────────
+
+async function getCursorMcpConfigPath(): Promise<string> {
+  const home = await homeDir();
+  return join(home, ".cursor", "mcp.json");
+}
+
+async function isCursorMcpInstalled(): Promise<boolean> {
+  try {
+    const content = await readTextFile(await getCursorMcpConfigPath());
+    return !!JSON.parse(content)?.mcpServers?.screenpipe;
+  } catch {
+    return false;
+  }
+}
+
+async function installCursorMcp(): Promise<void> {
+  const configPath = await getCursorMcpConfigPath();
+  let config: Record<string, unknown> = {};
+  try {
+    config = JSON.parse(await readTextFile(configPath));
+  } catch {
+    // fresh config
+  }
+  if (!config.mcpServers || typeof config.mcpServers !== "object") {
+    config.mcpServers = {};
+  }
+  (config.mcpServers as Record<string, unknown>).screenpipe = {
+    command: "npx",
+    args: ["-y", "screenpipe-mcp"],
+  };
+  await writeFile(configPath, new TextEncoder().encode(JSON.stringify(config, null, 2)));
 }
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -48,20 +119,16 @@ interface Integration {
   cardKey: string;
   name: string;
   valueProp: string;
-  /** shown after connecting — what the aha moment copy says */
-  ahaCopy?: string;
+  ahaCopy: string;
   isPro: boolean;
-  type: "oauth" | "native";
-  icon: React.ReactNode;
-  platform: "macos" | "windows" | "all";
+  type: "oauth" | "mcp";
 }
 
 type CardState = "idle" | "connecting" | "connected" | "error";
 
-// ─── Integration definitions ─────────────────────────────────────────────────
-// 7 total → platform filter gives exactly 6 per OS
+// ─── Integration list ─────────────────────────────────────────────────────────
 
-const ALL_INTEGRATIONS: Integration[] = [
+const INTEGRATIONS: Integration[] = [
   {
     id: "gmail",
     cardKey: "gmail",
@@ -70,8 +137,6 @@ const ALL_INTEGRATIONS: Integration[] = [
     ahaCopy: "email context active",
     isPro: true,
     type: "oauth",
-    icon: <GmailIcon />,
-    platform: "all",
   },
   {
     id: "google-calendar",
@@ -81,9 +146,6 @@ const ALL_INTEGRATIONS: Integration[] = [
     ahaCopy: "meeting context active",
     isPro: true,
     type: "oauth",
-    // eslint-disable-next-line @next/next/no-img-element
-    icon: <img src="/images/google-calendar.svg" alt="Google Calendar" className="w-5 h-5" />,
-    platform: "all",
   },
   {
     id: "notion",
@@ -93,9 +155,15 @@ const ALL_INTEGRATIONS: Integration[] = [
     ahaCopy: "notes context active",
     isPro: true,
     type: "oauth",
-    // eslint-disable-next-line @next/next/no-img-element
-    icon: <img src="/images/notion.svg" alt="Notion" className="w-5 h-5 dark:invert" />,
-    platform: "all",
+  },
+  {
+    id: "calcom",
+    cardKey: "calcom",
+    name: "Cal.com",
+    valueProp: "see bookings alongside what you work on",
+    ahaCopy: "scheduling context active",
+    isPro: false,
+    type: "oauth",
   },
   {
     id: "github",
@@ -105,45 +173,37 @@ const ALL_INTEGRATIONS: Integration[] = [
     ahaCopy: "code context active",
     isPro: false,
     type: "oauth",
-    // eslint-disable-next-line @next/next/no-img-element
-    icon: <img src="/images/github.png" alt="GitHub" className="w-5 h-5 rounded" />,
-    platform: "all",
   },
   {
-    id: "apple-calendar",
-    cardKey: "native-calendar-mac",
-    name: "Apple Calendar",
-    valueProp: "local calendar, always available",
+    id: "cursor",
+    cardKey: "cursor",
+    name: "Cursor",
+    valueProp: "give Cursor AI full memory of your work",
+    ahaCopy: "MCP installed — restart Cursor",
     isPro: false,
-    type: "native",
-    // eslint-disable-next-line @next/next/no-img-element
-    icon: <img src="/images/apple.svg" alt="Apple Calendar" className="w-5 h-5 dark:invert" />,
-    platform: "macos",
-  },
-  {
-    id: "apple-calendar",
-    cardKey: "native-calendar-win",
-    name: "Windows Calendar",
-    valueProp: "local calendar, always available",
-    isPro: false,
-    type: "native",
-    icon: <Calendar className="w-5 h-5 text-muted-foreground" />,
-    platform: "windows",
-  },
-  {
-    id: "calendly",
-    cardKey: "calendly",
-    name: "Calendly",
-    valueProp: "see bookings alongside what you work on",
-    ahaCopy: "scheduling context active",
-    isPro: false,
-    type: "oauth",
-    icon: <CalendlyIcon />,
-    platform: "all",
+    type: "mcp",
   },
 ];
 
-// ─── Card component ───────────────────────────────────────────────────────────
+const ICONS: Record<string, React.ReactNode> = {
+  gmail: <GmailIcon />,
+  "google-calendar": (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img src="/images/google-calendar.svg" alt="Google Calendar" className="w-5 h-5" />
+  ),
+  notion: (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img src="/images/notion.svg" alt="Notion" className="w-5 h-5 dark:invert" />
+  ),
+  calcom: <CalcomIcon />,
+  github: (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img src="/images/github.png" alt="GitHub" className="w-5 h-5 rounded" />
+  ),
+  cursor: <CursorIcon className="w-5 h-5 rounded" />,
+};
+
+// ─── Card ─────────────────────────────────────────────────────────────────────
 
 function IntegrationCard({
   integration,
@@ -165,20 +225,19 @@ function IntegrationCard({
   const isLocked = integration.isPro && !isPro;
   const isConnected = state === "connected";
   const isConnecting = state === "connecting";
-  const isNative = integration.type === "native";
 
   return (
     <div
       className={`relative flex flex-col gap-1.5 border p-3 transition-all duration-200 overflow-hidden ${
-        isConnected || isNative
+        isConnected
           ? "border-foreground/50 bg-foreground/[0.03]"
           : "border-border/50"
       }`}
     >
-      {/* Header row */}
+      {/* Header */}
       <div className="flex items-center gap-2 min-w-0">
         <div className="w-5 h-5 flex items-center justify-center shrink-0">
-          {integration.icon}
+          {ICONS[integration.cardKey]}
         </div>
         <span className="font-mono text-xs font-semibold truncate">
           {integration.name}
@@ -195,47 +254,33 @@ function IntegrationCard({
         {integration.valueProp}
       </p>
 
-      {/* Action / status */}
+      {/* Action */}
       <div className="mt-0.5 min-h-[28px]">
         {isConnected ? (
-          // ── Aha moment: email/name + what it unlocked ──
           <motion.div
             className="flex flex-col gap-0.5"
             initial={{ opacity: 0, y: 3 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.25 }}
+            transition={{ duration: 0.2 }}
           >
             <span className="flex items-center gap-1 font-mono text-[10px] text-foreground/70">
-              <Check className="w-3 h-3 shrink-0 text-foreground/60" strokeWidth={2.5} />
+              <Check className="w-3 h-3 shrink-0" strokeWidth={2.5} />
               <span className="truncate">{displayName ?? "connected"}</span>
             </span>
-            {integration.ahaCopy && (
-              <motion.span
-                className="font-mono text-[9px] text-muted-foreground/50 pl-4 leading-tight"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ delay: 0.2, duration: 0.3 }}
-              >
-                {integration.ahaCopy}
-              </motion.span>
-            )}
+            <motion.span
+              className="font-mono text-[9px] text-muted-foreground/50 pl-4 leading-tight"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.2, duration: 0.3 }}
+            >
+              {integration.ahaCopy}
+            </motion.span>
           </motion.div>
         ) : isConnecting ? (
           <span className="flex items-center gap-1 font-mono text-[10px] text-muted-foreground/50">
             <Loader className="w-3 h-3 animate-spin shrink-0" />
             connecting...
           </span>
-        ) : isNative ? (
-          // ── Native calendar: always connected, show it ──
-          <motion.span
-            className="flex items-center gap-1 font-mono text-[10px] text-foreground/50"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.1 }}
-          >
-            <Check className="w-3 h-3 shrink-0" strokeWidth={2.5} />
-            always available
-          </motion.span>
         ) : isLocked ? (
           <button
             onClick={onToggleUpsell}
@@ -264,9 +309,7 @@ function IntegrationCard({
             exit={{ opacity: 0, y: 6 }}
             transition={{ duration: 0.15 }}
           >
-            <span className="font-mono text-[9px] text-amber-500/60">
-              pro required
-            </span>
+            <span className="font-mono text-[9px] text-amber-500/60">pro required</span>
             <button
               onClick={() => openUrl("https://screenpi.pe/onboarding")}
               className="font-mono text-[9px] text-amber-500/80 hover:text-amber-500 transition-colors whitespace-nowrap"
@@ -280,7 +323,7 @@ function IntegrationCard({
   );
 }
 
-// ─── Main component ───────────────────────────────────────────────────────────
+// ─── Main ─────────────────────────────────────────────────────────────────────
 
 interface ConnectAppsProps {
   handleNextSlide: () => void;
@@ -288,7 +331,6 @@ interface ConnectAppsProps {
 
 export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
   const { settings } = useSettings();
-  const { isMac, isWindows, isLoading: isPlatformLoading } = usePlatform();
   const isPro = !!settings.user?.cloud_subscribed;
 
   const [cardStates, setCardStates] = useState<Record<string, CardState>>({});
@@ -297,43 +339,20 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
   const [seconds, setSeconds] = useState(0);
   const mountTimeRef = useRef(Date.now());
 
-  // Platform-filtered list, capped at 6
-  const integrations = ALL_INTEGRATIONS.filter((i) => {
-    if (isPlatformLoading) return false;
-    if (i.platform === "macos") return isMac;
-    if (i.platform === "windows") return isWindows;
-    return true;
-  }).slice(0, 6);
-
-  // Native calendar cards — mark connected immediately (no OAuth, always available)
+  // Check existing connections on mount
   useEffect(() => {
-    if (isPlatformLoading) return;
-    const nativeCards = integrations.filter((i) => i.type === "native");
-    if (nativeCards.length > 0) {
-      const updates: Record<string, CardState> = {};
-      for (const c of nativeCards) updates[c.cardKey] = "connected";
-      setCardStates((prev) => ({ ...prev, ...updates }));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPlatformLoading]);
-
-  // Check existing OAuth connections on mount (re-entering onboarding)
-  useEffect(() => {
-    if (isPlatformLoading) return;
     const check = async () => {
-      const oauthCards = integrations.filter((i) => i.type === "oauth");
       const stateUpdates: Record<string, CardState> = {};
       const nameUpdates: Record<string, string> = {};
 
+      // OAuth integrations
       await Promise.allSettled(
-        oauthCards.map(async (i) => {
+        INTEGRATIONS.filter((i) => i.type === "oauth").map(async (i) => {
           try {
             const res = await commands.oauthStatus(i.id, null);
             if (res.status === "ok" && res.data.connected) {
               stateUpdates[i.cardKey] = "connected";
-              if (res.data.display_name) {
-                nameUpdates[i.cardKey] = res.data.display_name;
-              }
+              if (res.data.display_name) nameUpdates[i.cardKey] = res.data.display_name;
             }
           } catch {
             // not connected
@@ -341,16 +360,21 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
         })
       );
 
-      if (Object.keys(stateUpdates).length > 0) {
+      // Cursor MCP
+      try {
+        const installed = await isCursorMcpInstalled();
+        if (installed) stateUpdates["cursor"] = "connected";
+      } catch {
+        // ignore
+      }
+
+      if (Object.keys(stateUpdates).length > 0)
         setCardStates((prev) => ({ ...prev, ...stateUpdates }));
-      }
-      if (Object.keys(nameUpdates).length > 0) {
+      if (Object.keys(nameUpdates).length > 0)
         setDisplayNames((prev) => ({ ...prev, ...nameUpdates }));
-      }
     };
     check();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPlatformLoading]);
+  }, []);
 
   // Seconds ticker
   useEffect(() => {
@@ -369,35 +393,34 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
 
   const handleConnect = useCallback(
     async (integration: Integration) => {
-      if (integration.type === "native") return;
-
       // Pro gate
       if (integration.isPro && !isPro) {
         setUpsellVisible((prev) => ({
           ...prev,
           [integration.cardKey]: !prev[integration.cardKey],
         }));
-        posthog.capture("onboarding_integration_upsell_shown", {
-          integration: integration.id,
-        });
+        posthog.capture("onboarding_integration_upsell_shown", { integration: integration.id });
         return;
       }
 
-      posthog.capture("onboarding_integration_connect_clicked", {
-        integration: integration.id,
-      });
+      posthog.capture("onboarding_integration_connect_clicked", { integration: integration.id });
       setCardState(integration.cardKey, "connecting");
 
       try {
+        if (integration.type === "mcp") {
+          // Cursor MCP: write config file
+          await installCursorMcp();
+          setCardState(integration.cardKey, "connected");
+          posthog.capture("onboarding_integration_connected", { integration: integration.id });
+          return;
+        }
+
+        // OAuth
         const res = await commands.oauthConnect(integration.id, null);
         if (res.status === "ok" && res.data.connected) {
           setCardState(integration.cardKey, "connected");
-          // Store display_name for the aha moment copy
           if (res.data.display_name) {
-            setDisplayNames((prev) => ({
-              ...prev,
-              [integration.cardKey]: res.data.display_name!,
-            }));
+            setDisplayNames((prev) => ({ ...prev, [integration.cardKey]: res.data.display_name! }));
           }
           posthog.capture("onboarding_integration_connected", {
             integration: integration.id,
@@ -432,14 +455,6 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
     handleNextSlide();
   }, [numConnected, connectedKeys, handleNextSlide]);
 
-  if (isPlatformLoading) return null;
-
-  // Count non-native connected for the "continue" button — native doesn't count
-  // as user action, so only show continue if they connected at least one OAuth
-  const oauthConnectedCount = connectedKeys.filter(
-    (k) => !k.startsWith("native-calendar")
-  ).length;
-
   return (
     <motion.div
       className="w-full flex flex-col items-center min-h-[400px]"
@@ -471,17 +486,15 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
         animate={{ opacity: 1 }}
         transition={{ delay: 0.15 }}
       >
-        <h2 className="font-mono text-base font-bold lowercase">
-          connect your world
-        </h2>
+        <h2 className="font-mono text-base font-bold lowercase">connect your world</h2>
         <p className="font-mono text-[10px] text-muted-foreground/60 mt-1 max-w-[280px]">
           screenpipe sees your screen — connect the tools it acts on
         </p>
       </motion.div>
 
-      {/* 2×3 card grid */}
+      {/* 2×3 grid */}
       <div className="grid grid-cols-2 gap-2 w-full">
-        {integrations.map((integration, i) => (
+        {INTEGRATIONS.map((integration, i) => (
           <motion.div
             key={integration.cardKey}
             initial={{ opacity: 0, y: 8 }}
@@ -500,16 +513,14 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
                   ...prev,
                   [integration.cardKey]: !prev[integration.cardKey],
                 }));
-                posthog.capture("onboarding_integration_upsell_shown", {
-                  integration: integration.id,
-                });
+                posthog.capture("onboarding_integration_upsell_shown", { integration: integration.id });
               }}
             />
           </motion.div>
         ))}
       </div>
 
-      {/* Pro hint for free users */}
+      {/* Pro hint */}
       {!isPro && (
         <motion.p
           className="font-mono text-[9px] text-muted-foreground/30 mt-3 text-center"
@@ -527,10 +538,10 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
         </motion.p>
       )}
 
-      {/* Action area */}
+      {/* Actions */}
       <div className="mt-5 flex flex-col items-center gap-2 w-full">
         <AnimatePresence>
-          {oauthConnectedCount > 0 && (
+          {numConnected > 0 && (
             <motion.button
               key="continue"
               initial={{ opacity: 0, y: 4 }}
@@ -543,12 +554,11 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
             </motion.button>
           )}
         </AnimatePresence>
-
         <button
           onClick={handleSkip}
           className="font-mono text-[10px] text-muted-foreground/30 hover:text-muted-foreground/50 transition-colors"
         >
-          {oauthConnectedCount > 0 ? "skip remaining →" : "skip for now →"}
+          {numConnected > 0 ? "skip remaining →" : "skip for now →"}
         </button>
       </div>
     </motion.div>
