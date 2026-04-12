@@ -49,7 +49,7 @@ pub async fn migrate_legacy_secrets(
 
                 match std::fs::read(&path) {
                     Ok(contents) => {
-                        // Check if already migrated
+                        // Check if already migrated and readable
                         match store.get(&store_key).await {
                             Ok(Some(_)) => {
                                 report
@@ -58,11 +58,13 @@ pub async fn migrate_legacy_secrets(
                                 continue;
                             }
                             Ok(None) => {}
-                            Err(e) => {
-                                report
-                                    .errors
-                                    .push(format!("{}: check failed: {}", filename, e));
-                                continue;
+                            Err(_) => {
+                                // Decryption failed — likely a key change (new computer).
+                                // Re-migrate from the file to overwrite with the new key.
+                                info!(
+                                    "re-migrating {} (old encrypted value unreadable, likely key change)",
+                                    filename
+                                );
                             }
                         }
 
@@ -111,7 +113,7 @@ pub async fn migrate_legacy_secrets(
                                                 let store_key =
                                                     format!("connection:{}:{}", name, field);
 
-                                                // Check if already migrated
+                                                // Check if already migrated and readable
                                                 match store.get(&store_key).await {
                                                     Ok(Some(_)) => {
                                                         report.skipped.push(format!(
@@ -121,12 +123,12 @@ pub async fn migrate_legacy_secrets(
                                                         continue;
                                                     }
                                                     Ok(None) => {}
-                                                    Err(e) => {
-                                                        report.errors.push(format!(
-                                                            "connections.json/{}/{}: check failed: {}",
-                                                            name, field, e
-                                                        ));
-                                                        continue;
+                                                    Err(_) => {
+                                                        // Key change — re-migrate
+                                                        info!(
+                                                            "re-migrating connections.json/{}/{} (key change)",
+                                                            name, field
+                                                        );
                                                     }
                                                 }
 
