@@ -71,10 +71,9 @@ pub async fn migrate_legacy_secrets(
                         if let Err(e) = store.set(&store_key, &contents).await {
                             report.errors.push(format!("{}: {}", filename, e));
                         } else {
-                            // Delete the legacy file — secrets live in SecretStore now
-                            if let Err(e) = std::fs::remove_file(&path) {
-                                warn!("migrated {} but failed to delete: {}", filename, e);
-                            }
+                            // Keep legacy files for now — the OAuth token refresh
+                            // logic in screenpipe-connect still reads/writes them.
+                            // Files will be deleted once SecretStore handles refresh.
                             report
                                 .migrated
                                 .push(format!("{} -> {}", filename, store_key));
@@ -348,19 +347,16 @@ mod tests {
 
         let store = make_store().await;
 
-        // First migration — file migrated and deleted
+        // First migration
         let report1 = migrate_legacy_secrets(&store, dir_path).await.unwrap();
         assert_eq!(report1.migrated.len(), 1);
-        assert!(!dir_path.join("gmail-oauth.json").exists(), "file should be deleted after migration");
+        // File kept for backward compat (token refresh still uses it)
+        assert!(dir_path.join("gmail-oauth.json").exists());
 
-        // Second migration — file gone, nothing to migrate or skip
+        // Second migration should skip
         let report2 = migrate_legacy_secrets(&store, dir_path).await.unwrap();
         assert_eq!(report2.migrated.len(), 0);
-        assert_eq!(report2.skipped.len(), 0);
-
-        // Value still in store
-        let val = store.get("oauth:gmail").await.unwrap();
-        assert!(val.is_some(), "secret should still be in store");
+        assert_eq!(report2.skipped.len(), 1);
     }
 
     #[test]
