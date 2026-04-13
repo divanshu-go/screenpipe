@@ -392,6 +392,7 @@ export function PrivacySection() {
         <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">
           Security
         </h2>
+        <LockedSetting settingKey="api_auth">
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5">
             <div className="flex items-center justify-between">
@@ -413,6 +414,7 @@ export function PrivacySection() {
                 }}
               />
             </div>
+            <LockedSetting settingKey="api_key">
             {(settings.apiAuth ?? true) && (
               <div className="mt-2.5 flex items-center space-x-2.5 pl-6.5">
                 <Input
@@ -426,8 +428,10 @@ export function PrivacySection() {
                 />
               </div>
             )}
+            </LockedSetting>
           </CardContent>
         </Card>
+        </LockedSetting>
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5">
             <div className="flex items-center justify-between">
