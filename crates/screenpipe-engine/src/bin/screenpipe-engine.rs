@@ -957,6 +957,10 @@ async fn main() -> anyhow::Result<()> {
             analytics::capture_event_nonblocking("pipe_scheduled_run", props);
         },
     ));
+    // Inject local API key so pipe subprocesses can authenticate to localhost
+    if config.api_auth {
+        pipe_manager.set_local_api_key(config.api_auth_key.clone());
+    }
     pipe_manager.install_builtin_pipes().ok();
     if let Err(e) = pipe_manager.load_pipes().await {
         tracing::warn!("failed to load pipes: {}", e);

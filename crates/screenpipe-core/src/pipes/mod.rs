@@ -1085,6 +1085,9 @@ pub struct PipeManager {
     token_registry: Option<Arc<dyn permissions::PipeTokenRegistry>>,
     /// Extra context appended to every pipe prompt (e.g. connected integrations).
     extra_context: Option<String>,
+    /// Local API auth key — injected into pipe subprocesses as SCREENPIPE_LOCAL_API_KEY
+    /// so pipes can authenticate to localhost:3030 when API auth is enabled.
+    local_api_key: Option<String>,
     /// Circuit breaker registry for AI preset fallback.
     fallback_registry: Arc<preset_fallback::PresetFallbackRegistry>,
 }
@@ -1122,6 +1125,7 @@ impl PipeManager {
             )),
             token_registry: None,
             extra_context: None,
+            local_api_key: None,
             fallback_registry: registry,
         }
     }
@@ -1149,6 +1153,12 @@ impl PipeManager {
     /// Clear extra context.
     pub fn clear_extra_context(&mut self) {
         self.extra_context = None;
+    }
+
+    /// Set the local API auth key. Injected into pipe subprocesses as
+    /// `SCREENPIPE_LOCAL_API_KEY` so they can authenticate to localhost.
+    pub fn set_local_api_key(&mut self, key: Option<String>) {
+        self.local_api_key = key;
     }
 
     /// Set a token registry for server-side permission enforcement.
@@ -2897,11 +2907,18 @@ impl PipeManager {
         let api_port = self.api_port;
         let token_registry = self.token_registry.clone();
         let extra_context = self.extra_context.clone();
+        let local_api_key = self.local_api_key.clone();
 
         let handle = tokio::spawn(async move {
             info!("pipe scheduler started (generation {})", generation);
             let mut last_run: HashMap<String, DateTime<Utc>> = HashMap::new();
             let mut last_cleanup = Instant::now();
+
+            // Inject local API key as env var so pipe subprocesses can authenticate
+            // to localhost:3030 when API auth is enabled.
+            if let Some(ref key) = local_api_key {
+                std::env::set_var("SCREENPIPE_LOCAL_API_KEY", key);
+            }
 
             // Sequential execution: only one scheduled pipe runs at a time to
             // avoid rate-limit stampedes when many pipes share the same cron.
@@ -3813,7 +3830,7 @@ fn render_pipe_system_prompt(body: &str, api_port: u16, system_prompt: Option<&s
     }
 
     sys.push_str(&format!(
-        "CRITICAL: You ARE this pipe. You are already running inside it. NEVER run `screenpipe pipe run` — that would create a recursive duplicate. Execute the task directly using the tools available to you (bash, file I/O, HTTP requests, etc.).\n\nOS: {os}\nOutput directory: ./output/\nScreenpipe API: http://localhost:{api_port}\nPrefer bun/TypeScript for scripts. Python may not be installed.\nSend notifications via POST http://localhost:11435/notify with {{\"title\": \"...\", \"body\": \"...\"}}. Body supports markdown. File links MUST use absolute paths (e.g. [View log](/Users/me/file.md)), never relative paths like ./output/file.md — relative paths break the notification link handler.\n\n"
+        "CRITICAL: You ARE this pipe. You are already running inside it. NEVER run `screenpipe pipe run` — that would create a recursive duplicate. Execute the task directly using the tools available to you (bash, file I/O, HTTP requests, etc.).\n\nOS: {os}\nOutput directory: ./output/\nScreenpipe API: http://localhost:{api_port}\nAPI Authentication: If $SCREENPIPE_LOCAL_API_KEY is set, include it in ALL requests to the Screenpipe API: `-H \"Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY\"`. Check with: `echo $SCREENPIPE_LOCAL_API_KEY`\nPrefer bun/TypeScript for scripts. Python may not be installed.\nSend notifications via POST http://localhost:11435/notify with {{\"title\": \"...\", \"body\": \"...\"}}. Body supports markdown. File links MUST use absolute paths (e.g. [View log](/Users/me/file.md)), never relative paths like ./output/file.md — relative paths break the notification link handler.\n\n"
     ));
     sys.push_str(body);
     sys

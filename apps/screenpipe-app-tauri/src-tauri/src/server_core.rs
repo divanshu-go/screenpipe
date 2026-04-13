@@ -310,6 +310,10 @@ impl ServerCore {
         if let Some(cb) = on_pipe_output {
             pipe_manager.set_on_output_line(cb);
         }
+        // Inject local API key so pipe subprocesses can authenticate to localhost
+        if config.api_auth {
+            pipe_manager.set_local_api_key(config.api_auth_key.clone());
+        }
         pipe_manager.install_builtin_pipes().ok();
         if let Err(e) = pipe_manager.load_pipes().await {
             warn!("failed to load pipes: {}", e);

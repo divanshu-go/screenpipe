@@ -794,8 +794,10 @@ impl SCServer {
                 crate::routes::timezone::timestamp_middleware,
             ))
             .layer({
-                // Remote API auth middleware — when api_auth is enabled,
-                // non-localhost requests must include a valid bearer token.
+                // API auth middleware — when api_auth is enabled, ALL requests
+                // (including localhost) must include a valid bearer token.
+                // This prevents other apps on the same machine from accessing
+                // your screen data. Pipes get the token via env var.
                 let auth_enabled = self.api_auth;
                 let auth_key = self.api_auth_key.clone();
                 axum::middleware::from_fn(
@@ -807,14 +809,8 @@ impl SCServer {
                                 return next.run(req).await;
                             }
 
-                            // Always allow localhost
-                            let is_localhost = req
-                                .extensions()
-                                .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-                                .map(|ci| ci.0.ip().is_loopback())
-                                .unwrap_or(true); // default to allow if no connect info
-
-                            if is_localhost {
+                            // Always allow health check (needed for app startup detection)
+                            if req.uri().path() == "/health" {
                                 return next.run(req).await;
                             }
 
@@ -836,7 +832,7 @@ impl SCServer {
                                     .status(403)
                                     .header("Content-Type", "application/json")
                                     .body(axum::body::Body::from(
-                                        r#"{"error":"unauthorized: remote API access requires authentication. Pass Authorization: Bearer <SCREENPIPE_API_KEY>"}"#,
+                                        r#"{"error":"unauthorized: API authentication is enabled. Pass Authorization: Bearer <your-api-key> (find your key in Settings > Privacy)"}"#,
                                     ))
                                     .unwrap()
                             }
