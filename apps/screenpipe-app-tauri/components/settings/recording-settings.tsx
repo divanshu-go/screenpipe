@@ -96,7 +96,7 @@ import * as Sentry from "@sentry/react";
 import { defaultOptions } from "tauri-plugin-sentry-api";
 import { useLoginDialog } from "../login-dialog";
 import { BatterySaverSection } from "./battery-saver-section";
-import { ScheduleSettings } from "./schedule-settings";
+// ScheduleSettings moved to privacy-section
 import { ValidatedInput } from "../ui/validated-input";
 import {
   validateField,
@@ -822,14 +822,14 @@ export function RecordingSettings() {
         }
       }
 
-      await commands.stopScreenpipe();
+      await commands.stopCapture();
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      await commands.startCapture();
       await new Promise((resolve) => setTimeout(resolve, 1000));
-      await commands.spawnScreenpipe(null);
-      await new Promise((resolve) => setTimeout(resolve, 2000));
 
       toast({
         title: "Settings updated successfully",
-        description: "Screenpipe has been restarted with new settings",
+        description: "Recording restarted with new settings",
       });
     } catch (error) {
       console.error("Failed to update settings:", error);
@@ -1112,15 +1112,6 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
           <BatterySaverSection />
         </CardContent>
       </Card>
-
-      {/* Recording Schedule */}
-      <ScheduleSettings
-        enabled={settings.scheduleEnabled ?? false}
-        rules={(settings.scheduleRules as any[]) ?? []}
-        onChange={(enabled, rules) => {
-          handleSettingsChange({ scheduleEnabled: enabled, scheduleRules: rules } as any);
-        }}
-      />
 
       {/* Audio */}
       <LockedSetting settingKey="audio_recording">

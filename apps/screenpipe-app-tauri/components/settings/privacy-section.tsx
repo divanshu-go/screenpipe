@@ -28,6 +28,7 @@ import { Badge } from "@/components/ui/badge";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { MultiSelect } from "@/components/ui/multi-select";
 import { useSettings, Settings } from "@/lib/hooks/use-settings";
+import { ScheduleSettings } from "./schedule-settings";
 import { useTeam } from "@/lib/hooks/use-team";
 import { useToast } from "@/components/ui/use-toast";
 import { useSqlAutocomplete } from "@/lib/hooks/use-sql-autocomplete";
@@ -578,6 +579,15 @@ export function PrivacySection() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Recording Schedule */}
+      <ScheduleSettings
+        enabled={settings.scheduleEnabled ?? false}
+        rules={(settings.scheduleRules as any[]) ?? []}
+        onChange={(enabled, rules) => {
+          handleSettingsChange({ scheduleEnabled: enabled, scheduleRules: rules } as any);
+        }}
+      />
 
       <div className="space-y-2">
         <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">
