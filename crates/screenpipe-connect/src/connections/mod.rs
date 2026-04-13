@@ -93,6 +93,28 @@ pub struct IntegrationDef {
 // Trait
 // ---------------------------------------------------------------------------
 
+/// Configuration for the credential proxy — tells the proxy how to forward
+/// requests to a third-party API with the correct auth injected.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProxyConfig {
+    /// Base URL for the API (e.g. "https://api.notion.com")
+    pub base_url: &'static str,
+    /// How to inject authentication
+    pub auth: ProxyAuth,
+    /// Extra headers to inject on every request (e.g. Notion-Version)
+    pub extra_headers: &'static [(&'static str, &'static str)],
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub enum ProxyAuth {
+    /// Send as `Authorization: Bearer <token>`. Token comes from OAuth or `api_key` credential.
+    Bearer { credential_key: &'static str },
+    /// Send as a custom header (e.g. `X-API-Key: <value>`).
+    Header { name: &'static str, credential_key: &'static str },
+    /// No auth needed (e.g. webhook-based integrations where the URL is the secret).
+    None,
+}
+
 #[async_trait]
 pub trait Integration: Send + Sync {
     /// Static metadata for this integration.
@@ -104,6 +126,13 @@ pub trait Integration: Send + Sync {
     /// Return OAuth config if this integration uses OAuth instead of manual fields.
     /// Default is `None` (manual credential entry).
     fn oauth_config(&self) -> Option<&'static oauth::OAuthConfig> {
+        None
+    }
+
+    /// Return proxy config for credential-free API forwarding.
+    /// When set, pipes can call `localhost:3030/connections/:id/proxy/*path`
+    /// and the server injects auth automatically — no secrets in the LLM context.
+    fn proxy_config(&self) -> Option<&'static ProxyConfig> {
         None
     }
 }
@@ -252,6 +281,22 @@ impl ConnectionManager {
         Ok(store.get(id).map(|c| c.credentials.clone()))
     }
 
+    /// Look up the proxy config for a connection by ID.
+    pub fn find_proxy_config(&self, id: &str) -> Option<&'static ProxyConfig> {
+        self.integrations
+            .iter()
+            .find(|i| i.def().id == id)
+            .and_then(|i| i.proxy_config())
+    }
+
+    /// Look up the integration definition by ID.
+    pub fn find_def(&self, id: &str) -> Option<&'static IntegrationDef> {
+        self.integrations
+            .iter()
+            .find(|i| i.def().id == id)
+            .map(|i| i.def())
+    }
+
     pub fn disconnect(&self, id: &str) -> Result<()> {
         let mut store = load_store(&self.screenpipe_dir);
         store.remove(id);
@@ -330,10 +375,10 @@ pub struct ConnectionInfo {
 }
 
 // ---------------------------------------------------------------------------
-// Pi context rendering — passes credentials directly
+// Pi context rendering — uses proxy URLs instead of raw credentials
 // ---------------------------------------------------------------------------
 
-pub fn render_context(screenpipe_dir: &Path, _api_port: u16) -> String {
+pub fn render_context(screenpipe_dir: &Path, api_port: u16) -> String {
     let store = load_store(screenpipe_dir);
     let integrations = all_integrations();
 
@@ -346,7 +391,7 @@ pub fn render_context(screenpipe_dir: &Path, _api_port: u16) -> String {
             store
                 .get(def.id)
                 .filter(|c| c.enabled && !c.credentials.is_empty())
-                .map(|c| (def, &c.credentials))
+                .map(|c| (i.as_ref(), def, &c.credentials))
         })
         .collect();
 
@@ -356,7 +401,7 @@ pub fn render_context(screenpipe_dir: &Path, _api_port: u16) -> String {
         .filter(|i| i.oauth_config().is_some())
         .filter_map(|i| {
             let def = i.def();
-            oauth::read_oauth_token(def.id).map(|token| (def, token))
+            oauth::read_oauth_token(def.id).map(|_token| (i.as_ref(), def))
         })
         .collect();
 
@@ -364,23 +409,47 @@ pub fn render_context(screenpipe_dir: &Path, _api_port: u16) -> String {
         return String::new();
     }
 
-    let mut out = String::from("\nConnected integrations (use these credentials directly):\n");
+    let base = format!("http://localhost:{}/connections", api_port);
 
-    for (def, creds) in &cred_connected {
+    let mut out = String::from(
+        "\nConnected integrations — use the proxy URLs below to make API calls.\n\
+         The proxy injects authentication automatically. NEVER fetch or use raw API keys.\n",
+    );
+
+    for (integration, def, creds) in &cred_connected {
         out.push_str(&format!("\n## {} ({})\n", def.name, def.id));
         out.push_str(&format!("{}\n", def.description));
-        for (key, value) in *creds {
-            if let Some(s) = value.as_str() {
-                out.push_str(&format!("  {}: {}\n", key, s));
+
+        if integration.proxy_config().is_some() {
+            out.push_str(&format!(
+                "  proxy: {}/{}/proxy/  (append the API path, e.g. /v1/pages)\n",
+                base, def.id
+            ));
+            out.push_str(&format!("  config: {}/{}/config  (non-secret settings)\n", base, def.id));
+        } else {
+            // No proxy config — fall back to raw credentials (webhook-style integrations)
+            for (key, value) in *creds {
+                if let Some(s) = value.as_str() {
+                    out.push_str(&format!("  {}: {}\n", key, s));
+                }
             }
         }
     }
 
-    for (def, token) in &oauth_connected {
+    for (integration, def) in &oauth_connected {
         out.push_str(&format!("\n## {} ({})\n", def.name, def.id));
         out.push_str(&format!("{}\n", def.description));
-        out.push_str(&format!("  api_key: {}\n", token));
-        out.push_str("  (connected via OAuth)\n");
+
+        if integration.proxy_config().is_some() {
+            out.push_str(&format!(
+                "  proxy: {}/{}/proxy/  (append the API path, e.g. /v1/pages)\n",
+                base, def.id
+            ));
+            out.push_str(&format!("  config: {}/{}/config  (non-secret settings)\n", base, def.id));
+        } else {
+            // OAuth without proxy — still don't expose the token
+            out.push_str("  (connected via OAuth — no proxy available, use API directly)\n");
+        }
     }
 
     out

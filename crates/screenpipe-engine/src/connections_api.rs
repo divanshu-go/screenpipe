@@ -950,6 +950,158 @@ async fn oauth_callback(Query(params): Query<OAuthCallbackQuery>) -> (StatusCode
     }
 }
 
+/// Proxy handler: forward requests to third-party APIs with credentials injected.
+/// Route: ANY /connections/:id/proxy/*path
+///
+/// The LLM calls this endpoint instead of the external API directly. The proxy
+/// looks up the connection's stored credentials, injects the auth header, and
+/// forwards the request. The LLM never sees the API key.
+async fn connection_proxy(
+    State(state): State<ConnectionsState>,
+    axum::extract::Path((id, api_path)): axum::extract::Path<(String, String)>,
+    method: axum::http::Method,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    use screenpipe_connect::connections::ProxyAuth;
+
+    let mgr = state.cm.lock().await;
+
+    // Find the integration and its proxy config
+    let proxy_cfg = match mgr.find_proxy_config(&id) {
+        Some(cfg) => cfg,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": format!("no proxy config for connection '{}'", id) })),
+            )
+                .into_response();
+        }
+    };
+
+    // Resolve the auth token from stored credentials or OAuth
+    let token = match &proxy_cfg.auth {
+        ProxyAuth::Bearer { credential_key } => {
+            // Try OAuth token first, fall back to stored credential
+            if let Some(token) = screenpipe_connect::oauth::read_oauth_token(&id) {
+                Some(("Authorization".to_string(), format!("Bearer {}", token)))
+            } else if let Ok(Some(creds)) = mgr.get_credentials(&id) {
+                creds
+                    .get(*credential_key)
+                    .and_then(|v| v.as_str())
+                    .map(|k| ("Authorization".to_string(), format!("Bearer {}", k)))
+            } else {
+                None
+            }
+        }
+        ProxyAuth::Header {
+            name,
+            credential_key,
+        } => {
+            if let Ok(Some(creds)) = mgr.get_credentials(&id) {
+                creds
+                    .get(*credential_key)
+                    .and_then(|v| v.as_str())
+                    .map(|k| (name.to_string(), k.to_string()))
+            } else {
+                None
+            }
+        }
+        ProxyAuth::None => None,
+    };
+
+    drop(mgr); // release lock before making external request
+
+    // Build the target URL
+    let target_url = format!("{}/{}", proxy_cfg.base_url, api_path.trim_start_matches('/'));
+
+    // Forward the request
+    let client = reqwest::Client::new();
+    let mut req = client.request(
+        reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap_or(reqwest::Method::GET),
+        &target_url,
+    );
+
+    // Forward content-type
+    if let Some(ct) = headers.get("content-type") {
+        if let Ok(ct_str) = ct.to_str() {
+            req = req.header("content-type", ct_str);
+        }
+    }
+
+    // Inject auth
+    if let Some((header_name, header_value)) = token {
+        req = req.header(&header_name, &header_value);
+    }
+
+    // Inject extra headers from proxy config
+    for (name, value) in proxy_cfg.extra_headers {
+        req = req.header(*name, *value);
+    }
+
+    // Forward body
+    if !body.is_empty() {
+        req = req.body(body.to_vec());
+    }
+
+    match req.send().await {
+        Ok(resp) => {
+            let status =
+                StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+            let resp_headers = resp.headers().clone();
+            match resp.bytes().await {
+                Ok(resp_body) => {
+                    let mut response = (status, resp_body).into_response();
+                    // Forward content-type from upstream
+                    if let Some(ct) = resp_headers.get("content-type") {
+                        response.headers_mut().insert("content-type", ct.clone());
+                    }
+                    response
+                }
+                Err(e) => (
+                    StatusCode::BAD_GATEWAY,
+                    Json(json!({ "error": format!("failed to read response: {}", e) })),
+                )
+                    .into_response(),
+            }
+        }
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({ "error": format!("proxy request failed: {}", e) })),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /connections/:id/config — return non-secret connection config.
+/// Gives the LLM the database_id, workspace, etc. without exposing API keys.
+async fn connection_config(
+    State(state): State<ConnectionsState>,
+    Path(id): Path<String>,
+) -> (StatusCode, Json<Value>) {
+    let mgr = state.cm.lock().await;
+    match mgr.get_credentials(&id) {
+        Ok(Some(creds)) => {
+            // Filter out secret fields
+            let def = mgr.find_def(&id);
+            let secret_keys: std::collections::HashSet<&str> = def
+                .map(|d| d.fields.iter().filter(|f| f.secret).map(|f| f.key).collect())
+                .unwrap_or_default();
+            let safe: Map<String, Value> = creds
+                .into_iter()
+                .filter(|(k, _)| !secret_keys.contains(k.as_str()))
+                .collect();
+            (StatusCode::OK, Json(json!({ "config": safe })))
+        }
+        Ok(None) => (StatusCode::OK, Json(json!({ "config": {} }))),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": e.to_string() })),
+        ),
+    }
+}
+
 pub fn router<S>(
     cm: SharedConnectionManager,
     wa: SharedWhatsAppGateway,
@@ -986,6 +1138,9 @@ where
         .route("/whatsapp/pair", post(whatsapp_pair))
         .route("/whatsapp/status", get(whatsapp_status))
         .route("/whatsapp/disconnect", post(whatsapp_disconnect))
+        // Credential proxy — pipes call this instead of external APIs directly
+        .route("/:id/proxy/*path", axum::routing::any(connection_proxy))
+        .route("/:id/config", get(connection_config))
         // Multi-instance routes (must be before /:id to avoid conflict)
         .route("/:id/instances", get(list_instances))
         .route(
