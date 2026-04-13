@@ -340,6 +340,15 @@ impl OnboardingStore {
     }
 }
 
+fn deserialize_null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    T: Default + Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    let opt = Option::deserialize(deserializer)?;
+    Ok(opt.unwrap_or_default())
+}
+
 #[derive(Serialize, Deserialize, Type, Clone)]
 #[serde(default)]
 pub struct SettingsStore {
@@ -350,7 +359,7 @@ pub struct SettingsStore {
     pub recording: screenpipe_config::RecordingSettings,
 
     // ── App-only fields (UI, shortcuts, metadata) ────────────────────────
-    #[serde(rename = "aiPresets")]
+    #[serde(rename = "aiPresets", deserialize_with = "deserialize_null_as_default")]
     pub ai_presets: Vec<AIPreset>,
 
     #[serde(rename = "isLoading")]
@@ -362,15 +371,15 @@ pub struct SettingsStore {
     pub ocr_engine: String,
     #[serde(rename = "dataDir")]
     pub data_dir: String,
-    #[serde(rename = "embeddedLLM")]
+    #[serde(rename = "embeddedLLM", deserialize_with = "deserialize_null_as_default")]
     pub embedded_llm: EmbeddedLLM,
     #[serde(rename = "autoStartEnabled")]
     pub auto_start_enabled: bool,
     #[serde(rename = "platform")]
     pub platform: String,
-    #[serde(rename = "disabledShortcuts")]
+    #[serde(rename = "disabledShortcuts", deserialize_with = "deserialize_null_as_default")]
     pub disabled_shortcuts: Vec<String>,
-    #[serde(rename = "user")]
+    #[serde(rename = "user", deserialize_with = "deserialize_null_as_default")]
     pub user: User,
     #[serde(rename = "showScreenpipeShortcut")]
     pub show_screenpipe_shortcut: String,
@@ -1239,5 +1248,35 @@ mod tests {
             presets[0].get("provider").unwrap().as_str().unwrap(),
             "custom"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_deserialize_settings_with_null_fields() {
+        let json_data = json!({
+            "recording": {
+                "audio": true,
+                "video": true
+            },
+            "user": null,
+            "embeddedLLM": null,
+            "aiPresets": null
+        });
+
+        let settings: Result<SettingsStore, _> = serde_json::from_value(json_data);
+        if let Err(e) = &settings {
+            println!("Deser error: {:?}", e);
+        }
+        assert!(settings.is_ok(), "Failed to deserialize settings with null fields");
+        let settings = settings.unwrap();
+        
+        assert_eq!(settings.user.token, None);
+        assert_eq!(settings.embedded_llm.enabled, false);
+        assert_eq!(settings.ai_presets.len(), 0);
     }
 }
