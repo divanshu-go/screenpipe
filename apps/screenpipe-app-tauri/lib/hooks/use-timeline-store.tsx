@@ -7,6 +7,7 @@ import { StreamTimeSeriesResponse } from "@/components/rewind/timeline";
 import { hasFramesForDate } from "../actions/has-frames-date";
 import { subDays } from "date-fns";
 import { saveFramesToCache, loadCachedFrames } from "./use-timeline-cache";
+import { getApiBaseUrl } from "@/lib/api";
 
 // Frame buffer for batching updates - reduces 68 re-renders to ~3-5
 let frameBuffer: StreamTimeSeriesResponse[] = [];
@@ -358,7 +359,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 			requestTimeoutTimer = null;
 		}
 
-		const ws = new WebSocket("ws://localhost:3030/stream/frames");
+		const ws = new WebSocket(`${getApiBaseUrl().replace("http", "ws")}/stream/frames`);
 
 		ws.onopen = () => {
 			// Ignore events from old WebSocket instances

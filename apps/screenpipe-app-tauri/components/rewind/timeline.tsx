@@ -37,6 +37,7 @@ import { useTimelineFilters } from "@/components/rewind/hooks/use-timeline-filte
 import { useScrollZoom } from "@/components/rewind/hooks/use-scroll-zoom";
 import { useDateNavigation } from "@/components/rewind/hooks/use-date-navigation";
 import { useTimelineKeyboard } from "@/components/rewind/hooks/use-timeline-keyboard";
+import { localFetch } from "@/lib/api";
 
 export interface StreamTimeSeriesResponse {
 	timestamp: string;
@@ -479,7 +480,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		const fetchFrameMetadata = async (id: string, retries = 3): Promise<{ timestamp?: string } | null> => {
 			for (let i = 0; i < retries; i++) {
 				try {
-					const resp = await fetch(`http://localhost:3030/frames/${id}/metadata`);
+					const resp = await localFetch(`/frames/${id}/metadata`);
 					if (resp.ok) {
 						const data = await resp.json();
 						return data;
@@ -1041,8 +1042,8 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 
 								try {
 									// Query the server for the next valid frame
-									const response = await fetch(
-										`http://localhost:3030/frames/next-valid?frame_id=${failedFrameId}&direction=forward&limit=50`
+									const response = await localFetch(
+										`/frames/next-valid?frame_id=${failedFrameId}&direction=forward&limit=50`
 									);
 
 									if (response.ok) {

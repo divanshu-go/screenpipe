@@ -12,6 +12,7 @@ import { platform } from "@tauri-apps/plugin-os";
 import { listen } from "@tauri-apps/api/event";
 import { showNotificationPanel } from "@/lib/hooks/use-notification-panel";
 import { showChatWithPrefill } from "@/lib/chat-utils";
+import { localFetch } from "@/lib/api";
 
 // notify_rust on Linux calls block_on for D-Bus inside the tokio runtime,
 // which panics and kills the worker thread. Skip OS notifications on Linux.
@@ -161,7 +162,7 @@ const NotificationHandler: React.FC = () => {
               source: `notification-native`,
             });
           } else {
-            await fetch(`http://localhost:3030/pipes/${action.pipe}/run`, {
+            await localFetch(`/pipes/${action.pipe}/run`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ notification_context: action.context }),
@@ -171,7 +172,7 @@ const NotificationHandler: React.FC = () => {
         }
 
         if (action.type === "api" && action.url) {
-          await fetch(`http://localhost:3030${action.url}`, {
+          await localFetch(action.url, {
             method: action.method || "POST",
             headers: { "Content-Type": "application/json" },
             body: action.body ? JSON.stringify(action.body) : undefined,
@@ -212,7 +213,7 @@ const NotificationHandler: React.FC = () => {
             for (let i = 0; i < 15; i++) {
               await new Promise((r) => setTimeout(r, 1000));
               try {
-                const res = await fetch("http://localhost:3030/health");
+                const res = await localFetch("/health");
                 if (res.ok) break;
               } catch {}
             }

@@ -12,6 +12,7 @@ import posthog from "posthog-js";
 import { commands } from "@/lib/utils/tauri";
 import { motion, AnimatePresence } from "framer-motion";
 import { useSettings } from "@/lib/hooks/use-settings";
+import { localFetch } from "@/lib/api";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { homeDir, join } from "@tauri-apps/api/path";
@@ -89,7 +90,7 @@ export default function EngineStartup({
   useEffect(() => {
     const start = async () => {
       try {
-        const healthCheck = await fetch("http://localhost:3030/health", {
+        const healthCheck = await localFetch("/health", {
           signal: AbortSignal.timeout(3000),
         }).catch(() => null);
 
@@ -115,7 +116,7 @@ export default function EngineStartup({
 
     const poll = async () => {
       try {
-        const res = await fetch("http://localhost:3030/health", {
+        const res = await localFetch("/health", {
           signal: AbortSignal.timeout(2000),
         });
         if (res.ok) {
@@ -172,12 +173,12 @@ export default function EngineStartup({
         const contentType = useFallback ? "all" : "accessibility";
 
         const [mainRes, audioRes] = await Promise.all([
-          fetch(
-            `http://localhost:3030/search?content_type=${contentType}&start_time=${encodeURIComponent("3m ago")}&limit=5&max_content_length=80`,
+          localFetch(
+            `/search?content_type=${contentType}&start_time=${encodeURIComponent("3m ago")}&limit=5&max_content_length=80`,
             { signal: AbortSignal.timeout(3000) }
           ).catch(() => null),
-          fetch(
-            `http://localhost:3030/search?content_type=audio&start_time=${encodeURIComponent("3m ago")}&limit=3&max_content_length=80`,
+          localFetch(
+            `/search?content_type=audio&start_time=${encodeURIComponent("3m ago")}&limit=3&max_content_length=80`,
             { signal: AbortSignal.timeout(3000) }
           ).catch(() => null),
         ]);

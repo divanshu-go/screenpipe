@@ -39,6 +39,7 @@ import { EnterpriseLicensePrompt } from "@/components/enterprise-license-prompt"
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { computeMeetingActive, type MeetingRow } from "@/lib/utils/meeting-state";
 import { useRouter } from "next/navigation";
+import { localFetch } from "@/lib/api";
 import {
   Tooltip,
   TooltipContent,
@@ -134,7 +135,7 @@ function HomeContent() {
   useEffect(() => {
     let cancelled = false;
     const fetchDevices = () => {
-      fetch("http://localhost:3030/health")
+      localFetch("/health")
         .then((r) => r.ok ? r.json() : null)
         .then((health: { monitors?: string[]; device_status_details?: string } | null) => {
           if (cancelled || !health) return;
@@ -196,7 +197,7 @@ function HomeContent() {
   useEffect(() => {
     let cancelled = false;
     const check = () => {
-      fetch("http://localhost:3030/meetings?limit=5")
+      localFetch("/meetings?limit=5")
         .then((r) => r.ok ? r.json() : [])
         .then((meetings: MeetingRow[]) => {
           if (cancelled) return;
@@ -216,7 +217,7 @@ function HomeContent() {
     try {
       if (meetingState.manualActive) {
         // Stop the manual meeting we previously started
-        await fetch("http://localhost:3030/meetings/stop", { method: "POST" });
+        await localFetch("/meetings/stop", { method: "POST" });
         manualMeetingStartedAt.current = 0;
         setMeetingState({ active: false, manualActive: false });
       } else if (meetingState.active) {
@@ -225,7 +226,7 @@ function HomeContent() {
         return;
       } else {
         // No meeting active — start a manual one
-        const res = await fetch("http://localhost:3030/meetings/start", {
+        const res = await localFetch("/meetings/start", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ app: "manual" }),
@@ -396,12 +397,12 @@ function HomeContent() {
                             onClick={key === "monitor" ? undefined : async () => {
                               const allActive = groupDevices.every((d: RecordingDevice) => d.active);
                               const endpoint = allActive
-                                ? "http://localhost:3030/audio/device/stop"
-                                : "http://localhost:3030/audio/device/start";
+                                ? "/audio/device/stop"
+                                : "/audio/device/start";
                               for (const d of groupDevices) {
                                 if (allActive || !d.active) {
                                   const suffix = d.kind === "input" ? "input" : "output";
-                                  await fetch(endpoint, {
+                                  await localFetch(endpoint, {
                                     method: "POST",
                                     headers: { "Content-Type": "application/json" },
                                     body: JSON.stringify({ device_name: `${d.name} (${suffix})` }),

@@ -8,6 +8,7 @@ import { commands } from "@/lib/utils/tauri";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { getStore } from "./use-settings";
 import { getVersion } from "@tauri-apps/api/app";
+import { localFetch } from "@/lib/api";
 import { platform as getPlatform } from "@tauri-apps/plugin-os";
 
 interface ManagedAiPreset {
@@ -55,7 +56,7 @@ async function sendHeartbeat(licenseKey: string): Promise<void> {
     let audioStatus = "unknown";
     let hostname = "unknown";
     try {
-      const healthRes = await fetch("http://localhost:3030/health", {
+      const healthRes = await localFetch("/health", {
         signal: AbortSignal.timeout(2000),
       });
       if (healthRes.ok) {

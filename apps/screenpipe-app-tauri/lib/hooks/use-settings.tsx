@@ -160,6 +160,8 @@ export type Settings = SettingsStore & {
 	offlineMode?: boolean;
 	/** Pause all screen capture when a DRM streaming app (Netflix, Disney+, etc.) is focused */
 	pauseOnDrmContent?: boolean;
+	/** Continue recording audio when the screen is locked (default: false) */
+	recordWhileLocked?: boolean;
 	/** Auto-append typed text to meeting notes when a meeting ends */
 	appendTypedTextToMeetingNotes?: boolean;
 	/** Auto-delete local data older than retention days (free alternative to cloud archive) */
@@ -342,6 +344,7 @@ let DEFAULT_SETTINGS: Settings = {
 			filterMusic: false,
 			ignoreIncognitoWindows: true,
 			pauseOnDrmContent: false,
+			recordWhileLocked: false,
 			appendTypedTextToMeetingNotes: true,
 			localRetentionEnabled: true,
 			localRetentionDays: 14,
@@ -613,6 +616,14 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 				setSettings(loadedSettings);
 				setIsSettingsLoaded(true);
 				setLoadingError(null);
+
+				// Configure the API module — single source of truth for port + auth
+				const { configureApi } = await import("@/lib/api");
+				configureApi({
+					port: loadedSettings.port ?? 3030,
+					apiKey: loadedSettings.apiKey || null,
+					authEnabled: loadedSettings.apiAuth ?? false,
+				});
 			} catch (error) {
 				console.error("Failed to load settings:", error);
 				setLoadingError(error instanceof Error ? error.message : "Unknown error");
@@ -733,6 +744,17 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 	const updateSettings = async (updates: Partial<Settings>) => {
 		await settingsStore.set(updates);
 		// Settings will be updated via the listener
+
+		// Reconfigure API module if auth/port settings changed
+		if ("port" in updates || "apiKey" in updates || "apiAuth" in updates) {
+			const { configureApi } = await import("@/lib/api");
+			const merged = { ...settings, ...updates };
+			configureApi({
+				port: merged.port ?? 3030,
+				apiKey: merged.apiKey || null,
+				authEnabled: merged.apiAuth ?? false,
+			});
+		}
 	};
 
 	const resetSettings = async () => {

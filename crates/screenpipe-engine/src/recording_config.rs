@@ -136,6 +136,10 @@ impl RecordingConfig {
     ) -> Self {
         let engine_str = audio_engine_override.unwrap_or(&settings.audio_transcription_engine);
 
+        // Sync the record_while_locked preference to the shared atomic flag
+        // so the audio recording loop can read it without holding a config reference.
+        screenpipe_config::set_record_while_locked(settings.record_while_locked);
+
         Self {
             audio_chunk_duration: settings.audio_chunk_duration.max(0) as u64,
             port: settings.port,

@@ -17,6 +17,7 @@ import {
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { commands } from "@/lib/utils/tauri";
 import posthog from "posthog-js";
+import { localFetch } from "@/lib/api";
 
 interface CalendarEventItem {
   id: string;
@@ -86,8 +87,8 @@ export function GoogleCalendarCard() {
   const fetchEvents = useCallback(async () => {
     setIsLoadingEvents(true);
     try {
-      const res = await tauriFetch(
-        `http://localhost:3030/connections/google-calendar/events?hours_back=0&hours_ahead=8`,
+      const res = await localFetch(
+        `/connections/google-calendar/events?hours_back=0&hours_ahead=8`,
         { method: "GET" }
       );
       if (res.ok) {

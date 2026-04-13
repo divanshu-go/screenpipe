@@ -34,6 +34,7 @@ import {
   EyeOff,
   Key,
 } from "lucide-react";
+import { localFetch } from "@/lib/api";
 import { toast } from "@/components/ui/use-toast";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -758,7 +759,7 @@ export function SyncSettings() {
 
     // 1. Check if the server-side sync service is already running (same session, navigated away and back)
     try {
-      const serverStatus = await fetch("http://localhost:3030/sync/status");
+      const serverStatus = await localFetch("/sync/status");
       if (serverStatus.ok) {
         const serverData = await serverStatus.json();
         console.log("[sync] step 1 - server status:", serverData);
@@ -853,7 +854,7 @@ export function SyncSettings() {
   };
 
   const fetchDeviceCounts = () => {
-    fetch("http://localhost:3030/data/device-storage")
+    localFetch("/data/device-storage")
       .then((r) => r.ok ? r.json() : [])
       .then((data: { machine_id: string; frames: number; audio_chunks: number }[]) => {
         const map: Record<string, { frames: number; audioChunks: number }> = {};

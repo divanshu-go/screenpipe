@@ -10,8 +10,7 @@ import { Button } from "@/components/ui/button";
 import { loadAllConversations } from "@/lib/chat-storage";
 import { homeDir, join } from "@tauri-apps/api/path";
 import { readTextFile, writeTextFile, exists } from "@tauri-apps/plugin-fs";
-
-const SCREENPIPE_API = "http://localhost:3030";
+import { localFetch } from "@/lib/api";
 
 type TimeRange = "day" | "week" | "month" | "all";
 
@@ -201,7 +200,7 @@ export function UsageSection() {
 
       // Pipe executions - only fetch newer than cache watermark
       try {
-        const pipesRes = await fetch(`${SCREENPIPE_API}/pipes`);
+        const pipesRes = await localFetch("/pipes");
         if (pipesRes.ok) {
           const pipesData = await pipesRes.json();
           const pipes = pipesData.data || [];
@@ -216,8 +215,8 @@ export function UsageSection() {
             const id = pipe.config?.name || pipe.source_slug || pipe.id || pipe.name;
             if (!id) continue;
             try {
-              const execRes = await fetch(
-                `${SCREENPIPE_API}/pipes/${id}/executions?limit=100`
+              const execRes = await localFetch(
+                `/pipes/${id}/executions?limit=100`
               );
               if (!execRes.ok) continue;
               const execData = await execRes.json();

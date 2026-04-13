@@ -7,6 +7,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 // PipeMonitorView merged into PipesSection as device dropdown
 import { apiCache } from "@/lib/cache";
+import { localFetch } from "@/lib/api";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -246,7 +247,7 @@ function ConnectionsStrip() {
       setIntegrations(cached);
       return;
     }
-    fetch("http://localhost:3030/connections")
+    localFetch("/connections")
       .then((r) => r.json())
       .then((data) => {
         const list: IntegrationInfo[] = data.data || [];
@@ -323,7 +324,7 @@ export function PipeStoreView() {
   const [installedCount, setInstalledCount] = useState<number | null>(null);
 
   useEffect(() => {
-    fetch("http://localhost:3030/pipes")
+    localFetch("/pipes")
       .then((r) => r.json())
       .then((data) => {
         const list = Array.isArray(data) ? data : data.data || data.pipes || [];
@@ -460,7 +461,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
       setInstalledNames(cached);
       return;
     }
-    fetch("http://localhost:3030/pipes")
+    localFetch("/pipes")
       .then((r) => r.json())
       .then((data) => {
         const list = Array.isArray(data) ? data : data.data || data.pipes || [];
@@ -473,7 +474,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
 
   // Check for pipe updates
   useEffect(() => {
-    fetch("http://localhost:3030/pipes/store/check-updates")
+    localFetch("/pipes/store/check-updates")
       .then((r) => r.ok ? r.json() : null)
       .then((json) => {
         if (!json) return;
@@ -518,7 +519,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 10_000);
-      const res = await fetch(`http://localhost:3030/pipes/store?${params}`, { signal: controller.signal });
+      const res = await localFetch(`/pipes/store?${params}`, { signal: controller.signal });
       clearTimeout(timeoutId);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
@@ -548,7 +549,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
     setReviewRating(0);
     setReviewComment("");
     try {
-      const res = await fetch(`http://localhost:3030/pipes/store/${slug}`, {
+      const res = await localFetch(`/pipes/store/${slug}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -573,7 +574,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
     try {
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       if (token) headers["Authorization"] = `Bearer ${token}`;
-      const res = await fetch("http://localhost:3030/pipes/store/install", {
+      const res = await localFetch("/pipes/store/install", {
         method: "POST",
         headers,
         body: JSON.stringify({ slug }),
@@ -589,7 +590,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
       const defaultPreset = settings.aiPresets?.find((p: any) => p.defaultPreset);
       if (defaultPreset?.id) {
         try {
-          await fetch(`http://localhost:3030/pipes/${pipeName}/config`, {
+          await localFetch(`/pipes/${pipeName}/config`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ preset: defaultPreset.id }),
@@ -630,8 +631,8 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
     try {
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       if (token) headers["Authorization"] = `Bearer ${token}`;
-      const res = await fetch(
-        `http://localhost:3030/pipes/store/${selectedPipe.slug}/review`,
+      const res = await localFetch(
+        `/pipes/store/${selectedPipe.slug}/review`,
         {
           method: "POST",
           headers,
@@ -662,7 +663,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
     try {
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       if (token) headers["Authorization"] = `Bearer ${token}`;
-      const res = await fetch(`http://localhost:3030/pipes/store/${slug}`, {
+      const res = await localFetch(`/pipes/store/${slug}`, {
         method: "DELETE",
         headers,
       });
@@ -1054,12 +1055,12 @@ function PipeDetailPanel({
     }
     setPublishing(true);
     try {
-      const settingsRes = await fetch("http://localhost:3030/settings");
+      const settingsRes = await localFetch("/settings");
       const settingsData = await settingsRes.json();
       const token = settingsData?.user?.token;
       if (!token) throw new Error("not logged in — go to account settings");
 
-      const res = await fetch("http://localhost:3030/pipes/store/publish", {
+      const res = await localFetch("/pipes/store/publish", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -1505,7 +1506,7 @@ export function PublishDialog({
     if (!open) return;
     if (defaultPipe) setSelectedPipe(defaultPipe);
     setLoadingPipes(true);
-    fetch("http://localhost:3030/pipes")
+    localFetch("/pipes")
       .then((r) => r.json())
       .then((data) => {
         const list = Array.isArray(data) ? data : data.data || data.pipes || [];
@@ -1597,7 +1598,7 @@ STEP 5: PUBLISH (only after user says yes)
         "Content-Type": "application/json",
       };
       if (token) headers["Authorization"] = `Bearer ${token}`;
-      const res = await fetch("http://localhost:3030/pipes/store/publish", {
+      const res = await localFetch("/pipes/store/publish", {
         method: "POST",
         headers,
         body: JSON.stringify({

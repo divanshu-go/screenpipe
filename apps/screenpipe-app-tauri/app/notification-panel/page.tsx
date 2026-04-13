@@ -11,6 +11,7 @@ import posthog from "posthog-js";
 import ReactMarkdown from "react-markdown";
 import { showChatWithPrefill } from "@/lib/chat-utils";
 import localforage from "localforage";
+import { localFetch } from "@/lib/api";
 
 interface NotificationAction {
   label: string;
@@ -138,7 +139,7 @@ export default function NotificationPanelPage() {
                   });
                 } else {
                   // Run in background
-                  await fetch(`http://localhost:3030/pipes/${pipeName}/run`, {
+                  await localFetch(`/pipes/${pipeName}/run`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ notification_context: actionObj.context }),
@@ -149,7 +150,7 @@ export default function NotificationPanelPage() {
             }
             case "api": {
               if (actionObj.url) {
-                await fetch(`http://localhost:3030${actionObj.url}`, {
+                await localFetch(actionObj.url, {
                   method: actionObj.method || "POST",
                   headers: { "Content-Type": "application/json" },
                   body: actionObj.body ? JSON.stringify(actionObj.body) : undefined,
@@ -215,7 +216,7 @@ export default function NotificationPanelPage() {
             for (let i = 0; i < 15; i++) {
               await new Promise((r) => setTimeout(r, 1000));
               try {
-                const res = await fetch("http://localhost:3030/health");
+                const res = await localFetch("/health");
                 if (res.ok) {
                   healthy = true;
                   break;

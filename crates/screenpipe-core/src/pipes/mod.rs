@@ -1157,8 +1157,16 @@ impl PipeManager {
 
     /// Set the local API auth key. Injected into pipe subprocesses as
     /// `SCREENPIPE_LOCAL_API_KEY` so they can authenticate to localhost.
+    ///
+    /// Sets it as a process-level env var so child processes inherit it
+    /// automatically via cmd.spawn(). Called once during initialization
+    /// before any async tasks are spawned.
     pub fn set_local_api_key(&mut self, key: Option<String>) {
-        self.local_api_key = key;
+        self.local_api_key = key.clone();
+        if let Some(ref k) = key {
+            // SAFETY: called during single-threaded init before scheduler starts
+            unsafe { std::env::set_var("SCREENPIPE_LOCAL_API_KEY", k) };
+        }
     }
 
     /// Set a token registry for server-side permission enforcement.
@@ -2914,11 +2922,8 @@ impl PipeManager {
             let mut last_run: HashMap<String, DateTime<Utc>> = HashMap::new();
             let mut last_cleanup = Instant::now();
 
-            // Inject local API key as env var so pipe subprocesses can authenticate
-            // to localhost:3030 when API auth is enabled.
-            if let Some(ref key) = local_api_key {
-                std::env::set_var("SCREENPIPE_LOCAL_API_KEY", key);
-            }
+            // local_api_key is passed to each pipe subprocess via cmd.env() in the
+            // executor — see PiExecutor::spawn_pi / spawn_pi_streaming.
 
             // Sequential execution: only one scheduled pipe runs at a time to
             // avoid rate-limit stampedes when many pipes share the same cron.
@@ -3829,8 +3834,14 @@ fn render_pipe_system_prompt(body: &str, api_port: u16, system_prompt: Option<&s
         sys.push_str("\n\n");
     }
 
+    let api_auth_note = if std::env::var("SCREENPIPE_LOCAL_API_KEY").is_ok() {
+        "\nAPI Authentication: REQUIRED. Add `-H \"Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY\"` to ALL curl requests to the Screenpipe API. The env var is already set in your environment.\n"
+    } else {
+        ""
+    };
+
     sys.push_str(&format!(
-        "CRITICAL: You ARE this pipe. You are already running inside it. NEVER run `screenpipe pipe run` — that would create a recursive duplicate. Execute the task directly using the tools available to you (bash, file I/O, HTTP requests, etc.).\n\nOS: {os}\nOutput directory: ./output/\nScreenpipe API: http://localhost:{api_port}\nAPI Authentication: If $SCREENPIPE_LOCAL_API_KEY is set, include it in ALL requests to the Screenpipe API: `-H \"Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY\"`. Check with: `echo $SCREENPIPE_LOCAL_API_KEY`\nPrefer bun/TypeScript for scripts. Python may not be installed.\nSend notifications via POST http://localhost:11435/notify with {{\"title\": \"...\", \"body\": \"...\"}}. Body supports markdown. File links MUST use absolute paths (e.g. [View log](/Users/me/file.md)), never relative paths like ./output/file.md — relative paths break the notification link handler.\n\n"
+        "CRITICAL: You ARE this pipe. You are already running inside it. NEVER run `screenpipe pipe run` — that would create a recursive duplicate. Execute the task directly using the tools available to you (bash, file I/O, HTTP requests, etc.).\n\nOS: {os}\nOutput directory: ./output/\nScreenpipe API: http://localhost:{api_port}{api_auth_note}\nPrefer bun/TypeScript for scripts. Python may not be installed.\nSend notifications via POST http://localhost:11435/notify with {{\"title\": \"...\", \"body\": \"...\"}}. Body supports markdown. File links MUST use absolute paths (e.g. [View log](/Users/me/file.md)), never relative paths like ./output/file.md — relative paths break the notification link handler.\n\n"
     ));
     sys.push_str(body);
     sys

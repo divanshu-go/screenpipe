@@ -18,6 +18,7 @@ import {
   AppWindowMac,
   WifiOff,
   Tv,
+  Lock,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -213,6 +214,10 @@ export function PrivacySection() {
 
   const handleDrmPauseToggle = (checked: boolean) => {
     handleSettingsChange({ pauseOnDrmContent: checked }, true);
+  };
+
+  const handleRecordWhileLockedToggle = (checked: boolean) => {
+    handleSettingsChange({ recordWhileLocked: checked }, true);
   };
 
   const handleAnalyticsToggle = (checked: boolean) => {
@@ -575,6 +580,31 @@ export function PrivacySection() {
               id="pauseOnDrmContent"
               checked={Boolean(settings.pauseOnDrmContent ?? false)}
               onCheckedChange={handleDrmPauseToggle}
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Record While Locked */}
+      <Card>
+        <CardContent className="px-3 py-2.5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2.5">
+              <Lock className="h-4 w-4 text-muted-foreground shrink-0" />
+              <div>
+                <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                  Record Audio While Locked
+                  <HelpTooltip text="when enabled, audio recording continues even when your screen is locked. by default, audio recording pauses when the screen is locked to save resources and protect privacy." />
+                </h3>
+                <p className="text-xs text-muted-foreground">
+                  continue audio capture when screen is locked
+                </p>
+              </div>
+            </div>
+            <Switch
+              id="recordWhileLocked"
+              checked={Boolean(settings.recordWhileLocked ?? false)}
+              onCheckedChange={handleRecordWhileLockedToggle}
             />
           </div>
         </CardContent>

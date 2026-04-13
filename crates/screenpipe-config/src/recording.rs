@@ -145,6 +145,11 @@ pub struct RecordingSettings {
     #[serde(rename = "pauseOnDrmContent", default)]
     pub pause_on_drm_content: bool,
 
+    /// Continue recording audio when the screen is locked.
+    /// Default: false (audio pauses when screen is locked to save resources).
+    #[serde(rename = "recordWhileLocked", default)]
+    pub record_while_locked: bool,
+
     /// Automatically append text typed during a meeting to the meeting's note
     /// when the meeting ends. Groups typed text by app/window context.
     #[serde(rename = "appendTypedTextToMeetingNotes", default = "default_true")]
@@ -314,6 +319,7 @@ impl Default for RecordingSettings {
             ignored_urls: vec![],
             ignore_incognito_windows: true,
             pause_on_drm_content: false,
+            record_while_locked: false,
             append_typed_text_to_meeting_notes: true,
             languages: vec![],
             use_pii_removal: false,

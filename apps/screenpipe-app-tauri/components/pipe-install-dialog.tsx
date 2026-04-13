@@ -21,6 +21,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { listen } from "@tauri-apps/api/event";
 import posthog from "posthog-js";
 import { PermissionsReview } from "@/components/pipe-store";
+import { localFetch } from "@/lib/api";
 
 interface PipeInstallRequest {
   url: string;
@@ -65,7 +66,7 @@ export function PipeInstallDialog() {
       if (isRegistrySource(url)) {
         // Fetch registry pipe details for permissions review
         const slug = getRegistrySlug(url);
-        fetch(`http://localhost:3030/pipes/store/${slug}`)
+        localFetch(`/pipes/store/${slug}`)
           .then((res) => {
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             return res.json();
@@ -107,14 +108,14 @@ export function PipeInstallDialog() {
       if (isRegistrySource(url)) {
         // Install via store endpoint
         const slug = getRegistrySlug(url);
-        res = await fetch("http://localhost:3030/pipes/store/install", {
+        res = await localFetch("/pipes/store/install", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ slug }),
         });
       } else {
         // Install via regular endpoint
-        res = await fetch("http://localhost:3030/pipes/install", {
+        res = await localFetch("/pipes/install", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ source: url }),

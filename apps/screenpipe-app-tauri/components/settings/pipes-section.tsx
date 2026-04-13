@@ -49,6 +49,7 @@ import { emit, once, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { ChatPrefillData } from "@/lib/chat-utils";
 import { commands } from "@/lib/utils/tauri";
 import { cn } from "@/lib/utils";
+import { getApiBaseUrl, localFetch } from "@/lib/api";
 import {
   isNotificationsDenied,
   toggleNotificationInContent,
@@ -846,7 +847,7 @@ export function PipesSection() {
     }
   };
 
-  const apiBase = selectedDevice ? `http://${selectedDevice}` : "http://localhost:3030";
+  const apiBase = selectedDevice ? `http://${selectedDevice}` : getApiBaseUrl();
   const isRemote = !!selectedDevice;
 
   const fetchPipes = useCallback(async () => {
@@ -968,7 +969,7 @@ export function PipesSection() {
   };
 
   const disablePipe = async (name: string) => {
-    await fetch(`http://localhost:3030/pipes/${name}/config`, {
+    await localFetch(`/pipes/${name}/config`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enabled: false }),

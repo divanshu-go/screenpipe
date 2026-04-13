@@ -4,6 +4,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getApiBaseUrl } from "@/lib/api";
 
 export function useLiveText(opts: {
 	debouncedFrame: { filePath: string; offsetIndex: number; fps: number; frameId: string } | null;
@@ -100,7 +101,7 @@ export function useLiveText(opts: {
 
 		// For snapshot frames, use the local file path directly (instant).
 		// For video-chunk frames, fall back to HTTP endpoint (requires ffmpeg extraction).
-		const imagePath = `http://localhost:3030/frames/${debouncedFrame.frameId}`;
+		const imagePath = `${getApiBaseUrl()}/frames/${debouncedFrame.frameId}`;
 
 		// Position is managed exclusively by livetext_update_position.
 		// The analyze call only sets the analysis + shows the overlay.
@@ -217,7 +218,7 @@ export function useLiveText(opts: {
 		} else if (debouncedFrame?.frameId) {
 			// Re-analyze to show overlay again, then send position update
 			// to apply the pending analysis with correct geometry.
-			const imagePath = `http://localhost:3030/frames/${debouncedFrame.frameId}`;
+			const imagePath = `${getApiBaseUrl()}/frames/${debouncedFrame.frameId}`;
 			const fid = String(debouncedFrame.frameId);
 			invoke("livetext_analyze", {
 				imagePath,

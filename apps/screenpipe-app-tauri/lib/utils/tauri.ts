@@ -1264,7 +1264,12 @@ ignoreIncognitoWindows: boolean;
  * Experimental: pause screen capture when a DRM streaming app or site is focused.
  * Off by default; engine-only pause (no full app shutdown).
  */
-pauseOnDrmContent?: boolean; 
+pauseOnDrmContent?: boolean;
+/**
+ * Continue recording audio when the screen is locked.
+ * Default: false (audio pauses when screen is locked to save resources).
+ */
+recordWhileLocked?: boolean;
 /**
  * Automatically append text typed during a meeting to the meeting's note
  * when the meeting ends. Groups typed text by app/window context.

@@ -32,6 +32,7 @@ import {
   Users,
   AlertCircle,
 } from "lucide-react";
+import { localFetch } from "@/lib/api";
 import { useQueryState } from "nuqs";
 import { emit } from "@tauri-apps/api/event";
 
@@ -552,8 +553,8 @@ function SpeakerDetail({
     setLoadingSimilar(true);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
-    fetch(
-      `http://localhost:3030/speakers/similar?speaker_id=${speaker.id}&limit=5`,
+    localFetch(
+      `/speakers/similar?speaker_id=${speaker.id}&limit=5`,
       {
         signal: controller.signal,
       }
@@ -840,8 +841,8 @@ export function SpeakersSection() {
   const fetchSpeakers = useCallback(async () => {
     try {
       const [namedRes, unnamedRes] = await Promise.all([
-        fetch("http://localhost:3030/speakers/search"),
-        fetch("http://localhost:3030/speakers/unnamed?limit=50"),
+        localFetch("/speakers/search"),
+        localFetch("/speakers/unnamed?limit=50"),
       ]);
       if (namedRes.ok)
         setSpeakers(
@@ -883,8 +884,8 @@ export function SpeakersSection() {
       await Promise.allSettled(
         unnamed.map(async (speaker) => {
           try {
-            const res = await fetch(
-              `http://localhost:3030/speakers/similar?speaker_id=${speaker.id}&limit=5`,
+            const res = await localFetch(
+              `/speakers/similar?speaker_id=${speaker.id}&limit=5`,
               { signal: controller.signal }
             );
             if (!res.ok) return;
@@ -965,8 +966,8 @@ export function SpeakersSection() {
       await Promise.allSettled(
         speakers.slice(0, 10).map(async (speaker) => {
           try {
-            const res = await fetch(
-              `http://localhost:3030/speakers/similar?speaker_id=${speaker.id}&limit=1`,
+            const res = await localFetch(
+              `/speakers/similar?speaker_id=${speaker.id}&limit=1`,
               { signal: controller.signal }
             );
             if (!res.ok) return;
@@ -989,7 +990,7 @@ export function SpeakersSection() {
   }, [unnamed, speakers]);
 
   const updateSpeaker = async (id: number, name: string) => {
-    const res = await fetch("http://localhost:3030/speakers/update", {
+    const res = await localFetch("/speakers/update", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id, name }),
@@ -1000,7 +1001,7 @@ export function SpeakersSection() {
   };
 
   const deleteSpeaker = async (id: number) => {
-    const res = await fetch("http://localhost:3030/speakers/delete", {
+    const res = await localFetch("/speakers/delete", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id }),
@@ -1012,7 +1013,7 @@ export function SpeakersSection() {
   };
 
   const markHallucination = async (id: number) => {
-    const res = await fetch("http://localhost:3030/speakers/hallucination", {
+    const res = await localFetch("/speakers/hallucination", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ speaker_id: id }),
@@ -1023,7 +1024,7 @@ export function SpeakersSection() {
   };
 
   const mergeSpeakers = async (keepId: number, mergeId: number) => {
-    const res = await fetch("http://localhost:3030/speakers/merge", {
+    const res = await localFetch("/speakers/merge", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

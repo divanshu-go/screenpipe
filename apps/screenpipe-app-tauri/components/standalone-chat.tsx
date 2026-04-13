@@ -49,8 +49,7 @@ import { useAutoSuggestions } from "@/lib/hooks/use-auto-suggestions";
 import { SummaryCards } from "@/components/chat/summary-cards";
 import { type CustomTemplate } from "@/lib/summary-templates";
 import { usePipes } from "@/lib/hooks/use-pipes";
-
-const SCREENPIPE_API = "http://localhost:3030";
+import { localFetch, getApiBaseUrl } from "@/lib/api";
 // Session ID is per-conversation — set on mount (new conv) and updated on load/new.
 // Stored as a ref so event listeners always see the current value without stale closures.
 
@@ -722,7 +721,7 @@ function MarkdownBlock({ text, isUser }: { text: string; isUser: boolean }) {
             try {
               imgSrc = convertFileSrc(src);
             } catch {
-              imgSrc = `http://localhost:3030/experimental/frames/from-file?path=${encodeURIComponent(src)}`;
+              imgSrc = `${getApiBaseUrl()}/experimental/frames/from-file?path=${encodeURIComponent(src)}`;
             }
           }
           return (
@@ -1527,8 +1526,8 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
     const searchSpeakers = async () => {
       setIsLoadingSpeakers(true);
       try {
-        const response = await fetch(
-          `${SCREENPIPE_API}/speakers/search?name=${encodeURIComponent(mentionFilter)}`
+        const response = await localFetch(
+          `/speakers/search?name=${encodeURIComponent(mentionFilter)}`
         );
         if (response.ok) {
           const speakers: Speaker[] = await response.json();
@@ -1725,7 +1724,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
     if (!appFilterOpen || recentSpeakers.length > 0) return;
     (async () => {
       try {
-        const response = await fetch(`${SCREENPIPE_API}/speakers/search?name=`);
+        const response = await localFetch("/speakers/search?name=");
         if (response.ok) {
           const speakers: Speaker[] = await response.json();
           setRecentSpeakers(
@@ -2444,7 +2443,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
     // Poll execution API to check if pipe already finished (race condition fix)
     const pollExecutionStatus = async (pipeName: string, executionId: number, msgId: string) => {
       try {
-        const res = await fetch(`http://localhost:3030/pipes/${pipeName}/executions?limit=20`);
+        const res = await localFetch(`/pipes/${pipeName}/executions?limit=20`);
         if (!res.ok) return;
         const data = await res.json();
         const exec = (data.data || []).find((e: any) => e.id === executionId);
@@ -2601,7 +2600,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
   async function generateFollowUps(userMsg: string, partialResponse: string) {
     try {
       // Check if Apple Intelligence is available
-      const statusResp = await fetch("http://localhost:3030/ai/status");
+      const statusResp = await localFetch("/ai/status");
       if (!statusResp.ok) return;
       const statusData = await statusResp.json();
       if (!statusData.available) return;
@@ -2609,7 +2608,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
       const controller = new AbortController();
       followUpAbortRef.current = controller;
 
-      const resp = await fetch("http://localhost:3030/ai/chat/completions", {
+      const resp = await localFetch("/ai/chat/completions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         signal: controller.signal,
@@ -2770,7 +2769,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
 
       if (prefillFrameId) {
         try {
-          const response = await fetch(`http://localhost:3030/frames/${prefillFrameId}`);
+          const response = await localFetch(`/frames/${prefillFrameId}`);
           if (response.ok) {
             const blob = await response.blob();
             const arrayBuffer = await blob.arrayBuffer();
@@ -2925,7 +2924,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
       const controller = new AbortController();
       const searchTimeoutId = setTimeout(() => controller.abort(), 120000);
 
-      const response = await fetch(`${SCREENPIPE_API}/search?${params.toString()}`, {
+      const response = await localFetch(`/search?${params.toString()}`, {
         signal: controller.signal,
       });
       clearTimeout(searchTimeoutId);
@@ -3571,7 +3570,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
                   <div className="relative group">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
-                      src={`http://localhost:3030/frames/${prefillFrameId}`}
+                      src={`${getApiBaseUrl()}/frames/${prefillFrameId}`}
                       alt="Attached frame"
                       className="w-16 h-12 object-cover rounded border border-border/50"
                     />

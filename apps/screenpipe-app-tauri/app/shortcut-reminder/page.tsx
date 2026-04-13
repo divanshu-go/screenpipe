@@ -8,6 +8,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
+import { localFetch } from "@/lib/api";
 import { readTextFile } from "@tauri-apps/plugin-fs";
 import { homeDir } from "@tauri-apps/api/path";
 import posthog from "posthog-js";
@@ -28,7 +29,7 @@ function useMeetingState() {
     const check = () => {
       abortCtrl?.abort();
       abortCtrl = new AbortController();
-      fetch("http://localhost:3030/meetings/status", { signal: abortCtrl.signal })
+      localFetch("/meetings/status", { signal: abortCtrl.signal })
         .then((r) => r.json())
         .then((d) => setActive(!!d.active))
         .catch(() => {});
@@ -45,10 +46,10 @@ function useMeetingState() {
     setLoading(true);
     try {
       if (active) {
-        await fetch("http://localhost:3030/meetings/stop", { method: "POST" });
+        await localFetch("/meetings/stop", { method: "POST" });
         setActive(false);
       } else {
-        const res = await fetch("http://localhost:3030/meetings/start", {
+        const res = await localFetch("/meetings/start", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ app: "manual" }),

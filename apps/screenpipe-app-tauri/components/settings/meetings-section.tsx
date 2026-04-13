@@ -21,6 +21,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { showChatWithPrefill } from "@/lib/chat-utils";
+import { localFetch } from "@/lib/api";
 
 interface MeetingRecord {
   id: number;
@@ -180,8 +181,8 @@ export function MeetingsSection() {
       }
 
       try {
-        const res = await fetch(
-          `http://localhost:3030/meetings?limit=${PAGE_SIZE}&offset=${offset}`,
+        const res = await localFetch(
+          `/meetings?limit=${PAGE_SIZE}&offset=${offset}`,
         );
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data: MeetingRecord[] = await res.json();
@@ -274,8 +275,8 @@ export function MeetingsSection() {
       try {
         const hoursBack = Math.ceil((Date.now() - new Date(meeting.meeting_start).getTime()) / 3600000) + 1;
         const hoursAhead = Math.max(1, Math.ceil((new Date(meeting.meeting_end || Date.now()).getTime() - Date.now()) / 3600000) + 1);
-        const calRes = await fetch(
-          `http://localhost:3030/connections/calendar/events?hours_back=${hoursBack}&hours_ahead=${hoursAhead}`
+        const calRes = await localFetch(
+          `/connections/calendar/events?hours_back=${hoursBack}&hours_ahead=${hoursAhead}`
         );
         if (calRes.ok) {
           const calData = await calRes.json();
@@ -295,8 +296,8 @@ export function MeetingsSection() {
 
       // Source 2: audio speakers during meeting
       try {
-        const audioRes = await fetch(
-          `http://localhost:3030/search?content_type=audio&start_time=${startTime}&end_time=${endTime}&limit=100`
+        const audioRes = await localFetch(
+          `/search?content_type=audio&start_time=${startTime}&end_time=${endTime}&limit=100`
         );
         if (audioRes.ok) {
           const audioData = await audioRes.json();
@@ -369,7 +370,7 @@ export function MeetingsSection() {
       if (editState.meeting_end) {
         body.meeting_end = new Date(editState.meeting_end).toISOString();
       }
-      const res = await fetch(`http://localhost:3030/meetings/${id}`, {
+      const res = await localFetch(`/meetings/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -394,7 +395,7 @@ export function MeetingsSection() {
     setDeletingId(id);
     setConfirmDeleteId(null);
     try {
-      const res = await fetch(`http://localhost:3030/meetings/${id}`, {
+      const res = await localFetch(`/meetings/${id}`, {
         method: "DELETE",
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -421,7 +422,7 @@ export function MeetingsSection() {
     if (ids.length < 2) return;
     setMerging(true);
     try {
-      const res = await fetch("http://localhost:3030/meetings/merge", {
+      const res = await localFetch("/meetings/merge", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ids }),
@@ -447,7 +448,7 @@ export function MeetingsSection() {
     if (ids.length === 0) return;
     setBulkDeleting(true);
     try {
-      const res = await fetch("http://localhost:3030/meetings/bulk-delete", {
+      const res = await localFetch("/meetings/bulk-delete", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ids }),

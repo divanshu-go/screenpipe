@@ -19,6 +19,7 @@ import { type TemplatePipe } from "@/lib/hooks/use-pipes";
 import { AppContextPopover } from "./app-context-popover";
 import { TimelineTagToolbar } from "./timeline-tag-toolbar";
 import { extractDomain, FaviconImg } from "./favicon-utils";
+import { localFetch } from "@/lib/api";
 
 // Global cache: preloads app-icon images so they render instantly on scroll.
 // Maps app name → "loaded" | "error" | Promise (in-flight).
@@ -328,7 +329,7 @@ export const TimelineSlider = ({
 		// Always use timestamp-based query: frame_id is never populated in ui_events
 		const query = `SELECT event_type, text_content, app_name, window_title, timestamp FROM ui_events WHERE timestamp BETWEEN datetime('${timestamp}', '-15 seconds') AND datetime('${timestamp}', '+15 seconds') ORDER BY timestamp ASC LIMIT 10`;
 
-		fetch("http://localhost:3030/raw_sql", {
+		localFetch("/raw_sql", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ query }),
@@ -523,7 +524,7 @@ export const TimelineSlider = ({
 			end_time: lastTs,
 			limit: "50",
 		});
-		fetch(`http://localhost:3030/memories?${params}`)
+		localFetch(`/memories?${params}`)
 			.then((r) => (r.ok ? r.json() : { data: [] }))
 			.then((res) => setMemories(res.data || []))
 			.catch(() => {});

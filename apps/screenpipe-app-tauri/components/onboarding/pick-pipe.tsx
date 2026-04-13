@@ -10,6 +10,7 @@ import { Loader, Brain, Clock, Users } from "lucide-react";
 import { useOnboarding } from "@/lib/hooks/use-onboarding";
 import { scheduleFirstRunNotification } from "@/lib/notifications";
 import posthog from "posthog-js";
+import { localFetch } from "@/lib/api";
 
 const PATHS = [
   {
@@ -54,7 +55,7 @@ async function waitForServer(maxWaitMs = 10000): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < maxWaitMs) {
     try {
-      const res = await fetch("http://localhost:3030/health");
+      const res = await localFetch("/health");
       if (res.ok) return;
     } catch {}
     await new Promise((r) => setTimeout(r, 500));
@@ -66,8 +67,8 @@ async function installAndEnable(slug: string): Promise<void> {
   // Wait for server to be ready before attempting install
   await waitForServer();
 
-  const enableRes = await fetch(
-    `http://localhost:3030/pipes/${slug}/enable`,
+  const enableRes = await localFetch(
+    `/pipes/${slug}/enable`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -76,14 +77,14 @@ async function installAndEnable(slug: string): Promise<void> {
   );
 
   if (!enableRes.ok) {
-    const installRes = await fetch("http://localhost:3030/pipes/store/install", {
+    const installRes = await localFetch("/pipes/store/install", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ slug }),
     });
     if (!installRes.ok) throw new Error(`failed to install ${slug}`);
 
-    await fetch(`http://localhost:3030/pipes/${slug}/enable`, {
+    await localFetch(`/pipes/${slug}/enable`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enabled: true }),
@@ -136,7 +137,7 @@ export default function PickPipe() {
         } catch {}
 
         try {
-          await fetch("http://localhost:3030/notify", {
+          await localFetch("/notify", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(path.notification),

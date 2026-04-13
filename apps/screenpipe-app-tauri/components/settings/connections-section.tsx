@@ -18,6 +18,7 @@ import { showChatWithPrefill } from "@/lib/chat-utils";
 import { Command } from "@tauri-apps/plugin-shell";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { message } from "@tauri-apps/plugin-dialog";
+import { localFetch } from "@/lib/api";
 import { writeFile, readTextFile } from "@tauri-apps/plugin-fs";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { platform } from "@tauri-apps/plugin-os";
@@ -733,7 +734,7 @@ function BrowserExtensionPanel({ connected, onRefresh }: { connected: boolean; o
     setTesting(true);
     setTestResult(null);
     try {
-      const r = await fetch("http://localhost:3030/browser/eval", {
+      const r = await localFetch("/browser/eval", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ code: "return document.title" }),
@@ -821,7 +822,7 @@ function WhatsAppPanel() {
     stopPolling();
     pollRef.current = setInterval(async () => {
       try {
-        const res = await fetch("http://localhost:3030/connections/whatsapp/status");
+        const res = await localFetch("/connections/whatsapp/status");
         const data = await res.json();
         const s = data.status;
         if (s?.qr_ready) {
@@ -844,7 +845,7 @@ function WhatsAppPanel() {
   useEffect(() => {
     const checkStatus = async () => {
       try {
-        const res = await fetch("http://localhost:3030/connections/whatsapp/status");
+        const res = await localFetch("/connections/whatsapp/status");
         const data = await res.json();
         const s = data.status;
         if (s?.connected) {
@@ -869,7 +870,7 @@ function WhatsAppPanel() {
     setQr(null);
     setError(null);
     try {
-      const res = await fetch("http://localhost:3030/connections/whatsapp/pair", {
+      const res = await localFetch("/connections/whatsapp/pair", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ bun_path: "bun" }),
@@ -886,7 +887,7 @@ function WhatsAppPanel() {
   };
 
   const handleDisconnect = async () => {
-    await fetch("http://localhost:3030/connections/whatsapp/disconnect", { method: "POST" });
+    await localFetch("/connections/whatsapp/disconnect", { method: "POST" });
     apiCache.invalidate("connections/list");
     setStatus("idle");
     setQr(null);
@@ -1139,14 +1140,14 @@ export function ConnectionCredentialForm({
   }, [initialCredentials]);
 
   const endpoint = instanceName
-    ? `http://localhost:3030/connections/${integrationId}/instances/${encodeURIComponent(instanceName)}`
-    : `http://localhost:3030/connections/${integrationId}`;
+    ? `/connections/${integrationId}/instances/${encodeURIComponent(instanceName)}`
+    : `/connections/${integrationId}`;
 
   const handleTest = async () => {
     setStatus("testing");
     setError(null);
     try {
-      const res = await fetch(`http://localhost:3030/connections/${integrationId}/test`, {
+      const res = await localFetch(`/connections/${integrationId}/test`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ credentials: creds }),
@@ -1154,7 +1155,7 @@ export function ConnectionCredentialForm({
       const data = await res.json();
       if (!res.ok || data.error) throw new Error(data.error || "test failed");
       setStatus("saving");
-      const saveRes = await fetch(endpoint, {
+      const saveRes = await localFetch(endpoint, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ credentials: creds }),
@@ -1286,7 +1287,7 @@ function ApiIntegrationPanel({ integration, onRefresh }: {
   // Load default credentials
   useEffect(() => {
     if (integration.connected) {
-      fetch(`http://localhost:3030/connections/${integration.id}`)
+      localFetch(`/connections/${integration.id}`)
         .then(r => r.json())
         .then(data => {
           if (data.credentials) {
@@ -1303,7 +1304,7 @@ function ApiIntegrationPanel({ integration, onRefresh }: {
 
   // Load instances
   useEffect(() => {
-    fetch(`http://localhost:3030/connections/${integration.id}/instances`)
+    localFetch(`/connections/${integration.id}/instances`)
       .then(r => {
         if (!r.ok) throw new Error("not supported");
         return r.json();
@@ -1326,7 +1327,7 @@ function ApiIntegrationPanel({ integration, onRefresh }: {
   const refreshAll = () => {
     onRefresh();
     // Re-fetch instances
-    fetch(`http://localhost:3030/connections/${integration.id}/instances`)
+    localFetch(`/connections/${integration.id}/instances`)
       .then(r => r.ok ? r.json() : null)
       .then(data => {
         if (!data) return;
@@ -1464,7 +1465,7 @@ export function ConnectionsSection() {
     commands.chatgptOauthStatus().then(res => {
       setChatgptConnected(res.status === "ok" && res.data.logged_in);
     }).catch(() => {});
-    fetch("http://localhost:3030/browser/status")
+    localFetch("/browser/status")
       .then(r => r.json())
       .then(d => setBrowserExtConnected(d.connected === true))
       .catch(() => setBrowserExtConnected(false));
@@ -1484,7 +1485,7 @@ export function ConnectionsSection() {
 
     for (let i = 0; i < retries; i++) {
       try {
-        const res = await fetch("http://localhost:3030/connections");
+        const res = await localFetch("/connections");
         const data = await res.json();
         if (data.data) {
           apiCache.set(cacheKey, data.data, 30_000); // 30s TTL

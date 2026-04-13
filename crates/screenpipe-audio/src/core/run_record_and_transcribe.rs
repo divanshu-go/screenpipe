@@ -70,6 +70,14 @@ pub async fn run_record_and_transcribe(
     while is_running.load(Ordering::Relaxed)
         && !audio_stream.is_disconnected.load(Ordering::Relaxed)
     {
+        // Skip recording while the screen is locked (unless record_while_locked is enabled).
+        // This avoids wasting CPU/disk on audio captured during lock screen.
+        if screenpipe_config::should_pause_audio_for_lock() {
+            debug!("screen is locked, pausing audio recording for {}", device_name);
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            continue;
+        }
+
         while collected_audio.len() < max_samples && is_running.load(Ordering::Relaxed) {
             match recv_audio_chunk(
                 &mut receiver,
