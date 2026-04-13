@@ -7,6 +7,8 @@ import { useIsEnterpriseBuild } from "./use-is-enterprise-build";
 import { commands } from "@/lib/utils/tauri";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { getStore } from "./use-settings";
+import { getVersion } from "@tauri-apps/api/app";
+import { platform as getPlatform } from "@tauri-apps/plugin-os";
 
 interface ManagedAiPreset {
   provider: string;
@@ -36,6 +38,50 @@ const ENTERPRISE_DEFAULT_HIDDEN = ["account", "referral"];
 const POLL_INTERVAL_MS = 5 * 60 * 1000;
 
 const CACHE_KEY = "enterprise-policy-cache";
+
+/**
+ * Fire-and-forget heartbeat to report device status to the enterprise API.
+ * Called after a successful policy fetch. Never throws, never blocks.
+ */
+async function sendHeartbeat(licenseKey: string): Promise<void> {
+  try {
+    const store = await getStore();
+    const settings = (await store.get<Record<string, unknown>>("settings")) || {};
+    const deviceId = (settings.deviceId as string) || "unknown";
+    const appVersion = await getVersion().catch(() => "unknown");
+    const devicePlatform = getPlatform();
+
+    let frameStatus = "unknown";
+    let audioStatus = "unknown";
+    let hostname = "unknown";
+    try {
+      const healthRes = await fetch("http://localhost:3030/health", {
+        signal: AbortSignal.timeout(2000),
+      });
+      if (healthRes.ok) {
+        const health = await healthRes.json();
+        frameStatus = health.frame_status || "unknown";
+        audioStatus = health.audio_status || "unknown";
+        hostname = health.hostname || "unknown";
+      }
+    } catch {}
+
+    await tauriFetch("https://screenpi.pe/api/enterprise/heartbeat", {
+      method: "POST",
+      headers: {
+        "X-License-Key": licenseKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        device_id: deviceId,
+        hostname,
+        platform: devicePlatform,
+        app_version: appVersion,
+        recording_status: { frame_status: frameStatus, audio_status: audioStatus },
+      }),
+    });
+  } catch {}
+}
 
 function cachePolicy(policy: EnterprisePolicy) {
   try {
@@ -109,6 +155,9 @@ export function useEnterprisePolicy() {
         `[enterprise] policy loaded: org=${result.orgName}, hidden=[${result.hiddenSections.join(",")}], locked=[${lockedKeys.join(",")}]`
       );
       cachePolicy(result);
+
+      // Fire-and-forget heartbeat
+      sendHeartbeat(licenseKey);
 
       // Apply managed AI preset to settings store if configured
       if (result.managedAiPreset) {
