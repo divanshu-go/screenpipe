@@ -255,8 +255,12 @@ pub struct RecordingSettings {
     pub schedule_rules: Vec<ScheduleRule>,
 
     /// Require authentication for remote (non-localhost) API access.
-    #[serde(rename = "apiAuth", default)]
+    #[serde(rename = "apiAuth", default = "default_true")]
     pub api_auth: bool,
+
+    /// Custom API key for remote authentication. If empty, a key is auto-generated.
+    #[serde(rename = "apiKey", default)]
+    pub api_key: String,
 }
 
 impl RecordingSettings {
@@ -333,7 +337,8 @@ impl Default for RecordingSettings {
             device_tier: None,
             schedule_enabled: false,
             schedule_rules: vec![],
-            api_auth: false,
+            api_auth: true,
+            api_key: String::new(),
         }
     }
 }

@@ -190,6 +190,7 @@ export type Settings = SettingsStore & {
 		recordMode: string;
 	}>;
 	apiAuth?: boolean;
+	apiKey?: string;
 	encryptStore?: boolean;
 }
 

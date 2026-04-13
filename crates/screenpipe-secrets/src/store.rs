@@ -104,6 +104,16 @@ impl SecretStore {
         }
     }
 
+    /// Get the updated_at timestamp for a secret. Returns None if key doesn't exist.
+    pub async fn get_updated_at(&self, key: &str) -> Result<Option<String>> {
+        let row: Option<(String,)> = sqlx::query_as("SELECT updated_at FROM secrets WHERE key = ?")
+            .bind(key)
+            .fetch_optional(&self.pool)
+            .await
+            .context("failed to get secret timestamp")?;
+        Ok(row.map(|(t,)| t))
+    }
+
     /// Delete a secret by key.
     pub async fn delete(&self, key: &str) -> Result<()> {
         sqlx::query("DELETE FROM secrets WHERE key = ?")

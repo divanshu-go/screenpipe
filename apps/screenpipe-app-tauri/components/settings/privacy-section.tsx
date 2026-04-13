@@ -22,6 +22,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
@@ -406,12 +407,25 @@ export function PrivacySection() {
                 </div>
               </div>
               <Switch
-                checked={settings.apiAuth ?? false}
+                checked={settings.apiAuth ?? true}
                 onCheckedChange={(checked) => {
                   handleSettingsChange({ apiAuth: checked });
                 }}
               />
             </div>
+            {(settings.apiAuth ?? true) && (
+              <div className="mt-2.5 flex items-center space-x-2.5 pl-6.5">
+                <Input
+                  type="text"
+                  placeholder="custom API key (leave empty to auto-generate)"
+                  value={settings.apiKey ?? ""}
+                  onChange={(e) => {
+                    handleSettingsChange({ apiKey: e.target.value });
+                  }}
+                  className="h-8 text-xs font-mono"
+                />
+              </div>
+            )}
           </CardContent>
         </Card>
         <Card className="border-border bg-card">

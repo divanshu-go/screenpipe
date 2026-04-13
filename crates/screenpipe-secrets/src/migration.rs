@@ -49,23 +49,46 @@ pub async fn migrate_legacy_secrets(
 
                 match std::fs::read(&path) {
                     Ok(contents) => {
-                        // Check if already migrated and readable
-                        match store.get(&store_key).await {
+                        // Check if already migrated — but re-import if file is newer
+                        // (handles re-auth writing to file after migration)
+                        let should_import = match store.get(&store_key).await {
                             Ok(Some(_)) => {
-                                report
-                                    .skipped
-                                    .push(format!("{} (already migrated)", filename));
-                                continue;
+                                // Check if file is newer than store entry
+                                let file_mtime = std::fs::metadata(&path)
+                                    .ok()
+                                    .and_then(|m| m.modified().ok());
+                                let store_time = store
+                                    .get_updated_at(&store_key)
+                                    .await
+                                    .ok()
+                                    .flatten()
+                                    .and_then(|t| chrono::DateTime::parse_from_rfc3339(&t).ok())
+                                    .map(|dt| std::time::SystemTime::from(dt));
+
+                                match (file_mtime, store_time) {
+                                    (Some(fm), Some(st)) if fm > st => {
+                                        info!("re-importing {} (file newer than store)", filename);
+                                        true
+                                    }
+                                    _ => {
+                                        report
+                                            .skipped
+                                            .push(format!("{} (already migrated)", filename));
+                                        false
+                                    }
+                                }
                             }
-                            Ok(None) => {}
+                            Ok(None) => true,
                             Err(_) => {
-                                // Decryption failed — likely a key change (new computer).
-                                // Re-migrate from the file to overwrite with the new key.
                                 info!(
                                     "re-migrating {} (old encrypted value unreadable, likely key change)",
                                     filename
                                 );
+                                true
                             }
+                        };
+                        if !should_import {
+                            continue;
                         }
 
                         if let Err(e) = store.set(&store_key, &contents).await {
