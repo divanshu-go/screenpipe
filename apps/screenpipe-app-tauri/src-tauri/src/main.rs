@@ -44,7 +44,9 @@ mod chatgpt_oauth;
 #[allow(deprecated)]
 mod commands;
 mod disk_usage;
+mod capture_session;
 mod embedded_server;
+mod server_core;
 mod enterprise_policy;
 mod hardware;
 mod ics_calendar;
@@ -733,7 +735,8 @@ async fn main() {
     }
 
     let recording_state = RecordingState {
-        handle: Arc::new(tokio::sync::Mutex::new(None)),
+        server: Arc::new(tokio::sync::Mutex::new(None)),
+        capture: Arc::new(tokio::sync::Mutex::new(None)),
         is_starting: Arc::new(AtomicBool::new(false)),
         last_spawn_epoch: Arc::new(AtomicU64::new(0)),
     };
@@ -838,6 +841,8 @@ async fn main() {
             commands::save_enterprise_license_key,
             spawn_screenpipe,
             stop_screenpipe,
+            recording::start_capture,
+            recording::stop_capture,
             recording::get_monitors,
             recording::get_audio_devices,
             permissions::open_permission_settings,
