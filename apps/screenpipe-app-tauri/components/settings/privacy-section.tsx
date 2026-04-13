@@ -659,7 +659,7 @@ export function PrivacySection() {
                   <EyeOff className="h-4 w-4 text-muted-foreground shrink-0" />
                   <div className="flex items-center gap-1.5 flex-1 min-w-0">
                     <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                      Ignored apps
+                      Ignored Apps
                       <HelpTooltip text="Apps matching these patterns will not be captured. Matches against window titles — e.g. add 'Password Manager' to skip sensitive apps." />
                     </h3>
                     {isTeamAdmin && (
@@ -750,7 +750,7 @@ export function PrivacySection() {
                   <Eye className="h-4 w-4 text-muted-foreground shrink-0" />
                   <div className="flex items-center gap-1.5 flex-1 min-w-0">
                     <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                      Included apps
+                      Included Apps
                       <HelpTooltip text="When set, ONLY apps matching these patterns will be captured. Everything else is ignored. Leave empty to capture all apps (except ignored ones)." />
                     </h3>
                     {isTeamAdmin && (
@@ -950,7 +950,7 @@ export function PrivacySection() {
                   <div className="flex items-center space-x-2.5 mb-2">
                     <EyeOff className="h-4 w-4 text-muted-foreground shrink-0" />
                     <h3 className="text-sm font-medium text-foreground">
-                      Ignored apps
+                      Ignored Apps
                     </h3>
                   </div>
                   <div className="flex flex-wrap gap-1 ml-[26px]">
@@ -1002,7 +1002,7 @@ export function PrivacySection() {
                   <div className="flex items-center space-x-2.5 mb-2">
                     <Eye className="h-4 w-4 text-muted-foreground shrink-0" />
                     <h3 className="text-sm font-medium text-foreground">
-                      Included apps
+                      Included Apps
                     </h3>
                   </div>
                   <div className="flex flex-wrap gap-1 ml-[26px]">
