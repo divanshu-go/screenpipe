@@ -110,19 +110,43 @@ async fn list_connections(State(state): State<ConnectionsState>) -> Json<Value> 
 }
 
 /// GET /connections/:id — get saved credentials.
+///
+/// DEPRECATED: Exposes raw API keys to callers. Use /connections/:id/proxy/*path
+/// instead — the proxy injects auth server-side so secrets never enter the LLM context.
 async fn get_connection(
     State(state): State<ConnectionsState>,
     Path(id): Path<String>,
-) -> (StatusCode, Json<Value>) {
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
     let mgr = state.cm.lock().await;
-    match mgr.get_credentials(&id) {
-        Ok(Some(creds)) => (StatusCode::OK, Json(json!({ "credentials": creds }))),
-        Ok(None) => (StatusCode::OK, Json(json!({ "credentials": {} }))),
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": e.to_string() })),
-        ),
+    let has_proxy = mgr.find_proxy_config(&id).is_some();
+
+    let (status, body) = match mgr.get_credentials(&id) {
+        Ok(Some(creds)) => (StatusCode::OK, json!({ "credentials": creds })),
+        Ok(None) => (StatusCode::OK, json!({ "credentials": {} })),
+        Err(e) => (StatusCode::BAD_REQUEST, json!({ "error": e.to_string() })),
+    };
+
+    let mut response = (status, Json(body)).into_response();
+
+    if has_proxy {
+        tracing::debug!(
+            "raw credential access for '{}' — consider using /connections/{}/proxy/ instead",
+            id, id
+        );
+        response.headers_mut().insert(
+            "X-Deprecation-Warning",
+            format!(
+                "Use /connections/{}/proxy/ instead — raw credential access will be removed in a future version",
+                id
+            )
+            .parse()
+            .unwrap(),
+        );
     }
+
+    response
 }
 
 /// PUT /connections/:id — save credentials.
