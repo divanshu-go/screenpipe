@@ -292,8 +292,10 @@ pub async fn event_driven_capture_loop(
     // Also seeds the frame comparer so subsequent visual-change checks work.
     // Skip if screen is locked — avoids storing black frames from sleep/lock.
     // Pre-capture DRM gate: skip if DRM content is focused (AX-only, no SCK).
+    // Skip if outside work-hours schedule.
     if !crate::sleep_monitor::screen_is_locked()
         && !crate::drm_detector::pre_capture_drm_check(pause_on_drm_content, None)
+        && !crate::schedule_monitor::schedule_paused()
     {
         // Small delay to let the monitor settle after startup
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -387,8 +389,10 @@ pub async fn event_driven_capture_loop(
             }
         }
 
-        // Skip capture while DRM streaming content is focused
-        if crate::drm_detector::drm_content_paused() {
+        // Skip capture while DRM streaming content is focused or outside schedule
+        if crate::drm_detector::drm_content_paused()
+            || crate::schedule_monitor::schedule_paused()
+        {
             tokio::time::sleep(poll_interval).await;
             continue;
         }
@@ -453,6 +457,7 @@ pub async fn event_driven_capture_loop(
             && visual_check_enabled
             && state.can_capture()
             && !crate::drm_detector::drm_content_paused()
+            && !crate::schedule_monitor::schedule_paused()
             && last_visual_check.elapsed() >= visual_check_interval
         {
             last_visual_check = Instant::now();

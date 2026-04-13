@@ -425,6 +425,12 @@ pub async fn start_embedded_server(
     // Tracks system sleep/wake events and checks if recording degrades after wake
     start_sleep_monitor();
 
+    // Reset schedule pause flag — the embedded server runs inside the Tauri process,
+    // so static globals survive across stop/start cycles. Without this reset a flag
+    // set in a prior session (e.g. "outside work hours") would keep recording
+    // blocked even after the user disables the schedule and restarts.
+    screenpipe_engine::schedule_monitor::reset_schedule_paused();
+
     // Start work-hours schedule monitor if enabled
     if config.schedule_enabled {
         screenpipe_engine::schedule_monitor::start_schedule_monitor(

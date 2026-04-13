@@ -21,6 +21,15 @@ pub fn schedule_paused() -> bool {
     SCHEDULE_PAUSED.load(Ordering::SeqCst)
 }
 
+/// Reset the schedule pause flag to `false`.
+///
+/// Must be called at embedded-server startup so that a previously-set flag
+/// from a prior run (same process) does not carry over when the schedule is
+/// disabled or restarted with different rules.
+pub fn reset_schedule_paused() {
+    SCHEDULE_PAUSED.store(false, Ordering::SeqCst);
+}
+
 /// Check if the given time falls within any schedule rule for today.
 fn is_within_schedule(rules: &[ScheduleRule], now: &chrono::DateTime<chrono::Local>) -> bool {
     use chrono::Weekday::*;

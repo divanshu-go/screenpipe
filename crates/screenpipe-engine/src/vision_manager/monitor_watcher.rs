@@ -38,6 +38,8 @@ pub async fn start_monitor_watcher(
         let mut permission_denied_logged = false;
         // Track whether we stopped monitors due to DRM
         let mut drm_stopped = false;
+        // Track whether we stopped recording due to work-hours schedule
+        let mut schedule_stopped = false;
 
         // Initialize with current monitors
         match list_monitors_detailed().await {
@@ -102,6 +104,45 @@ pub async fn start_monitor_watcher(
                 }
                 drm_stopped = false;
                 // Re-populate known_monitors after restart
+                if let Ok(monitors) = list_monitors_detailed().await {
+                    known_monitors = monitors.iter().map(|m| m.id()).collect();
+                }
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                continue;
+            }
+
+            // ── Schedule pause handling ─────────────────────────────────────
+            // When outside the work-hours schedule stop all capture so no data
+            // is recorded outside the user's defined window.
+            if crate::schedule_monitor::schedule_paused() {
+                if !schedule_stopped {
+                    info!("outside work-hours schedule — stopping all capture");
+                    if let Err(e) = vision_manager.stop().await {
+                        warn!("failed to stop vision manager for schedule pause: {:?}", e);
+                    }
+                    if let Some(ref am) = audio_manager {
+                        if let Err(e) = am.stop().await {
+                            warn!("failed to stop audio for schedule pause: {:?}", e);
+                        }
+                    }
+                    schedule_stopped = true;
+                }
+                // Check every 30 s — matches the schedule monitor's own cadence.
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                continue;
+            }
+
+            if schedule_stopped {
+                info!("within work-hours schedule — resuming capture");
+                if let Err(e) = vision_manager.start().await {
+                    warn!("failed to restart vision manager after schedule resume: {:?}", e);
+                }
+                if let Some(ref am) = audio_manager {
+                    if let Err(e) = am.start().await {
+                        warn!("failed to restart audio after schedule resume: {:?}", e);
+                    }
+                }
+                schedule_stopped = false;
                 if let Ok(monitors) = list_monitors_detailed().await {
                     known_monitors = monitors.iter().map(|m| m.id()).collect();
                 }
