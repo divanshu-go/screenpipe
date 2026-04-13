@@ -2902,9 +2902,14 @@ impl PipeManager {
             let mut last_run: HashMap<String, DateTime<Utc>> = HashMap::new();
             let mut last_cleanup = Instant::now();
 
-            // Sequential execution: only one pipe runs at a time to avoid
-            // rate-limit stampedes when many pipes share the same schedule.
+            // Sequential execution: only one scheduled pipe runs at a time to
+            // avoid rate-limit stampedes when many pipes share the same cron.
+            // Event-triggered pipes bypass the queue for low-latency response.
             let execution_semaphore = Arc::new(tokio::sync::Semaphore::new(1));
+            // Track pipes that are queued (waiting for semaphore) or running,
+            // so the scheduler doesn't double-queue the same pipe.
+            let queued_or_running: Arc<tokio::sync::Mutex<std::collections::HashSet<String>>> =
+                Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new()));
 
             // Load last_run from DB on first tick
             if let Some(ref store) = store {
@@ -3069,10 +3074,10 @@ impl PipeManager {
                         continue;
                     }
 
-                    // Check not already running (HashMap)
+                    // Check not already queued or running
                     {
-                        let r = running.lock().await;
-                        if r.contains_key(name) {
+                        let qr = queued_or_running.lock().await;
+                        if qr.contains(name) {
                             continue;
                         }
                     }
@@ -3110,17 +3115,18 @@ impl PipeManager {
                         continue;
                     }
 
-                    info!("scheduler: running pipe '{}'", name);
+                    info!(
+                        "scheduler: queuing pipe '{}' ({})",
+                        name,
+                        if triggered_by_event { "event" } else { "scheduled" }
+                    );
                     last_run.insert(name.clone(), Utc::now());
 
-                    // Mark running
+                    // Mark as queued so the next tick doesn't double-queue
                     {
-                        let mut r = running.lock().await;
-                        r.insert(name.clone(), ExecutionHandle { pid: 0 });
+                        let mut qr = queued_or_running.lock().await;
+                        qr.insert(name.clone());
                     }
-
-                    // Write pre-emptive PID file to claim the lock before spawn
-                    write_pid_file(&pipes_dir, name, std::process::id());
 
                     // Resolve preset → model/provider overrides (same as run_pipe)
                     let (model, provider, provider_url, api_key, preset_prompt) = if let Some(
@@ -3209,10 +3215,32 @@ impl PipeManager {
                     let token_registry_ref = token_registry.clone();
                     let pipe_timeout = config.timeout.unwrap_or(DEFAULT_TIMEOUT_SECS);
                     let semaphore = execution_semaphore.clone();
+                    let pipes_dir_for_mark = pipes_dir.clone();
+                    let queued_ref = queued_or_running.clone();
 
                     tokio::spawn(async move {
-                        // Wait for previous pipe to finish before starting
-                        let _permit = semaphore.acquire().await;
+                        // Event-triggered pipes skip the queue for low-latency response.
+                        // Scheduled pipes wait for the previous one to finish.
+                        let _permit = if !is_event_triggered {
+                            Some(
+                                semaphore
+                                    .acquire()
+                                    .await
+                                    .expect("execution semaphore closed"),
+                            )
+                        } else {
+                            None
+                        };
+
+                        // Mark running + write PID file only after acquiring the permit,
+                        // so the UI shows accurate state (not "running" while queued).
+                        {
+                            let mut r = running_ref.lock().await;
+                            r.insert(pipe_name.clone(), ExecutionHandle { pid: 0 });
+                        }
+                        write_pid_file(&pipes_dir_for_mark, &pipe_name, std::process::id());
+
+                        info!("scheduler: running pipe '{}'", pipe_name);
 
                         // Create DB execution row
                         let trigger = if is_event_triggered {
@@ -3324,6 +3352,10 @@ impl PipeManager {
                         {
                             let mut exec_ids = running_exec_ids_ref.lock().await;
                             exec_ids.remove(&pipe_name);
+                        }
+                        {
+                            let mut qr = queued_ref.lock().await;
+                            qr.remove(&pipe_name);
                         }
                         remove_pid_file(&pipes_dir_for_log, &pipe_name);
 
@@ -5268,5 +5300,123 @@ mod tests {
             config2.config.get("another").and_then(|v| v.as_i64()),
             Some(42)
         );
+    }
+
+    // -- sequential pipe execution tests ------------------------------------
+
+    #[tokio::test]
+    async fn test_semaphore_serializes_scheduled_pipes() {
+        // Simulates 3 scheduled pipes acquiring the semaphore.
+        // They should run one at a time, not in parallel.
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(1));
+        let active_count = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let max_concurrent = Arc::new(std::sync::atomic::AtomicU32::new(0));
+
+        let mut handles = Vec::new();
+        for _ in 0..3 {
+            let sem = semaphore.clone();
+            let active = active_count.clone();
+            let max = max_concurrent.clone();
+            handles.push(tokio::spawn(async move {
+                let _permit = sem.acquire().await.unwrap();
+                let current = active.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                // Update max if this is the highest we've seen
+                max.fetch_max(current, std::sync::atomic::Ordering::SeqCst);
+                // Simulate pipe execution
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                active.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            }));
+        }
+
+        for h in handles {
+            h.await.unwrap();
+        }
+
+        // Max concurrent should be 1 — pipes ran sequentially
+        assert_eq!(
+            max_concurrent.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "scheduled pipes should run sequentially (max concurrent = 1)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_event_triggered_bypasses_semaphore() {
+        // Simulates 1 scheduled pipe holding the semaphore while an
+        // event-triggered pipe starts without waiting.
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(1));
+        let event_started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let scheduled_running = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+        let sem = semaphore.clone();
+        let sched_flag = scheduled_running.clone();
+        let event_flag = event_started.clone();
+
+        // Scheduled pipe: holds permit for 200ms
+        let scheduled = tokio::spawn(async move {
+            let _permit = sem.acquire().await.unwrap();
+            sched_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            sched_flag.store(false, std::sync::atomic::Ordering::SeqCst);
+        });
+
+        // Give the scheduled pipe time to acquire the permit
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert!(scheduled_running.load(std::sync::atomic::Ordering::SeqCst));
+
+        // Event-triggered pipe: skips semaphore (None permit)
+        let event = tokio::spawn(async move {
+            // Event pipes don't acquire the semaphore
+            let _permit: Option<tokio::sync::OwnedSemaphorePermit> = None;
+            event_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+
+        event.await.unwrap();
+
+        // Event pipe should have started while scheduled pipe was still running
+        assert!(
+            event_started.load(std::sync::atomic::Ordering::SeqCst),
+            "event-triggered pipe should start immediately without waiting for semaphore"
+        );
+        assert!(
+            scheduled_running.load(std::sync::atomic::Ordering::SeqCst),
+            "scheduled pipe should still be running when event pipe completes"
+        );
+
+        scheduled.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_queued_set_prevents_double_queue() {
+        let queued: Arc<tokio::sync::Mutex<std::collections::HashSet<String>>> =
+            Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new()));
+
+        // First queue attempt should succeed
+        {
+            let mut qr = queued.lock().await;
+            assert!(qr.insert("my-pipe".to_string()), "first insert should succeed");
+        }
+
+        // Second queue attempt should be blocked
+        {
+            let qr = queued.lock().await;
+            assert!(
+                qr.contains("my-pipe"),
+                "pipe should be in queued set"
+            );
+        }
+
+        // After removal, should be queueable again
+        {
+            let mut qr = queued.lock().await;
+            qr.remove("my-pipe");
+        }
+        {
+            let mut qr = queued.lock().await;
+            assert!(
+                qr.insert("my-pipe".to_string()),
+                "should be queueable after removal"
+            );
+        }
     }
 }
