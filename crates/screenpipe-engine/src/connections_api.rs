@@ -980,41 +980,80 @@ async fn connection_proxy(
         }
     };
 
-    // Resolve the auth token from stored credentials or OAuth
-    let token = match &proxy_cfg.auth {
+    // Load credentials for auth resolution and dynamic URL
+    let creds = mgr.get_credentials(&id).ok().flatten();
+    let oauth_token = screenpipe_connect::oauth::read_oauth_token(&id);
+
+    // Resolve auth
+    enum ResolvedAuth {
+        Header(String, String),
+        Basic(String, String),
+        None,
+    }
+
+    let auth = match &proxy_cfg.auth {
         ProxyAuth::Bearer { credential_key } => {
-            // Try OAuth token first, fall back to stored credential
-            if let Some(token) = screenpipe_connect::oauth::read_oauth_token(&id) {
-                Some(("Authorization".to_string(), format!("Bearer {}", token)))
-            } else if let Ok(Some(creds)) = mgr.get_credentials(&id) {
-                creds
-                    .get(*credential_key)
+            if let Some(ref token) = oauth_token {
+                ResolvedAuth::Header("Authorization".into(), format!("Bearer {}", token))
+            } else if let Some(ref c) = creds {
+                c.get(*credential_key)
                     .and_then(|v| v.as_str())
-                    .map(|k| ("Authorization".to_string(), format!("Bearer {}", k)))
+                    .map(|k| ResolvedAuth::Header("Authorization".into(), format!("Bearer {}", k)))
+                    .unwrap_or(ResolvedAuth::None)
             } else {
-                None
+                ResolvedAuth::None
             }
         }
         ProxyAuth::Header {
             name,
             credential_key,
-        } => {
-            if let Ok(Some(creds)) = mgr.get_credentials(&id) {
-                creds
-                    .get(*credential_key)
+        } => creds
+            .as_ref()
+            .and_then(|c| {
+                c.get(*credential_key)
                     .and_then(|v| v.as_str())
-                    .map(|k| (name.to_string(), k.to_string()))
+                    .map(|k| ResolvedAuth::Header(name.to_string(), k.to_string()))
+            })
+            .unwrap_or(ResolvedAuth::None),
+        ProxyAuth::BasicAuth {
+            username_key,
+            password_key,
+        } => {
+            if let Some(ref c) = creds {
+                let user = c
+                    .get(*username_key)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let pass = c
+                    .get(*password_key)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                ResolvedAuth::Basic(user, pass)
             } else {
-                None
+                ResolvedAuth::None
             }
         }
-        ProxyAuth::None => None,
+        ProxyAuth::None => ResolvedAuth::None,
     };
+
+    // Resolve dynamic base_url — replace {field} placeholders with credential values
+    let mut base_url = proxy_cfg.base_url.to_string();
+    if base_url.contains('{') {
+        if let Some(ref c) = creds {
+            for (key, value) in c.iter() {
+                if let Some(s) = value.as_str() {
+                    base_url = base_url.replace(&format!("{{{}}}", key), s);
+                }
+            }
+        }
+    }
 
     drop(mgr); // release lock before making external request
 
     // Build the target URL
-    let target_url = format!("{}/{}", proxy_cfg.base_url, api_path.trim_start_matches('/'));
+    let target_url = format!("{}/{}", base_url, api_path.trim_start_matches('/'));
 
     // Forward the request
     let client = reqwest::Client::new();
@@ -1031,8 +1070,14 @@ async fn connection_proxy(
     }
 
     // Inject auth
-    if let Some((header_name, header_value)) = token {
-        req = req.header(&header_name, &header_value);
+    match auth {
+        ResolvedAuth::Header(name, value) => {
+            req = req.header(&name, &value);
+        }
+        ResolvedAuth::Basic(user, pass) => {
+            req = req.basic_auth(&user, Some(&pass));
+        }
+        ResolvedAuth::None => {}
     }
 
     // Inject extra headers from proxy config

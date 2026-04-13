@@ -97,7 +97,8 @@ pub struct IntegrationDef {
 /// requests to a third-party API with the correct auth injected.
 #[derive(Debug, Clone, Serialize)]
 pub struct ProxyConfig {
-    /// Base URL for the API (e.g. "https://api.notion.com")
+    /// Base URL for the API (e.g. "https://api.notion.com").
+    /// Use "{field_name}" placeholders for dynamic URLs (e.g. "https://{domain}.zendesk.com/api/v2").
     pub base_url: &'static str,
     /// How to inject authentication
     pub auth: ProxyAuth,
@@ -107,10 +108,12 @@ pub struct ProxyConfig {
 
 #[derive(Debug, Clone, Serialize)]
 pub enum ProxyAuth {
-    /// Send as `Authorization: Bearer <token>`. Token comes from OAuth or `api_key` credential.
+    /// Send as `Authorization: Bearer <token>`. Token comes from OAuth or credential field.
     Bearer { credential_key: &'static str },
     /// Send as a custom header (e.g. `X-API-Key: <value>`).
     Header { name: &'static str, credential_key: &'static str },
+    /// HTTP Basic Auth using two credential fields (username:password).
+    BasicAuth { username_key: &'static str, password_key: &'static str },
     /// No auth needed (e.g. webhook-based integrations where the URL is the secret).
     None,
 }
