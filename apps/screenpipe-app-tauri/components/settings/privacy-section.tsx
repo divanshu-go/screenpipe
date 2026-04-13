@@ -400,7 +400,7 @@ export function PrivacySection() {
                 <Shield className="h-4 w-4 text-muted-foreground shrink-0" />
                 <div>
                   <h3 className="text-sm font-medium text-foreground">
-                    require API authentication
+                    Require API Authentication
                   </h3>
                   <p className="text-xs text-muted-foreground mt-0.5">
                     remote devices must use the same account to access this API. localhost is always allowed.
@@ -439,7 +439,7 @@ export function PrivacySection() {
                 <Shield className="h-4 w-4 text-muted-foreground shrink-0" />
                 <div>
                   <h3 className="text-sm font-medium text-foreground">
-                    encrypt settings at rest
+                    Encrypt Settings at Rest
                   </h3>
                   <p className="text-xs text-muted-foreground mt-0.5">
                     encrypt store.bin with a key stored in your OS keychain. requires keychain access.
@@ -470,7 +470,7 @@ export function PrivacySection() {
                 <WifiOff className="h-4 w-4 text-muted-foreground shrink-0" />
                 <div>
                   <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                    Offline mode
+                    Offline Mode
                     <HelpTooltip text="Prevents pipes from accessing the internet. Forces local AI models (Ollama), disables web search, blocks external API calls, and turns off usage analytics. Crash reports (Sentry) and auto-updates still work. Local network (localhost, LAN) remains accessible." />
                   </h3>
                   <p className="text-xs text-muted-foreground">
@@ -508,7 +508,7 @@ export function PrivacySection() {
                 <Shield className="h-4 w-4 text-muted-foreground shrink-0" />
                 <div>
                   <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                    PII removal
+                    PII Removal
                     <HelpTooltip text="Automatically redacts personally identifiable information (emails, phone numbers, etc.) from captured text before storing." />
                   </h3>
                   <p className="text-xs text-muted-foreground">
@@ -536,7 +536,7 @@ export function PrivacySection() {
               <EyeOff className="h-4 w-4 text-muted-foreground shrink-0" />
               <div>
                 <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                  ignore incognito windows
+                  Ignore Incognito Windows
                   <HelpTooltip text="automatically detects and skips private/incognito browser windows in 20+ languages. on macos, uses native browser APIs for chromium browsers (chrome, edge, brave, arc)." />
                 </h3>
                 <p className="text-xs text-muted-foreground">
@@ -562,7 +562,7 @@ export function PrivacySection() {
               <Tv className="h-4 w-4 text-muted-foreground shrink-0" />
               <div>
                 <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                  pause for streaming apps
+                  Pause for Streaming Apps
                   <HelpTooltip text="pauses all screen capture when netflix, disney+, hulu, prime video, and other DRM streaming apps are focused. this prevents black screens caused by DRM copy protection detecting screen recording. capture resumes automatically when you switch to a non-browser app." />
                 </h3>
                 <p className="text-xs text-muted-foreground">
