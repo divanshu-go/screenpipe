@@ -4,6 +4,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { debounce } from "lodash";
+import { getApiBaseUrl } from "@/lib/api";
 
 interface AudioPipelineHealth {
   chunks_sent: number;
@@ -97,7 +98,8 @@ export function useHealthCheck() {
     }
 
     try {
-      const ws = new WebSocket("ws://127.0.0.1:3030/ws/health");
+      const wsBase = getApiBaseUrl().replace("http://", "ws://");
+      const ws = new WebSocket(`${wsBase}/ws/health`);
       wsRef.current = ws;
 
       ws.onopen = () => {

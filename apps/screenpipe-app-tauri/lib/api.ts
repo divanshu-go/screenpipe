@@ -27,9 +27,50 @@ let _apiKey: string | null = null;
 let _authEnabled = false;
 let _initialized = false;
 
+// Eager initialization promise — reads from Tauri store immediately on import.
+// This ensures auth is available before any React component mounts.
+let _initPromise: Promise<void> | null = null;
+
+function ensureInitialized(): Promise<void> {
+  if (_initialized) return Promise.resolve();
+  if (_initPromise) return _initPromise;
+
+  _initPromise = (async () => {
+    try {
+      const { Store } = await import("@tauri-apps/plugin-store");
+      const store = await Store.load("store.bin");
+      const settings = await store.get<Record<string, unknown>>("settings");
+      if (settings) {
+        const port = (settings as any)?.port;
+        const apiKey = (settings as any)?.apiKey;
+        const apiAuth = (settings as any)?.apiAuth;
+        if (port) _port = port;
+        if (apiAuth) {
+          _authEnabled = true;
+          if (apiKey) _apiKey = apiKey;
+        }
+      }
+      // Also check user token as fallback key
+      if (_authEnabled && !_apiKey) {
+        const user = await store.get<Record<string, unknown>>("user");
+        const token = (user as any)?.token || (user as any)?.api_key;
+        if (token) _apiKey = token;
+      }
+    } catch {
+      // Not in Tauri context (tests, SSR) — defaults are fine
+    }
+    _initialized = true;
+  })();
+
+  return _initPromise;
+}
+
+// Start loading immediately on import — don't wait for React mount
+ensureInitialized();
+
 /**
- * Configure the API module. Call once at app startup after loading settings.
- * This is the ONLY place port and auth config should be set.
+ * Configure the API module. Call from SettingsProvider after loading settings.
+ * Overrides the eager initialization with authoritative values.
  */
 export function configureApi(opts: {
   port?: number;
@@ -78,6 +119,7 @@ export function getAuthHeaders(): Record<string, string> {
  * - Resolves paths relative to the configured base URL
  * - Auto-injects auth header when API auth is enabled
  * - Passes through full URLs unchanged (for remote device access)
+ * - Waits for initialization on first call if needed
  *
  * @param path - API path (e.g. "/search?q=hello") or full URL
  * @param init - Standard fetch RequestInit
@@ -86,6 +128,9 @@ export async function localFetch(
   path: string,
   init?: RequestInit
 ): Promise<Response> {
+  // Ensure config is loaded before first request
+  await ensureInitialized();
+
   const url = path.startsWith("http")
     ? path
     : `${getApiBaseUrl()}${path.startsWith("/") ? path : `/${path}`}`;
