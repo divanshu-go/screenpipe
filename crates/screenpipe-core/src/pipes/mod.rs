@@ -2902,6 +2902,10 @@ impl PipeManager {
             let mut last_run: HashMap<String, DateTime<Utc>> = HashMap::new();
             let mut last_cleanup = Instant::now();
 
+            // Sequential execution: only one pipe runs at a time to avoid
+            // rate-limit stampedes when many pipes share the same schedule.
+            let execution_semaphore = Arc::new(tokio::sync::Semaphore::new(1));
+
             // Load last_run from DB on first tick
             if let Some(ref store) = store {
                 let pipe_snapshot: Vec<String> = {
@@ -3204,8 +3208,12 @@ impl PipeManager {
                     let store_ref = store.clone();
                     let token_registry_ref = token_registry.clone();
                     let pipe_timeout = config.timeout.unwrap_or(DEFAULT_TIMEOUT_SECS);
+                    let semaphore = execution_semaphore.clone();
 
                     tokio::spawn(async move {
+                        // Wait for previous pipe to finish before starting
+                        let _permit = semaphore.acquire().await;
+
                         // Create DB execution row
                         let trigger = if is_event_triggered {
                             "event"
