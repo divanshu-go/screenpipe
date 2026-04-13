@@ -417,7 +417,12 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                             let health_name = d.name.split(" (").next().unwrap_or(&d.name);
                             let allowed_short =
                                 allowed_name.split('_').next().unwrap_or(allowed_name);
-                            health_name == allowed_short
+                            // Also match numeric monitor IDs from CLI -m flag
+                            // e.g. allowed="3" should match health_name="Display 3"
+                            let numeric_match = health_name
+                                .strip_prefix("Display ")
+                                .map_or(false, |id| id == *allowed);
+                            health_name == allowed_short || numeric_match
                         })
                     });
                 }
