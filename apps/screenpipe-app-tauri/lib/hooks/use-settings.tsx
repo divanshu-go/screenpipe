@@ -7,10 +7,11 @@ import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { platform } from "@tauri-apps/plugin-os";
 import { Store } from "@tauri-apps/plugin-store";
-import React, { createContext, useContext, useEffect, useState } from "react";
+import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import posthog from "posthog-js";
 import { User } from "../utils/tauri";
 import { SettingsStore } from "../utils/tauri";
+import { installAuthInterceptor } from "../auth-guard";
 export type VadSensitivity = "low" | "medium" | "high";
 
 export type AIProviderType =
@@ -631,6 +632,18 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 		};
 	}, []);
 
+	// Install global fetch interceptor to catch 401s from screenpi.pe
+	const settingsRef = useRef(settings);
+	settingsRef.current = settings;
+	useEffect(() => {
+		installAuthInterceptor(
+			() => settingsRef.current.user?.token ?? undefined,
+			async () => {
+				await updateSettings({ user: null as any });
+			}
+		);
+	}, []); // eslint-disable-line react-hooks/exhaustive-deps
+
 	// Auto-refresh user data from API when app starts with a stored token.
 	// This ensures subscription status (cloud_subscribed) stays current —
 	// e.g. when a subscription is granted after the user last logged in.
@@ -652,6 +665,12 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 					await loadUser(token);
 					return; // success
 				} catch (err) {
+					// Don't retry on auth errors — the interceptor handles sign-out
+					const msg = err instanceof Error ? err.message : String(err);
+					if (msg.includes("401") || msg.includes("403")) {
+						console.warn("auto-refresh: token rejected, stopping retries");
+						return;
+					}
 					console.warn(
 						`auto-refresh user data failed (attempt ${attempt + 1}/${MAX_RETRIES + 1}):`,
 						err
