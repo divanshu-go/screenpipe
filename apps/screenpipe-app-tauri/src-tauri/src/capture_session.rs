@@ -25,9 +25,14 @@ use crate::server_core::ServerCore;
 ///
 /// Dropping this without calling [`CaptureSession::stop`] will leak tasks.
 /// Always use `stop()` for clean shutdown.
+///
+/// Holds its own `Arc<AudioManager>` so `stop()` is self-contained —
+/// callers don't need to reach into `ServerCore` to stop capture.
 pub struct CaptureSession {
     shutdown_tx: broadcast::Sender<()>,
     ui_recorder_handle: Option<screenpipe_engine::UiRecorderHandle>,
+    audio_manager: Arc<screenpipe_audio::audio_manager::AudioManager>,
+    audio_disabled: bool,
 }
 
 impl CaptureSession {
@@ -186,11 +191,17 @@ impl CaptureSession {
         Ok(Self {
             shutdown_tx,
             ui_recorder_handle,
+            audio_manager: server.audio_manager.clone(),
+            audio_disabled: config.disable_audio,
         })
     }
 
     /// Stop all capture pipelines. The server stays alive.
-    pub async fn stop(mut self, audio_manager: &Arc<screenpipe_audio::audio_manager::AudioManager>) {
+    ///
+    /// This is self-contained — no external references needed.
+    /// Audio is stopped (not shutdown), keeping the `Arc<AudioManager>` valid
+    /// for the next capture session or for HTTP API queries.
+    pub async fn stop(mut self) {
         info!("Stopping capture session");
 
         // Signal UI recorder to stop
@@ -201,9 +212,11 @@ impl CaptureSession {
         // Broadcast shutdown to VisionManager, meeting watcher, schedule monitor, compaction
         let _ = self.shutdown_tx.send(());
 
-        // Stop audio recording (but don't shutdown — keep the Arc valid)
-        if let Err(e) = audio_manager.stop().await {
-            warn!("Error stopping audio manager: {:?}", e);
+        // Stop audio recording (but don't shutdown — keep the Arc valid for queries)
+        if !self.audio_disabled {
+            if let Err(e) = self.audio_manager.stop().await {
+                warn!("Error stopping audio manager: {:?}", e);
+            }
         }
 
         // Wait for UI recorder tasks to finish

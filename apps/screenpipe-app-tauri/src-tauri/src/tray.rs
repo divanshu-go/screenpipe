@@ -843,11 +843,9 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
             tauri::async_runtime::spawn(async move {
                 info!("Stopping screenpipe recording before quit...");
                 if let Some(recording_state) = app_handle_clone.try_state::<RecordingState>() {
-                    // Stop capture first
+                    // Stop capture first (self-contained)
                     if let Some(session) = recording_state.capture.lock().await.take() {
-                        if let Some(ref server) = *recording_state.server.lock().await {
-                            session.stop(&server.audio_manager).await;
-                        }
+                        session.stop().await;
                     }
                     // Then shutdown server
                     if let Some(server) = recording_state.server.lock().await.take() {

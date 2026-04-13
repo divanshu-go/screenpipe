@@ -16,18 +16,31 @@ use crate::store::SettingsStore;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use screenpipe_engine::RecordingConfig;
 use tauri::{Emitter, State};
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
+
+/// Build a `RecordingConfig` from the current settings store.
+fn build_config(app: &tauri::AppHandle) -> Result<RecordingConfig, String> {
+    let store = SettingsStore::get(app).ok().flatten().unwrap_or_default();
+    let (data_dir, _) = config::resolve_data_dir(&store.data_dir);
+    Ok(store.to_recording_config(data_dir))
+}
 
 /// Minimum seconds between consecutive stop→spawn cycles.
 const RESTART_COOLDOWN_SECS: u64 = 30;
 
 /// Two-phase state: server (long-lived) + capture (togglable).
+///
+/// **Lock ordering**: `capture` may be locked independently (it's self-contained).
+/// When both locks are needed (e.g. `start_capture`), always lock `capture` first,
+/// then `server`. Never hold `server` while waiting on `capture`.
 pub struct RecordingState {
     /// Long-lived server core (DB, HTTP, pipes). None until first start.
     pub server: Arc<Mutex<Option<ServerCore>>>,
     /// Current capture session. None when recording is stopped/paused.
+    /// Self-contained — `CaptureSession::stop()` needs no external references.
     pub capture: Arc<Mutex<Option<CaptureSession>>>,
     /// True while a server start is in progress (prevents race between main.rs boot and frontend)
     pub is_starting: Arc<AtomicBool>,
@@ -142,13 +155,7 @@ pub async fn stop_capture(
 
     let mut capture_guard = state.capture.lock().await;
     if let Some(session) = capture_guard.take() {
-        let server_guard = state.server.lock().await;
-        if let Some(ref server) = *server_guard {
-            session.stop(&server.audio_manager).await;
-        } else {
-            // Server gone — just drop the session
-            drop(session);
-        }
+        session.stop().await;
         info!("Capture session stopped");
     } else {
         debug!("No capture session running");
@@ -179,10 +186,7 @@ pub async fn start_capture(
         .as_ref()
         .ok_or_else(|| "Server not running — cannot start capture".to_string())?;
 
-    let store = SettingsStore::get(&app).ok().flatten().unwrap_or_default();
-    let (data_dir, _) = config::resolve_data_dir(&store.data_dir);
-    let config = store.to_recording_config(data_dir);
-
+    let config = build_config(&app)?;
     let session = CaptureSession::start(server, &config).await?;
     drop(server_guard);
 
@@ -209,12 +213,7 @@ pub async fn stop_screenpipe(
 
     let mut capture_guard = state.capture.lock().await;
     if let Some(session) = capture_guard.take() {
-        let server_guard = state.server.lock().await;
-        if let Some(ref server) = *server_guard {
-            session.stop(&server.audio_manager).await;
-        } else {
-            drop(session);
-        }
+        session.stop().await;
         info!("Capture stopped");
     } else {
         debug!("No capture session to stop");
@@ -347,15 +346,9 @@ pub async fn spawn_screenpipe(
     }
 
     // --- Full start: server + capture ---
-    // Stop any existing capture first
-    {
-        let mut capture_guard = state.capture.lock().await;
-        if let Some(session) = capture_guard.take() {
-            let server_guard = state.server.lock().await;
-            if let Some(ref server) = *server_guard {
-                session.stop(&server.audio_manager).await;
-            }
-        }
+    // Stop any existing capture first (self-contained, no server lock needed)
+    if let Some(session) = state.capture.lock().await.take() {
+        session.stop().await;
     }
     // Shutdown existing server if any
     {
@@ -554,10 +547,7 @@ async fn start_capture_internal(
         .as_ref()
         .ok_or_else(|| "Server not running".to_string())?;
 
-    let store = SettingsStore::get(app).ok().flatten().unwrap_or_default();
-    let (data_dir, _) = config::resolve_data_dir(&store.data_dir);
-    let config = store.to_recording_config(data_dir);
-
+    let config = build_config(app)?;
     let session = CaptureSession::start(server, &config).await?;
     drop(server_guard);
 

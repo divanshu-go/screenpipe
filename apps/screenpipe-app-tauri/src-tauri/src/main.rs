@@ -1807,11 +1807,9 @@ async fn main() {
                             if let Some(recording_state) =
                                 app_handle_shutdown.try_state::<recording::RecordingState>()
                             {
-                                // Stop capture first, then server
+                                // Stop capture first (self-contained), then server
                                 if let Some(session) = recording_state.capture.lock().await.take() {
-                                    if let Some(ref server) = *recording_state.server.lock().await {
-                                        session.stop(&server.audio_manager).await;
-                                    }
+                                    session.stop().await;
                                 }
                                 if let Some(server) = recording_state.server.lock().await.take() {
                                     server.shutdown().await;
