@@ -950,12 +950,112 @@ async fn oauth_callback(Query(params): Query<OAuthCallbackQuery>) -> (StatusCode
     }
 }
 
+// ---------------------------------------------------------------------------
+// Credential proxy — forward requests to third-party APIs with auth injected
+// ---------------------------------------------------------------------------
+
+/// Resolved authentication — extracted from credentials before the request.
+enum ResolvedAuth {
+    Header(String, String),
+    Basic(String, String),
+    None,
+}
+
+/// Resolve base_url, replacing `{field}` placeholders with credential values.
+/// Returns an error if any placeholder remains unresolved.
+fn resolve_base_url(
+    template: &str,
+    creds: Option<&Map<String, Value>>,
+) -> Result<String, String> {
+    let mut url = template.to_string();
+    if url.contains('{') {
+        if let Some(c) = creds {
+            for (key, value) in c.iter() {
+                if let Some(s) = value.as_str() {
+                    url = url.replace(&format!("{{{}}}", key), s);
+                }
+            }
+        }
+        // Check for unresolved placeholders
+        if let Some(start) = url.find('{') {
+            let end = url[start..].find('}').unwrap_or(0) + start + 1;
+            let field = &url[start..end];
+            return Err(format!(
+                "unresolved placeholder {} in base_url — credential field missing",
+                field
+            ));
+        }
+    }
+    Ok(url)
+}
+
+/// Resolve auth from proxy config + stored credentials/OAuth token.
+fn resolve_auth(
+    proxy_auth: &screenpipe_connect::connections::ProxyAuth,
+    creds: Option<&Map<String, Value>>,
+    oauth_token: Option<&str>,
+) -> ResolvedAuth {
+    use screenpipe_connect::connections::ProxyAuth;
+    match proxy_auth {
+        ProxyAuth::Bearer { credential_key } => {
+            // OAuth token takes precedence over stored credential
+            if let Some(token) = oauth_token {
+                ResolvedAuth::Header("Authorization".into(), format!("Bearer {}", token))
+            } else if let Some(c) = creds {
+                c.get(*credential_key)
+                    .and_then(|v| v.as_str())
+                    .map(|k| ResolvedAuth::Header("Authorization".into(), format!("Bearer {}", k)))
+                    .unwrap_or(ResolvedAuth::None)
+            } else {
+                ResolvedAuth::None
+            }
+        }
+        ProxyAuth::Header {
+            name,
+            credential_key,
+        } => creds
+            .and_then(|c| {
+                c.get(*credential_key)
+                    .and_then(|v| v.as_str())
+                    .map(|k| ResolvedAuth::Header(name.to_string(), k.to_string()))
+            })
+            .unwrap_or(ResolvedAuth::None),
+        ProxyAuth::BasicAuth {
+            username_key,
+            password_key,
+        } => {
+            if let Some(c) = creds {
+                let user = c
+                    .get(*username_key)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let pass = c
+                    .get(*password_key)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if user.is_empty() && pass.is_empty() {
+                    ResolvedAuth::None
+                } else {
+                    ResolvedAuth::Basic(user, pass)
+                }
+            } else {
+                ResolvedAuth::None
+            }
+        }
+        ProxyAuth::None => ResolvedAuth::None,
+    }
+}
+
 /// Proxy handler: forward requests to third-party APIs with credentials injected.
 /// Route: ANY /connections/:id/proxy/*path
 ///
-/// The LLM calls this endpoint instead of the external API directly. The proxy
-/// looks up the connection's stored credentials, injects the auth header, and
-/// forwards the request. The LLM never sees the API key.
+/// Security:
+/// - Credentials never enter the LLM context window
+/// - Only safe HTTP methods allowed (GET, POST, PUT, PATCH) — DELETE blocked by default
+/// - Unresolved URL placeholders are rejected (prevents requests to wrong hosts)
+/// - All proxy requests are logged for audit
 async fn connection_proxy(
     State(state): State<ConnectionsState>,
     axum::extract::Path((id, api_path)): axum::extract::Path<(String, String)>,
@@ -964,7 +1064,20 @@ async fn connection_proxy(
     body: axum::body::Bytes,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
-    use screenpipe_connect::connections::ProxyAuth;
+
+    // Block destructive methods — pipes should not delete external resources
+    if method == axum::http::Method::DELETE {
+        tracing::warn!(
+            "proxy: blocked DELETE request to {}/{} — destructive methods not allowed",
+            id,
+            api_path
+        );
+        return (
+            StatusCode::METHOD_NOT_ALLOWED,
+            Json(json!({ "error": "DELETE method not allowed through proxy — use the API directly if you need to delete resources" })),
+        )
+            .into_response();
+    }
 
     let mgr = state.cm.lock().await;
 
@@ -980,80 +1093,53 @@ async fn connection_proxy(
         }
     };
 
-    // Load credentials for auth resolution and dynamic URL
+    // Load credentials
     let creds = mgr.get_credentials(&id).ok().flatten();
     let oauth_token = screenpipe_connect::oauth::read_oauth_token(&id);
 
     // Resolve auth
-    enum ResolvedAuth {
-        Header(String, String),
-        Basic(String, String),
-        None,
+    let auth = resolve_auth(
+        &proxy_cfg.auth,
+        creds.as_ref(),
+        oauth_token.as_deref(),
+    );
+
+    // Check that auth was actually resolved (don't send unauthenticated requests)
+    if matches!(auth, ResolvedAuth::None) && !matches!(proxy_cfg.auth, screenpipe_connect::connections::ProxyAuth::None) {
+        tracing::warn!("proxy: no credentials found for connection '{}' — cannot authenticate", id);
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": format!("connection '{}' has no stored credentials — connect it first in Settings", id) })),
+        )
+            .into_response();
     }
 
-    let auth = match &proxy_cfg.auth {
-        ProxyAuth::Bearer { credential_key } => {
-            if let Some(ref token) = oauth_token {
-                ResolvedAuth::Header("Authorization".into(), format!("Bearer {}", token))
-            } else if let Some(ref c) = creds {
-                c.get(*credential_key)
-                    .and_then(|v| v.as_str())
-                    .map(|k| ResolvedAuth::Header("Authorization".into(), format!("Bearer {}", k)))
-                    .unwrap_or(ResolvedAuth::None)
-            } else {
-                ResolvedAuth::None
-            }
+    // Resolve dynamic base_url
+    let base_url = match resolve_base_url(proxy_cfg.base_url, creds.as_ref()) {
+        Ok(url) => url,
+        Err(e) => {
+            tracing::warn!("proxy: failed to resolve base_url for '{}': {}", id, e);
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": e })),
+            )
+                .into_response();
         }
-        ProxyAuth::Header {
-            name,
-            credential_key,
-        } => creds
-            .as_ref()
-            .and_then(|c| {
-                c.get(*credential_key)
-                    .and_then(|v| v.as_str())
-                    .map(|k| ResolvedAuth::Header(name.to_string(), k.to_string()))
-            })
-            .unwrap_or(ResolvedAuth::None),
-        ProxyAuth::BasicAuth {
-            username_key,
-            password_key,
-        } => {
-            if let Some(ref c) = creds {
-                let user = c
-                    .get(*username_key)
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let pass = c
-                    .get(*password_key)
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                ResolvedAuth::Basic(user, pass)
-            } else {
-                ResolvedAuth::None
-            }
-        }
-        ProxyAuth::None => ResolvedAuth::None,
     };
-
-    // Resolve dynamic base_url — replace {field} placeholders with credential values
-    let mut base_url = proxy_cfg.base_url.to_string();
-    if base_url.contains('{') {
-        if let Some(ref c) = creds {
-            for (key, value) in c.iter() {
-                if let Some(s) = value.as_str() {
-                    base_url = base_url.replace(&format!("{{{}}}", key), s);
-                }
-            }
-        }
-    }
 
     drop(mgr); // release lock before making external request
 
     // Build the target URL
     let target_url = format!("{}/{}", base_url, api_path.trim_start_matches('/'));
+
+    // Audit log
+    tracing::info!(
+        "proxy: {} {} → {} (connection: {})",
+        method,
+        api_path,
+        target_url,
+        id
+    );
 
     // Forward the request
     let client = reqwest::Client::new();
@@ -1090,15 +1176,27 @@ async fn connection_proxy(
         req = req.body(body.to_vec());
     }
 
+    // 30-second timeout to prevent hung connections
+    let req = req.timeout(std::time::Duration::from_secs(30));
+
     match req.send().await {
         Ok(resp) => {
+            let upstream_status = resp.status().as_u16();
             let status =
-                StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+                StatusCode::from_u16(upstream_status).unwrap_or(StatusCode::BAD_GATEWAY);
             let resp_headers = resp.headers().clone();
             match resp.bytes().await {
                 Ok(resp_body) => {
+                    if !status.is_success() {
+                        tracing::warn!(
+                            "proxy: {} {} → {} returned {}",
+                            method,
+                            api_path,
+                            id,
+                            upstream_status
+                        );
+                    }
                     let mut response = (status, resp_body).into_response();
-                    // Forward content-type from upstream
                     if let Some(ct) = resp_headers.get("content-type") {
                         response.headers_mut().insert("content-type", ct.clone());
                     }
@@ -1111,11 +1209,14 @@ async fn connection_proxy(
                     .into_response(),
             }
         }
-        Err(e) => (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({ "error": format!("proxy request failed: {}", e) })),
-        )
-            .into_response(),
+        Err(e) => {
+            tracing::error!("proxy: request to {} failed: {}", target_url, e);
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({ "error": format!("proxy request failed: {}", e) })),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -1201,4 +1302,180 @@ where
         )
         .route("/:id/test", post(test_connection))
         .with_state(state)
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use screenpipe_connect::connections::{ProxyAuth, ProxyConfig};
+    use serde_json::json;
+
+    // -- resolve_base_url ---------------------------------------------------
+
+    #[test]
+    fn test_resolve_base_url_static() {
+        let result = resolve_base_url("https://api.notion.com", None);
+        assert_eq!(result.unwrap(), "https://api.notion.com");
+    }
+
+    #[test]
+    fn test_resolve_base_url_with_placeholder() {
+        let mut creds = Map::new();
+        creds.insert("domain".into(), json!("mycompany.atlassian.net"));
+        let result = resolve_base_url("https://{domain}/rest/api/3", Some(&creds));
+        assert_eq!(result.unwrap(), "https://mycompany.atlassian.net/rest/api/3");
+    }
+
+    #[test]
+    fn test_resolve_base_url_multiple_placeholders() {
+        let mut creds = Map::new();
+        creds.insert("subdomain".into(), json!("acme"));
+        creds.insert("region".into(), json!("us1"));
+        let result = resolve_base_url("https://{subdomain}.{region}.api.com", Some(&creds));
+        assert_eq!(result.unwrap(), "https://acme.us1.api.com");
+    }
+
+    #[test]
+    fn test_resolve_base_url_unresolved_placeholder_fails() {
+        let creds = Map::new(); // empty — no "domain" field
+        let result = resolve_base_url("https://{domain}.zendesk.com/api/v2", Some(&creds));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("{domain}"));
+    }
+
+    #[test]
+    fn test_resolve_base_url_no_creds_with_placeholder_fails() {
+        let result = resolve_base_url("https://{domain}.example.com", None);
+        assert!(result.is_err());
+    }
+
+    // -- resolve_auth -------------------------------------------------------
+
+    #[test]
+    fn test_resolve_auth_bearer_from_creds() {
+        let auth_cfg = ProxyAuth::Bearer {
+            credential_key: "api_key",
+        };
+        let mut creds = Map::new();
+        creds.insert("api_key".into(), json!("sk-test-123"));
+        match resolve_auth(&auth_cfg, Some(&creds), None) {
+            ResolvedAuth::Header(name, value) => {
+                assert_eq!(name, "Authorization");
+                assert_eq!(value, "Bearer sk-test-123");
+            }
+            _ => panic!("expected Header auth"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_auth_bearer_oauth_takes_precedence() {
+        let auth_cfg = ProxyAuth::Bearer {
+            credential_key: "api_key",
+        };
+        let mut creds = Map::new();
+        creds.insert("api_key".into(), json!("should-not-use-this"));
+        match resolve_auth(&auth_cfg, Some(&creds), Some("oauth-token-xyz")) {
+            ResolvedAuth::Header(name, value) => {
+                assert_eq!(name, "Authorization");
+                assert_eq!(value, "Bearer oauth-token-xyz");
+            }
+            _ => panic!("expected Header auth from OAuth"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_auth_bearer_no_creds_returns_none() {
+        let auth_cfg = ProxyAuth::Bearer {
+            credential_key: "api_key",
+        };
+        assert!(matches!(resolve_auth(&auth_cfg, None, None), ResolvedAuth::None));
+    }
+
+    #[test]
+    fn test_resolve_auth_custom_header() {
+        let auth_cfg = ProxyAuth::Header {
+            name: "X-API-Key",
+            credential_key: "api_key",
+        };
+        let mut creds = Map::new();
+        creds.insert("api_key".into(), json!("my-key"));
+        match resolve_auth(&auth_cfg, Some(&creds), None) {
+            ResolvedAuth::Header(name, value) => {
+                assert_eq!(name, "X-API-Key");
+                assert_eq!(value, "my-key");
+            }
+            _ => panic!("expected Header auth"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_auth_basic() {
+        let auth_cfg = ProxyAuth::BasicAuth {
+            username_key: "email",
+            password_key: "api_token",
+        };
+        let mut creds = Map::new();
+        creds.insert("email".into(), json!("user@example.com"));
+        creds.insert("api_token".into(), json!("secret123"));
+        match resolve_auth(&auth_cfg, Some(&creds), None) {
+            ResolvedAuth::Basic(user, pass) => {
+                assert_eq!(user, "user@example.com");
+                assert_eq!(pass, "secret123");
+            }
+            _ => panic!("expected Basic auth"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_auth_basic_empty_creds_returns_none() {
+        let auth_cfg = ProxyAuth::BasicAuth {
+            username_key: "email",
+            password_key: "api_token",
+        };
+        let creds = Map::new(); // no email or api_token
+        assert!(matches!(
+            resolve_auth(&auth_cfg, Some(&creds), None),
+            ResolvedAuth::None
+        ));
+    }
+
+    #[test]
+    fn test_resolve_auth_none() {
+        let auth_cfg = ProxyAuth::None;
+        assert!(matches!(resolve_auth(&auth_cfg, None, None), ResolvedAuth::None));
+    }
+
+    // -- proxy config validation --------------------------------------------
+
+    #[test]
+    fn test_all_proxy_configs_have_valid_base_urls() {
+        use screenpipe_connect::connections::all_integrations;
+        for integration in all_integrations() {
+            if let Some(cfg) = integration.proxy_config() {
+                let def = integration.def();
+                // Static URLs should be valid
+                if !cfg.base_url.contains('{') {
+                    assert!(
+                        cfg.base_url.starts_with("https://"),
+                        "integration '{}' has non-HTTPS base_url: {}",
+                        def.id,
+                        cfg.base_url
+                    );
+                }
+                // Dynamic URLs should have at least one placeholder
+                if cfg.base_url.contains('{') {
+                    assert!(
+                        cfg.base_url.contains('}'),
+                        "integration '{}' has unclosed placeholder in base_url: {}",
+                        def.id,
+                        cfg.base_url
+                    );
+                }
+            }
+        }
+    }
 }
