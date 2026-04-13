@@ -396,6 +396,7 @@ fn create_dynamic_menu(
     let status_text = match effective_status {
         RecordingStatus::Starting => "○ Starting…",
         RecordingStatus::Recording => "● Recording",
+        RecordingStatus::Paused => "◐ Paused",
         RecordingStatus::Stopped => "○ Stopped",
         RecordingStatus::Error => "○ Error",
     };
@@ -533,10 +534,10 @@ fn create_dynamic_menu(
         menu_builder = menu_builder.item(&PredefinedMenuItem::separator(app)?);
 
         let is_recording = effective_status == RecordingStatus::Recording;
-        let label = if is_recording {
-            "Recording"
-        } else {
-            "Stopped — click to record"
+        let label = match effective_status {
+            RecordingStatus::Recording => "Recording",
+            RecordingStatus::Paused => "Paused — click to resume",
+            _ => "Stopped — click to record",
         };
         let toggle = CheckMenuItemBuilder::with_id("toggle_recording", label)
             .checked(is_recording)
@@ -649,9 +650,10 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
             });
         }
         "start_recording" | "stop_recording" | "toggle_recording" => {
-            let is_recording = get_recording_status() == RecordingStatus::Recording;
+            let status = get_recording_status();
+            let is_recording = status == RecordingStatus::Recording;
             let (optimistic, event) = if is_recording {
-                (RecordingStatus::Stopped, "shortcut-stop-recording")
+                (RecordingStatus::Paused, "shortcut-stop-recording")
             } else {
                 (RecordingStatus::Starting, "shortcut-start-recording")
             };
@@ -841,16 +843,17 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
             tauri::async_runtime::spawn(async move {
                 info!("Stopping screenpipe recording before quit...");
                 if let Some(recording_state) = app_handle_clone.try_state::<RecordingState>() {
-                    let mut handle_guard = recording_state.handle.lock().await;
-                    if let Some(handle) = handle_guard.take() {
-                        // Wait for UI recorder tasks to actually finish before exiting.
-                        // This prevents the crash where the runtime tears down while
-                        // the tree walker is still mid-DB-write.
-                        handle.shutdown_and_wait().await;
-                        info!("Screenpipe recording stopped successfully");
-                    } else {
-                        debug!("No recording running to stop");
+                    // Stop capture first
+                    if let Some(session) = recording_state.capture.lock().await.take() {
+                        if let Some(ref server) = *recording_state.server.lock().await {
+                            session.stop(&server.audio_manager).await;
+                        }
                     }
+                    // Then shutdown server
+                    if let Some(server) = recording_state.server.lock().await.take() {
+                        server.shutdown().await;
+                    }
+                    info!("Screenpipe server + recording stopped successfully");
                 }
                 info!("All tasks stopped, exiting process");
                 // Use _exit() instead of exit() to skip C++ atexit/static destructors.

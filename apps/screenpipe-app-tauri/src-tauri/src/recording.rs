@@ -430,7 +430,6 @@ pub async fn spawn_screenpipe(
     let recording_config = store.to_recording_config(data_dir);
     let server_arc = state.server.clone();
     let capture_arc = state.capture.clone();
-    let is_starting_clone = state.is_starting.clone();
 
     // Pipe output callback
     let app_for_pipe = app.clone();

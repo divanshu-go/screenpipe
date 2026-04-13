@@ -31,6 +31,8 @@ const CONSECUTIVE_UNHEALTHY_THRESHOLD: u32 = 10;
 pub enum RecordingStatus {
     Starting,
     Recording,
+    /// Capture paused but server (HTTP/pipes/search) still alive.
+    Paused,
     Stopped,
     Error,
 }
@@ -240,6 +242,7 @@ fn status_to_icon_key(status: RecordingStatus) -> &'static str {
     match status {
         RecordingStatus::Starting => "starting",
         RecordingStatus::Recording => "healthy",
+        RecordingStatus::Paused => "starting",
         RecordingStatus::Stopped => "error",
         RecordingStatus::Error => "unhealthy",
     }

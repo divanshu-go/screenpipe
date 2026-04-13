@@ -193,7 +193,7 @@ export function DeeplinkHandler() {
       }),
 
       listen("shortcut-start-recording", async () => {
-        await commands.spawnScreenpipe(null);
+        await commands.startCapture();
 
         toast({
           title: "recording started",
@@ -202,11 +202,11 @@ export function DeeplinkHandler() {
       }),
 
       listen("shortcut-stop-recording", async () => {
-        await commands.stopScreenpipe();
+        await commands.stopCapture();
 
         toast({
-          title: "recording stopped",
-          description: "screen recording has been stopped",
+          title: "recording paused",
+          description: "capture paused — pipes and search still available",
         });
       }),
 

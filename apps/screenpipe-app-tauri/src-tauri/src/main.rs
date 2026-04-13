@@ -1420,18 +1420,19 @@ async fn main() {
             //     let _ = app_handle.emit("vault-locked-on-startup", ());
             // }
 
-            // Start embedded server on a dedicated thread with its own tokio runtime
-            // to avoid competing with Tauri's UI runtime
+            // Start server core + capture on a dedicated thread with its own tokio runtime
+            // to avoid competing with Tauri's UI runtime.
+            // Two-phase startup: ServerCore (DB + HTTP + pipes) then CaptureSession (vision + audio).
             {
                 let store_clone = store.clone();
                 let data_dir_clone = data_dir.clone();
                 let recording_state = app_handle.state::<RecordingState>();
-                // Mark as starting BEFORE spawning thread — prevents race with frontend spawn_screenpipe
                 recording_state.is_starting.store(true, std::sync::atomic::Ordering::SeqCst);
-                let recording_state_inner = recording_state.handle.clone();
+                let server_arc = recording_state.server.clone();
+                let capture_arc = recording_state.capture.clone();
                 let is_starting_clone = recording_state.is_starting.clone();
 
-                // Create pipe output callback that emits Tauri events to the frontend
+                // Pipe output callback
                 let app_for_pipe = app_handle.clone();
                 let on_pipe_output: Option<screenpipe_core::pipes::OnPipeOutputLine> = Some(
                     std::sync::Arc::new(move |pipe_name: &str, exec_id: i64, line: &str| {
@@ -1452,15 +1453,9 @@ async fn main() {
                     }),
                 );
 
-                // Spawn a dedicated thread for the server with its own runtime
-                // This prevents CPU contention between UI and recording workloads
                 std::thread::Builder::new()
                     .name("screenpipe-server".to_string())
                     .spawn(move || {
-                        // Create a dedicated multi-threaded runtime for the server
-                        // Use 16 worker threads: several are permanently consumed by
-                        // blocking crossbeam channel calls (audio handlers, meeting watcher),
-                        // so we need enough headroom for async I/O and HTTP handling.
                         let server_runtime = tokio::runtime::Builder::new_multi_thread()
                             .worker_threads(16)
                             .thread_name("screenpipe-worker")
@@ -1469,7 +1464,7 @@ async fn main() {
                             .expect("Failed to create server runtime");
 
                         server_runtime.block_on(async move {
-                            // Check if server already running (with timeout)
+                            // Check if server already running
                             let server_running = tokio::time::timeout(
                                 std::time::Duration::from_secs(2),
                                 async {
@@ -1483,12 +1478,12 @@ async fn main() {
                             ).await.unwrap_or(false);
 
                             if server_running {
-                                info!("Server already running, skipping embedded server start");
+                                info!("Server already running, skipping startup");
                                 is_starting_clone.store(false, std::sync::atomic::Ordering::SeqCst);
                                 return;
                             }
 
-                            // Check permissions before starting
+                            // Permissions check
                             let permissions_check = permissions::do_permissions_check(false);
                             let disable_audio = store_clone.recording.disable_audio;
 
@@ -1502,34 +1497,50 @@ async fn main() {
                                 warn!("Microphone permission not granted: {:?}. Audio recording will not work.", permissions_check.microphone);
                             }
 
-                            info!("Starting embedded screenpipe server on dedicated runtime...");
+                            info!("Starting server core + capture on dedicated runtime...");
                             let config = store_clone.to_recording_config(data_dir_clone);
 
-                            match embedded_server::start_embedded_server(config, on_pipe_output).await {
-                                Ok(handle) => {
-                                    info!("Embedded screenpipe server started successfully on dedicated runtime");
-                                    // Store handle in state so it can be stopped/restarted later
-                                    {
-                                        let mut guard = recording_state_inner.lock().await;
-                                        *guard = Some(handle);
-                                    }
-
-                                    // Keep the runtime alive, but check periodically if we should shut down
-                                    // When stop_screenpipe is called, the handle is taken from the state
-                                    loop {
-                                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-
-                                        // Check if handle was taken (indicating shutdown requested)
-                                        let guard = recording_state_inner.lock().await;
-                                        if guard.is_none() {
-                                            info!("Server handle removed from state, shutting down server thread");
-                                            break;
-                                        }
-                                    }
-                                }
+                            // Phase 1: Start server core
+                            let server = match server_core::ServerCore::start(&config, on_pipe_output).await {
+                                Ok(s) => s,
                                 Err(e) => {
-                                    error!("Failed to start embedded server: {}", e);
+                                    error!("Failed to start server core: {}", e);
                                     is_starting_clone.store(false, std::sync::atomic::Ordering::SeqCst);
+                                    return;
+                                }
+                            };
+
+                            // Phase 2: Start capture session
+                            let capture = match capture_session::CaptureSession::start(&server, &config).await {
+                                Ok(c) => c,
+                                Err(e) => {
+                                    error!("Failed to start capture: {}", e);
+                                    // Store server anyway so pipes/search work
+                                    let mut guard = server_arc.lock().await;
+                                    *guard = Some(server);
+                                    drop(guard);
+                                    is_starting_clone.store(false, std::sync::atomic::Ordering::SeqCst);
+                                    return;
+                                }
+                            };
+
+                            info!("Server + capture started successfully on dedicated runtime");
+                            {
+                                let mut guard = server_arc.lock().await;
+                                *guard = Some(server);
+                            }
+                            {
+                                let mut guard = capture_arc.lock().await;
+                                *guard = Some(capture);
+                            }
+
+                            // Keep runtime alive as long as server exists
+                            loop {
+                                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                                let guard = server_arc.lock().await;
+                                if guard.is_none() {
+                                    info!("Server removed from state, shutting down server thread");
+                                    break;
                                 }
                             }
                         });
@@ -1796,8 +1807,14 @@ async fn main() {
                             if let Some(recording_state) =
                                 app_handle_shutdown.try_state::<recording::RecordingState>()
                             {
-                                if let Some(handle) = recording_state.handle.lock().await.take() {
-                                    handle.shutdown_and_wait().await;
+                                // Stop capture first, then server
+                                if let Some(session) = recording_state.capture.lock().await.take() {
+                                    if let Some(ref server) = *recording_state.server.lock().await {
+                                        session.stop(&server.audio_manager).await;
+                                    }
+                                }
+                                if let Some(server) = recording_state.server.lock().await.take() {
+                                    server.shutdown().await;
                                 }
                             }
                         })
