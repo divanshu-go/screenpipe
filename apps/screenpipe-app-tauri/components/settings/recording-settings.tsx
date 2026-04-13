@@ -1593,8 +1593,8 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
               <div className="flex items-center space-x-2.5">
                 <Monitor className="h-4 w-4 text-muted-foreground shrink-0" />
                 <div>
-                  <h3 className="text-sm font-medium text-foreground">Follow system default</h3>
-                  <p className="text-xs text-muted-foreground">Auto-switch when you change default device</p>
+                  <h3 className="text-sm font-medium text-foreground">Auto-select audio devices</h3>
+                  <p className="text-xs text-muted-foreground">Records all default devices. Turn off to exclude bluetooth headphones or pick specific devices.</p>
                 </div>
               </div>
               <Switch
