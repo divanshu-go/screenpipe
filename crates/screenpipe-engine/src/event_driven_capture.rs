@@ -390,9 +390,7 @@ pub async fn event_driven_capture_loop(
         }
 
         // Skip capture while DRM streaming content is focused or outside schedule
-        if crate::drm_detector::drm_content_paused()
-            || crate::schedule_monitor::schedule_paused()
-        {
+        if crate::drm_detector::drm_content_paused() || crate::schedule_monitor::schedule_paused() {
             tokio::time::sleep(poll_interval).await;
             continue;
         }

@@ -135,7 +135,10 @@ pub async fn start_monitor_watcher(
             if schedule_stopped {
                 info!("within work-hours schedule — resuming capture");
                 if let Err(e) = vision_manager.start().await {
-                    warn!("failed to restart vision manager after schedule resume: {:?}", e);
+                    warn!(
+                        "failed to restart vision manager after schedule resume: {:?}",
+                        e
+                    );
                 }
                 if let Some(ref am) = audio_manager {
                     if let Err(e) = am.start().await {

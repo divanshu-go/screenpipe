@@ -19,6 +19,19 @@ use std::sync::Mutex as StdMutex;
 use tracing::{error, info, warn};
 use whisper_rs::{WhisperContext, WhisperState};
 
+/// Global GPU serialization lock for MLX Metal operations.
+///
+/// MLX uses asynchronous Metal command buffers that can overlap even when the
+/// Rust model mutex is held. If a Metal command buffer fails (e.g. GPU memory
+/// pressure, timeout), MLX calls abort() — killing the entire process. This
+/// mutex ensures only ONE MLX transcription uses the GPU at any time,
+/// preventing concurrent Metal submissions from different threads.
+///
+/// Uses std::sync::Mutex (not tokio) because transcription runs on blocking threads.
+#[cfg(feature = "parakeet-mlx")]
+static MLX_GPU_LOCK: std::sync::LazyLock<std::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
+
 /// MLX Metal memory management — cap the GPU buffer cache to prevent unbounded growth.
 /// MLX's caching allocator keeps freed GPU buffers for reuse; without a limit the
 /// cache grows to 10+ GB over hours of transcription on a 0.6B model.
@@ -600,6 +613,17 @@ impl TranscriptionSession {
 
             #[cfg(feature = "parakeet-mlx")]
             Self::ParakeetMlx { model, .. } => {
+                // Acquire the global GPU lock — only one MLX operation at a time.
+                // This prevents concurrent Metal command buffer submissions that
+                // cause abort() when the GPU can't handle overlapping workloads.
+                let _gpu_guard = match MLX_GPU_LOCK.lock() {
+                    Ok(g) => Some(g),
+                    Err(poisoned) => {
+                        tracing::warn!("mlx gpu lock poisoned (previous panic), recovering");
+                        Some(poisoned.into_inner())
+                    }
+                };
+
                 let mut engine = model.lock().map_err(|e| anyhow!("stt model lock: {}", e))?;
                 // Clear GPU cache before transcription to reduce Metal command buffer
                 // errors from GPU memory pressure (prevents abort in MLX completion handler)
