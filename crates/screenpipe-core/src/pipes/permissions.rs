@@ -621,6 +621,7 @@ mod tests {
             days: None,
             pipe_token: None,
             offline_mode: false,
+            pipe_dir: None,
         }
     }
 
