@@ -24,6 +24,7 @@ interface Permissions {
   days: number[] | null;
   pipe_token: string | null;
   offline_mode: boolean;
+  pipe_dir: string | null;
 }
 
 const DEFAULT_ALLOWED_ENDPOINTS: string[] = [
@@ -67,6 +68,7 @@ try {
         : null,
       pipe_token: parsed.pipe_token || null,
       offline_mode: parsed.offline_mode || false,
+      pipe_dir: parsed.pipe_dir || null,
     };
   }
 } catch {
@@ -244,6 +246,116 @@ function checkCurlCommand(cmd: string): string | null {
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// Filesystem sandbox helpers
+// ---------------------------------------------------------------------------
+
+function resolvePath(p: string, cwd: string): string {
+  const path = require("path");
+  if (p.startsWith("~")) {
+    const os = require("os");
+    p = path.join(os.homedir(), p.slice(1));
+  }
+  if (!path.isAbsolute(p)) {
+    p = path.resolve(cwd, p);
+  }
+  return path.normalize(p);
+}
+
+function isInsidePipeDir(targetPath: string, pipeDir: string): boolean {
+  const path = require("path");
+  const resolved = resolvePath(targetPath, pipeDir);
+  const normalizedPipeDir = path.normalize(pipeDir);
+  return (
+    resolved === normalizedPipeDir ||
+    resolved.startsWith(normalizedPipeDir + path.sep)
+  );
+}
+
+function checkFilesystemWrite(cmd: string): string | null {
+  if (!PERMS?.pipe_dir) return null;
+  const pipeDir = PERMS.pipe_dir;
+
+  // Extract file targets from common write operations
+  const writePatterns: Array<{
+    regex: RegExp;
+    extract: (m: RegExpMatchArray) => string[];
+  }> = [
+    // Redirect: > file, >> file, 2> file, &> file
+    {
+      regex: /(?:>{1,2}|2>|&>)\s*["']?([^\s"'|;&>]+)["']?/g,
+      extract: (m) => [m[1]],
+    },
+    // tee [-a] file
+    {
+      regex: /\btee\s+(?:-[a-zA-Z]\s+)*["']?([^\s"'|;&]+)["']?/g,
+      extract: (m) => [m[1]],
+    },
+    // cp [-r] src dest
+    {
+      regex:
+        /\bcp\s+(?:-[a-zA-Z]+\s+)*(?:["'][^"']+["']|[^\s"']+)\s+["']?([^\s"'|;&]+)["']?/g,
+      extract: (m) => [m[1]],
+    },
+    // mv src dest
+    {
+      regex:
+        /\bmv\s+(?:-[a-zA-Z]+\s+)*(?:["'][^"']+["']|[^\s"']+)\s+["']?([^\s"'|;&]+)["']?/g,
+      extract: (m) => [m[1]],
+    },
+    // mkdir [-p] dir
+    {
+      regex: /\bmkdir\s+(?:-[a-zA-Z]+\s+)*["']?([^\s"'|;&]+)["']?/g,
+      extract: (m) => [m[1]],
+    },
+    // touch file
+    {
+      regex: /\btouch\s+["']?([^\s"'|;&]+)["']?/g,
+      extract: (m) => [m[1]],
+    },
+    // rm [-rf] path
+    {
+      regex: /\brm\s+(?:-[a-zA-Z]+\s+)*["']?([^\s"'|;&]+)["']?/g,
+      extract: (m) => [m[1]],
+    },
+    // sed -i
+    {
+      regex:
+        /\bsed\s+(?:.*?)-i['"=]?\s*(?:\S+\s+)?["']?([^\s"'|;&]+)["']?/g,
+      extract: (m) => [m[1]],
+    },
+    // chmod / chown target
+    {
+      regex:
+        /\b(?:chmod|chown)\s+(?:-[a-zA-Z]+\s+)*\S+\s+["']?([^\s"'|;&]+)["']?/g,
+      extract: (m) => [m[1]],
+    },
+    // dd of=path
+    {
+      regex: /\bdd\b[^|;]*\bof=["']?([^\s"'|;&]+)["']?/g,
+      extract: (m) => [m[1]],
+    },
+  ];
+
+  for (const { regex, extract } of writePatterns) {
+    regex.lastIndex = 0;
+    let match;
+    while ((match = regex.exec(cmd)) !== null) {
+      const targets = extract(match);
+      for (const target of targets) {
+        if (target && !isInsidePipeDir(target, pipeDir)) {
+          return (
+            `Filesystem write blocked: "${target}" is outside the pipe directory. ` +
+            `Pipes can only write files within: ${pipeDir}`
+          );
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
 function buildPermissionRules(): string {
   if (!PERMS) return "";
   const rules: string[] = [];
@@ -299,6 +411,18 @@ function buildPermissionRules(): string {
     const dayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
     rules.push(`**Allowed days**: ${PERMS.days.map((d) => dayNames[d] || "?").join(", ")}`);
   }
+  if (PERMS.pipe_dir) {
+    rules.push("\n### Filesystem Sandbox");
+    rules.push(
+      `You can ONLY write files inside your pipe directory: \`${PERMS.pipe_dir}\``
+    );
+    rules.push(
+      "Writing, moving, copying, or deleting files outside this directory is BLOCKED."
+    );
+    rules.push(
+      "Use relative paths (e.g. `./output.json`) to stay within your directory."
+    );
+  }
   if (PERMS.pipe_token) {
     rules.push(
       `\n**Authentication**: Include this header in ALL curl requests:\n  -H "Authorization: Bearer ${PERMS.pipe_token}"`
@@ -339,6 +463,12 @@ export default function (pi: ExtensionAPI) {
           "Only localhost and LAN addresses are allowed. " +
           "Disable offline mode in Settings → Privacy to restore external access.",
       };
+    }
+
+    // Filesystem sandbox: block writes outside pipe_dir
+    const fsViolation = checkFilesystemWrite(cmd);
+    if (fsViolation) {
+      return { block: true, reason: fsViolation };
     }
 
     if (hitsScreenpipeApi(cmd) && !isParsableCurl(cmd)) {

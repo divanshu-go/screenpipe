@@ -998,9 +998,10 @@ async fn setup_pipe_permissions(
     }
 
     let mut perms = permissions::PipePermissions::from_config(config);
+    perms.pipe_dir = Some(pipe_dir.to_string_lossy().to_string());
 
-    // In offline mode, force restrictions so the permissions JSON is always written
-    let force_write = offline;
+    // In offline mode or with filesystem sandbox, force restrictions so the permissions JSON is always written
+    let force_write = offline || perms.pipe_dir.is_some();
 
     if perms.has_any_restrictions() || force_write {
         // Generate a unique pipe token for server-side enforcement
