@@ -2915,7 +2915,7 @@ impl PipeManager {
         let api_port = self.api_port;
         let token_registry = self.token_registry.clone();
         let extra_context = self.extra_context.clone();
-        let local_api_key = self.local_api_key.clone();
+        let _local_api_key = self.local_api_key.clone();
 
         let handle = tokio::spawn(async move {
             info!("pipe scheduler started (generation {})", generation);

@@ -10,7 +10,6 @@
 
 use screenpipe_secrets::SecretStore;
 use serde_json::Value;
-use std::sync::Arc;
 
 const EXCHANGE_PROXY_URL: &str = "https://screenpi.pe/api/oauth/exchange";
 
