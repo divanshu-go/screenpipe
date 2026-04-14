@@ -438,7 +438,6 @@ export function PrivacySection() {
                   size="sm"
                   className="h-8 px-2 shrink-0"
                   onClick={async () => {
-                    // Copy custom key if set, otherwise read auto-generated key
                     let key = settings.apiKey;
                     if (!key) {
                       try {
@@ -448,7 +447,13 @@ export function PrivacySection() {
                       } catch {}
                     }
                     if (key) {
-                      navigator.clipboard.writeText(key);
+                      try {
+                        await navigator.clipboard.writeText(key);
+                      } catch {
+                        // Fallback for Tauri webview clipboard restrictions
+                        const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
+                        await writeText(key);
+                      }
                       toast({ title: "API key copied to clipboard" });
                     } else {
                       toast({ title: "No API key available", description: "Restart the app to auto-generate a key", variant: "destructive" });
