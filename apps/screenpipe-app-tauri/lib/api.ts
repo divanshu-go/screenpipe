@@ -40,15 +40,32 @@ function ensureInitialized(): Promise<void> {
   _initPromise = (async () => {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
-      const config = await invoke<{
-        key: string | null;
-        port: number;
-        auth_enabled: boolean;
-      }>("get_local_api_config");
 
-      _port = config.port;
-      _apiKey = config.key;
-      _authEnabled = config.auth_enabled;
+      // Retry up to 10 times (5 seconds total) if server hasn't started yet.
+      // The server generates the API key on startup, but the webview may load
+      // before it's ready — get_local_api_config returns key:null in that case.
+      const MAX_RETRIES = 10;
+      const RETRY_DELAY_MS = 500;
+
+      for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        const config = await invoke<{
+          key: string | null;
+          port: number;
+          auth_enabled: boolean;
+        }>("get_local_api_config");
+
+        _port = config.port;
+        _apiKey = config.key;
+        _authEnabled = config.auth_enabled;
+
+        // If auth is enabled but key is missing, server isn't ready yet — retry
+        if (_authEnabled && !_apiKey) {
+          await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+          continue;
+        }
+
+        break;
+      }
 
       // Set auth cookie so <img src>, WebSocket, and other browser-initiated
       // requests that can't carry custom headers are authenticated.
