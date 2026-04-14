@@ -405,7 +405,7 @@ dependencies = [
 [[package]]
 name = "antirez-asr-sys"
 version = "0.1.0"
-source = "git+https://github.com/screenpipe/audiopipe.git?rev=cce3776#cce37760c9006f4649006ca8b8eee78c1b32b052"
+source = "git+https://github.com/screenpipe/audiopipe.git?rev=d9cf445#d9cf445483c6a8ea24a5eb6ee92c84353408cba6"
 dependencies = [
  "cc",
 ]
@@ -461,15 +461,6 @@ dependencies = [
  "percent-encoding",
  "windows-sys 0.60.2",
  "x11rb",
-]
-
-[[package]]
-name = "arc-swap"
-version = "1.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a3a1fd6f75306b68087b831f025c712524bcb19aad54e557b1129cfa0a2b207"
-dependencies = [
- "rustversion",
 ]
 
 [[package]]
@@ -831,7 +822,7 @@ dependencies = [
 [[package]]
 name = "audiopipe"
 version = "0.2.0"
-source = "git+https://github.com/screenpipe/audiopipe.git?rev=cce3776#cce37760c9006f4649006ca8b8eee78c1b32b052"
+source = "git+https://github.com/screenpipe/audiopipe.git?rev=d9cf445#d9cf445483c6a8ea24a5eb6ee92c84353408cba6"
 dependencies = [
  "antirez-asr-sys",
  "half",
@@ -992,7 +983,6 @@ dependencies = [
  "matchit 0.7.3",
  "memchr",
  "mime",
- "multer",
  "percent-encoding",
  "pin-project-lite",
  "rustversion",
@@ -1547,9 +1537,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.2.58"
+version = "1.2.57"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1e928d4b69e3077709075a938a05ffbedfa53a84c8f766efbf8220bb1ff60e1"
+checksum = "7a0dd1ca384932ff3641c8718a02769f1698e7563dc6974ffd03346116310423"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -1727,7 +1717,7 @@ dependencies = [
 [[package]]
 name = "cidre"
 version = "0.15.0"
-source = "git+https://github.com/yury/cidre.git#61e5e77ed1b33ff9a8758626b6266b8509df5506"
+source = "git+https://github.com/yury/cidre.git#4b0f590028051f1b98c325405f119cb6f3e95580"
 dependencies = [
  "cc",
  "cidre-macros 0.5.0",
@@ -2690,27 +2680,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be1e0bca6c3637f992fc1cc7cbc52a78c1ef6db076dbf1059c4323d6a2048376"
 
 [[package]]
-name = "dbus"
-version = "0.9.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21b3aa68d7e7abee336255bd7248ea965cc393f3e70411135a6f6a4b651345d4"
-dependencies = [
- "libc",
- "libdbus-sys",
- "windows-sys 0.59.0",
-]
-
-[[package]]
-name = "dbus-secret-service"
-version = "4.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "708b509edf7889e53d7efb0ffadd994cc6c2345ccb62f55cfd6b0682165e4fa6"
-dependencies = [
- "dbus",
- "zeroize",
-]
-
-[[package]]
 name = "debugid"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3463,8 +3432,8 @@ dependencies = [
 
 [[package]]
 name = "ffmpeg-sidecar"
-version = "2.5.0"
-source = "git+https://github.com/nathanbabcock/ffmpeg-sidecar?branch=main#33272cc8203d85983f805b23892c889c2308b816"
+version = "2.3.0"
+source = "git+https://github.com/nathanbabcock/ffmpeg-sidecar?branch=main#b3d375274620a2668b3d169f81e3f9890433a455"
 dependencies = [
  "anyhow",
  "tar",
@@ -5484,22 +5453,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "keyring"
-version = "3.6.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eebcc3aff044e5944a8fbaf69eb277d11986064cba30c468730e8b9909fb551c"
-dependencies = [
- "byteorder",
- "dbus-secret-service",
- "linux-keyutils",
- "log",
- "security-framework 2.11.1",
- "security-framework 3.7.0",
- "windows-sys 0.60.2",
- "zeroize",
-]
-
-[[package]]
 name = "khronos-egl"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5746,15 +5699,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "libdbus-sys"
-version = "0.2.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "328c4789d42200f1eeec05bd86c9c13c7f091d2ba9a6ea35acdf51f31bc0f043"
-dependencies = [
- "pkg-config",
-]
-
-[[package]]
 name = "libfuzzer-sys"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5917,16 +5861,6 @@ dependencies = [
  "wayland-client",
  "wayland-protocols",
  "wayland-protocols-wlr",
-]
-
-[[package]]
-name = "linux-keyutils"
-version = "0.2.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83270a18e9f90d0707c41e9f35efada77b64c0e6f3f1810e71c8368a864d5590"
-dependencies = [
- "bitflags 2.11.0",
- "libc",
 ]
 
 [[package]]
@@ -6480,23 +6414,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "multer"
-version = "3.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83e87776546dc87511aa5ee218730c92b666d7264ab6ed41f9d215af9cd5224b"
-dependencies = [
- "bytes",
- "encoding_rs",
- "futures-util",
- "http 1.4.0",
- "httparse",
- "memchr",
- "mime",
- "spin",
- "version_check",
-]
-
-[[package]]
 name = "nalgebra"
 version = "0.32.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6532,7 +6449,7 @@ dependencies = [
  "openssl-probe",
  "openssl-sys",
  "schannel",
- "security-framework 3.7.0",
+ "security-framework",
  "security-framework-sys",
  "tempfile",
 ]
@@ -8641,7 +8558,7 @@ checksum = "478e0585659a122aa407eb7e3c0e1fa51b1d8a870038bd29f0cf4a8551eea972"
 [[package]]
 name = "qwen3-asr-sys"
 version = "0.1.0"
-source = "git+https://github.com/screenpipe/audiopipe.git?rev=cce3776#cce37760c9006f4649006ca8b8eee78c1b32b052"
+source = "git+https://github.com/screenpipe/audiopipe.git?rev=d9cf445#d9cf445483c6a8ea24a5eb6ee92c84353408cba6"
 dependencies = [
  "cc",
  "cmake",
@@ -9445,7 +9362,7 @@ dependencies = [
  "openssl-probe",
  "rustls-pki-types",
  "schannel",
- "security-framework 3.7.0",
+ "security-framework",
 ]
 
 [[package]]
@@ -9491,7 +9408,7 @@ dependencies = [
  "rustls-native-certs",
  "rustls-platform-verifier-android",
  "rustls-webpki 0.103.10",
- "security-framework 3.7.0",
+ "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
  "windows-sys 0.61.2",
@@ -9679,7 +9596,7 @@ dependencies = [
 [[package]]
 name = "sck-rs"
 version = "0.1.0"
-source = "git+https://github.com/screenpipe/sck-rs#cc39b0fee819f470b881d37658c940e7172c6431"
+source = "git+https://github.com/screenpipe/sck-rs#1561f06250991346f75a8b9120023ce7fe88b83e"
 dependencies = [
  "cidre 0.15.0",
  "image 0.25.10",
@@ -9706,8 +9623,6 @@ name = "screenpipe-a11y"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "arboard",
- "arc-swap",
  "chrono",
  "cidre 0.13.1",
  "crossbeam-channel",
@@ -9727,7 +9642,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.3.82"
+version = "2.2.298"
 dependencies = [
  "anyhow",
  "arboard",
@@ -9752,7 +9667,6 @@ dependencies = [
  "icalendar",
  "image 0.25.10",
  "ini",
- "keyring",
  "lazy_static",
  "log",
  "nokhwa-bindings-macos",
@@ -9773,7 +9687,6 @@ dependencies = [
  "screenpipe-engine",
  "screenpipe-events",
  "screenpipe-screen",
- "screenpipe-secrets",
  "screenpipe-vault",
  "sentry 0.42.0",
  "serde",
@@ -9831,7 +9744,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio"
-version = "0.3.279"
+version = "0.3.245"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -9886,7 +9799,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
-version = "0.3.279"
+version = "0.3.245"
 dependencies = [
  "dirs 6.0.0",
  "serde",
@@ -9898,10 +9811,11 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.3.279"
+version = "0.3.245"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64 0.22.1",
  "chrono",
  "dirs 6.0.0",
  "eventkit-rs",
@@ -9926,7 +9840,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.3.279"
+version = "0.3.245"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -9959,20 +9873,18 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sha2 0.10.9",
- "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
  "uiautomation",
  "uuid",
  "which 6.0.3",
- "windows-sys 0.59.0",
  "zeroize",
 ]
 
 [[package]]
 name = "screenpipe-db"
-version = "0.3.279"
+version = "0.3.245"
 dependencies = [
  "anyhow",
  "chrono",
@@ -9997,7 +9909,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-engine"
-version = "0.3.279"
+version = "0.3.245"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -10037,7 +9949,6 @@ dependencies = [
  "screenpipe-db",
  "screenpipe-events",
  "screenpipe-screen",
- "screenpipe-secrets",
  "screenpipe-vault",
  "sentry 0.36.0",
  "serde",
@@ -10061,7 +9972,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.3.279"
+version = "0.3.245"
 dependencies = [
  "anyhow",
  "chrono",
@@ -10077,7 +9988,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.3.279"
+version = "0.3.245"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -10112,24 +10023,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "screenpipe-secrets"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64 0.22.1",
- "chacha20poly1305",
- "chrono",
- "rand 0.8.5",
- "serde",
- "serde_json",
- "sqlx",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "screenpipe-vault"
-version = "0.3.279"
+version = "0.3.245"
 dependencies = [
  "argon2",
  "chacha20poly1305",
@@ -10196,19 +10091,6 @@ dependencies = [
  "pkcs8 0.10.2",
  "subtle",
  "zeroize",
-]
-
-[[package]]
-name = "security-framework"
-version = "2.11.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "897b2245f0b511c87893af39b033e5ca9cce68824c4d7e7630b5a1d339658d02"
-dependencies = [
- "bitflags 2.11.0",
- "core-foundation 0.9.4",
- "core-foundation-sys 0.8.7",
- "libc",
- "security-framework-sys",
 ]
 
 [[package]]
