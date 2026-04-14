@@ -33,7 +33,9 @@ impl Integration for Asana {
     fn proxy_config(&self) -> Option<&'static ProxyConfig> {
         static CFG: ProxyConfig = ProxyConfig {
             base_url: "https://app.asana.com/api/1.0",
-            auth: ProxyAuth::Bearer { credential_key: "api_token" },
+            auth: ProxyAuth::Bearer {
+                credential_key: "api_token",
+            },
             extra_headers: &[],
         };
         Some(&CFG)

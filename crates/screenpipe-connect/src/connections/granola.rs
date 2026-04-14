@@ -33,7 +33,9 @@ impl Integration for Granola {
     fn proxy_config(&self) -> Option<&'static ProxyConfig> {
         static CFG: ProxyConfig = ProxyConfig {
             base_url: "https://public-api.granola.ai/v1",
-            auth: ProxyAuth::Bearer { credential_key: "api_key" },
+            auth: ProxyAuth::Bearer {
+                credential_key: "api_key",
+            },
             extra_headers: &[],
         };
         Some(&CFG)

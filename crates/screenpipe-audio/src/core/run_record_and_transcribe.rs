@@ -87,7 +87,10 @@ pub async fn run_record_and_transcribe(
         // The broadcast channel accumulated data while we were paused — drain it to avoid
         // transcribing audio from the lock screen period.
         if was_paused_for_lock {
-            info!("screen unlocked, resuming audio recording for {}", device_name);
+            info!(
+                "screen unlocked, resuming audio recording for {}",
+                device_name
+            );
             was_paused_for_lock = false;
             collected_audio.clear();
             segment_start_time = now_epoch_secs();

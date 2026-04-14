@@ -33,7 +33,9 @@ impl Integration for Intercom {
     fn proxy_config(&self) -> Option<&'static ProxyConfig> {
         static CFG: ProxyConfig = ProxyConfig {
             base_url: "https://api.intercom.io",
-            auth: ProxyAuth::Bearer { credential_key: "api_token" },
+            auth: ProxyAuth::Bearer {
+                credential_key: "api_token",
+            },
             extra_headers: &[],
         };
         Some(&CFG)

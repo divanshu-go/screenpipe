@@ -33,7 +33,10 @@ impl Integration for Limitless {
     fn proxy_config(&self) -> Option<&'static ProxyConfig> {
         static CFG: ProxyConfig = ProxyConfig {
             base_url: "https://api.limitless.ai/v1",
-            auth: ProxyAuth::Header { name: "X-API-Key", credential_key: "api_key" },
+            auth: ProxyAuth::Header {
+                name: "X-API-Key",
+                credential_key: "api_key",
+            },
             extra_headers: &[],
         };
         Some(&CFG)

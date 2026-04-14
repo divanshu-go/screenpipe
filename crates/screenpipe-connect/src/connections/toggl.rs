@@ -33,7 +33,10 @@ impl Integration for Toggl {
     fn proxy_config(&self) -> Option<&'static ProxyConfig> {
         static CFG: ProxyConfig = ProxyConfig {
             base_url: "https://api.track.toggl.com/api/v9",
-            auth: ProxyAuth::BasicAuth { username_key: "api_token", password_key: "api_token" },
+            auth: ProxyAuth::BasicAuth {
+                username_key: "api_token",
+                password_key: "api_token",
+            },
             extra_headers: &[],
         };
         Some(&CFG)

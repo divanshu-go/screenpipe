@@ -508,18 +508,21 @@ impl RecordArgs {
         config.api_auth = self.api_auth;
         if config.api_auth {
             // Priority: env var > settings > secret store > auth.json (legacy) > auto-generate
-            config.api_auth_key = std::env::var("SCREENPIPE_API_KEY")
-                .ok()
-                .or_else(|| {
-                    let key = settings.api_key.as_str();
-                    if key.is_empty() { None } else { Some(key.to_string()) }
-                });
+            config.api_auth_key = std::env::var("SCREENPIPE_API_KEY").ok().or_else(|| {
+                let key = settings.api_key.as_str();
+                if key.is_empty() {
+                    None
+                } else {
+                    Some(key.to_string())
+                }
+            });
 
             // Try secret store
             if config.api_auth_key.is_none() {
                 if let Ok(store) = auth::open_secret_store().await {
                     if let Ok(Some(bytes)) = store.get("api_auth_key").await {
-                        config.api_auth_key = String::from_utf8(bytes).ok().filter(|s| !s.is_empty());
+                        config.api_auth_key =
+                            String::from_utf8(bytes).ok().filter(|s| !s.is_empty());
                     }
                 }
             }
@@ -527,7 +530,8 @@ impl RecordArgs {
             // Legacy fallback: auth.json (for users upgrading from older versions)
             if config.api_auth_key.is_none() {
                 config.api_auth_key = dirs::home_dir().and_then(|home| {
-                    let content = std::fs::read_to_string(home.join(".screenpipe/auth.json")).ok()?;
+                    let content =
+                        std::fs::read_to_string(home.join(".screenpipe/auth.json")).ok()?;
                     let json: serde_json::Value = serde_json::from_str(&content).ok()?;
                     json["token"].as_str().map(|s| s.to_string())
                 });

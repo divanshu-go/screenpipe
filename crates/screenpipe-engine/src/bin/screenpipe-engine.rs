@@ -865,9 +865,15 @@ async fn main() -> anyhow::Result<()> {
         std::sync::Arc::new(tokio::sync::RwLock::new(None));
 
     if config.listen_address.is_loopback() {
-        info!("API server listening on 127.0.0.1:{} (localhost only)", config.port);
+        info!(
+            "API server listening on 127.0.0.1:{} (localhost only)",
+            config.port
+        );
     } else {
-        warn!("API server listening on {}:{} — accessible from the network", config.listen_address, config.port);
+        warn!(
+            "API server listening on {}:{} — accessible from the network",
+            config.listen_address, config.port
+        );
     }
     if config.api_auth {
         info!("API auth enabled — run `screenpipe auth token` to view your key");

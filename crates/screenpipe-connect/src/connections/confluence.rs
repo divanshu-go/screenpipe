@@ -49,7 +49,10 @@ impl Integration for Confluence {
     fn proxy_config(&self) -> Option<&'static ProxyConfig> {
         static CFG: ProxyConfig = ProxyConfig {
             base_url: "https://{domain}/wiki/api/v2",
-            auth: ProxyAuth::BasicAuth { username_key: "email", password_key: "api_token" },
+            auth: ProxyAuth::BasicAuth {
+                username_key: "email",
+                password_key: "api_token",
+            },
             extra_headers: &[],
         };
         Some(&CFG)

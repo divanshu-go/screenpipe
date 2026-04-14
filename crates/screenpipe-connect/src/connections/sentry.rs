@@ -42,7 +42,9 @@ impl Integration for Sentry {
     fn proxy_config(&self) -> Option<&'static ProxyConfig> {
         static CFG: ProxyConfig = ProxyConfig {
             base_url: "https://sentry.io/api/0",
-            auth: ProxyAuth::Bearer { credential_key: "auth_token" },
+            auth: ProxyAuth::Bearer {
+                credential_key: "auth_token",
+            },
             extra_headers: &[],
         };
         Some(&CFG)

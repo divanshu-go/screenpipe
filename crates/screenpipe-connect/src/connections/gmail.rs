@@ -56,7 +56,9 @@ impl Integration for Gmail {
     fn proxy_config(&self) -> Option<&'static ProxyConfig> {
         static CFG: ProxyConfig = ProxyConfig {
             base_url: "https://gmail.googleapis.com/gmail/v1",
-            auth: ProxyAuth::Bearer { credential_key: "api_key" },
+            auth: ProxyAuth::Bearer {
+                credential_key: "api_key",
+            },
             extra_headers: &[],
         };
         Some(&CFG)

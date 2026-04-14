@@ -42,7 +42,9 @@ impl Integration for WhatsApp {
     fn proxy_config(&self) -> Option<&'static ProxyConfig> {
         static CFG: ProxyConfig = ProxyConfig {
             base_url: "https://graph.facebook.com/v21.0",
-            auth: ProxyAuth::Bearer { credential_key: "access_token" },
+            auth: ProxyAuth::Bearer {
+                credential_key: "access_token",
+            },
             extra_headers: &[],
         };
         Some(&CFG)

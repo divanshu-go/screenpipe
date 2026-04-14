@@ -53,7 +53,9 @@ impl Integration for GoogleCalendar {
     fn proxy_config(&self) -> Option<&'static ProxyConfig> {
         static CFG: ProxyConfig = ProxyConfig {
             base_url: "https://www.googleapis.com",
-            auth: ProxyAuth::Bearer { credential_key: "api_key" },
+            auth: ProxyAuth::Bearer {
+                credential_key: "api_key",
+            },
             extra_headers: &[],
         };
         Some(&CFG)

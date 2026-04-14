@@ -871,6 +871,7 @@ mod tests {
             source_slug: None,
             installed_version: None,
             source_hash: None,
+            subagent: false,
             trigger: None,
             config: std::collections::HashMap::new(),
         };
@@ -896,6 +897,7 @@ mod tests {
             source_slug: None,
             installed_version: None,
             source_hash: None,
+            subagent: false,
             trigger: None,
             config: std::collections::HashMap::new(),
         };
@@ -933,6 +935,7 @@ mod tests {
             source_slug: None,
             installed_version: None,
             source_hash: None,
+            subagent: false,
             trigger: None,
             config: std::collections::HashMap::new(),
         };
@@ -983,6 +986,7 @@ mod tests {
             source_slug: None,
             installed_version: None,
             source_hash: None,
+            subagent: false,
             trigger: None,
             config: std::collections::HashMap::new(),
         };

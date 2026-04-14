@@ -33,7 +33,10 @@ impl Integration for Monday {
     fn proxy_config(&self) -> Option<&'static ProxyConfig> {
         static CFG: ProxyConfig = ProxyConfig {
             base_url: "https://api.monday.com/v2",
-            auth: ProxyAuth::Header { name: "Authorization", credential_key: "api_token" },
+            auth: ProxyAuth::Header {
+                name: "Authorization",
+                credential_key: "api_token",
+            },
             extra_headers: &[],
         };
         Some(&CFG)

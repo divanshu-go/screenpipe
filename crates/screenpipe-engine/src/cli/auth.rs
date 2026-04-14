@@ -32,8 +32,7 @@ async fn print_token() -> Result<()> {
     }
 
     // Priority 2: settings store (store.bin — used by desktop app)
-    let store_path =
-        screenpipe_core::paths::default_screenpipe_data_dir().join("store.bin");
+    let store_path = screenpipe_core::paths::default_screenpipe_data_dir().join("store.bin");
     if store_path.exists() {
         if let Ok(content) = std::fs::read_to_string(&store_path) {
             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {

@@ -75,7 +75,10 @@ use std::{
 };
 use tokio::{net::TcpListener, sync::Mutex};
 use tower_http::{cors::Any, trace::TraceLayer};
-use tower_http::{cors::{CorsLayer, AllowOrigin}, trace::DefaultMakeSpan};
+use tower_http::{
+    cors::{AllowOrigin, CorsLayer},
+    trace::DefaultMakeSpan,
+};
 
 /// Bind a TcpListener with SO_REUSEADDR on Windows to avoid TIME_WAIT port conflicts.
 /// On non-Windows platforms, falls back to the standard tokio bind.

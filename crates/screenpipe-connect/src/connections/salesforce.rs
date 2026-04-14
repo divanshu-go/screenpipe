@@ -42,7 +42,9 @@ impl Integration for Salesforce {
     fn proxy_config(&self) -> Option<&'static ProxyConfig> {
         static CFG: ProxyConfig = ProxyConfig {
             base_url: "{instance_url}/services/data/v61.0",
-            auth: ProxyAuth::Bearer { credential_key: "access_token" },
+            auth: ProxyAuth::Bearer {
+                credential_key: "access_token",
+            },
             extra_headers: &[],
         };
         Some(&CFG)

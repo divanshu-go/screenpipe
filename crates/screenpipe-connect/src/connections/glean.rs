@@ -53,7 +53,9 @@ impl Integration for Glean {
     fn proxy_config(&self) -> Option<&'static ProxyConfig> {
         static CFG: ProxyConfig = ProxyConfig {
             base_url: "https://{instance}-be.glean.com/api/index/v1",
-            auth: ProxyAuth::Bearer { credential_key: "indexing_token" },
+            auth: ProxyAuth::Bearer {
+                credential_key: "indexing_token",
+            },
             extra_headers: &[],
         };
         Some(&CFG)

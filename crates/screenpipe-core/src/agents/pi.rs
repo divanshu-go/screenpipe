@@ -221,6 +221,24 @@ impl PiExecutor {
         Ok(())
     }
 
+    /// Install or remove the sub-agent extension based on the `subagent` frontmatter flag.
+    /// When enabled, the agent can spawn parallel child pi processes via
+    /// `sub-agent run "prompt"` bash commands.
+    pub fn ensure_subagent_extension(project_dir: &Path, enabled: bool) -> Result<()> {
+        let ext_dir = project_dir.join(".pi").join("extensions");
+        let ext_path = ext_dir.join("sub-agent.ts");
+        if enabled {
+            std::fs::create_dir_all(&ext_dir)?;
+            let ext_content = include_str!("../../assets/extensions/sub-agent.ts");
+            std::fs::write(&ext_path, ext_content)?;
+            info!("sub-agent extension installed at {:?}", ext_path);
+        } else if ext_path.exists() {
+            std::fs::remove_file(&ext_path)?;
+            info!("sub-agent extension removed");
+        }
+        Ok(())
+    }
+
     /// Install or remove the web-search extension based on provider and offline mode.
     /// Web search uses the screenpipe cloud backend, so we only enable it
     /// for screenpipe-cloud to avoid sending data to our backend when the

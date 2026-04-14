@@ -25,18 +25,14 @@ pub async fn handle_backup_command(
         BackupCommand::Checkpoint => {
             eprintln!("flushing WAL to main database file...");
 
-            let db = screenpipe_db::DatabaseManager::new(
-                &db_path.to_string_lossy(),
-                Default::default(),
-            )
-            .await?;
+            let db =
+                screenpipe_db::DatabaseManager::new(&db_path.to_string_lossy(), Default::default())
+                    .await?;
 
             let (busy, log_pages, checkpointed) = db.wal_checkpoint().await?;
 
             if busy != 0 {
-                eprintln!(
-                    "warning: checkpoint was busy (another process holds the database)"
-                );
+                eprintln!("warning: checkpoint was busy (another process holds the database)");
                 eprintln!("  wal pages: {}, checkpointed: {}", log_pages, checkpointed);
                 std::process::exit(1);
             }
@@ -63,11 +59,9 @@ pub async fn handle_backup_command(
             eprintln!("  source: {}", db_path.display());
             eprintln!("  dest:   {}", dest);
 
-            let db = screenpipe_db::DatabaseManager::new(
-                &db_path.to_string_lossy(),
-                Default::default(),
-            )
-            .await?;
+            let db =
+                screenpipe_db::DatabaseManager::new(&db_path.to_string_lossy(), Default::default())
+                    .await?;
 
             db.backup_to(&dest).await.map_err(|e| {
                 let _ = std::fs::remove_file(&dest);

@@ -39,7 +39,9 @@ impl Integration for Notion {
     fn proxy_config(&self) -> Option<&'static ProxyConfig> {
         static CFG: ProxyConfig = ProxyConfig {
             base_url: "https://api.notion.com",
-            auth: ProxyAuth::Bearer { credential_key: "api_key" },
+            auth: ProxyAuth::Bearer {
+                credential_key: "api_key",
+            },
             extra_headers: &[("Notion-Version", "2022-06-28")],
         };
         Some(&CFG)

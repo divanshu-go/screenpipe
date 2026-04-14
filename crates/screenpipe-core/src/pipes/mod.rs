@@ -145,6 +145,12 @@ pub struct PipeConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_hash: Option<String>,
 
+    /// Enable sub-agent spawning. Default: false.
+    /// When true, the pipe's agent can spawn parallel sub-agents via
+    /// `sub-agent run "prompt"` bash commands.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub subagent: bool,
+
     /// Catches any extra fields from front-matter (backwards compat).
     #[serde(default, flatten, skip_serializing_if = "HashMap::is_empty")]
     pub config: HashMap<String, serde_json::Value>,
@@ -319,6 +325,9 @@ fn is_default_agent(s: &String) -> bool {
 }
 fn is_default_model(s: &String) -> bool {
     s == "auto" || s == "claude-haiku-4-5" || s == "claude-haiku-4-5@20251001"
+}
+fn is_false(b: &bool) -> bool {
+    !b
 }
 /// Simple FNV-1a 64-bit hash, sufficient for change detection.
 fn simple_hash(content: &str) -> String {
@@ -972,6 +981,9 @@ async fn setup_pipe_permissions(
     }
     if let Err(e) = PiExecutor::ensure_orphan_guard_extension(pipe_dir) {
         warn!("failed to install orphan-guard extension: {}", e);
+    }
+    if let Err(e) = PiExecutor::ensure_subagent_extension(pipe_dir, config.subagent) {
+        warn!("failed to install sub-agent extension: {}", e);
     }
     if let Err(e) = PiExecutor::ensure_screenpipe_skill_filtered(pipe_dir, config) {
         warn!("failed to install filtered skills: {}", e);
@@ -2684,7 +2696,9 @@ impl PipeManager {
 
         // URL — fetch over HTTPS only (reject plaintext HTTP to prevent MITM)
         if source.starts_with("http://") {
-            return Err(anyhow!("pipe installation over plain HTTP is not allowed — use https:// instead"));
+            return Err(anyhow!(
+                "pipe installation over plain HTTP is not allowed — use https:// instead"
+            ));
         }
         if source.starts_with("https://") {
             let name = url_to_pipe_name(source);
@@ -3144,7 +3158,11 @@ impl PipeManager {
                     info!(
                         "scheduler: queuing pipe '{}' ({})",
                         name,
-                        if triggered_by_event { "event" } else { "scheduled" }
+                        if triggered_by_event {
+                            "event"
+                        } else {
+                            "scheduled"
+                        }
                     );
                     last_run.insert(name.clone(), Utc::now());
 
@@ -4537,6 +4555,7 @@ mod tests {
             source_slug: None,
             installed_version: None,
             source_hash: None,
+            subagent: false,
             trigger: None,
         };
         let body = "Do something useful";
@@ -4765,6 +4784,7 @@ mod tests {
             source_slug: None,
             installed_version: None,
             source_hash: None,
+            subagent: false,
             trigger: None,
         };
         let prompt = render_prompt_with_port(&config, "body text", 3031, None, None);
@@ -4795,6 +4815,7 @@ mod tests {
             source_slug: None,
             installed_version: None,
             source_hash: None,
+            subagent: false,
             trigger: None,
         };
         let sys = render_pipe_system_prompt("hello", 3030, None);
@@ -4818,6 +4839,7 @@ mod tests {
             source_slug: None,
             installed_version: None,
             source_hash: None,
+            subagent: false,
             trigger: None,
         };
         let sys = render_pipe_system_prompt("body text", 3030, Some("You are a helpful assistant"));
@@ -4843,6 +4865,7 @@ mod tests {
             source_slug: None,
             installed_version: None,
             source_hash: None,
+            subagent: false,
             trigger: None,
         };
         let sys = render_pipe_system_prompt("body text", 3030, None);
@@ -4921,6 +4944,7 @@ mod tests {
                 source_slug: None,
                 installed_version: None,
                 source_hash: None,
+                subagent: false,
                 trigger: None,
             },
             last_run: None,
@@ -5426,16 +5450,16 @@ mod tests {
         // First queue attempt should succeed
         {
             let mut qr = queued.lock().await;
-            assert!(qr.insert("my-pipe".to_string()), "first insert should succeed");
+            assert!(
+                qr.insert("my-pipe".to_string()),
+                "first insert should succeed"
+            );
         }
 
         // Second queue attempt should be blocked
         {
             let qr = queued.lock().await;
-            assert!(
-                qr.contains("my-pipe"),
-                "pipe should be in queued set"
-            );
+            assert!(qr.contains("my-pipe"), "pipe should be in queued set");
         }
 
         // After removal, should be queueable again

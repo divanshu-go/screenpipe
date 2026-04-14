@@ -111,9 +111,15 @@ pub enum ProxyAuth {
     /// Send as `Authorization: Bearer <token>`. Token comes from OAuth or credential field.
     Bearer { credential_key: &'static str },
     /// Send as a custom header (e.g. `X-API-Key: <value>`).
-    Header { name: &'static str, credential_key: &'static str },
+    Header {
+        name: &'static str,
+        credential_key: &'static str,
+    },
     /// HTTP Basic Auth using two credential fields (username:password).
-    BasicAuth { username_key: &'static str, password_key: &'static str },
+    BasicAuth {
+        username_key: &'static str,
+        password_key: &'static str,
+    },
     /// No auth needed (e.g. webhook-based integrations where the URL is the secret).
     None,
 }
@@ -432,7 +438,10 @@ pub async fn render_context(screenpipe_dir: &Path, api_port: u16) -> String {
                 "  proxy: {}/{}/proxy/  (append the API path, e.g. /v1/pages)\n",
                 base, def.id
             ));
-            out.push_str(&format!("  config: {}/{}/config  (non-secret settings)\n", base, def.id));
+            out.push_str(&format!(
+                "  config: {}/{}/config  (non-secret settings)\n",
+                base, def.id
+            ));
         } else {
             // No proxy config — fall back to raw credentials (webhook-style integrations)
             for (key, value) in *creds {
@@ -452,7 +461,10 @@ pub async fn render_context(screenpipe_dir: &Path, api_port: u16) -> String {
                 "  proxy: {}/{}/proxy/  (append the API path, e.g. /v1/pages)\n",
                 base, def.id
             ));
-            out.push_str(&format!("  config: {}/{}/config  (non-secret settings)\n", base, def.id));
+            out.push_str(&format!(
+                "  config: {}/{}/config  (non-secret settings)\n",
+                base, def.id
+            ));
         } else {
             // OAuth without proxy — still don't expose the token
             out.push_str("  (connected via OAuth — no proxy available, use API directly)\n");

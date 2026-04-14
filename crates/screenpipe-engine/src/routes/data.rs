@@ -248,9 +248,7 @@ pub(crate) async fn backup_handler(
     if std::path::Path::new(&dest).exists() {
         return Err((
             StatusCode::CONFLICT,
-            JsonResponse(
-                json!({"error": format!("destination already exists: {}", dest)}),
-            ),
+            JsonResponse(json!({"error": format!("destination already exists: {}", dest)})),
         ));
     }
 

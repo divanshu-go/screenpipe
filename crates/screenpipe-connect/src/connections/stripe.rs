@@ -33,7 +33,9 @@ impl Integration for Stripe {
     fn proxy_config(&self) -> Option<&'static ProxyConfig> {
         static CFG: ProxyConfig = ProxyConfig {
             base_url: "https://api.stripe.com",
-            auth: ProxyAuth::Bearer { credential_key: "api_key" },
+            auth: ProxyAuth::Bearer {
+                credential_key: "api_key",
+            },
             extra_headers: &[],
         };
         Some(&CFG)

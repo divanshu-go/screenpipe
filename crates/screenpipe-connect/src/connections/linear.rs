@@ -33,7 +33,10 @@ impl Integration for Linear {
     fn proxy_config(&self) -> Option<&'static ProxyConfig> {
         static CFG: ProxyConfig = ProxyConfig {
             base_url: "https://api.linear.app",
-            auth: ProxyAuth::Header { name: "Authorization", credential_key: "api_key" },
+            auth: ProxyAuth::Header {
+                name: "Authorization",
+                credential_key: "api_key",
+            },
             extra_headers: &[],
         };
         Some(&CFG)

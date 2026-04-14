@@ -133,7 +133,8 @@ async fn get_connection(
     if has_proxy {
         tracing::debug!(
             "raw credential access for '{}' — consider using /connections/{}/proxy/ instead",
-            id, id
+            id,
+            id
         );
         response.headers_mut().insert(
             "X-Deprecation-Warning",
@@ -554,36 +555,24 @@ async fn gmail_token(
     instance: Option<&str>,
     secret_store: &Option<Arc<SecretStore>>,
 ) -> anyhow::Result<String> {
-    oauth_store::get_valid_token_instance(
-        secret_store.as_deref(),
-        client,
-        "gmail",
-        instance,
-    )
-    .await
-    .ok_or_else(|| {
-        anyhow::anyhow!(
-            "Gmail not connected — use 'Connect with Gmail' in Settings > Connections"
-        )
-    })
+    oauth_store::get_valid_token_instance(secret_store.as_deref(), client, "gmail", instance)
+        .await
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Gmail not connected — use 'Connect with Gmail' in Settings > Connections"
+            )
+        })
 }
 
 /// GET /connections/gmail/instances — list all connected Gmail accounts.
 async fn gmail_list_instances(State(state): State<ConnectionsState>) -> (StatusCode, Json<Value>) {
-    let instances = oauth_store::list_oauth_instances(
-        state.secret_store.as_deref(),
-        "gmail",
-    )
-    .await;
+    let instances = oauth_store::list_oauth_instances(state.secret_store.as_deref(), "gmail").await;
     let mut accounts = Vec::new();
     for inst in instances {
-        let email = oauth_store::load_oauth_json(
-            state.secret_store.as_deref(),
-            "gmail",
-            inst.as_deref(),
-        )
-        .await
-        .and_then(|v| v["email"].as_str().map(String::from));
+        let email =
+            oauth_store::load_oauth_json(state.secret_store.as_deref(), "gmail", inst.as_deref())
+                .await
+                .and_then(|v| v["email"].as_str().map(String::from));
         accounts.push(json!({
             "instance": inst,
             "email": email,
@@ -959,10 +948,7 @@ enum ResolvedAuth {
 
 /// Resolve base_url, replacing `{field}` placeholders with credential values.
 /// Returns an error if any placeholder remains unresolved.
-fn resolve_base_url(
-    template: &str,
-    creds: Option<&Map<String, Value>>,
-) -> Result<String, String> {
+fn resolve_base_url(template: &str, creds: Option<&Map<String, Value>>) -> Result<String, String> {
     let mut url = template.to_string();
     if url.contains('{') {
         if let Some(c) = creds {
@@ -1101,8 +1087,16 @@ async fn connection_proxy(
     );
 
     // Check that auth was actually resolved (don't send unauthenticated requests)
-    if matches!(auth, ResolvedAuth::None) && !matches!(proxy_cfg.auth, screenpipe_connect::connections::ProxyAuth::None) {
-        tracing::warn!("proxy: no credentials found for connection '{}' — cannot authenticate", id);
+    if matches!(auth, ResolvedAuth::None)
+        && !matches!(
+            proxy_cfg.auth,
+            screenpipe_connect::connections::ProxyAuth::None
+        )
+    {
+        tracing::warn!(
+            "proxy: no credentials found for connection '{}' — cannot authenticate",
+            id
+        );
         return (
             StatusCode::UNAUTHORIZED,
             Json(json!({ "error": format!("connection '{}' has no stored credentials — connect it first in Settings", id) })),
@@ -1115,11 +1109,7 @@ async fn connection_proxy(
         Ok(url) => url,
         Err(e) => {
             tracing::warn!("proxy: failed to resolve base_url for '{}': {}", id, e);
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": e })),
-            )
-                .into_response();
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response();
         }
     };
 
@@ -1178,8 +1168,7 @@ async fn connection_proxy(
     match req.send().await {
         Ok(resp) => {
             let upstream_status = resp.status().as_u16();
-            let status =
-                StatusCode::from_u16(upstream_status).unwrap_or(StatusCode::BAD_GATEWAY);
+            let status = StatusCode::from_u16(upstream_status).unwrap_or(StatusCode::BAD_GATEWAY);
             let resp_headers = resp.headers().clone();
             match resp.bytes().await {
                 Ok(resp_body) => {
@@ -1228,7 +1217,13 @@ async fn connection_config(
             // Filter out secret fields
             let def = mgr.find_def(&id);
             let secret_keys: std::collections::HashSet<&str> = def
-                .map(|d| d.fields.iter().filter(|f| f.secret).map(|f| f.key).collect())
+                .map(|d| {
+                    d.fields
+                        .iter()
+                        .filter(|f| f.secret)
+                        .map(|f| f.key)
+                        .collect()
+                })
                 .unwrap_or_default();
             let safe: Map<String, Value> = creds
                 .into_iter()
@@ -1323,7 +1318,10 @@ mod tests {
         let mut creds = Map::new();
         creds.insert("domain".into(), json!("mycompany.atlassian.net"));
         let result = resolve_base_url("https://{domain}/rest/api/3", Some(&creds));
-        assert_eq!(result.unwrap(), "https://mycompany.atlassian.net/rest/api/3");
+        assert_eq!(
+            result.unwrap(),
+            "https://mycompany.atlassian.net/rest/api/3"
+        );
     }
 
     #[test]
@@ -1388,7 +1386,10 @@ mod tests {
         let auth_cfg = ProxyAuth::Bearer {
             credential_key: "api_key",
         };
-        assert!(matches!(resolve_auth(&auth_cfg, None, None), ResolvedAuth::None));
+        assert!(matches!(
+            resolve_auth(&auth_cfg, None, None),
+            ResolvedAuth::None
+        ));
     }
 
     #[test]
@@ -1442,7 +1443,10 @@ mod tests {
     #[test]
     fn test_resolve_auth_none() {
         let auth_cfg = ProxyAuth::None;
-        assert!(matches!(resolve_auth(&auth_cfg, None, None), ResolvedAuth::None));
+        assert!(matches!(
+            resolve_auth(&auth_cfg, None, None),
+            ResolvedAuth::None
+        ));
     }
 
     // -- proxy config validation --------------------------------------------
