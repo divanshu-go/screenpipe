@@ -193,7 +193,7 @@ export default function GeneralSettings() {
                 <div>
                   <h3 className="text-sm font-medium text-foreground">Enhanced AI</h3>
                   <p className="text-xs text-muted-foreground">
-                    use screenpipe cloud for smarter suggestions
+                    Use Screenpipe Cloud for smarter suggestions
                   </p>
                   <p className="text-[10px] text-muted-foreground/60 mt-0.5">
                     sends recent activity to screenpipe cloud for processing. we don&apos;t store your data (zero retention).
@@ -227,7 +227,7 @@ export default function GeneralSettings() {
                       Version{currentVersion ? ` ${currentVersion}` : ""}
                     </h3>
                     <p className="text-xs text-muted-foreground">
-                      install a previous version (at your own risk)
+                      Install a previous version (at your own risk)
                     </p>
                   </div>
                 </div>

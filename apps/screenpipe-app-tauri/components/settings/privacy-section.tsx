@@ -409,7 +409,7 @@ export function PrivacySection() {
                     Require API Authentication
                   </h3>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    remote devices must use the same account to access this API. localhost is always allowed.
+                    Remote devices must use the same account to access this API. Localhost is always allowed.
                   </p>
                 </div>
               </div>
@@ -448,7 +448,7 @@ export function PrivacySection() {
                     Encrypt Settings at Rest
                   </h3>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    encrypt store.bin with a key stored in your OS keychain. requires keychain access.
+                    Encrypt store.bin with a key stored in your OS keychain. Requires keychain access.
                   </p>
                 </div>
               </div>
@@ -546,7 +546,7 @@ export function PrivacySection() {
                   <HelpTooltip text="automatically detects and skips private/incognito browser windows in 20+ languages. on macos, uses native browser APIs for chromium browsers (chrome, edge, brave, arc)." />
                 </h3>
                 <p className="text-xs text-muted-foreground">
-                  skip all private browsing sessions
+                  Skip all private browsing sessions
                 </p>
               </div>
             </div>
@@ -572,7 +572,7 @@ export function PrivacySection() {
                   <HelpTooltip text="pauses all screen capture when netflix, disney+, hulu, prime video, and other DRM streaming apps are focused. this prevents black screens caused by DRM copy protection detecting screen recording. capture resumes automatically when you switch to a non-browser app." />
                 </h3>
                 <p className="text-xs text-muted-foreground">
-                  avoid DRM black screens on netflix, disney+, etc.
+                  Avoid DRM black screens on Netflix, Disney+, etc.
                 </p>
               </div>
             </div>
@@ -597,7 +597,7 @@ export function PrivacySection() {
                   <HelpTooltip text="when enabled, audio recording continues even when your screen is locked. by default, audio recording pauses when the screen is locked to save resources and protect privacy." />
                 </h3>
                 <p className="text-xs text-muted-foreground">
-                  continue audio capture when screen is locked
+                  Continue audio capture when screen is locked
                 </p>
               </div>
             </div>
