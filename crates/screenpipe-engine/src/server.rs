@@ -794,11 +794,18 @@ impl SCServer {
                 crate::routes::timezone::timestamp_middleware,
             ))
             .layer({
-                // API auth middleware — when api_auth is enabled, ALL requests
-                // (including localhost) must include a valid bearer token.
-                // This prevents other apps on the same machine from accessing
-                // screen data. The Tauri frontend gets the key via IPC command
-                // (get_local_api_config), pipes get it via SCREENPIPE_LOCAL_API_KEY env var.
+                // API auth middleware — when api_auth is enabled,
+                // non-localhost requests must include a valid bearer token.
+                //
+                // Localhost is bypassed because the Tauri webview can't
+                // synchronously inject auth before React renders. Tauri's
+                // invoke() is async, so there's always a window where
+                // useEffect fires fetch calls before the key is available.
+                //
+                // TODO: Enforce localhost auth once Tauri supports synchronous
+                // IPC (e.g. via window.__TAURI_INTERNALS__ or preload script).
+                // The infrastructure is ready: localFetch, get_local_api_config
+                // command, SCREENPIPE_LOCAL_API_KEY env var for pipes.
                 let auth_enabled = self.api_auth;
                 let auth_key = self.api_auth_key.clone();
                 axum::middleware::from_fn(
@@ -810,13 +817,18 @@ impl SCServer {
                                 return next.run(req).await;
                             }
 
-                            // Always allow health check — needed for startup detection
-                            // and monitoring before the frontend has the token
-                            if req.uri().path() == "/health" {
+                            // Always allow localhost
+                            let is_localhost = req
+                                .extensions()
+                                .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+                                .map(|ci| ci.0.ip().is_loopback())
+                                .unwrap_or(true);
+
+                            if is_localhost {
                                 return next.run(req).await;
                             }
 
-                            // Check bearer token
+                            // Check bearer token for remote requests
                             let authorized = req
                                 .headers()
                                 .get(axum::http::header::AUTHORIZATION)
@@ -834,7 +846,7 @@ impl SCServer {
                                     .status(403)
                                     .header("Content-Type", "application/json")
                                     .body(axum::body::Body::from(
-                                        r#"{"error":"unauthorized: API authentication is enabled. Pass Authorization: Bearer <your-api-key> (find your key in Settings > Privacy)"}"#,
+                                        r#"{"error":"unauthorized: remote API access requires authentication. Pass Authorization: Bearer <your-api-key> (find your key in Settings > Privacy)"}"#,
                                     ))
                                     .unwrap()
                             }
