@@ -194,9 +194,14 @@ const FREE_INTEGRATIONS: Integration[] = [
   },
 ];
 
-// Free-user view: 2×2 grid with only integrations that work without Pro.
-// GitHub excluded — oauth_connect is blanket Pro-gated backend-side.
-// LM Studio uses a deeplink + localhost check, no backend call needed.
+// Pro user "also free" section — GitHub, Cursor, ChatGPT (no LM Studio, it's a free-tier highlight)
+const PRO_FREE_SECTION: Integration[] = [
+  FREE_INTEGRATIONS[0], // GitHub
+  FREE_INTEGRATIONS[1], // Cursor
+  FREE_INTEGRATIONS[2], // ChatGPT
+];
+
+// Free-user view: 2×2 grid — Cursor, Gmail (locked teaser), ChatGPT, LM Studio
 const FREE_USER_ORDER: Integration[] = [
   FREE_INTEGRATIONS[1], // Cursor
   PRO_INTEGRATIONS[0],  // Gmail (locked teaser)
@@ -707,7 +712,7 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
 
           {/* Free cards */}
           <div className="grid grid-cols-3 gap-2 w-full">
-            {FREE_INTEGRATIONS.map((integration, i) => (
+            {PRO_FREE_SECTION.map((integration, i) => (
               <motion.div
                 key={integration.cardKey}
                 initial={{ opacity: 0, y: 8 }}
