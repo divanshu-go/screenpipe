@@ -45,6 +45,9 @@ pub struct ServerCore {
     pub data_dir: PathBuf,
     pub data_path: PathBuf,
     pub port: u16,
+    /// Local API auth key — exposed to the frontend via Tauri command so
+    /// localFetch can inject it synchronously (no async store race).
+    pub local_api_key: Option<String>,
 }
 
 impl ServerCore {
@@ -369,6 +372,7 @@ impl ServerCore {
             data_dir: local_data_dir,
             data_path,
             port: config.port,
+            local_api_key: config.api_auth_key.clone(),
         })
     }
 

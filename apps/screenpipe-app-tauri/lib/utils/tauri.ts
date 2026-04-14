@@ -170,6 +170,10 @@ async updateGlobalShortcuts(showShortcut: string, startShortcut: string, stopSho
     else return { status: "error", error: e  as any };
 }
 },
+/**
+ * Start the server (if not running) and capture.
+ * This is the main entry point called by the frontend.
+ */
 async spawnScreenpipe(overrideArgs: string[] | null) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("spawn_screenpipe", { overrideArgs }) };
@@ -178,25 +182,13 @@ async spawnScreenpipe(overrideArgs: string[] | null) : Promise<Result<null, stri
     else return { status: "error", error: e  as any };
 }
 },
+/**
+ * Stop everything — capture only. Server stays alive.
+ * This is the command called by the tray toggle and keyboard shortcut.
+ */
 async stopScreenpipe() : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("stop_screenpipe") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-async startCapture() : Promise<Result<null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("start_capture") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-async stopCapture() : Promise<Result<null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("stop_capture") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1264,12 +1256,12 @@ ignoreIncognitoWindows: boolean;
  * Experimental: pause screen capture when a DRM streaming app or site is focused.
  * Off by default; engine-only pause (no full app shutdown).
  */
-pauseOnDrmContent?: boolean;
+pauseOnDrmContent?: boolean; 
 /**
  * Continue recording audio when the screen is locked.
  * Default: false (audio pauses when screen is locked to save resources).
  */
-recordWhileLocked?: boolean;
+recordWhileLocked?: boolean; 
 /**
  * Automatically append text typed during a meeting to the meeting's note
  * when the meeting ends. Groups typed text by app/window context.
@@ -1373,7 +1365,11 @@ scheduleRules?: ScheduleRule[];
 /**
  * Require authentication for remote (non-localhost) API access.
  */
-apiAuth?: boolean }) & 
+apiAuth?: boolean; 
+/**
+ * Custom API key for remote authentication. If empty, a key is auto-generated.
+ */
+apiKey?: string }) & 
 /**
  * Catch-all for fields added by the frontend (e.g. chatHistory)
  * that the Rust struct doesn't know about. Without this, `save()` would

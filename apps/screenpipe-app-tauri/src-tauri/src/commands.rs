@@ -132,6 +132,33 @@ pub fn is_enterprise_build_cmd(app_handle: tauri::AppHandle) -> bool {
     is_enterprise_build(&app_handle)
 }
 
+/// Get the local API auth key and port for the frontend to use.
+/// Returns immediately (no async, no disk I/O) — the key is already in memory.
+/// Returns { key: string | null, port: number, auth_enabled: bool }.
+#[tauri::command]
+#[specta::specta]
+pub fn get_local_api_config(
+    app_handle: tauri::AppHandle,
+) -> serde_json::Value {
+    use crate::recording::RecordingState;
+    if let Some(state) = app_handle.try_state::<RecordingState>() {
+        if let Ok(guard) = state.server.try_lock() {
+            if let Some(ref core) = *guard {
+                return serde_json::json!({
+                    "key": core.local_api_key,
+                    "port": core.port,
+                    "auth_enabled": core.local_api_key.is_some(),
+                });
+            }
+        }
+    }
+    serde_json::json!({
+        "key": null,
+        "port": 3030,
+        "auth_enabled": false,
+    })
+}
+
 /// Read the enterprise license key from `enterprise.json`.
 /// Checks in order:
 /// 1. Next to executable (pushed via Intune/MDM to Program Files / .app bundle)

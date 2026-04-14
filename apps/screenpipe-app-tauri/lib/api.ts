@@ -19,43 +19,36 @@
  */
 
 // ---------------------------------------------------------------------------
-// Configuration — set once at app startup, read everywhere
+// Configuration — loaded from Tauri IPC (fast, synchronous on Rust side)
 // ---------------------------------------------------------------------------
 
 let _port = 3030;
 let _apiKey: string | null = null;
 let _authEnabled = false;
 let _initialized = false;
-
-// Eager initialization promise — reads from Tauri store immediately on import.
-// This ensures auth is available before any React component mounts.
 let _initPromise: Promise<void> | null = null;
 
+/**
+ * Load API config from the Tauri backend via IPC command.
+ * This is fast (microseconds — reads from memory, no disk I/O).
+ * Falls back to defaults in non-Tauri contexts (tests, SSR).
+ */
 function ensureInitialized(): Promise<void> {
   if (_initialized) return Promise.resolve();
   if (_initPromise) return _initPromise;
 
   _initPromise = (async () => {
     try {
-      const { Store } = await import("@tauri-apps/plugin-store");
-      const store = await Store.load("store.bin");
-      const settings = await store.get<Record<string, unknown>>("settings");
-      if (settings) {
-        const port = (settings as any)?.port;
-        const apiKey = (settings as any)?.apiKey;
-        const apiAuth = (settings as any)?.apiAuth;
-        if (port) _port = port;
-        if (apiAuth) {
-          _authEnabled = true;
-          if (apiKey) _apiKey = apiKey;
-        }
-      }
-      // Also check user token as fallback key
-      if (_authEnabled && !_apiKey) {
-        const user = await store.get<Record<string, unknown>>("user");
-        const token = (user as any)?.token || (user as any)?.api_key;
-        if (token) _apiKey = token;
-      }
+      const { invoke } = await import("@tauri-apps/api/core");
+      const config = await invoke<{
+        key: string | null;
+        port: number;
+        auth_enabled: boolean;
+      }>("get_local_api_config");
+
+      _port = config.port;
+      _apiKey = config.key;
+      _authEnabled = config.auth_enabled;
     } catch {
       // Not in Tauri context (tests, SSR) — defaults are fine
     }
@@ -65,12 +58,12 @@ function ensureInitialized(): Promise<void> {
   return _initPromise;
 }
 
-// Start loading immediately on import — don't wait for React mount
+// Start loading immediately on import
 ensureInitialized();
 
 /**
- * Configure the API module. Call from SettingsProvider after loading settings.
- * Overrides the eager initialization with authoritative values.
+ * Configure the API module explicitly. Called by SettingsProvider when
+ * settings change (port, auth key). Overrides the IPC-loaded values.
  */
 export function configureApi(opts: {
   port?: number;
@@ -85,7 +78,6 @@ export function configureApi(opts: {
 
 /**
  * Get the base URL for the local screenpipe API.
- * Use this instead of hardcoding "http://localhost:3030".
  */
 export function getApiBaseUrl(): string {
   return `http://localhost:${_port}`;
@@ -100,7 +92,6 @@ export function getApiPort(): number {
 
 /**
  * Build auth headers for the current config.
- * Returns empty object if auth is disabled.
  */
 export function getAuthHeaders(): Record<string, string> {
   if (_authEnabled && _apiKey) {
@@ -119,16 +110,12 @@ export function getAuthHeaders(): Record<string, string> {
  * - Resolves paths relative to the configured base URL
  * - Auto-injects auth header when API auth is enabled
  * - Passes through full URLs unchanged (for remote device access)
- * - Waits for initialization on first call if needed
- *
- * @param path - API path (e.g. "/search?q=hello") or full URL
- * @param init - Standard fetch RequestInit
+ * - Waits for IPC config on first call (typically already resolved)
  */
 export async function localFetch(
   path: string,
   init?: RequestInit
 ): Promise<Response> {
-  // Ensure config is loaded before first request
   await ensureInitialized();
 
   const url = path.startsWith("http")
