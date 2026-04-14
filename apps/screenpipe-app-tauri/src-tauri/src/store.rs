@@ -913,7 +913,7 @@ impl SettingsStore {
             // Auto-generate if no key found — stored in the encrypted settings
             // store (not auth.json) so it's protected by keychain encryption.
             if config.api_auth_key.is_none() {
-                let key = format!("sp-{}", uuid::Uuid::new_v4().simple());
+                let key = format!("sp-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
                 tracing::info!("api auth enabled — auto-generated key");
                 config.api_auth_key = Some(key);
                 // Note: caller should persist this back to settings.apiKey

@@ -539,7 +539,7 @@ impl RecordArgs {
 
             // Auto-generate if none found — persist to secret store
             if config.api_auth_key.is_none() {
-                let key = format!("sp-{}", uuid::Uuid::new_v4().simple());
+                let key = format!("sp-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
                 if let Ok(store) = auth::open_secret_store().await {
                     let _ = store.set("api_auth_key", key.as_bytes()).await;
                 }
