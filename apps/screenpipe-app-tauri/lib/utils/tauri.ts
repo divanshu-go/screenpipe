@@ -183,6 +183,28 @@ async spawnScreenpipe(overrideArgs: string[] | null) : Promise<Result<null, stri
 }
 },
 /**
+ * Start capture session (recording). Server must already be running.
+ */
+async startCapture() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("start_capture") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Stop capture session. Server stays alive.
+ */
+async stopCapture() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("stop_capture") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Stop everything — capture only. Server stays alive.
  * This is the command called by the tray toggle and keyboard shortcut.
  */
