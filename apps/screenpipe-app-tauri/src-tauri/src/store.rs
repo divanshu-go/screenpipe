@@ -910,19 +910,15 @@ impl SettingsStore {
             .or_else(|| self.user.api_key.clone())
             .or_else(|| self.user.token.clone());
 
-            // Auto-generate if no key found
+            // Auto-generate if no key found — stored in the encrypted settings
+            // store (not auth.json) so it's protected by keychain encryption.
             if config.api_auth_key.is_none() {
                 let key = format!("sp-{}", uuid::Uuid::new_v4().simple());
-                if let Some(home) = dirs::home_dir() {
-                    let auth_path = home.join(".screenpipe/auth.json");
-                    let json = serde_json::json!({ "token": &key });
-                    let _ = std::fs::write(
-                        &auth_path,
-                        serde_json::to_string_pretty(&json).unwrap_or_default(),
-                    );
-                }
-                tracing::info!("api auth enabled — auto-generated key: {}", key);
+                tracing::info!("api auth enabled — auto-generated key");
                 config.api_auth_key = Some(key);
+                // Note: caller should persist this back to settings.apiKey
+                // so it survives restarts. The key is returned in config and
+                // saved by the recording startup code.
             }
         }
         config

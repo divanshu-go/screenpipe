@@ -298,6 +298,10 @@ async fn main() -> anyhow::Result<()> {
             screenpipe_engine::cli::login::handle_whoami_command().await?;
             return Ok(());
         }
+        Command::Auth { ref subcommand } => {
+            screenpipe_engine::cli::auth::handle_auth_command(subcommand).await?;
+            return Ok(());
+        }
         Command::Backup {
             ref subcommand,
             ref data_dir,
@@ -475,7 +479,8 @@ async fn main() -> anyhow::Result<()> {
     // Build unified RecordingConfig from CLI args
     let config = record_args
         .clone()
-        .into_recording_config(local_data_dir.clone());
+        .into_recording_config(local_data_dir.clone())
+        .await;
 
     // Replace the current conditional check with:
     let ffmpeg_path = find_ffmpeg_path();
@@ -860,9 +865,12 @@ async fn main() -> anyhow::Result<()> {
         std::sync::Arc::new(tokio::sync::RwLock::new(None));
 
     if config.listen_address.is_loopback() {
-        info!("API server listening on 127.0.0.1:{} (localhost only). To allow network access, set listen_address to 0.0.0.0", config.port);
+        info!("API server listening on 127.0.0.1:{} (localhost only)", config.port);
     } else {
-        warn!("API server listening on {}:{} — accessible from the network. Ensure api_auth is enabled.", config.listen_address, config.port);
+        warn!("API server listening on {}:{} — accessible from the network", config.listen_address, config.port);
+    }
+    if config.api_auth {
+        info!("API auth enabled — run `screenpipe auth token` to view your key");
     }
 
     let mut server = SCServer::new(

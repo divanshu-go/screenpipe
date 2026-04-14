@@ -49,6 +49,12 @@ function ensureInitialized(): Promise<void> {
       _port = config.port;
       _apiKey = config.key;
       _authEnabled = config.auth_enabled;
+
+      // Set auth cookie so <img src>, WebSocket, and other browser-initiated
+      // requests that can't carry custom headers are authenticated.
+      if (_authEnabled && _apiKey) {
+        document.cookie = `screenpipe_auth=${_apiKey}; path=/; SameSite=Strict`;
+      }
     } catch {
       // Not in Tauri context (tests, SSR) — defaults are fine
     }
@@ -74,6 +80,13 @@ export function configureApi(opts: {
   if (opts.apiKey !== undefined) _apiKey = opts.apiKey || null;
   if (opts.authEnabled !== undefined) _authEnabled = opts.authEnabled;
   _initialized = true;
+
+  // Update auth cookie
+  if (_authEnabled && _apiKey) {
+    document.cookie = `screenpipe_auth=${_apiKey}; path=/; SameSite=Strict`;
+  } else {
+    document.cookie = "screenpipe_auth=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
+  }
 }
 
 /**
@@ -98,6 +111,17 @@ export function getAuthHeaders(): Record<string, string> {
     return { Authorization: `Bearer ${_apiKey}` };
   }
   return {};
+}
+
+/**
+ * Append auth token as query parameter to a URL.
+ * Used for WebSocket connections and <img src="..."> tags
+ * which can't set HTTP headers.
+ */
+export function appendAuthToken(url: string): string {
+  if (!_authEnabled || !_apiKey) return url;
+  const sep = url.includes("?") ? "&" : "?";
+  return `${url}${sep}token=${encodeURIComponent(_apiKey)}`;
 }
 
 // ---------------------------------------------------------------------------

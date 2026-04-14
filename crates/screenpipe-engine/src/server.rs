@@ -817,10 +817,10 @@ impl SCServer {
                 // invoke() is async, so there's always a window where
                 // useEffect fires fetch calls before the key is available.
                 //
-                // TODO: Enforce localhost auth once Tauri supports synchronous
-                // IPC (e.g. via window.__TAURI_INTERNALS__ or preload script).
-                // The infrastructure is ready: localFetch, get_local_api_config
-                // command, SCREENPIPE_LOCAL_API_KEY env var for pipes.
+                // Auth middleware: requires Bearer token for ALL requests (including
+                // localhost) when api_auth is enabled. The Tauri frontend injects the
+                // token via localFetch (loaded from get_local_api_config IPC on import).
+                // Health endpoint is exempt so status polling works before auth init.
                 let auth_enabled = self.api_auth;
                 let auth_key = self.api_auth_key.clone();
                 axum::middleware::from_fn(
@@ -832,26 +832,53 @@ impl SCServer {
                                 return next.run(req).await;
                             }
 
-                            // Always allow localhost
-                            let is_localhost = req
-                                .extensions()
-                                .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-                                .map(|ci| ci.0.ip().is_loopback())
-                                .unwrap_or(true);
-
-                            if is_localhost {
+                            // Allow specific endpoints without auth:
+                            // - /health: device monitor, tray status, startup polling
+                            //   (called before frontend loads API key via IPC)
+                            // - /connections/oauth/callback: browser redirect from
+                            //   OAuth providers (no bearer token in redirect)
+                            let path = req.uri().path();
+                            if path == "/health"
+                                || path == "/ws/health"
+                                || path == "/connections/oauth/callback"
+                            {
                                 return next.run(req).await;
                             }
 
-                            // Check bearer token for remote requests
-                            let authorized = req
+                            // Check auth via (in priority order):
+                            // 1. Authorization: Bearer <token> header (localFetch)
+                            // 2. screenpipe_auth=<token> cookie (img src, WebSocket)
+                            // 3. ?token=<token> query param (fallback)
+                            let header_token = req
                                 .headers()
                                 .get(axum::http::header::AUTHORIZATION)
                                 .and_then(|v| v.to_str().ok())
                                 .and_then(|v| v.strip_prefix("Bearer "))
-                                .map(|token| {
-                                    auth_key.as_deref() == Some(token)
-                                })
+                                .map(|s| s.to_string());
+
+                            let cookie_token = req
+                                .headers()
+                                .get(axum::http::header::COOKIE)
+                                .and_then(|v| v.to_str().ok())
+                                .and_then(|cookies| {
+                                    cookies.split(';')
+                                        .map(|c| c.trim())
+                                        .find_map(|c| c.strip_prefix("screenpipe_auth="))
+                                        .map(|s| s.to_string())
+                                });
+
+                            let query_token = req
+                                .uri()
+                                .query()
+                                .and_then(|q| {
+                                    q.split('&')
+                                        .find_map(|pair| pair.strip_prefix("token="))
+                                        .map(|s| s.to_string())
+                                });
+
+                            let token = header_token.or(cookie_token).or(query_token);
+                            let authorized = token
+                                .map(|t| auth_key.as_deref() == Some(t.as_str()))
                                 .unwrap_or(false);
 
                             if authorized {
@@ -861,7 +888,7 @@ impl SCServer {
                                     .status(403)
                                     .header("Content-Type", "application/json")
                                     .body(axum::body::Body::from(
-                                        r#"{"error":"unauthorized: remote API access requires authentication. Pass Authorization: Bearer <your-api-key> (find your key in Settings > Privacy)"}"#,
+                                        r#"{"error":"unauthorized: API access requires authentication. Pass Authorization: Bearer <your-api-key> (find your key in Settings > Privacy)"}"#,
                                     ))
                                     .unwrap()
                             }

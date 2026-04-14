@@ -421,6 +421,25 @@ pub async fn spawn_screenpipe(
     }
 
     let recording_config = store.to_recording_config(data_dir);
+
+    // If an API key was auto-generated, persist it to the encrypted settings
+    // store so it survives restarts (replaces the old auth.json file approach).
+    if let Some(ref key) = recording_config.api_auth_key {
+        if store.recording.api_key.is_empty() && store.user.api_key.is_none() && store.user.token.is_none() {
+            if let Ok(tauri_store) = crate::store::get_store(&app, None) {
+                if let Ok(Some(mut settings_val)) = tauri_store.get("settings").map(|v| v.map(|v| v.clone())) {
+                    if let Some(obj) = settings_val.as_object_mut() {
+                        obj.insert("apiKey".to_string(), serde_json::json!(key));
+                        tauri_store.set("settings", settings_val);
+                        let _ = tauri_store.save();
+                        crate::store::reencrypt_store_file(&app);
+                        tracing::info!("api auth: auto-generated key persisted to encrypted store");
+                    }
+                }
+            }
+        }
+    }
+
     let server_arc = state.server.clone();
     let capture_arc = state.capture.clone();
 
