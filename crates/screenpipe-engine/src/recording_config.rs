@@ -118,6 +118,11 @@ pub struct RecordingConfig {
     /// The API key for this instance (from SCREENPIPE_API_KEY env or auth.json).
     /// Used to validate incoming remote requests when api_auth is enabled.
     pub api_auth_key: Option<String>,
+
+    /// IP address the HTTP server listens on. Default: 127.0.0.1 (localhost only).
+    /// Set to 0.0.0.0 to allow access from other devices on the network.
+    /// When set to 0.0.0.0, api_auth should be enabled for security.
+    pub listen_address: std::net::Ipv4Addr,
 }
 
 impl RecordingConfig {
@@ -211,6 +216,7 @@ impl RecordingConfig {
             max_snapshot_width: settings.max_snapshot_width,
             api_auth: settings.api_auth,
             api_auth_key: None,
+            listen_address: std::net::Ipv4Addr::LOCALHOST,
         }
     }
 

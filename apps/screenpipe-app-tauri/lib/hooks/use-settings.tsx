@@ -622,7 +622,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 				configureApi({
 					port: loadedSettings.port ?? 3030,
 					apiKey: loadedSettings.apiKey || null,
-					authEnabled: loadedSettings.apiAuth ?? false,
+					authEnabled: loadedSettings.apiAuth ?? true,
 				});
 			} catch (error) {
 				console.error("Failed to load settings:", error);
@@ -752,7 +752,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 			configureApi({
 				port: merged.port ?? 3030,
 				apiKey: merged.apiKey || null,
-				authEnabled: merged.apiAuth ?? false,
+				authEnabled: merged.apiAuth ?? true,
 			});
 		}
 	};

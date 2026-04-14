@@ -226,7 +226,7 @@ impl ServerCore {
         // --- HTTP server ---
         let mut server = SCServer::new(
             db.clone(),
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), config.port),
+            SocketAddr::new(IpAddr::V4(config.listen_address), config.port),
             local_data_dir.clone(),
             config.disable_vision,
             config.disable_audio,
@@ -338,7 +338,7 @@ impl ServerCore {
 
         // Bind HTTP listener before returning (catches port conflicts early)
         let listener = bind_listener(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            IpAddr::V4(config.listen_address),
             config.port,
         ))
         .await

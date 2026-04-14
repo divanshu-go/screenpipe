@@ -183,28 +183,6 @@ async spawnScreenpipe(overrideArgs: string[] | null) : Promise<Result<null, stri
 }
 },
 /**
- * Start capture session (recording). Server must already be running.
- */
-async startCapture() : Promise<Result<null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("start_capture") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Stop capture session. Server stays alive.
- */
-async stopCapture() : Promise<Result<null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("stop_capture") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
  * Stop everything — capture only. Server stays alive.
  * This is the command called by the tray toggle and keyboard shortcut.
  */
@@ -808,10 +786,6 @@ async chatgptOauthStatus() : Promise<Result<ChatGptOAuthStatus, string>> {
     else return { status: "error", error: e  as any };
 }
 },
-/**
- * Return the current valid access token (auto-refreshing if needed).
- * Used by the frontend to call OpenAI APIs directly (e.g. /v1/models).
- */
 async chatgptOauthGetToken() : Promise<Result<string, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("chatgpt_oauth_get_token") };
@@ -828,9 +802,6 @@ async chatgptOauthLogout() : Promise<Result<boolean, string>> {
     else return { status: "error", error: e  as any };
 }
 },
-/**
- * Fetch available models from OpenAI using the stored OAuth token.
- */
 async chatgptOauthModels() : Promise<Result<string[], string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("chatgpt_oauth_models") };

@@ -2682,8 +2682,11 @@ impl PipeManager {
             }
         }
 
-        // URL — try HTTP fetch
-        if source.starts_with("http://") || source.starts_with("https://") {
+        // URL — fetch over HTTPS only (reject plaintext HTTP to prevent MITM)
+        if source.starts_with("http://") {
+            return Err(anyhow!("pipe installation over plain HTTP is not allowed — use https:// instead"));
+        }
+        if source.starts_with("https://") {
             let name = url_to_pipe_name(source);
             let dest_dir = self.pipes_dir.join(&name);
             std::fs::create_dir_all(&dest_dir)?;

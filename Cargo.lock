@@ -1170,7 +1170,7 @@ dependencies = [
 [[package]]
 name = "cidre"
 version = "0.15.0"
-source = "git+https://github.com/yury/cidre.git#61e5e77ed1b33ff9a8758626b6266b8509df5506"
+source = "git+https://github.com/yury/cidre.git#3bd68fa9d9809f43bc5e2b7172d358f41c50bd19"
 dependencies = [
  "cc",
  "cidre-macros 0.5.0",
@@ -1325,7 +1325,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
 dependencies = [
  "lazy_static",
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -6903,6 +6903,7 @@ dependencies = [
  "russh",
  "russh-sftp",
  "screenpipe-core",
+ "screenpipe-secrets",
  "serde",
  "serde_json",
  "tokio",

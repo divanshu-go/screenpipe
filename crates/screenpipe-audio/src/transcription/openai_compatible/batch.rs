@@ -275,7 +275,7 @@ async fn handle_response(response: Response, device: &str) -> Result<String> {
             let transcription = result["text"].as_str().unwrap_or("");
 
             if transcription.is_empty() {
-                info!("device: {}, transcription is empty.", device);
+                debug!("device: {}, transcription is empty.", device);
             } else {
                 info!(
                     "device: {}, transcription successful. length: {} characters",

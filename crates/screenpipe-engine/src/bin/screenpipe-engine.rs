@@ -859,6 +859,12 @@ async fn main() -> anyhow::Result<()> {
     let manual_meeting: std::sync::Arc<tokio::sync::RwLock<Option<i64>>> =
         std::sync::Arc::new(tokio::sync::RwLock::new(None));
 
+    if config.listen_address.is_loopback() {
+        info!("API server listening on 127.0.0.1:{} (localhost only). To allow network access, set listen_address to 0.0.0.0", config.port);
+    } else {
+        warn!("API server listening on {}:{} — accessible from the network. Ensure api_auth is enabled.", config.listen_address, config.port);
+    }
+
     let mut server = SCServer::new(
         db_server,
         SocketAddr::new(IpAddr::V4(config.listen_address), config.port),

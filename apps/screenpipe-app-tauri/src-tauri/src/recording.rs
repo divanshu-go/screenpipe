@@ -364,7 +364,7 @@ pub async fn spawn_screenpipe(
     // Wait for port release
     let max_poll_iters = if cfg!(windows) { 40 } else { 20 };
     for i in 0..max_poll_iters {
-        match tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await {
+        match tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port)).await {
             Ok(_) => {
                 debug!("Port {} is free after {}ms", port, i * 250);
                 break;
