@@ -6876,6 +6876,7 @@ dependencies = [
  "bytemuck",
  "bytes",
  "chrono",
+ "cidre 0.15.0",
  "clap",
  "cpal",
  "criterion",
