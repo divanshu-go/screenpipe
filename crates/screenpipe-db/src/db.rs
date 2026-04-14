@@ -2788,7 +2788,7 @@ impl DatabaseManager {
         LIMIT ?10 OFFSET ?11
         "#,
             fts_join = if has_fts {
-                "JOIN frames_fts ON frames.id = frames_fts.id"
+                "JOIN frames_fts ON frames.id = frames_fts.rowid"
             } else {
                 ""
             },
@@ -3294,7 +3294,7 @@ impl DatabaseManager {
                        AND (?7 IS NULL OR frames.focused = ?7)
                        {a11y_filter}"#,
                 fts_join = if has_fts {
-                    "JOIN frames_fts ON frames.id = frames_fts.id"
+                    "JOIN frames_fts ON frames.id = frames_fts.rowid"
                 } else {
                     ""
                 },
@@ -3986,7 +3986,7 @@ impl DatabaseManager {
             LIMIT ?4 OFFSET ?5
             "#,
             fts_join = if has_fts {
-                "JOIN frames_fts ON f.id = frames_fts.id"
+                "JOIN frames_fts ON f.id = frames_fts.rowid"
             } else {
                 ""
             },
@@ -5495,7 +5495,7 @@ impl DatabaseManager {
                 crate::text_normalizer::sanitize_fts5_query(query)
             };
             conditions.push(
-                "f.id IN (SELECT id FROM frames_fts WHERE frames_fts MATCH ? ORDER BY rank LIMIT 5000)",
+                "f.id IN (SELECT rowid FROM frames_fts WHERE frames_fts MATCH ? ORDER BY rank LIMIT 5000)",
             );
             fts_match
         } else {
@@ -5847,7 +5847,7 @@ LIMIT ? OFFSET ?
                 crate::text_normalizer::sanitize_fts5_query(query)
             };
             conditions.push(
-                "f.id IN (SELECT id FROM frames_fts WHERE frames_fts MATCH ? ORDER BY rank LIMIT 5000)",
+                "f.id IN (SELECT rowid FROM frames_fts WHERE frames_fts MATCH ? ORDER BY rank LIMIT 5000)",
             );
             fts_match
         } else {
