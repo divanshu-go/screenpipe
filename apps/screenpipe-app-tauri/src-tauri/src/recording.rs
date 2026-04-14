@@ -427,7 +427,7 @@ pub async fn spawn_screenpipe(
     if let Some(ref key) = recording_config.api_auth_key {
         if store.recording.api_key.is_empty() && store.user.api_key.is_none() && store.user.token.is_none() {
             if let Ok(tauri_store) = crate::store::get_store(&app, None) {
-                if let Ok(Some(mut settings_val)) = tauri_store.get("settings").map(|v| v.map(|v| v.clone())) {
+                if let Some(mut settings_val) = tauri_store.get("settings") {
                     if let Some(obj) = settings_val.as_object_mut() {
                         obj.insert("apiKey".to_string(), serde_json::json!(key));
                         tauri_store.set("settings", settings_val);
