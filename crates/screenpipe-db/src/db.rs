@@ -855,7 +855,7 @@ impl DatabaseManager {
         let count = sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*) FROM audio_transcriptions
              WHERE is_input_device = 0
-               AND timestamp >= datetime('now', ?1)
+               AND timestamp >= strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now', ?1)
              LIMIT 1",
         )
         .bind(format!("-{} seconds", within_secs))
@@ -1072,7 +1072,7 @@ impl DatabaseManager {
         // Fetch recent transcriptions from ALL devices
         let recent: Vec<(String,)> = sqlx::query_as(
             "SELECT transcription FROM audio_transcriptions
-             WHERE timestamp > datetime('now', ?1)
+             WHERE timestamp > strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now', ?1)
              ORDER BY timestamp DESC
              LIMIT 50",
         )
@@ -6600,6 +6600,25 @@ LIMIT ? OFFSET ?
                 }
             }
         });
+    }
+
+    /// Run `PRAGMA wal_checkpoint(TRUNCATE)` on demand, flushing WAL into the
+    /// main database file so it can be safely copied.
+    /// Returns (busy, log_pages, checkpointed_pages).
+    pub async fn wal_checkpoint(&self) -> Result<(i32, i32, i32), sqlx::Error> {
+        let row = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok((row.get(0), row.get(1), row.get(2)))
+    }
+
+    /// Create an atomic backup of the database using `VACUUM INTO`.
+    /// The destination path must not already exist.
+    pub async fn backup_to(&self, dest: &str) -> Result<(), sqlx::Error> {
+        sqlx::query(&format!("VACUUM INTO '{}'", dest.replace('\'', "''")))
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     // ── Meeting persistence ──────────────────────────────────────────
