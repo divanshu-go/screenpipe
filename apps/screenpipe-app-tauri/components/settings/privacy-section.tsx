@@ -450,9 +450,15 @@ export function PrivacySection() {
                       try {
                         await navigator.clipboard.writeText(key);
                       } catch {
-                        // Fallback for Tauri webview clipboard restrictions
-                        const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
-                        await writeText(key);
+                        // Fallback: create a temporary input and use execCommand
+                        const el = document.createElement("textarea");
+                        el.value = key;
+                        el.style.position = "fixed";
+                        el.style.opacity = "0";
+                        document.body.appendChild(el);
+                        el.select();
+                        document.execCommand("copy");
+                        document.body.removeChild(el);
                       }
                       toast({ title: "API key copied to clipboard" });
                     } else {
