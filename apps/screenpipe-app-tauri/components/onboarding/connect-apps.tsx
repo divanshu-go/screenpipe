@@ -12,6 +12,7 @@ import { useSettings } from "@/lib/hooks/use-settings";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { readTextFile, writeFile } from "@tauri-apps/plugin-fs";
 import { homeDir, join } from "@tauri-apps/api/path";
+import { platform } from "@tauri-apps/plugin-os";
 import posthog from "posthog-js";
 
 // ─── Icons ───────────────────────────────────────────────────────────────────
@@ -27,10 +28,11 @@ function GmailIcon({ className = "w-5 h-5" }: { className?: string }) {
   );
 }
 
-function CalcomIcon({ className = "w-5 h-5" }: { className?: string }) {
+function ClaudeIcon({ className = "w-5 h-5" }: { className?: string }) {
   return (
-    <svg viewBox="0 0 24 24" className={className} fill="currentColor" aria-hidden>
-      <path d="M2.408 14.488C1.035 14.488 0 13.4 0 12.058c0-1.346.982-2.443 2.408-2.443.758 0 1.282.233 1.691.765l-.66.55a1.343 1.343 0 0 0-1.03-.442c-.93 0-1.44.711-1.44 1.57 0 .86.559 1.557 1.44 1.557.413 0 .765-.147 1.043-.443l.651.573c-.391.51-.929.743-1.695.743zM6.948 10.913h.89v3.49h-.89v-.51c-.185.362-.493.604-1.083.604-.943 0-1.695-.82-1.695-1.826 0-1.007.752-1.825 1.695-1.825.585 0 .898.241 1.083.604zm.026 1.758c0-.546-.374-.998-.964-.998-.568 0-.938.457-.938.998 0 .528.37.998.938.998.586 0 .964-.456.964-.998zM8.467 9.503h.89v4.895h-.89zM9.752 13.937a.53.53 0 0 1 .542-.528c.313 0 .533.242.533.528a.527.527 0 0 1-.533.537.534.534 0 0 1-.542-.537zM14.23 13.839c-.33.403-.832.658-1.426.658a1.806 1.806 0 0 1-1.84-1.826c0-1.007.778-1.825 1.84-1.825.572 0 1.07.241 1.4.622l-.687.577c-.172-.215-.396-.376-.713-.376-.568 0-.938.456-.938.998 0 .541.37.997.938.997.343 0 .58-.179.757-.42zM14.305 12.671c0-1.007.78-1.825 1.84-1.825 1.061 0 1.84.818 1.84 1.825 0 1.007-.779 1.826-1.84 1.826-1.06-.005-1.84-.82-1.84-1.826zm2.778 0c0-.546-.37-.998-.938-.998-.568-.004-.937.452-.937.998 0 .542.37.998.937.998.568 0 .938-.456.938-.998zM24 12.269v2.13h-.89v-1.911c0-.604-.281-.864-.704-.864-.396 0-.678.197-.678.864v1.91h-.89v-1.91c0-.604-.285-.864-.704-.864-.396 0-.744.197-.744.864v1.91h-.89v-3.49h.89v.484c.185-.376.52-.564 1.035-.564.489 0 .898.241 1.123.649.224-.417.554-.65 1.153-.65.731.005 1.299.56 1.299 1.442z" />
+    <svg viewBox="0 0 512 509.64" xmlns="http://www.w3.org/2000/svg" className={className}>
+      <path fill="#D77655" d="M115.612 0h280.775C459.974 0 512 52.026 512 115.612v278.415c0 63.587-52.026 115.612-115.613 115.612H115.612C52.026 509.639 0 457.614 0 394.027V115.612C0 52.026 52.026 0 115.612 0z"/>
+      <path fill="#FCF2EE" fillRule="nonzero" d="M142.27 316.619l73.655-41.326 1.238-3.589-1.238-1.996-3.589-.001-12.31-.759-42.084-1.138-36.498-1.516-35.361-1.896-8.897-1.895-8.34-10.995.859-5.484 7.482-5.03 10.717.935 23.683 1.617 35.537 2.452 25.782 1.517 38.193 3.968h6.064l.86-2.451-2.073-1.517-1.618-1.517-36.776-24.922-39.81-26.338-20.852-15.166-11.273-7.683-5.687-7.204-2.451-15.721 10.237-11.273 13.75.935 3.513.936 13.928 10.716 29.749 23.027 38.848 28.612 5.687 4.727 2.275-1.617.278-1.138-2.553-4.271-21.13-38.193-22.546-38.848-10.035-16.101-2.654-9.655c-.935-3.968-1.617-7.304-1.617-11.374l11.652-15.823 6.445-2.073 15.545 2.073 6.547 5.687 9.655 22.092 15.646 34.78 24.265 47.291 7.103 14.028 3.791 12.992 1.416 3.968 2.449-.001v-2.275l1.997-26.641 3.69-32.707 3.589-42.084 1.239-11.854 5.863-14.206 11.652-7.683 9.099 4.348 7.482 10.716-1.036 6.926-4.449 28.915-8.72 45.294-5.687 30.331h3.313l3.792-3.791 15.342-20.372 25.782-32.227 11.374-12.789 13.27-14.129 8.517-6.724 16.1-.001 11.854 17.617-5.307 18.199-16.581 21.029-13.75 17.819-19.716 26.54-12.309 21.231 1.138 1.694 2.932-.278 44.536-9.479 24.062-4.347 28.714-4.928 12.992 6.066 1.416 6.167-5.106 12.613-30.71 7.583-36.018 7.204-53.636 12.689-.657.48.758.935 24.164 2.275 10.337.556h25.301l47.114 3.514 12.309 8.139 7.381 9.959-1.238 7.583-18.957 9.655-25.579-6.066-59.702-14.205-20.474-5.106-2.83-.001v1.694l17.061 16.682 31.266 28.233 39.152 36.397 1.997 8.999-5.03 7.102-5.307-.758-34.401-25.883-13.27-11.651-30.053-25.302-1.996-.001v2.654l6.926 10.136 36.574 54.975 1.895 16.859-2.653 5.485-9.479 3.311-10.414-1.895-21.408-30.054-22.092-33.844-17.819-30.331-2.173 1.238-10.515 113.261-4.929 5.788-11.374 4.348-9.478-7.204-5.03-11.652 5.03-23.027 6.066-30.052 4.928-23.886 4.449-29.674 2.654-9.858-.177-.657-2.173.278-22.37 30.71-34.021 45.977-26.919 28.815-6.445 2.553-11.173-5.789 1.037-10.337 6.243-9.2 37.257-47.392 22.47-29.371 14.508-16.961-.101-2.451h-.859l-98.954 64.251-17.618 2.275-7.583-7.103.936-11.652 3.589-3.791 29.749-20.474-.101.102.024.101z"/>
     </svg>
   );
 }
@@ -73,8 +75,52 @@ function CursorIcon({ className = "w-5 h-5" }: { className?: string }) {
   );
 }
 
-// ─── Cursor MCP helpers ───────────────────────────────────────────────────────
+// ─── MCP helpers (shared pattern for Claude Desktop & Cursor) ────────────────
 
+const SCREENPIPE_MCP_CONFIG = { command: "npx", args: ["-y", "screenpipe-mcp"] };
+
+async function readMcpConfig(configPath: string): Promise<Record<string, unknown>> {
+  try {
+    return JSON.parse(await readTextFile(configPath));
+  } catch {
+    return {};
+  }
+}
+
+async function writeMcpConfig(configPath: string, config: Record<string, unknown>): Promise<void> {
+  if (!config.mcpServers || typeof config.mcpServers !== "object") config.mcpServers = {};
+  (config.mcpServers as Record<string, unknown>).screenpipe = SCREENPIPE_MCP_CONFIG;
+  await writeFile(configPath, new TextEncoder().encode(JSON.stringify(config, null, 2)));
+}
+
+// Claude Desktop
+async function getClaudeMcpConfigPath(): Promise<string | null> {
+  try {
+    const os = platform();
+    const home = await homeDir();
+    if (os === "macos") return join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json");
+    if (os === "windows") return join(home, "AppData", "Roaming", "Claude", "claude_desktop_config.json");
+    return null;
+  } catch { return null; }
+}
+
+async function isClaudeMcpInstalled(): Promise<boolean> {
+  try {
+    const configPath = await getClaudeMcpConfigPath();
+    if (!configPath) return false;
+    const config = await readMcpConfig(configPath);
+    return !!(config?.mcpServers as Record<string, unknown>)?.screenpipe;
+  } catch { return false; }
+}
+
+async function installClaudeMcp(): Promise<void> {
+  const configPath = await getClaudeMcpConfigPath();
+  if (!configPath) throw new Error("claude desktop not found");
+  const config = await readMcpConfig(configPath);
+  await writeMcpConfig(configPath, config);
+}
+
+// Cursor
 async function getCursorMcpConfigPath(): Promise<string> {
   const home = await homeDir();
   return join(home, ".cursor", "mcp.json");
@@ -84,27 +130,13 @@ async function isCursorMcpInstalled(): Promise<boolean> {
   try {
     const content = await readTextFile(await getCursorMcpConfigPath());
     return !!JSON.parse(content)?.mcpServers?.screenpipe;
-  } catch {
-    return false;
-  }
+  } catch { return false; }
 }
 
 async function installCursorMcp(): Promise<void> {
   const configPath = await getCursorMcpConfigPath();
-  let config: Record<string, unknown> = {};
-  try {
-    config = JSON.parse(await readTextFile(configPath));
-  } catch {
-    // fresh config
-  }
-  if (!config.mcpServers || typeof config.mcpServers !== "object") {
-    config.mcpServers = {};
-  }
-  (config.mcpServers as Record<string, unknown>).screenpipe = {
-    command: "npx",
-    args: ["-y", "screenpipe-mcp"],
-  };
-  await writeFile(configPath, new TextEncoder().encode(JSON.stringify(config, null, 2)));
+  const config = await readMcpConfig(configPath);
+  await writeMcpConfig(configPath, config);
 }
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -152,13 +184,13 @@ const INTEGRATIONS: Integration[] = [
     type: "oauth",
   },
   {
-    id: "calcom",
-    cardKey: "calcom",
-    name: "Cal.com",
-    valueProp: "see bookings alongside what you work on",
-    ahaCopy: "scheduling context active",
+    id: "claude",
+    cardKey: "claude",
+    name: "Claude Desktop",
+    valueProp: "give Claude memory of everything you do",
+    ahaCopy: "MCP installed — restart Claude",
     isPro: false,
-    type: "oauth",
+    type: "mcp",
   },
   {
     id: "github",
@@ -190,7 +222,7 @@ const ICONS: Record<string, React.ReactNode> = {
     // eslint-disable-next-line @next/next/no-img-element
     <img src="/images/notion.svg" alt="Notion" className="w-5 h-5 dark:invert" />
   ),
-  calcom: <CalcomIcon />,
+  claude: <ClaudeIcon />,
   github: (
     // eslint-disable-next-line @next/next/no-img-element
     <img src="/images/github.png" alt="GitHub" className="w-5 h-5 rounded" />
@@ -355,13 +387,15 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
         })
       );
 
+      // Claude Desktop MCP
+      try {
+        if (await isClaudeMcpInstalled()) stateUpdates["claude"] = "connected";
+      } catch { /* ignore */ }
+
       // Cursor MCP
       try {
-        const installed = await isCursorMcpInstalled();
-        if (installed) stateUpdates["cursor"] = "connected";
-      } catch {
-        // ignore
-      }
+        if (await isCursorMcpInstalled()) stateUpdates["cursor"] = "connected";
+      } catch { /* ignore */ }
 
       if (Object.keys(stateUpdates).length > 0)
         setCardStates((prev) => ({ ...prev, ...stateUpdates }));
@@ -403,8 +437,11 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
 
       try {
         if (integration.type === "mcp") {
-          // Cursor MCP: write config file
-          await installCursorMcp();
+          if (integration.cardKey === "claude") {
+            await installClaudeMcp();
+          } else {
+            await installCursorMcp();
+          }
           setCardState(integration.cardKey, "connected");
           posthog.capture("onboarding_integration_connected", { integration: integration.id });
           return;
