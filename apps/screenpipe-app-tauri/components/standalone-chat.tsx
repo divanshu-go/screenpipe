@@ -2676,8 +2676,8 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
         console.log("[Pi] Not running, auto-starting before sending message");
         piStartInFlightRef.current = true;
         setPiStarting(true);
+        const providerConfig = buildProviderConfig();
         try {
-          const providerConfig = buildProviderConfig();
           const home = await homeDir();
           const dir = await join(home, ".screenpipe", "pi-chat");
           const result = await commands.piStart(piSessionIdRef.current, dir, settings.user?.token ?? null, providerConfig);
