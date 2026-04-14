@@ -3015,8 +3015,8 @@ impl DatabaseManager {
                 .await?;
 
         match snapshot {
-            Some((Some(path),)) => Ok(Some((path, 0, true))),
-            Some((None,)) => {
+            Some((Some(path),)) if !path.is_empty() => Ok(Some((path, 0, true))),
+            Some((Some(_),)) | Some((None,)) => {
                 // Legacy frame — get from video_chunks
                 let result = sqlx::query_as::<_, (String, i64)>(
                     r#"
