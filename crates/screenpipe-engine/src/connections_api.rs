@@ -1097,7 +1097,7 @@ async fn connection_proxy(
     let auth = resolve_auth(
         &proxy_cfg.auth,
         creds.as_ref(),
-        oauth_token.as_deref(),
+        oauth_token.await.as_deref(),
     );
 
     // Check that auth was actually resolved (don't send unauthenticated requests)
