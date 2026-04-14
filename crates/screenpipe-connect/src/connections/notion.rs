@@ -47,6 +47,7 @@ impl Integration for Notion {
 
     async fn test(&self, client: &reqwest::Client, _creds: &Map<String, Value>) -> Result<String> {
         let token = oauth::read_oauth_token("notion")
+            .await
             .ok_or_else(|| anyhow!("not connected — use 'Connect with Notion' button"))?;
         let resp: Value = client
             .get("https://api.notion.com/v1/users/me")

@@ -15,7 +15,7 @@ pub async fn handle_connection_command(command: &ConnectionCommand) -> anyhow::R
 
     match command {
         ConnectionCommand::List { json: use_json } => {
-            let list = cm.list();
+            let list = cm.list().await;
 
             // Add WhatsApp — check session on disk AND whether gateway is actually reachable
             let has_session = screenpipe_dir
@@ -123,7 +123,7 @@ pub async fn handle_connection_command(command: &ConnectionCommand) -> anyhow::R
 
             // Check credential store first, then fall back to OAuth token
             let has_creds = cm.get_credentials(id)?;
-            let has_oauth = oauth::read_oauth_token(id);
+            let has_oauth = oauth::read_oauth_token(id).await;
 
             if let Some(creds) = has_creds {
                 if *use_json {
@@ -174,7 +174,7 @@ pub async fn handle_connection_command(command: &ConnectionCommand) -> anyhow::R
             // For OAuth integrations, test with empty creds — the test()
             // implementation reads the token from the OAuth file itself.
             let creds = cm.get_credentials(id)?.unwrap_or_default();
-            let has_oauth = oauth::read_oauth_token(id).is_some();
+            let has_oauth = oauth::read_oauth_token(id).await.is_some();
 
             if creds.is_empty() && !has_oauth {
                 eprintln!("{} has no saved credentials", id);

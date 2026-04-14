@@ -50,6 +50,7 @@ impl Integration for CalCom {
 
     async fn test(&self, client: &reqwest::Client, _creds: &Map<String, Value>) -> Result<String> {
         let token = oauth::read_oauth_token("calcom")
+            .await
             .ok_or_else(|| anyhow!("not connected — use 'Connect with Cal.com' button"))?;
         let resp: Value = client
             .get("https://api.cal.com/v2/me")

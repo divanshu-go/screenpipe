@@ -47,7 +47,7 @@ pub struct WhatsAppPairRequest {
 /// GET /connections — list all integrations with connection status.
 async fn list_connections(State(state): State<ConnectionsState>) -> Json<Value> {
     let mgr = state.cm.lock().await;
-    let list = mgr.list();
+    let list = mgr.list().await;
 
     // Add WhatsApp to the list
     let wa = state.wa.lock().await;
@@ -549,54 +549,41 @@ async fn gmail_send_inner(
 }
 
 /// Retrieve a valid Gmail OAuth token or return an error.
-///
-/// When a SecretStore is available, attempts to load the token from the
-/// encrypted store first (via `secret_oauth`), falling back to the legacy
-/// file-based path.
 async fn gmail_token(
     client: &reqwest::Client,
     instance: Option<&str>,
     secret_store: &Option<Arc<SecretStore>>,
 ) -> anyhow::Result<String> {
-    // Use SecretStore with full refresh support
-    if let Some(store) = secret_store {
-        if let Some(token) =
-            crate::secret_oauth::get_valid_token(client, store, "gmail", instance).await
-        {
-            return Ok(token);
-        }
-    }
-
-    // Fall back to legacy file-based token retrieval
-    oauth_store::get_valid_token_instance(client, "gmail", instance)
-        .await
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Gmail not connected — use 'Connect with Gmail' in Settings > Connections"
-            )
-        })
+    oauth_store::get_valid_token_instance(
+        secret_store.as_deref(),
+        client,
+        "gmail",
+        instance,
+    )
+    .await
+    .ok_or_else(|| {
+        anyhow::anyhow!(
+            "Gmail not connected — use 'Connect with Gmail' in Settings > Connections"
+        )
+    })
 }
 
 /// GET /connections/gmail/instances — list all connected Gmail accounts.
 async fn gmail_list_instances(State(state): State<ConnectionsState>) -> (StatusCode, Json<Value>) {
-    let instances = oauth_store::list_oauth_instances("gmail");
+    let instances = oauth_store::list_oauth_instances(
+        state.secret_store.as_deref(),
+        "gmail",
+    )
+    .await;
     let mut accounts = Vec::new();
     for inst in instances {
-        // Try SecretStore first, then fall back to file
-        let email = if let Some(store) = &state.secret_store {
-            crate::secret_oauth::load_oauth_json(store, "gmail", inst.as_deref())
-                .await
-                .and_then(|v| v["email"].as_str().map(String::from))
-        } else {
-            None
-        };
-        let email = email.or_else(|| {
-            let path = oauth_store::oauth_token_path_instance("gmail", inst.as_deref());
-            std::fs::read_to_string(&path)
-                .ok()
-                .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-                .and_then(|v| v["email"].as_str().map(String::from))
-        });
+        let email = oauth_store::load_oauth_json(
+            state.secret_store.as_deref(),
+            "gmail",
+            inst.as_deref(),
+        )
+        .await
+        .and_then(|v| v["email"].as_str().map(String::from));
         accounts.push(json!({
             "instance": inst,
             "email": email,
@@ -725,32 +712,23 @@ pub struct GoogleCalendarInstanceQuery {
 }
 
 /// Retrieve a valid Google Calendar OAuth token or return an error.
-///
-/// When a SecretStore is available, attempts to load the token from the
-/// encrypted store first (via `secret_oauth`), falling back to the legacy
-/// file-based path.
 async fn gcal_token(
     client: &reqwest::Client,
     instance: Option<&str>,
     secret_store: &Option<Arc<SecretStore>>,
 ) -> anyhow::Result<String> {
-    // Use SecretStore with full refresh support
-    if let Some(store) = secret_store {
-        if let Some(token) =
-            crate::secret_oauth::get_valid_token(client, store, "google-calendar", instance).await
-        {
-            return Ok(token);
-        }
-    }
-
-    // Fall back to legacy file-based token retrieval
-    oauth_store::get_valid_token_instance(client, "google-calendar", instance)
-        .await
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Google Calendar not connected — use 'Connect Google Calendar' in Settings > Connections"
-            )
-        })
+    oauth_store::get_valid_token_instance(
+        secret_store.as_deref(),
+        client,
+        "google-calendar",
+        instance,
+    )
+    .await
+    .ok_or_else(|| {
+        anyhow::anyhow!(
+            "Google Calendar not connected — use 'Connect Google Calendar' in Settings > Connections"
+        )
+    })
 }
 
 /// GET /connections/google-calendar/status — check connection + email.
@@ -761,15 +739,12 @@ async fn gcal_status(
     let client = reqwest::Client::new();
     let instance = q.instance.as_deref();
 
-    // Check SecretStore first, then fall back to file-based check
-    let connected = if let Some(store) = &state.secret_store {
-        crate::secret_oauth::load_oauth_json(store, "google-calendar", instance)
-            .await
-            .is_some()
-            || oauth_store::is_oauth_instance_connected("google-calendar", instance)
-    } else {
-        oauth_store::is_oauth_instance_connected("google-calendar", instance)
-    };
+    let connected = oauth_store::is_oauth_instance_connected(
+        state.secret_store.as_deref(),
+        "google-calendar",
+        instance,
+    )
+    .await;
     if !connected {
         return (
             StatusCode::OK,
@@ -892,16 +867,13 @@ async fn gcal_disconnect(
     State(state): State<ConnectionsState>,
     Query(q): Query<GoogleCalendarInstanceQuery>,
 ) -> (StatusCode, Json<Value>) {
-    // Also remove from SecretStore if available
-    if let Some(store) = &state.secret_store {
-        let key = match q.instance.as_deref() {
-            Some(inst) => format!("oauth:google-calendar:{}", inst),
-            None => "oauth:google-calendar".to_string(),
-        };
-        let _ = store.delete(&key).await;
-    }
-
-    match oauth_store::delete_oauth_token_instance("google-calendar", q.instance.as_deref()) {
+    match oauth_store::delete_oauth_token_instance(
+        state.secret_store.as_deref(),
+        "google-calendar",
+        q.instance.as_deref(),
+    )
+    .await
+    {
         Ok(()) => (StatusCode::OK, Json(json!({ "success": true }))),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,

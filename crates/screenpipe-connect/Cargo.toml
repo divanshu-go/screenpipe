@@ -16,6 +16,7 @@ tokio = { version = "1.0", features = ["full"] }
 log = "0.4"
 anyhow = "1.0"
 screenpipe-core = { path = "../screenpipe-core" }
+screenpipe-secrets = { path = "../screenpipe-secrets" }
 tracing = { workspace = true }
 russh = { version = "0.57", default-features = false, features = ["ring", "flate2", "rsa"] }
 russh-sftp = "2.1"

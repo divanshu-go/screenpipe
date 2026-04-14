@@ -31,6 +31,19 @@ pub struct OAuthInstanceInfo {
 }
 
 // ---------------------------------------------------------------------------
+// SecretStore helper
+// ---------------------------------------------------------------------------
+
+async fn open_secret_store() -> Option<screenpipe_secrets::SecretStore> {
+    let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
+    let db_path = data_dir.join("db.sqlite");
+    let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
+    let pool = sqlx::SqlitePool::connect(&db_url).await.ok()?;
+    let secret_key = crate::secrets::get_or_create_key();
+    screenpipe_secrets::SecretStore::new(pool, secret_key).await.ok()
+}
+
+// ---------------------------------------------------------------------------
 // Tauri commands
 // ---------------------------------------------------------------------------
 
@@ -149,20 +162,23 @@ pub async fn oauth_connect(
         }
     }
 
+    let store = open_secret_store().await;
+
     // Auto-derive instance name from email/identity in token response
     let effective_instance = instance.or_else(|| token_data["email"].as_str().map(String::from));
 
     // If no instance was explicitly provided and we couldn't derive one from the
     // token, always store as the default instance (None) to avoid creating
     // orphaned "default" named instances that oauthStatus can't find.
-    let existing = oauth::list_oauth_instances(&integration_id);
+    let existing = oauth::list_oauth_instances(store.as_ref(), &integration_id).await;
     let store_instance = if existing.is_empty() || effective_instance.is_none() {
         None
     } else {
         effective_instance.as_deref()
     };
 
-    oauth::write_oauth_token_instance(&integration_id, store_instance, &token_data)
+    oauth::write_oauth_token_instance(store.as_ref(), &integration_id, store_instance, &token_data)
+        .await
         .map_err(|e| format!("failed to save token: {}", e))?;
 
     let display_name = token_data["email"]
@@ -189,13 +205,14 @@ pub async fn oauth_status(
     integration_id: String,
     instance: Option<String>,
 ) -> Result<OAuthStatus, String> {
-    let token = oauth::read_oauth_token_instance(&integration_id, instance.as_deref());
+    let store = open_secret_store().await;
+    let token =
+        oauth::read_oauth_token_instance(store.as_ref(), &integration_id, instance.as_deref())
+            .await;
 
     let display_name = if token.is_some() {
-        let path = oauth::oauth_token_path_instance(&integration_id, instance.as_deref());
-        std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        oauth::load_oauth_json(store.as_ref(), &integration_id, instance.as_deref())
+            .await
             .and_then(|v| {
                 v["email"]
                     .as_str()
@@ -220,7 +237,9 @@ pub async fn oauth_disconnect(
     integration_id: String,
     instance: Option<String>,
 ) -> Result<bool, String> {
-    oauth::delete_oauth_token_instance(&integration_id, instance.as_deref())
+    let store = open_secret_store().await;
+    oauth::delete_oauth_token_instance(store.as_ref(), &integration_id, instance.as_deref())
+        .await
         .map_err(|e| format!("failed to remove token: {}", e))?;
     info!(
         "OAuth disconnected: {} (instance={:?})",
@@ -235,21 +254,21 @@ pub async fn oauth_disconnect(
 pub async fn oauth_list_instances(
     integration_id: String,
 ) -> Result<Vec<OAuthInstanceInfo>, String> {
-    let instances = oauth::list_oauth_instances(&integration_id);
+    let store = open_secret_store().await;
+    let instances = oauth::list_oauth_instances(store.as_ref(), &integration_id).await;
     let mut result = Vec::new();
 
     for inst in instances {
-        let path = oauth::oauth_token_path_instance(&integration_id, inst.as_deref());
-        let display_name = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-            .and_then(|v| {
-                v["email"]
-                    .as_str()
-                    .or_else(|| v["workspace_name"].as_str())
-                    .or_else(|| v["name"].as_str())
-                    .map(String::from)
-            });
+        let display_name =
+            oauth::load_oauth_json(store.as_ref(), &integration_id, inst.as_deref())
+                .await
+                .and_then(|v| {
+                    v["email"]
+                        .as_str()
+                        .or_else(|| v["workspace_name"].as_str())
+                        .or_else(|| v["name"].as_str())
+                        .map(String::from)
+                });
 
         result.push(OAuthInstanceInfo {
             instance: inst,

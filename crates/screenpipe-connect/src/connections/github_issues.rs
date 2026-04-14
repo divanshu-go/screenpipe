@@ -50,6 +50,7 @@ impl Integration for GithubIssues {
 
     async fn test(&self, client: &reqwest::Client, _creds: &Map<String, Value>) -> Result<String> {
         let token = oauth::read_oauth_token("github")
+            .await
             .ok_or_else(|| anyhow!("not connected — use 'Connect with GitHub' button"))?;
         let resp: Value = client
             .get("https://api.github.com/user")

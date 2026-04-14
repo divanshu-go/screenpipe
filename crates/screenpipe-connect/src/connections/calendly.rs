@@ -50,6 +50,7 @@ impl Integration for Calendly {
 
     async fn test(&self, client: &reqwest::Client, _creds: &Map<String, Value>) -> Result<String> {
         let token = oauth::read_oauth_token("calendly")
+            .await
             .ok_or_else(|| anyhow!("not connected — use 'Connect with Calendly' button"))?;
         let resp: Value = client
             .get("https://api.calendly.com/users/me")

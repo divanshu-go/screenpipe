@@ -239,30 +239,35 @@ impl ConnectionManager {
         }
     }
 
-    pub fn list(&self) -> Vec<ConnectionInfo> {
+    pub async fn list(&self) -> Vec<ConnectionInfo> {
         let store = load_store(&self.screenpipe_dir);
-        self.integrations
-            .iter()
-            .map(|i| {
-                let def = i.def();
-                let is_oauth = i.oauth_config().is_some();
-                let connected = if is_oauth {
-                    oauth::list_oauth_instances(def.id)
-                        .iter()
-                        .any(|inst| oauth::is_oauth_instance_connected(def.id, inst.as_deref()))
-                } else {
-                    store
-                        .get(def.id)
-                        .map(|c| c.enabled && !c.credentials.is_empty())
-                        .unwrap_or(false)
-                };
-                ConnectionInfo {
-                    def,
-                    connected,
-                    is_oauth,
+        let mut result = Vec::new();
+        for i in &self.integrations {
+            let def = i.def();
+            let is_oauth = i.oauth_config().is_some();
+            let connected = if is_oauth {
+                let instances = oauth::list_oauth_instances(None, def.id).await;
+                let mut any_connected = false;
+                for inst in &instances {
+                    if oauth::is_oauth_instance_connected(None, def.id, inst.as_deref()).await {
+                        any_connected = true;
+                        break;
+                    }
                 }
-            })
-            .collect()
+                any_connected
+            } else {
+                store
+                    .get(def.id)
+                    .map(|c| c.enabled && !c.credentials.is_empty())
+                    .unwrap_or(false)
+            };
+            result.push(ConnectionInfo {
+                def,
+                connected,
+                is_oauth,
+            });
+        }
+        result
     }
 
     pub fn connect(&self, id: &str, creds: Map<String, Value>) -> Result<()> {
@@ -381,7 +386,7 @@ pub struct ConnectionInfo {
 // Pi context rendering — uses proxy URLs instead of raw credentials
 // ---------------------------------------------------------------------------
 
-pub fn render_context(screenpipe_dir: &Path, api_port: u16) -> String {
+pub async fn render_context(screenpipe_dir: &Path, api_port: u16) -> String {
     let store = load_store(screenpipe_dir);
     let integrations = all_integrations();
 
@@ -399,14 +404,13 @@ pub fn render_context(screenpipe_dir: &Path, api_port: u16) -> String {
         .collect();
 
     // OAuth integrations with a stored token
-    let oauth_connected: Vec<_> = integrations
-        .iter()
-        .filter(|i| i.oauth_config().is_some())
-        .filter_map(|i| {
-            let def = i.def();
-            oauth::read_oauth_token(def.id).map(|_token| (i.as_ref(), def))
-        })
-        .collect();
+    let mut oauth_connected: Vec<(&dyn Integration, &'static IntegrationDef)> = Vec::new();
+    for i in integrations.iter().filter(|i| i.oauth_config().is_some()) {
+        let def = i.def();
+        if oauth::read_oauth_token(def.id).await.is_some() {
+            oauth_connected.push((i.as_ref(), def));
+        }
+    }
 
     if cred_connected.is_empty() && oauth_connected.is_empty() {
         return String::new();
