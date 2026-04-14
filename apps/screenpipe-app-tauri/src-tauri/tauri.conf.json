@@ -117,7 +117,7 @@
           "$HOME/.screenpipe/**"
         ]
       },
-      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: https: http://localhost:* data: blob:; media-src 'self' asset: https: http://localhost:* blob:; font-src 'self' data:; connect-src 'self' http://localhost:* https://* ws://localhost:* wss://*; frame-src 'self' https://*"
+      "csp": null
     },
     "macOSPrivateApi": true
   }
