@@ -19,6 +19,7 @@ import {
   WifiOff,
   Tv,
   Lock,
+  Copy,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -432,6 +433,19 @@ export function PrivacySection() {
                   }}
                   className="h-8 text-xs font-mono"
                 />
+                {settings.apiKey && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 px-2 shrink-0"
+                    onClick={() => {
+                      navigator.clipboard.writeText(settings.apiKey ?? "");
+                      toast({ title: "API key copied to clipboard" });
+                    }}
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                  </Button>
+                )}
               </div>
             )}
             </LockedSetting>
