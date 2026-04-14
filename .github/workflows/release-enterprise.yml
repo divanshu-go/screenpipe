@@ -547,28 +547,16 @@ jobs:
           PKG_DIR="${BUNDLE_DIR}/pkg"
           mkdir -p "$PKG_DIR"
 
-          # Create component pkg — installs to /Applications
-          COMPONENT_PKG="${PKG_DIR}/screenpipe-component.pkg"
+          # Create component pkg from .app — installs to /Applications
+          PKG_OUTPUT="${PKG_DIR}/screenpipe-enterprise-${VERSION}-arm64.pkg"
           pkgbuild \
-            --root "$(dirname "$APP_PATH")" \
+            --component "$APP_PATH" \
             --install-location /Applications \
             --identifier "screenpi.pe.enterprise" \
-            --version "$VERSION" \
-            --component-plist /dev/null \
-            "$COMPONENT_PKG"
-
-          echo "Component pkg created"
-
-          # Create distribution pkg (what Intune deploys)
-          PKG_OUTPUT="${PKG_DIR}/screenpipe-enterprise-${VERSION}-arm64.pkg"
-          productbuild \
-            --package "$COMPONENT_PKG" \
-            --identifier "screenpi.pe.enterprise.installer" \
             --version "$VERSION" \
             "$PKG_OUTPUT"
 
           echo "Distribution pkg created: $(basename "$PKG_OUTPUT")"
-          rm -f "$COMPONENT_PKG"
 
           # Notarize the .pkg
           echo "Notarizing .pkg..."
