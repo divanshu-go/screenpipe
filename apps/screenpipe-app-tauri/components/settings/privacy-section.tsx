@@ -433,19 +433,30 @@ export function PrivacySection() {
                   }}
                   className="h-8 text-xs font-mono"
                 />
-                {settings.apiKey && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 px-2 shrink-0"
-                    onClick={() => {
-                      navigator.clipboard.writeText(settings.apiKey ?? "");
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 px-2 shrink-0"
+                  onClick={async () => {
+                    // Copy custom key if set, otherwise read auto-generated key
+                    let key = settings.apiKey;
+                    if (!key) {
+                      try {
+                        const { invoke } = await import("@tauri-apps/api/core");
+                        const config = await invoke<{ key: string | null }>("get_local_api_config");
+                        key = config.key;
+                      } catch {}
+                    }
+                    if (key) {
+                      navigator.clipboard.writeText(key);
                       toast({ title: "API key copied to clipboard" });
-                    }}
-                  >
-                    <Copy className="h-3.5 w-3.5" />
-                  </Button>
-                )}
+                    } else {
+                      toast({ title: "No API key available", description: "Restart the app to auto-generate a key", variant: "destructive" });
+                    }
+                  }}
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                </Button>
               </div>
             )}
             </LockedSetting>
