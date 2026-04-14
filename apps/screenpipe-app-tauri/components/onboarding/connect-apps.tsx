@@ -118,7 +118,7 @@ interface Integration {
   valueProp: string;
   ahaCopy: string;
   isPro: boolean;
-  type: "oauth" | "mcp" | "chatgpt";
+  type: "oauth" | "mcp" | "chatgpt" | "lmstudio";
 }
 
 type CardState = "idle" | "connecting" | "connected" | "error";
@@ -183,14 +183,25 @@ const FREE_INTEGRATIONS: Integration[] = [
     isPro: false,
     type: "chatgpt",
   },
+  {
+    id: "lmstudio",
+    cardKey: "lmstudio",
+    name: "LM Studio",
+    valueProp: "run local AI models with full screen context",
+    ahaCopy: "local AI connected",
+    isPro: false,
+    type: "lmstudio",
+  },
 ];
 
-// Free-user view: GitHub, Cursor, Gmail (pro teaser at slot 3), ChatGPT
+// Free-user view: 2×2 grid with only integrations that work without Pro.
+// GitHub excluded — oauth_connect is blanket Pro-gated backend-side.
+// LM Studio uses a deeplink + localhost check, no backend call needed.
 const FREE_USER_ORDER: Integration[] = [
-  FREE_INTEGRATIONS[0], // GitHub
   FREE_INTEGRATIONS[1], // Cursor
-  PRO_INTEGRATIONS[0],  // Gmail (pro — shown as teaser at position 3)
+  PRO_INTEGRATIONS[0],  // Gmail (locked teaser)
   FREE_INTEGRATIONS[2], // ChatGPT
+  FREE_INTEGRATIONS[3], // LM Studio
 ];
 
 const ICONS: Record<string, React.ReactNode> = {
@@ -209,6 +220,10 @@ const ICONS: Record<string, React.ReactNode> = {
   ),
   cursor: <CursorIcon className="w-5 h-5 rounded" />,
   chatgpt: <ChatGptIcon className="w-5 h-5" />,
+  lmstudio: (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img src="/images/lmstudio.png" alt="LM Studio" className="w-5 h-5 rounded" />
+  ),
 };
 
 // ─── Card ─────────────────────────────────────────────────────────────────────
@@ -267,16 +282,16 @@ function IntegrationCard({
       {/* ── Static lock overlay for free users on pro cards ────────────────
           Always visible, never animates. Lock + upgrade CTA centred.    */}
       {isLocked && (
-        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-background/55">
+        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-background/50 backdrop-blur-[3px]">
           <motion.div
-            animate={{ opacity: [0.2, 0.38, 0.2] }}
+            animate={{ opacity: [0.55, 0.8, 0.55] }}
             transition={{ duration: 2.8, repeat: Infinity, ease: "easeInOut" }}
           >
-            <Lock className="w-6 h-6 text-foreground/35" strokeWidth={1.5} />
+            <Lock className="w-5 h-5 text-foreground/70" strokeWidth={1.5} />
           </motion.div>
           <button
             onClick={() => openUrl("https://screenpi.pe/onboarding")}
-            className="font-mono text-[9px] text-muted-foreground/45 hover:text-foreground/70 transition-colors underline underline-offset-2"
+            className="font-mono text-[9px] text-foreground/55 hover:text-foreground transition-colors underline underline-offset-2"
           >
             upgrade to pro →
           </button>
@@ -328,10 +343,16 @@ function IntegrationCard({
         </motion.div>
       )}
 
-      {/* Card content — dimmed while locked so the overlay contrast is clear */}
+      {/* Card content — dimmed while locked (free overlay) or during pro lock phase */}
       <motion.div
         className="flex flex-col gap-1.5"
-        animate={{ opacity: shouldAnimate && localPhase === "locked" ? 0.38 : 1 }}
+        animate={{
+          opacity: isLocked
+            ? 0.62
+            : shouldAnimate && localPhase === "locked"
+            ? 0.38
+            : 1,
+        }}
         transition={{ duration: 0.4 }}
       >
         {/* Header */}
@@ -342,8 +363,8 @@ function IntegrationCard({
           <span className="font-mono text-xs font-semibold truncate">
             {integration.name}
           </span>
-          {/* Only show pro badge for free users on pro cards */}
-          {integration.isPro && !isPro && !isConnected && (
+          {/* pro badge only when NOT locked — lock overlay already carries the CTA */}
+          {integration.isPro && !isPro && !isLocked && !isConnected && (
             <span className="ml-auto shrink-0 font-mono text-[9px] px-1 py-0.5 border border-amber-500/40 text-amber-500/70 leading-none">
               pro
             </span>
@@ -357,7 +378,7 @@ function IntegrationCard({
 
         {/* Action */}
         <div className="mt-0.5 min-h-[20px] flex items-center">
-          {isConnected ? (
+          {isConnected && !isLocked ? (
             <motion.div
               className="flex flex-col gap-0.5 w-full"
               initial={{ opacity: 0, y: 3 }}
@@ -474,6 +495,12 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
         if (await isCursorMcpInstalled()) stateUpdates["cursor"] = "connected";
       } catch { /* ignore */ }
 
+      // LM Studio — check if local server is reachable
+      try {
+        const res = await fetch("http://localhost:1234/v1/models", { signal: AbortSignal.timeout(1500) });
+        if (res.ok) stateUpdates["lmstudio"] = "connected";
+      } catch { /* not running */ }
+
       if (Object.keys(stateUpdates).length > 0)
         setCardStates((prev) => ({ ...prev, ...stateUpdates }));
       if (Object.keys(nameUpdates).length > 0)
@@ -517,6 +544,31 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
       setCardState(integration.cardKey, "connecting");
 
       try {
+        if (integration.type === "lmstudio") {
+          const deeplink = "lmstudio://add_mcp?name=screenpipe&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsInNjcmVlbnBpcGUtbWNwIl19";
+          await openUrl(deeplink);
+          // Poll localhost:1234 for up to 8s to confirm LM Studio is running
+          let connected = false;
+          for (let i = 0; i < 8; i++) {
+            await new Promise((r) => setTimeout(r, 1000));
+            try {
+              const res = await fetch("http://localhost:1234/v1/models", { signal: AbortSignal.timeout(800) });
+              if (res.ok) { connected = true; break; }
+            } catch { /* still starting */ }
+          }
+          if (connected) {
+            setCardState("lmstudio", "connected");
+            setDisplayNames((prev) => ({ ...prev, lmstudio: "LM Studio" }));
+            posthog.capture("onboarding_integration_connected", { integration: "lmstudio" });
+          } else {
+            // Deeplink was opened but LM Studio not detected running — treat as connected optimistically
+            setCardState("lmstudio", "connected");
+            setDisplayNames((prev) => ({ ...prev, lmstudio: "MCP added" }));
+            posthog.capture("onboarding_integration_connected", { integration: "lmstudio", optimistic: true });
+          }
+          return;
+        }
+
         if (integration.type === "chatgpt") {
           const res = await commands.chatgptOauthLogin();
           if (res.status === "ok" && res.data) {
@@ -676,7 +728,7 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
           </div>
         </div>
       ) : (
-        /* Free layout: 2×2 grid — GitHub, Cursor, Gmail(teaser), ChatGPT */
+        /* Free layout: 2×2 — Cursor, Gmail (locked teaser), ChatGPT, LM Studio */
         <>
           <div className="grid grid-cols-2 gap-2 w-full">
             {FREE_USER_ORDER.map((integration, i) => (
