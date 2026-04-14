@@ -25,7 +25,10 @@ use crate::{
             add_tags, add_to_database, execute_raw_sql, get_tags_batch, merge_frames_handler,
             remove_tags, validate_media_handler,
         },
-        data::{delete_device_data_handler, delete_time_range_handler, device_storage_handler},
+        data::{
+            backup_handler, checkpoint_handler, delete_device_data_handler,
+            delete_time_range_handler, device_storage_handler,
+        },
         elements::{get_frame_elements, search_elements},
         frames::{
             get_frame_context, get_frame_data, get_frame_metadata, get_frame_text_data,
@@ -72,7 +75,7 @@ use std::{
 };
 use tokio::{net::TcpListener, sync::Mutex};
 use tower_http::{cors::Any, trace::TraceLayer};
-use tower_http::{cors::CorsLayer, trace::DefaultMakeSpan};
+use tower_http::{cors::{CorsLayer, AllowOrigin}, trace::DefaultMakeSpan};
 
 /// Bind a TcpListener with SO_REUSEADDR on Windows to avoid TIME_WAIT port conflicts.
 /// On non-Windows platforms, falls back to the standard tokio bind.
@@ -483,8 +486,17 @@ impl SCServer {
             secret_store: self.secret_store.clone(),
         });
 
+        // Restrict CORS to localhost origins (Tauri webview + local development).
+        // Remote origins are blocked to prevent malicious websites from making
+        // cross-origin requests to the local API.
         let cors = CorsLayer::new()
-            .allow_origin(Any)
+            .allow_origin(AllowOrigin::predicate(|origin, _| {
+                origin.as_bytes().starts_with(b"http://localhost")
+                    || origin.as_bytes().starts_with(b"https://localhost")
+                    || origin.as_bytes().starts_with(b"tauri://localhost")
+                    || origin.as_bytes().starts_with(b"http://127.0.0.1")
+                    || origin.as_bytes().starts_with(b"https://127.0.0.1")
+            }))
             .allow_methods(Any)
             .allow_headers(Any)
             .expose_headers([
@@ -573,6 +585,9 @@ impl SCServer {
             .post("/data/delete-range", delete_time_range_handler)
             .post("/data/delete-device", delete_device_data_handler)
             .get("/data/device-storage", device_storage_handler)
+            // Database backup & checkpoint
+            .post("/data/checkpoint", checkpoint_handler)
+            .get("/data/backup", backup_handler)
             .route_yaml_spec("/openapi.yaml")
             .route_json_spec("/openapi.json")
             .freeze();

@@ -298,6 +298,13 @@ async fn main() -> anyhow::Result<()> {
             screenpipe_engine::cli::login::handle_whoami_command().await?;
             return Ok(());
         }
+        Command::Backup {
+            ref subcommand,
+            ref data_dir,
+        } => {
+            screenpipe_engine::cli::backup::handle_backup_command(subcommand, data_dir).await?;
+            return Ok(());
+        }
         Command::Doctor => {
             eprintln!("screenpipe doctor");
             eprintln!("=================");
@@ -854,7 +861,7 @@ async fn main() -> anyhow::Result<()> {
 
     let mut server = SCServer::new(
         db_server,
-        SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), config.port),
+        SocketAddr::new(IpAddr::V4(config.listen_address), config.port),
         local_data_dir_clone_2,
         config.disable_vision,
         config.disable_audio,
