@@ -443,7 +443,7 @@ export function PrivacySection() {
                       try {
                         const { invoke } = await import("@tauri-apps/api/core");
                         const config = await invoke<{ key: string | null }>("get_local_api_config");
-                        key = config.key;
+                        key = config.key ?? undefined;
                       } catch {}
                     }
                     if (key) {
