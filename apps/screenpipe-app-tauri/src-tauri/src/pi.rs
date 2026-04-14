@@ -1261,9 +1261,9 @@ pub async fn pi_start_inner(
 
     // Pass the user's API key as env var for non-screenpipe providers
     if let Some(ref config) = provider_config {
-        // ChatGPT OAuth: inject token from encrypted store (no api_key in config)
+        // ChatGPT OAuth: inject token from secret store (no api_key in config)
         if config.provider == "openai-chatgpt" {
-            match crate::chatgpt_oauth::get_valid_token(&app).await {
+            match crate::chatgpt_oauth::get_valid_token().await {
                 Ok(token) => {
                     cmd.env("OPENAI_CHATGPT_TOKEN", token);
                 }

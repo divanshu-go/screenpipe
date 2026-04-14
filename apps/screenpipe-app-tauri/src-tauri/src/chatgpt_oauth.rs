@@ -12,9 +12,8 @@
 //!  2. Exchange auth code → access_token + refresh_token
 //!  3. Use access_token directly as Bearer token for OpenAI API
 //!
-//! Tokens are stored in the encrypted Tauri store (store.bin), not as a
-//! separate file, so they persist across restarts and benefit from keychain
-//! encryption.
+//! Tokens are stored in the `secrets` table (encrypted with AES-256-GCM,
+//! key in OS keychain) via `screenpipe_secrets::SecretStore`.
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::{Deserialize, Serialize};
@@ -22,14 +21,17 @@ use sha2::{Digest, Sha256};
 use tauri::AppHandle;
 use tauri_plugin_opener::OpenerExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const ISSUER: &str = "https://auth.openai.com";
 const TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 const CALLBACK_PORT: u16 = 1455;
 
-const STORE_KEY: &str = "chatgpt_oauth";
+/// Key used in the secrets table for ChatGPT OAuth tokens.
+/// The legacy migration in screenpipe-secrets also writes to this key
+/// when it finds chatgpt-oauth.json.
+const SECRET_KEY: &str = "oauth:chatgpt";
 
 // ── Token storage ──────────────────────────────────────────────────────
 
@@ -45,30 +47,44 @@ pub struct ChatGptOAuthStatus {
     pub logged_in: bool,
 }
 
-fn read_tokens(app: &AppHandle) -> Option<OAuthTokens> {
-    let store = crate::store::get_store(app, None).ok()?;
-    let val = store.get(STORE_KEY)?;
-    serde_json::from_value(val).ok()
+/// Open a connection to the secrets store (same DB as the screenpipe server).
+async fn open_secret_store() -> Result<screenpipe_secrets::SecretStore, String> {
+    let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
+    let db_path = data_dir.join("db.sqlite");
+    let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
+
+    let pool = sqlx::SqlitePool::connect(&db_url)
+        .await
+        .map_err(|e| format!("failed to open db: {}", e))?;
+
+    let secret_key = crate::secrets::get_or_create_key();
+
+    screenpipe_secrets::SecretStore::new(pool, secret_key)
+        .await
+        .map_err(|e| format!("failed to init secret store: {}", e))
 }
 
-fn write_tokens(app: &AppHandle, tokens: &OAuthTokens) -> Result<(), String> {
-    let store =
-        crate::store::get_store(app, None).map_err(|e| format!("failed to get store: {}", e))?;
-    let val =
-        serde_json::to_value(tokens).map_err(|e| format!("failed to serialize tokens: {}", e))?;
-    store.set(STORE_KEY, val);
-    store.save().map_err(|e| format!("failed to save store: {}", e))?;
-    crate::store::reencrypt_store_file(app);
-    Ok(())
+async fn read_tokens_from_store() -> Option<OAuthTokens> {
+    let store = open_secret_store().await.ok()?;
+    let bytes = store.get(SECRET_KEY).await.ok()??;
+    serde_json::from_slice(&bytes).ok()
 }
 
-fn delete_tokens(app: &AppHandle) -> Result<(), String> {
-    let store =
-        crate::store::get_store(app, None).map_err(|e| format!("failed to get store: {}", e))?;
-    store.delete(STORE_KEY);
-    store.save().map_err(|e| format!("failed to save store: {}", e))?;
-    crate::store::reencrypt_store_file(app);
-    Ok(())
+async fn write_tokens_to_store(tokens: &OAuthTokens) -> Result<(), String> {
+    let store = open_secret_store().await?;
+    let json = serde_json::to_vec(tokens).map_err(|e| format!("serialize: {}", e))?;
+    store
+        .set(SECRET_KEY, &json)
+        .await
+        .map_err(|e| format!("failed to save token: {}", e))
+}
+
+async fn delete_tokens_from_store() -> Result<(), String> {
+    let store = open_secret_store().await?;
+    store
+        .delete(SECRET_KEY)
+        .await
+        .map_err(|e| format!("failed to delete token: {}", e))
 }
 
 fn is_token_expired(tokens: &OAuthTokens) -> bool {
@@ -83,43 +99,6 @@ fn unix_now() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
-}
-
-/// Migrate tokens from the old `chatgpt-oauth.json` file to the encrypted store.
-/// Called once on startup. Deletes the file after successful migration.
-pub fn migrate_from_file(app: &AppHandle) {
-    let path = screenpipe_core::paths::default_screenpipe_data_dir().join("chatgpt-oauth.json");
-    if !path.exists() {
-        return;
-    }
-
-    let content = match std::fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(e) => {
-            error!("chatgpt oauth: failed to read old token file: {}", e);
-            return;
-        }
-    };
-
-    let tokens: OAuthTokens = match serde_json::from_str(&content) {
-        Ok(t) => t,
-        Err(e) => {
-            error!("chatgpt oauth: failed to parse old token file: {}", e);
-            // Remove corrupt file
-            let _ = std::fs::remove_file(&path);
-            return;
-        }
-    };
-
-    match write_tokens(app, &tokens) {
-        Ok(()) => {
-            let _ = std::fs::remove_file(&path);
-            info!("chatgpt oauth: migrated tokens from file to encrypted store");
-        }
-        Err(e) => {
-            error!("chatgpt oauth: migration failed: {}", e);
-        }
-    }
 }
 
 // ── PKCE helpers ───────────────────────────────────────────────────────
@@ -140,10 +119,7 @@ fn generate_pkce() -> (String, String) {
 
 // ── Token refresh ──────────────────────────────────────────────────────
 
-async fn do_refresh_token(
-    app: &AppHandle,
-    refresh_token: &str,
-) -> Result<OAuthTokens, String> {
+async fn do_refresh_token(refresh_token: &str) -> Result<OAuthTokens, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
@@ -191,17 +167,19 @@ async fn do_refresh_token(
         expires_at: Some(unix_now() + expires_in),
     };
 
-    write_tokens(app, &tokens)?;
+    write_tokens_to_store(&tokens).await?;
     info!("ChatGPT token refreshed successfully");
     Ok(tokens)
 }
 
 /// Get a valid access token, refreshing automatically if expired.
-pub async fn get_valid_token(app: &AppHandle) -> Result<String, String> {
-    let tokens = read_tokens(app).ok_or("not logged in to ChatGPT")?;
+pub async fn get_valid_token() -> Result<String, String> {
+    let tokens = read_tokens_from_store()
+        .await
+        .ok_or("not logged in to ChatGPT")?;
 
     if is_token_expired(&tokens) {
-        let refreshed = do_refresh_token(app, &tokens.refresh_token).await?;
+        let refreshed = do_refresh_token(&tokens.refresh_token).await?;
         return Ok(refreshed.access_token);
     }
 
@@ -282,7 +260,6 @@ pub async fn chatgpt_oauth_login(app_handle: AppHandle) -> Result<bool, String> 
         .port();
 
     let redirect_uri = format!("http://localhost:{}/auth/callback", port);
-
     let state = uuid::Uuid::new_v4().simple().to_string();
 
     let mut auth_url = reqwest::Url::parse(&format!("{ISSUER}/oauth/authorize")).unwrap();
@@ -363,19 +340,19 @@ pub async fn chatgpt_oauth_login(app_handle: AppHandle) -> Result<bool, String> 
         expires_at: Some(unix_now() + expires_in),
     };
 
-    write_tokens(&app_handle, &tokens)?;
-    info!("ChatGPT OAuth login successful — token saved to encrypted store");
+    write_tokens_to_store(&tokens).await?;
+    info!("ChatGPT OAuth login successful — token saved to secret store");
 
     Ok(true)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub async fn chatgpt_oauth_status(app_handle: AppHandle) -> Result<ChatGptOAuthStatus, String> {
-    match read_tokens(&app_handle) {
+pub async fn chatgpt_oauth_status() -> Result<ChatGptOAuthStatus, String> {
+    match read_tokens_from_store().await {
         Some(tokens) => {
             if is_token_expired(&tokens) {
-                match do_refresh_token(&app_handle, &tokens.refresh_token).await {
+                match do_refresh_token(&tokens.refresh_token).await {
                     Ok(_) => Ok(ChatGptOAuthStatus { logged_in: true }),
                     Err(e) => {
                         error!("ChatGPT token refresh failed: {}", e);
@@ -392,14 +369,14 @@ pub async fn chatgpt_oauth_status(app_handle: AppHandle) -> Result<ChatGptOAuthS
 
 #[tauri::command]
 #[specta::specta]
-pub async fn chatgpt_oauth_get_token(app_handle: AppHandle) -> Result<String, String> {
-    get_valid_token(&app_handle).await
+pub async fn chatgpt_oauth_get_token() -> Result<String, String> {
+    get_valid_token().await
 }
 
 #[tauri::command]
 #[specta::specta]
-pub async fn chatgpt_oauth_models(app_handle: AppHandle) -> Result<Vec<String>, String> {
-    let token = get_valid_token(&app_handle).await?;
+pub async fn chatgpt_oauth_models() -> Result<Vec<String>, String> {
+    let token = get_valid_token().await?;
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
@@ -438,8 +415,8 @@ pub async fn chatgpt_oauth_models(app_handle: AppHandle) -> Result<Vec<String>, 
 
 #[tauri::command]
 #[specta::specta]
-pub async fn chatgpt_oauth_logout(app_handle: AppHandle) -> Result<bool, String> {
-    delete_tokens(&app_handle)?;
+pub async fn chatgpt_oauth_logout() -> Result<bool, String> {
+    delete_tokens_from_store().await?;
     info!("ChatGPT OAuth logged out");
     Ok(true)
 }

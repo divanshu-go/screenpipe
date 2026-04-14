@@ -1245,9 +1245,6 @@ async fn main() {
                 }
             }
 
-            // Migrate ChatGPT OAuth tokens from old file to encrypted store
-            chatgpt_oauth::migrate_from_file(&app.handle());
-
             // Pre-download AI models in background immediately.
             // These downloads don't need any permissions — they just fetch files to cache.
             // On macOS, granting screen recording permission restarts the app, killing
