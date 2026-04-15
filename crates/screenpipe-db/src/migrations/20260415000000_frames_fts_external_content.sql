@@ -52,8 +52,18 @@ CREATE VIRTUAL TABLE frames_fts USING fts5(
     tokenize='unicode61'
 );
 
--- 3. Rebuild the inverted index from frames. This is the slow step.
-INSERT INTO frames_fts(frames_fts) VALUES('rebuild');
+-- 3. Backfill the inverted index from frames rows that should actually be
+-- searchable. This preserves the trigger semantics below: metadata-only rows
+-- without OCR text are not indexed.
+INSERT INTO frames_fts(rowid, full_text, app_name, window_name, browser_url)
+SELECT
+    id,
+    full_text,
+    COALESCE(app_name, ''),
+    COALESCE(window_name, ''),
+    COALESCE(browser_url, '')
+FROM frames
+WHERE full_text IS NOT NULL AND full_text != '';
 
 -- 4. Recreate triggers for external content mode.
 -- External content requires explicit INSERT/DELETE on the FTS table to
