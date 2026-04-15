@@ -439,6 +439,9 @@ async fn main() -> anyhow::Result<()> {
                         json!(record_args.sync_interval_secs),
                     );
                     map.insert("debug".into(), json!(record_args.debug));
+                    map.insert("api_auth".into(), json!(record_args.api_auth));
+                    map.insert("encrypt_secrets".into(), json!(record_args.encrypt_secrets));
+                    map.insert("retention_days".into(), json!(record_args.retention_days));
                     // Only send counts for privacy-sensitive lists (not actual values)
                     map.insert(
                         "audio_device_count".into(),
@@ -1117,6 +1120,29 @@ async fn main() -> anyhow::Result<()> {
             "set (masked)"
         } else {
             "not set"
+        }
+    );
+    println!(
+        "│ api auth               │ {:<34} │",
+        if record_args.api_auth { "enabled" } else { "disabled" }
+    );
+    println!(
+        "│ encrypt secrets        │ {:<34} │",
+        if record_args.encrypt_secrets {
+            "enabled (--encrypt-secrets)"
+        } else {
+            match screenpipe_secrets::keychain::get_key() {
+                screenpipe_secrets::keychain::KeyResult::Found(_) => "enabled (existing key)",
+                _ => "disabled",
+            }
+        }
+    );
+    println!(
+        "│ retention days         │ {:<34} │",
+        if record_args.retention_days == 0 {
+            "forever".to_string()
+        } else {
+            format!("{}", record_args.retention_days)
         }
     );
 
