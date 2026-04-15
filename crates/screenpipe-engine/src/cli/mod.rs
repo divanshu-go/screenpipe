@@ -476,6 +476,11 @@ impl RecordArgs {
                 if is_fresh {
                     screenpipe_config::apply_tier_defaults(&mut settings, tier);
 
+                    // Restore CLI audio engine — user's explicit -a/--audio-transcription-engine
+                    // must win over tier defaults
+                    settings.audio_transcription_engine =
+                        cli_engine_to_str(&self.audio_transcription_engine).to_string();
+
                     // Restore CLI monitor flags — user's explicit --use-all-monitors or -m
                     // must win over tier defaults (fixes #2897)
                     if cli_use_all_monitors {
