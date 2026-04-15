@@ -9727,7 +9727,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.3.92"
+version = "2.3.94"
 dependencies = [
  "anyhow",
  "arboard",
@@ -10121,6 +10121,7 @@ dependencies = [
  "base64 0.22.1",
  "chacha20poly1305",
  "chrono",
+ "keyring",
  "rand 0.8.5",
  "serde",
  "serde_json",
