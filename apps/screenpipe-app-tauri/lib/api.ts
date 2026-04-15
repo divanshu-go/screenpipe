@@ -58,8 +58,9 @@ function ensureInitialized(): Promise<void> {
         _apiKey = config.key;
         _authEnabled = config.auth_enabled;
 
-        // If auth is enabled but key is missing, server isn't ready yet — retry
-        if (_authEnabled && !_apiKey) {
+        // Server not ready yet: either auth_enabled=false (server state not
+        // available) or key is null. Retry until we get a real config.
+        if (!_apiKey) {
           await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
           continue;
         }
