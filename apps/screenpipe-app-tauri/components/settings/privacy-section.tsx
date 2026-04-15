@@ -537,38 +537,11 @@ export function PrivacySection() {
       </div>
       </LockedSetting>
 
-      {/* PII Removal */}
-      <LockedSetting settingKey="pii_removal">
+      {/* Capture Rules */}
       <div className="space-y-2">
         <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">
-          Redaction
+          Capture rules
         </h2>
-        <Card className="border-border bg-card">
-          <CardContent className="px-3 py-2.5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2.5">
-                <Shield className="h-4 w-4 text-muted-foreground shrink-0" />
-                <div>
-                  <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                    PII Removal
-                    <HelpTooltip text="Automatically redacts personally identifiable information (emails, phone numbers, etc.) from captured text before storing." />
-                  </h3>
-                  <p className="text-xs text-muted-foreground">
-                    Redact emails, phones, SSNs, credit cards
-                  </p>
-                </div>
-              </div>
-              <ManagedSwitch
-                settingKey="usePiiRemoval"
-                id="usePiiRemoval"
-                checked={settings.usePiiRemoval}
-                onCheckedChange={handlePiiRemovalChange}
-              />
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-      </LockedSetting>
 
       {/* Incognito Detection */}
       <Card className="border-border bg-card">
@@ -654,6 +627,40 @@ export function PrivacySection() {
           handleSettingsChange({ scheduleEnabled: enabled, scheduleRules: rules } as any);
         }}
       />
+      </div>
+
+      {/* Data Protection */}
+      <LockedSetting settingKey="pii_removal">
+      <div className="space-y-2">
+        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">
+          Data protection
+        </h2>
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <Shield className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                    PII Removal
+                    <HelpTooltip text="Automatically redacts personally identifiable information (emails, phone numbers, etc.) from captured text before storing." />
+                  </h3>
+                  <p className="text-xs text-muted-foreground">
+                    Redact emails, phones, SSNs, credit cards
+                  </p>
+                </div>
+              </div>
+              <ManagedSwitch
+                settingKey="usePiiRemoval"
+                id="usePiiRemoval"
+                checked={settings.usePiiRemoval}
+                onCheckedChange={handlePiiRemovalChange}
+              />
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+      </LockedSetting>
 
       <div className="space-y-2">
         <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">
