@@ -444,6 +444,45 @@ export function AIProviderConfig({
           "grid gap-2",
           piAvailable ? "grid-cols-3" : "grid-cols-4"
         )}>
+          {piAvailable && (
+            <Button
+              type="button"
+              disabled={!settings?.user?.token}
+              variant={selectedProvider === "screenpipe-cloud" ? "default" : "outline"}
+              className="flex h-8 items-center justify-center gap-1.5 text-xs px-3"
+              onClick={() => {
+                setSelectedProvider("screenpipe-cloud");
+                setFormData({
+                  ...formData,
+                  provider: "screenpipe-cloud",
+                  url: "",
+                  model: "auto",
+                });
+              }}
+            >
+              <Icons.terminal className="h-3.5 w-3.5" />
+              <span>screenpipe cloud</span>
+            </Button>
+          )}
+
+          <Button
+            type="button"
+            variant={selectedProvider === "openai-chatgpt" ? "default" : "outline"}
+            className="flex h-8 items-center justify-center gap-1.5 text-xs px-3"
+            onClick={() => {
+              setSelectedProvider("openai-chatgpt");
+              setFormData({
+                ...formData,
+                provider: "openai-chatgpt",
+                url: "https://api.openai.com/v1",
+                model: "gpt-5.4",
+              });
+            }}
+          >
+            <Icons.openai className="h-3.5 w-3.5" />
+            <span>chatgpt</span>
+          </Button>
+
           <Button
             type="button"
             variant={
@@ -482,24 +521,6 @@ export function AIProviderConfig({
 
           <Button
             type="button"
-            variant={selectedProvider === "openai-chatgpt" ? "default" : "outline"}
-            className="flex h-8 items-center justify-center gap-1.5 text-xs px-3"
-            onClick={() => {
-              setSelectedProvider("openai-chatgpt");
-              setFormData({
-                ...formData,
-                provider: "openai-chatgpt",
-                url: "https://api.openai.com/v1",
-                model: "gpt-5.4",
-              });
-            }}
-          >
-            <Icons.openai className="h-3.5 w-3.5" />
-            <span>chatgpt</span>
-          </Button>
-
-          <Button
-            type="button"
             variant={(selectedProvider as string) === "anthropic" ? "default" : "outline"}
             className="flex h-8 items-center justify-center gap-1.5 text-xs px-3"
             onClick={() => {
@@ -518,27 +539,6 @@ export function AIProviderConfig({
             <img src="/images/claude-ai.svg" alt="Claude API" className="h-3.5 w-3.5 rounded-sm" />
             <span>claude api</span>
           </Button>
-
-          {piAvailable && (
-            <Button
-              type="button"
-              disabled={!settings?.user?.token}
-              variant={selectedProvider === "screenpipe-cloud" ? "default" : "outline"}
-              className="flex h-8 items-center justify-center gap-1.5 text-xs px-3"
-              onClick={() => {
-                setSelectedProvider("screenpipe-cloud");
-                setFormData({
-                  ...formData,
-                  provider: "screenpipe-cloud",
-                  url: "", // Pi uses RPC mode
-                  model: "auto",
-                });
-              }}
-            >
-              <Icons.terminal className="h-3.5 w-3.5" />
-              <span>screenpipe cloud</span>
-            </Button>
-          )}
         </div>
 
         {selectedProvider === "openai" && (
