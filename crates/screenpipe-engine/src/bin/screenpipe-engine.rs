@@ -899,7 +899,29 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize secret store for unified credential management
     {
-        let secret_store_result = screenpipe_secrets::SecretStore::new(db.pool.clone(), None).await;
+        // Read-only keychain access: pick up existing key without triggering modals.
+        // Use --encrypt-secrets to create a key if one doesn't exist.
+        let secret_key = if config.encrypt_secrets {
+            match screenpipe_secrets::keychain::get_or_create_key() {
+                Some(k) => {
+                    info!("keychain: encryption key ready (--encrypt-secrets)");
+                    Some(k)
+                }
+                None => {
+                    warn!("keychain: failed to create encryption key — secrets will be stored unencrypted");
+                    None
+                }
+            }
+        } else {
+            match screenpipe_secrets::keychain::get_key() {
+                screenpipe_secrets::keychain::KeyResult::Found(k) => {
+                    info!("keychain: using existing encryption key");
+                    Some(k)
+                }
+                _ => None,
+            }
+        };
+        let secret_store_result = screenpipe_secrets::SecretStore::new(db.pool.clone(), secret_key).await;
         match secret_store_result {
             Ok(store) => {
                 // Run startup permission sweep
