@@ -1213,29 +1213,6 @@ pub async fn pi_start_inner(
         }
     }
 
-    // For local/small models, inject minimal screenpipe API context directly into the system prompt
-    // so they don't need to discover and read the skill file (which they often skip)
-    let is_local_model = matches!(pi_provider.as_str(), "ollama" | "custom");
-    if is_local_model {
-        let api_hint = concat!(
-            "You are a screen activity assistant. The user has screenpipe running locally.\n",
-            "IMPORTANT: ALL API requests MUST include the auth header: -H \"Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY\"\n",
-            "Search their data with: curl -H \"Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY\" \"http://localhost:3030/search?q=QUERY&content_type=all&limit=10&start_time=ISO8601\"\n",
-            "Parameters: q (keywords), content_type (all|ocr|audio), limit (1-20), start_time (ISO 8601, REQUIRED), end_time, app_name, window_name\n",
-            "ALWAYS include start_time. Use date -u for UTC. Example:\n",
-            "curl -H \"Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY\" \"http://localhost:3030/search?content_type=all&limit=5&start_time=$(date -u -v-5M +%Y-%m-%dT%H:%M:%SZ)\"\n",
-            "For Linux use: date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%SZ\n",
-            "Response is JSON with data[] array containing type (OCR/Audio/UI) and content with text/transcription, timestamp, app_name."
-        );
-        cmd.args(["--append-system-prompt", api_hint]);
-    }
-
-    // Always inject auth reminder into the system prompt so all models know to authenticate
-    {
-        let auth_hint = "CRITICAL: You MUST add -H \"Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY\" to EVERY curl request to the Screenpipe API (localhost:3030). Without it, you will get 403 unauthorized. The $SCREENPIPE_LOCAL_API_KEY env var is already set in your environment.";
-        cmd.args(["--append-system-prompt", auth_hint]);
-    }
-
     // Append the user's AI preset system prompt (enables Anthropic prompt caching —
     // Pi's built-in system prompt + this text form the cached prefix, reducing
     // input costs by 90% on subsequent messages in the same conversation)
