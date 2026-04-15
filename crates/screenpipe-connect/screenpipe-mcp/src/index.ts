@@ -39,27 +39,33 @@ function discoverApiKey(): string {
   const { execFileSync, execSync } = require("child_process");
 
   // Read api_auth_key directly from ~/.screenpipe/db.sqlite.
-  // The local API key is stored as base64 plaintext (nonce=zeros, not encrypted).
-  // This is the most reliable method — no PATH, no subprocess, no keychain.
+  // The key may be stored as plaintext base64 (nonce=zeros, keychain unavailable)
+  // or encrypted (non-zero nonce, keychain was available at write time).
+  // If plaintext: decode and return. If encrypted: skip, fall through to CLI.
   try {
     const dbPath = path.join(os.homedir(), ".screenpipe", "db.sqlite");
     if (fs.existsSync(dbPath)) {
-      // Use sqlite3 CLI which is pre-installed on macOS/Linux
       const sqliteBin = process.platform === "win32" ? "sqlite3.exe" : "sqlite3";
-      const result = execFileSync(sqliteBin, [
+      // Check nonce — all zeros means plaintext base64, non-zero means encrypted
+      const row = execFileSync(sqliteBin, [
         dbPath,
-        "SELECT value FROM secrets WHERE key = 'api_auth_key';",
+        "SELECT hex(nonce), value FROM secrets WHERE key = 'api_auth_key';",
       ], {
         timeout: 5000,
         encoding: "utf-8",
         stdio: ["pipe", "pipe", "pipe"],
       }).trim();
-      if (result) {
-        // Value is base64-encoded — decode it
-        const decoded = Buffer.from(result, "base64").toString("utf-8");
-        if (decoded && decoded.startsWith("sp-")) return decoded;
-        // If not base64 or not sp- prefixed, use raw value
-        if (result.startsWith("sp-")) return result;
+      if (row) {
+        const sepIdx = row.indexOf("|");
+        const nonceHex = sepIdx >= 0 ? row.substring(0, sepIdx) : "";
+        const value = sepIdx >= 0 ? row.substring(sepIdx + 1) : row;
+        const isPlaintext = !nonceHex || /^0+$/.test(nonceHex);
+        if (isPlaintext && value) {
+          const decoded = Buffer.from(value, "base64").toString("utf-8");
+          if (decoded && decoded.startsWith("sp-")) return decoded;
+          if (value.startsWith("sp-")) return value;
+        }
+        // Non-zero nonce = encrypted — fall through to CLI which can decrypt via keychain
       }
     }
   } catch {}
