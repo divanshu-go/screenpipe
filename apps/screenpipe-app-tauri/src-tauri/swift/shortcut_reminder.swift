@@ -507,11 +507,30 @@ class ShortcutReminderController: NSObject {
         // Expects {"overlay":"…","chat":"…","search":"…"} plus optional URLs from Rust when API auth is on.
         guard let data = json.data(using: .utf8),
               let dict = try? JSONDecoder().decode([String: String].self, from: data) else { return }
-        if let s = dict["overlay"] { overlayShortcut = s }
-        if let s = dict["chat"] { chatShortcut = s }
-        if let s = dict["search"] { searchShortcut = s }
+        if let s = dict["overlay"] { overlayShortcut = prettifyShortcut(s) }
+        if let s = dict["chat"] { chatShortcut = prettifyShortcut(s) }
+        if let s = dict["search"] { searchShortcut = prettifyShortcut(s) }
         if let s = dict["metrics_ws_url"] { metricsWsUrl = s }
         if let s = dict["meetings_status_url"] { meetingsStatusUrl = s }
+    }
+
+    /// Convert "Super+Ctrl+S" → "⌘⌃S" for compact overlay display.
+    private func prettifyShortcut(_ raw: String) -> String {
+        // Already contains symbols — return as-is
+        if raw.contains("⌘") || raw.contains("⌃") || raw.contains("⌥") || raw.contains("⇧") { return raw }
+        let parts = raw.split(separator: "+").map(String.init)
+        var symbols = ""
+        var key = ""
+        for part in parts {
+            switch part.lowercased() {
+            case "super", "cmd", "command", "meta":  symbols += "⌘"
+            case "ctrl", "control":                   symbols += "⌃"
+            case "alt", "option", "opt":              symbols += "⌥"
+            case "shift":                             symbols += "⇧"
+            default:                                  key = part.uppercased()
+            }
+        }
+        return symbols + key
     }
 
     private func createPanel() {
