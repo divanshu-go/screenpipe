@@ -36,6 +36,8 @@ pub fn screenpipe_cloud_models() -> serde_json::Value {
         {"id": "stepfun/step-3.5-flash:free", "name": "Step 3.5 Flash", "reasoning": false, "input": ["text"], "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}, "contextWindow": 256000, "maxTokens": 32000},
         {"id": "gemini-3-flash", "name": "Gemini 3 Flash", "reasoning": false, "input": ["text", "image"], "cost": {"input": 0.10, "output": 0.40, "cacheRead": 0, "cacheWrite": 0}, "contextWindow": 1000000, "maxTokens": 65536},
         {"id": "gemini-2.5-flash", "name": "Gemini 2.5 Flash", "reasoning": false, "input": ["text", "image"], "cost": {"input": 0.075, "output": 0.30, "cacheRead": 0, "cacheWrite": 0}, "contextWindow": 1000000, "maxTokens": 65536},
+        // ── Confidential inference (Tinfoil — secure enclaves) ──
+        {"id": "gemma4-31b", "name": "Gemma 4 31B (Confidential)", "reasoning": false, "input": ["text"], "cost": {"input": 0.45, "output": 1.00, "cacheRead": 0, "cacheWrite": 0}, "contextWindow": 256000, "maxTokens": 32000},
         // ── Anthropic ──
         {"id": "claude-opus-4-6", "name": "Claude Opus 4.6", "reasoning": true, "input": ["text", "image"], "cost": {"input": 15, "output": 75, "cacheRead": 1.5, "cacheWrite": 18.75}, "contextWindow": 200000, "maxTokens": 32000},
         {"id": "claude-sonnet-4-5", "name": "Claude Sonnet 4.5", "reasoning": true, "input": ["text", "image"], "cost": {"input": 3, "output": 15, "cacheRead": 0.3, "cacheWrite": 3.75}, "contextWindow": 200000, "maxTokens": 64000},
