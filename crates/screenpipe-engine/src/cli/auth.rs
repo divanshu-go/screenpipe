@@ -31,25 +31,7 @@ async fn print_token() -> Result<()> {
         }
     }
 
-    // Priority 2: settings store (store.bin — used by desktop app)
-    let store_path = screenpipe_core::paths::default_screenpipe_data_dir().join("store.bin");
-    if store_path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&store_path) {
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
-                let key = parsed
-                    .pointer("/settings/apiKey")
-                    .or_else(|| parsed.pointer("/state/settings/apiKey"))
-                    .and_then(|v| v.as_str())
-                    .filter(|s| !s.is_empty());
-                if let Some(key) = key {
-                    println!("{}", key);
-                    return Ok(());
-                }
-            }
-        }
-    }
-
-    // Priority 3: secret store (db.sqlite — used by CLI)
+    // Priority 2: SecretStore in db.sqlite (encrypted, keychain key)
     if let Ok(store) = open_secret_store().await {
         if let Ok(Some(bytes)) = store.get("api_auth_key").await {
             if let Ok(key) = String::from_utf8(bytes) {
@@ -61,7 +43,7 @@ async fn print_token() -> Result<()> {
         }
     }
 
-    // Priority 4: legacy auth.json
+    // Priority 3: legacy auth.json (for users upgrading)
     if let Some(home) = dirs::home_dir() {
         let auth_path = home.join(".screenpipe/auth.json");
         if let Ok(content) = std::fs::read_to_string(auth_path) {

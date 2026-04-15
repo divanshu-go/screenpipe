@@ -422,22 +422,26 @@ pub async fn spawn_screenpipe(
 
     let recording_config = store.to_recording_config(data_dir);
 
-    // If an API key was auto-generated, persist it to the encrypted settings
-    // store so it survives restarts (replaces the old auth.json file approach).
+    // Persist auto-generated API key to the SecretStore (encrypted in db.sqlite)
+    // so it survives restarts and is discoverable by `screenpipe auth token`.
     if let Some(ref key) = recording_config.api_auth_key {
-        // Persist only if apiKey isn't already saved in settings
         if store.recording.api_key.is_empty() {
-            if let Ok(tauri_store) = crate::store::get_store(&app, None) {
-                if let Some(mut settings_val) = tauri_store.get("settings") {
-                    if let Some(obj) = settings_val.as_object_mut() {
-                        obj.insert("apiKey".to_string(), serde_json::json!(key));
-                        tauri_store.set("settings", settings_val);
-                        let _ = tauri_store.save();
-                        crate::store::reencrypt_store_file(&app);
-                        tracing::info!("api auth: auto-generated key persisted to encrypted store");
+            let key_clone = key.clone();
+            let data_dir = data_dir.clone();
+            tauri::async_runtime::spawn(async move {
+                let db_path = data_dir.join("db.sqlite");
+                let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
+                if let Ok(pool) = sqlx::SqlitePool::connect(&db_url).await {
+                    let secret_key = crate::secrets::get_or_create_key();
+                    if let Ok(store) = screenpipe_secrets::SecretStore::new(pool, secret_key).await {
+                        if let Err(e) = store.set("api_auth_key", key_clone.as_bytes()).await {
+                            tracing::warn!("failed to persist API key to secret store: {}", e);
+                        } else {
+                            tracing::info!("api auth: key persisted to encrypted secret store");
+                        }
                     }
                 }
-            }
+            });
         }
     }
 
