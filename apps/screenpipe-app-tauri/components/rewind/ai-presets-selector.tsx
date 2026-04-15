@@ -442,21 +442,8 @@ export function AIProviderConfig({
 
         <div className={cn(
           "grid gap-2",
-          piAvailable ? "grid-cols-3" : "grid-cols-5"
+          piAvailable ? "grid-cols-3" : "grid-cols-4"
         )}>
-          <Button
-            type="button"
-            variant={selectedProvider === "openai" ? "default" : "outline"}
-            className="flex h-8 items-center justify-center gap-1.5 text-xs px-3"
-            onClick={() => {
-              setSelectedProvider("openai");
-              setFormData({ ...formData, provider: "openai" });
-            }}
-          >
-            <Icons.openai className="h-3.5 w-3.5" />
-            <span>openai api</span>
-          </Button>
-
           <Button
             type="button"
             variant={
