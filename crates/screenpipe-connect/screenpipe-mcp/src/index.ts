@@ -27,6 +27,7 @@ for (let i = 0; i < args.length; i++) {
 }
 
 const SCREENPIPE_API = `http://localhost:${port}`;
+const API_KEY = process.env.SCREENPIPE_LOCAL_API_KEY || process.env.SCREENPIPE_API_KEY || "";
 
 // Read version from package.json (single source of truth)
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -531,6 +532,7 @@ async function fetchAPI(
     ...options,
     headers: {
       "Content-Type": "application/json",
+      ...(API_KEY ? { Authorization: `Bearer ${API_KEY}` } : {}),
       ...options.headers,
     },
   });
