@@ -72,6 +72,26 @@ function ensureInitialized(): Promise<void> {
       if (_authEnabled && _apiKey) {
         document.cookie = `screenpipe_auth=${_apiKey}; path=/; SameSite=Strict`;
       }
+
+      // Patch global fetch to inject auth header for all local API requests.
+      // Many components use direct fetch() instead of localFetch(), so they
+      // miss the auth header entirely and get 403. This catches them all.
+      if (_authEnabled && _apiKey && typeof window !== "undefined") {
+        const originalFetch = window.fetch.bind(window);
+        const apiKey = _apiKey;
+        const apiPort = _port;
+        window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+          if (url.includes(`localhost:${apiPort}`) || url.includes(`127.0.0.1:${apiPort}`)) {
+            const headers = new Headers(init?.headers);
+            if (!headers.has("Authorization")) {
+              headers.set("Authorization", `Bearer ${apiKey}`);
+            }
+            return originalFetch(input, { ...init, headers });
+          }
+          return originalFetch(input, init);
+        };
+      }
     } catch {
       // Not in Tauri context (tests, SSR) — defaults are fine
     }
