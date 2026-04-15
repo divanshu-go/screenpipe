@@ -28,18 +28,22 @@ for (let i = 0; i < args.length; i++) {
 
 const SCREENPIPE_API = `http://localhost:${port}`;
 
-// Discover API key: env var > npx screenpipe auth token > bundled bun
+// Discover API key: env var > screenpipe JS lib > npx fallback
 function discoverApiKey(): string {
   const envKey = process.env.SCREENPIPE_LOCAL_API_KEY || process.env.SCREENPIPE_API_KEY;
   if (envKey) return envKey;
 
-  const { execSync } = require("child_process");
-  const os = require("os");
-  const fs = require("fs");
-  const path = require("path");
-
-  // Try npx first (works if user has Node installed)
+  // Use the screenpipe npm package's JS API — resolves the bundled native
+  // binary directly, no PATH dependency, no subprocess spawning of npx.
   try {
+    const { getApiKey } = require("screenpipe");
+    const token = getApiKey();
+    if (token) return token;
+  } catch {}
+
+  // Fallback: shell out to npx (works when screenpipe pkg isn't installed as dependency)
+  try {
+    const { execSync } = require("child_process");
     const token = execSync("npx screenpipe@latest auth token", {
       timeout: 15000,
       encoding: "utf-8",
@@ -47,33 +51,6 @@ function discoverApiKey(): string {
     }).trim();
     if (token) return token;
   } catch {}
-
-  // Try bundled bun inside the screenpipe app
-  const bundledBunPaths: string[] = [];
-  const platform = os.platform();
-  if (platform === "darwin") {
-    bundledBunPaths.push("/Applications/screenpipe.app/Contents/MacOS/bun");
-  } else if (platform === "win32") {
-    bundledBunPaths.push(
-      path.join(process.env.LOCALAPPDATA || "", "screenpipe", "bun.exe"),
-      path.join(process.env.PROGRAMFILES || "", "screenpipe", "bun.exe"),
-    );
-  } else {
-    bundledBunPaths.push("/usr/lib/screenpipe/bun", "/opt/screenpipe/bun");
-  }
-
-  for (const bunPath of bundledBunPaths) {
-    try {
-      if (fs.existsSync(bunPath)) {
-        const token = execSync(`"${bunPath}" x screenpipe@latest auth token`, {
-          timeout: 15000,
-          encoding: "utf-8",
-          stdio: ["pipe", "pipe", "pipe"],
-        }).trim();
-        if (token) return token;
-      }
-    } catch {}
-  }
 
   return "";
 }
