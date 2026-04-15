@@ -28,25 +28,43 @@ for (let i = 0; i < args.length; i++) {
 
 const SCREENPIPE_API = `http://localhost:${port}`;
 
-// Discover API key: env var > screenpipe JS lib > npx via process.execPath > npx on PATH
+// Discover API key: env var > db.sqlite direct read > npx fallbacks
 function discoverApiKey(): string {
   const envKey = process.env.SCREENPIPE_LOCAL_API_KEY || process.env.SCREENPIPE_API_KEY;
   if (envKey) return envKey;
 
-  const { execFileSync, execSync } = require("child_process");
+  const os = require("os");
   const path = require("path");
+  const fs = require("fs");
+  const { execFileSync, execSync } = require("child_process");
 
-  // Use the screenpipe npm package's JS API — resolves the bundled native
-  // binary directly, no PATH dependency, no subprocess spawning of npx.
+  // Read api_auth_key directly from ~/.screenpipe/db.sqlite.
+  // The local API key is stored as base64 plaintext (nonce=zeros, not encrypted).
+  // This is the most reliable method — no PATH, no subprocess, no keychain.
   try {
-    const { getApiKey } = require("screenpipe");
-    const token = getApiKey();
-    if (token) return token;
+    const dbPath = path.join(os.homedir(), ".screenpipe", "db.sqlite");
+    if (fs.existsSync(dbPath)) {
+      // Use sqlite3 CLI which is pre-installed on macOS/Linux
+      const sqliteBin = process.platform === "win32" ? "sqlite3.exe" : "sqlite3";
+      const result = execFileSync(sqliteBin, [
+        dbPath,
+        "SELECT value FROM secrets WHERE key = 'api_auth_key';",
+      ], {
+        timeout: 5000,
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "pipe"],
+      }).trim();
+      if (result) {
+        // Value is base64-encoded — decode it
+        const decoded = Buffer.from(result, "base64").toString("utf-8");
+        if (decoded && decoded.startsWith("sp-")) return decoded;
+        // If not base64 or not sp- prefixed, use raw value
+        if (result.startsWith("sp-")) return result;
+      }
+    }
   } catch {}
 
-  // Fallback: use the current Node binary to run npx (no PATH dependency).
-  // Claude Code and other MCP hosts may strip PATH, making bare `npx` unfindable.
-  // process.execPath is the absolute path to the Node binary running this MCP.
+  // Fallback: use the current Node binary to find npx (no PATH dependency)
   try {
     const npxPath = path.join(path.dirname(process.execPath), "npx");
     const token = execFileSync(npxPath, ["screenpipe@latest", "auth", "token"], {
