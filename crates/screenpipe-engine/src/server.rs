@@ -843,6 +843,7 @@ impl SCServer {
                             let path = req.uri().path();
                             if path == "/health"
                                 || path == "/ws/health"
+                                || path == "/audio/device/status"
                                 || path == "/connections/oauth/callback"
                                 || path.starts_with("/frames/")
                                 || path == "/notify"
