@@ -1259,6 +1259,20 @@ pub async fn pi_start_inner(
         cmd.env("SCREENPIPE_API_KEY", token);
     }
 
+    // Pass local API auth key so the Pi agent can authenticate to localhost:3030
+    {
+        use crate::recording::RecordingState;
+        if let Some(state) = app.try_state::<RecordingState>() {
+            if let Ok(guard) = state.server.try_lock() {
+                if let Some(ref core) = *guard {
+                    if let Some(ref key) = core.local_api_key {
+                        cmd.env("SCREENPIPE_LOCAL_API_KEY", key);
+                    }
+                }
+            }
+        }
+    }
+
     // Pass the user's API key as env var for non-screenpipe providers
     if let Some(ref config) = provider_config {
         // ChatGPT OAuth: inject token from secret store (no api_key in config)
