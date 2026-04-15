@@ -1296,12 +1296,18 @@ async fn main() -> anyhow::Result<()> {
     let server_future = server.start();
     pin_mut!(server_future);
 
-    // Auto-enable local data retention (14 days) for CLI users.
+    // Auto-enable local data retention for CLI users.
     // The Tauri app does this via auto_start_retention(); for CLI we hit the
     // same HTTP endpoint after a short delay to let the server bind.
     {
         let port = config.port;
+        let retention_days = record_args.retention_days;
+        let retention_enabled = retention_days > 0;
         tokio::spawn(async move {
+            if !retention_enabled {
+                tracing::info!("local retention disabled (--retention-days 0)");
+                return;
+            }
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             let client = reqwest::Client::new();
             let url = format!("http://localhost:{}/retention/configure", port);
@@ -1309,13 +1315,13 @@ async fn main() -> anyhow::Result<()> {
                 .post(&url)
                 .json(&serde_json::json!({
                     "enabled": true,
-                    "retention_days": 14,
+                    "retention_days": retention_days,
                 }))
                 .send()
                 .await
             {
                 Ok(r) if r.status().is_success() => {
-                    tracing::info!("local retention auto-enabled (14 days)");
+                    tracing::info!("local retention auto-enabled ({} days)", retention_days);
                 }
                 Ok(r) => {
                     tracing::debug!("retention configure returned {}", r.status());

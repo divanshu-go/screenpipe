@@ -366,6 +366,11 @@ pub struct RecordArgs {
     /// Localhost requests are always allowed.
     #[arg(long, default_value_t = true)]
     pub api_auth: bool,
+
+    /// Local data retention in days. Old screen/audio data is auto-deleted after this period.
+    /// Set to 0 to disable retention (keep data forever).
+    #[arg(long, default_value_t = 14)]
+    pub retention_days: u32,
 }
 
 impl RecordArgs {
