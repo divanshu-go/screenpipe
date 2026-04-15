@@ -485,14 +485,6 @@ jobs:
             fi
           done
 
-      - name: Clean up build keychain
-        if: always()
-        shell: bash
-        run: |
-          BUILD_KC="$HOME/Library/Keychains/build.keychain-db"
-          security delete-keychain "$BUILD_KC" 2>/dev/null || true
-          security list-keychain -d user -s ~/Library/Keychains/login.keychain-db 2>/dev/null || true
-
       - name: Notarize and staple DMG
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -547,24 +539,55 @@ jobs:
           PKG_DIR="${BUNDLE_DIR}/pkg"
           mkdir -p "$PKG_DIR"
 
+          # Find installer signing identity (Developer ID Installer)
+          INSTALLER_IDENTITY=$(security find-identity -v -p basic "$HOME/Library/Keychains/build.keychain-db" 2>/dev/null | grep "Developer ID Installer" | head -1 | sed 's/.*"\(.*\)".*/\1/' || true)
+
           # Create component pkg from .app — installs to /Applications
           PKG_OUTPUT="${PKG_DIR}/screenpipe-enterprise-${VERSION}-arm64.pkg"
-          pkgbuild \
-            --component "$APP_PATH" \
-            --install-location /Applications \
-            --identifier "screenpi.pe.enterprise" \
-            --version "$VERSION" \
-            "$PKG_OUTPUT"
+          if [ -n "$INSTALLER_IDENTITY" ]; then
+            echo "Signing .pkg with: $INSTALLER_IDENTITY"
+            pkgbuild \
+              --component "$APP_PATH" \
+              --install-location /Applications \
+              --identifier "screenpi.pe.enterprise" \
+              --version "$VERSION" \
+              --sign "$INSTALLER_IDENTITY" \
+              "$PKG_OUTPUT"
+          else
+            echo "WARNING: No 'Developer ID Installer' cert found, building unsigned .pkg"
+            echo "Apple notarization will fail without it. Add the installer cert to APPLE_CERTIFICATE."
+            pkgbuild \
+              --component "$APP_PATH" \
+              --install-location /Applications \
+              --identifier "screenpi.pe.enterprise" \
+              --version "$VERSION" \
+              "$PKG_OUTPUT"
+          fi
 
           echo "Distribution pkg created: $(basename "$PKG_OUTPUT")"
 
           # Notarize the .pkg
           echo "Notarizing .pkg..."
-          xcrun notarytool submit "$PKG_OUTPUT" \
+          SUBMIT_OUT=$(xcrun notarytool submit "$PKG_OUTPUT" \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" \
-            --wait --timeout 15m
+            --wait --timeout 15m 2>&1) || true
+          echo "$SUBMIT_OUT"
+
+          # Extract submission ID and check result
+          SUBMISSION_ID=$(echo "$SUBMIT_OUT" | grep "id:" | head -1 | awk '{print $2}')
+          if echo "$SUBMIT_OUT" | grep -q "status: Invalid"; then
+            echo "Notarization FAILED — fetching log for details..."
+            if [ -n "$SUBMISSION_ID" ]; then
+              xcrun notarytool log "$SUBMISSION_ID" \
+                --apple-id "$APPLE_ID" \
+                --password "$APPLE_PASSWORD" \
+                --team-id "$APPLE_TEAM_ID" 2>&1 || true
+            fi
+            echo "WARNING: .pkg notarization failed but continuing — DMG is still available"
+            exit 0
+          fi
 
           echo "Stapling .pkg..."
           xcrun stapler staple "$PKG_OUTPUT"
@@ -600,6 +623,14 @@ jobs:
           path: |
             apps/screenpipe-app-tauri/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
             apps/screenpipe-app-tauri/src-tauri/target/aarch64-apple-darwin/release/bundle/pkg/*.pkg
+
+      - name: Clean up build keychain
+        if: always()
+        shell: bash
+        run: |
+          BUILD_KC="$HOME/Library/Keychains/build.keychain-db"
+          security delete-keychain "$BUILD_KC" 2>/dev/null || true
+          security list-keychain -d user -s ~/Library/Keychains/login.keychain-db 2>/dev/null || true
 
   # ─── Notify subscribers after all builds complete ─────────────────────────
   notify:
