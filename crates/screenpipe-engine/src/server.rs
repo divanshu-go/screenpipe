@@ -844,6 +844,8 @@ impl SCServer {
                             if path == "/health"
                                 || path == "/ws/health"
                                 || path == "/connections/oauth/callback"
+                                || path.starts_with("/frames/")
+                                || path == "/notify"
                             {
                                 return next.run(req).await;
                             }
