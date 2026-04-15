@@ -427,7 +427,7 @@ pub async fn spawn_screenpipe(
     if let Some(ref key) = recording_config.api_auth_key {
         if store.recording.api_key.is_empty() {
             let key_clone = key.clone();
-            let data_dir = data_dir.clone();
+            let data_dir = recording_config.data_dir.clone();
             tauri::async_runtime::spawn(async move {
                 let db_path = data_dir.join("db.sqlite");
                 let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
