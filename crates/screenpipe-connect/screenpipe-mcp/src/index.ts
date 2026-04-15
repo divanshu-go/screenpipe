@@ -28,36 +28,20 @@ for (let i = 0; i < args.length; i++) {
 
 const SCREENPIPE_API = `http://localhost:${port}`;
 
-// Auto-discover API key: env var > store.bin > auth.json
+// Discover API key: env var > `screenpipe auth token` CLI
 function discoverApiKey(): string {
-  // 1. Env var (set by pipes or user)
   const envKey = process.env.SCREENPIPE_LOCAL_API_KEY || process.env.SCREENPIPE_API_KEY;
   if (envKey) return envKey;
 
-  // 2. Read from store.bin (Tauri desktop app encrypted settings)
+  // Ask the running screenpipe CLI for the token
   try {
-    const os = require("os");
-    const fs = require("fs");
-    const path = require("path");
-    const storePath = path.join(os.homedir(), ".screenpipe", "store.bin");
-    if (fs.existsSync(storePath)) {
-      const content = fs.readFileSync(storePath, "utf-8");
-      const parsed = JSON.parse(content);
-      const key = parsed?.settings?.apiKey || parsed?.state?.settings?.apiKey;
-      if (key) return key;
-    }
-  } catch {}
-
-  // 3. Legacy auth.json
-  try {
-    const os = require("os");
-    const fs = require("fs");
-    const path = require("path");
-    const authPath = path.join(os.homedir(), ".screenpipe", "auth.json");
-    if (fs.existsSync(authPath)) {
-      const parsed = JSON.parse(fs.readFileSync(authPath, "utf-8"));
-      if (parsed?.token) return parsed.token;
-    }
+    const { execSync } = require("child_process");
+    const token = execSync("screenpipe auth token", {
+      timeout: 5000,
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
+    if (token) return token;
   } catch {}
 
   return "";
