@@ -28,10 +28,13 @@ for (let i = 0; i < args.length; i++) {
 
 const SCREENPIPE_API = `http://localhost:${port}`;
 
-// Discover API key: env var > screenpipe JS lib > npx fallback
+// Discover API key: env var > screenpipe JS lib > npx via process.execPath > npx on PATH
 function discoverApiKey(): string {
   const envKey = process.env.SCREENPIPE_LOCAL_API_KEY || process.env.SCREENPIPE_API_KEY;
   if (envKey) return envKey;
+
+  const { execFileSync, execSync } = require("child_process");
+  const path = require("path");
 
   // Use the screenpipe npm package's JS API — resolves the bundled native
   // binary directly, no PATH dependency, no subprocess spawning of npx.
@@ -41,9 +44,21 @@ function discoverApiKey(): string {
     if (token) return token;
   } catch {}
 
-  // Fallback: shell out to npx (works when screenpipe pkg isn't installed as dependency)
+  // Fallback: use the current Node binary to run npx (no PATH dependency).
+  // Claude Code and other MCP hosts may strip PATH, making bare `npx` unfindable.
+  // process.execPath is the absolute path to the Node binary running this MCP.
   try {
-    const { execSync } = require("child_process");
+    const npxPath = path.join(path.dirname(process.execPath), "npx");
+    const token = execFileSync(npxPath, ["screenpipe@latest", "auth", "token"], {
+      timeout: 15000,
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
+    if (token) return token;
+  } catch {}
+
+  // Last resort: npx on PATH
+  try {
     const token = execSync("npx screenpipe@latest auth token", {
       timeout: 15000,
       encoding: "utf-8",

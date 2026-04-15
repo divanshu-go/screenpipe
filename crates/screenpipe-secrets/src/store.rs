@@ -324,4 +324,37 @@ mod tests {
         let result = cli_store.get("encrypted:only").await;
         assert!(result.is_err()); // can't decrypt without key
     }
+
+    #[tokio::test]
+    async fn test_reencrypt_unencrypted_secrets() {
+        let pool = SqlitePool::connect(":memory:").await.unwrap();
+
+        // Write 3 secrets without encryption
+        let plain_store = SecretStore::new(pool.clone(), None).await.unwrap();
+        plain_store.set("a", b"alpha").await.unwrap();
+        plain_store.set("b", b"bravo").await.unwrap();
+        plain_store.set("c", b"charlie").await.unwrap();
+
+        // Re-encrypt with a key
+        let key = [99u8; 32];
+        let count = plain_store.reencrypt_unencrypted_secrets(&key).await.unwrap();
+        assert_eq!(count, 3);
+
+        // Verify the encrypted store can read them back
+        let enc_store = SecretStore::new(pool.clone(), Some(key)).await.unwrap();
+        assert_eq!(enc_store.get("a").await.unwrap().unwrap(), b"alpha");
+        assert_eq!(enc_store.get("b").await.unwrap().unwrap(), b"bravo");
+        assert_eq!(enc_store.get("c").await.unwrap().unwrap(), b"charlie");
+
+        // Verify nonces are no longer zero (actually encrypted)
+        let row: (Vec<u8>,) = sqlx::query_as("SELECT nonce FROM secrets WHERE key = 'a'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(!row.0.iter().all(|&b| b == 0), "nonce should be non-zero after re-encryption");
+
+        // Re-encrypt again should be a no-op (already encrypted)
+        let count2 = enc_store.reencrypt_unencrypted_secrets(&key).await.unwrap();
+        assert_eq!(count2, 0);
+    }
 }
