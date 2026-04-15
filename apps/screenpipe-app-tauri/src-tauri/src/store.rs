@@ -899,16 +899,14 @@ impl SettingsStore {
             data_dir,
             Some(&resolved_engine),
         );
-        // Set the API auth key: settings apiKey > user api_key > user token > auto-generate
+        // Set the API auth key: settings apiKey > auto-generate
         if config.api_auth {
             let settings_key = settings.api_key.as_str();
             config.api_auth_key = if !settings_key.is_empty() {
                 Some(settings_key.to_string())
             } else {
                 None
-            }
-            .or_else(|| self.user.api_key.clone())
-            .or_else(|| self.user.token.clone());
+            };
 
             // Auto-generate if no key found — stored in the encrypted settings
             // store (not auth.json) so it's protected by keychain encryption.

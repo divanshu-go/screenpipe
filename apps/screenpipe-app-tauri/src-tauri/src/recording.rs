@@ -425,7 +425,8 @@ pub async fn spawn_screenpipe(
     // If an API key was auto-generated, persist it to the encrypted settings
     // store so it survives restarts (replaces the old auth.json file approach).
     if let Some(ref key) = recording_config.api_auth_key {
-        if store.recording.api_key.is_empty() && store.user.api_key.is_none() && store.user.token.is_none() {
+        // Persist only if apiKey isn't already saved in settings
+        if store.recording.api_key.is_empty() {
             if let Ok(tauri_store) = crate::store::get_store(&app, None) {
                 if let Some(mut settings_val) = tauri_store.get("settings") {
                     if let Some(obj) = settings_val.as_object_mut() {
