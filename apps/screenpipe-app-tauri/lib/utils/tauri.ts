@@ -194,6 +194,9 @@ async stopScreenpipe() : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+/**
+ * Start recording. Requires the server to be running.
+ */
 async startCapture() : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("start_capture") };
@@ -202,6 +205,10 @@ async startCapture() : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+/**
+ * Stop recording without killing the server.
+ * Pipes, memories, search, and the HTTP API remain accessible.
+ */
 async stopCapture() : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("stop_capture") };
