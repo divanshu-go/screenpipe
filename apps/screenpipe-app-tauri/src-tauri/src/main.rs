@@ -618,6 +618,8 @@ async fn main() {
                 commands::reset_onboarding,
                 commands::set_onboarding_step,
                 commands::show_onboarding_window,
+                commands::get_keychain_status,
+                commands::enable_keychain_encryption,
                 commands::open_search_window,
                 // Shortcut reminder commands
                 commands::show_shortcut_reminder,

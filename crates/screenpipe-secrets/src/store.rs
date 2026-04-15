@@ -152,6 +152,44 @@ impl SecretStore {
             }
         }
     }
+
+    /// Re-encrypt all unencrypted (base64) secrets with the given key.
+    /// Called when the user enables keychain encryption after previously
+    /// running without it. Returns the number of secrets re-encrypted.
+    pub async fn reencrypt_unencrypted_secrets(&self, new_key: &[u8; 32]) -> Result<usize> {
+        let rows: Vec<(String, Vec<u8>, Vec<u8>)> =
+            sqlx::query_as("SELECT key, value, nonce FROM secrets")
+                .fetch_all(&self.pool)
+                .await
+                .context("failed to fetch secrets for re-encryption")?;
+
+        let mut count = 0;
+        for (secret_key, stored_value, nonce) in rows {
+            if !nonce.iter().all(|&b| b == 0) {
+                continue; // already encrypted
+            }
+
+            let plaintext = BASE64
+                .decode(&stored_value)
+                .context("failed to decode base64 during re-encryption")?;
+
+            let (ciphertext, new_nonce) = crypto::encrypt(&plaintext, new_key)?;
+
+            sqlx::query(
+                "UPDATE secrets SET value = ?, nonce = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE key = ?",
+            )
+            .bind(&ciphertext)
+            .bind(new_nonce.as_slice())
+            .bind(&secret_key)
+            .execute(&self.pool)
+            .await
+            .context("failed to update secret during re-encryption")?;
+
+            count += 1;
+        }
+
+        Ok(count)
+    }
 }
 
 #[cfg(test)]

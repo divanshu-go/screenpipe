@@ -5,7 +5,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Monitor, Mic, Keyboard, Globe, Check } from "lucide-react";
+import { Monitor, Mic, Keyboard, Globe, Lock, Check } from "lucide-react";
 import { commands } from "@/lib/utils/tauri";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { motion } from "framer-motion";
@@ -135,6 +135,22 @@ export default function PermissionsStep({
         await commands.requestBrowsersAutomationPermission();
       },
       macOnly: true,
+      optional: true,
+    },
+    {
+      id: "keychain",
+      icon: <Lock className="w-3.5 h-3.5" strokeWidth={1.5} />,
+      title: "secure storage",
+      subtitle: "encrypt api keys & credentials with your os keychain",
+      check: async () => {
+        const res = await commands.getKeychainStatus();
+        if (res.status === "ok" && res.data.state === "enabled") return "granted";
+        if (res.status === "ok" && res.data.state === "unavailable") return "granted";
+        return "denied";
+      },
+      request: async () => {
+        await commands.enableKeychainEncryption();
+      },
       optional: true,
     },
   ];

@@ -1042,6 +1042,57 @@ pub async fn show_onboarding_window(app_handle: tauri::AppHandle) -> Result<(), 
     Ok(())
 }
 
+// Keychain / secure storage commands
+
+#[derive(serde::Serialize, specta::Type)]
+pub struct KeychainStatus {
+    pub state: String,
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_keychain_status() -> Result<KeychainStatus, String> {
+    let state = match crate::secrets::get_key() {
+        crate::secrets::KeyResult::Found(_) => "enabled",
+        crate::secrets::KeyResult::NotFound => "disabled",
+        crate::secrets::KeyResult::AccessDenied => "disabled",
+        crate::secrets::KeyResult::Unavailable => "unavailable",
+    };
+    Ok(KeychainStatus {
+        state: state.to_string(),
+    })
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn enable_keychain_encryption() -> Result<KeychainStatus, String> {
+    let key = crate::secrets::get_or_create_key().ok_or_else(|| {
+        "Keychain access denied or unavailable. Credentials will remain unencrypted.".to_string()
+    })?;
+
+    let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
+    let db_path = data_dir.join("db.sqlite");
+    let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
+
+    if let Ok(pool) = sqlx::SqlitePool::connect(&db_url).await {
+        if let Ok(store) = screenpipe_secrets::SecretStore::new(pool, Some(key)).await {
+            match store.reencrypt_unencrypted_secrets(&key).await {
+                Ok(count) if count > 0 => {
+                    tracing::info!("re-encrypted {} secrets after keychain opt-in", count);
+                }
+                Err(e) => {
+                    tracing::warn!("failed to re-encrypt secrets: {}", e);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    Ok(KeychainStatus {
+        state: "enabled".to_string(),
+    })
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn set_window_size(

@@ -439,6 +439,22 @@ async showOnboardingWindow() : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async getKeychainStatus() : Promise<Result<KeychainStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_keychain_status") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async enableKeychainEncryption() : Promise<Result<KeychainStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("enable_keychain_encryption") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async openSearchWindow(query: string | null) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("open_search_window", { query }) };
@@ -1073,6 +1089,7 @@ export type AudioDeviceInfo = { name: string; isDefault: boolean }
 export type BrowserAutomationStatus = { name: string; status: string; running: boolean }
 export type BrowserLogEntry = { level: string; message: string }
 export type CacheFile = { path: string; label: string; size_bytes: bigint }
+export type KeychainStatus = { state: string }
 export type CachedSuggestions = { suggestions: Suggestion[]; generatedAt: string; mode: string; aiGenerated: boolean; tags: string[] }
 export type CalendarEventItem = { id: string; title: string; 
 /**
