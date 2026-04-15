@@ -8,6 +8,7 @@
 
 use screenpipe_core::agents::pi::screenpipe_cloud_models;
 use serde::{Deserialize, Serialize};
+use tauri::Manager;
 use serde_json::{json, Value};
 use specta::Type;
 use std::collections::HashMap;
