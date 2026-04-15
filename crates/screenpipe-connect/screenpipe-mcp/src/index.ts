@@ -27,7 +27,43 @@ for (let i = 0; i < args.length; i++) {
 }
 
 const SCREENPIPE_API = `http://localhost:${port}`;
-const API_KEY = process.env.SCREENPIPE_LOCAL_API_KEY || process.env.SCREENPIPE_API_KEY || "";
+
+// Auto-discover API key: env var > store.bin > auth.json
+function discoverApiKey(): string {
+  // 1. Env var (set by pipes or user)
+  const envKey = process.env.SCREENPIPE_LOCAL_API_KEY || process.env.SCREENPIPE_API_KEY;
+  if (envKey) return envKey;
+
+  // 2. Read from store.bin (Tauri desktop app encrypted settings)
+  try {
+    const os = require("os");
+    const fs = require("fs");
+    const path = require("path");
+    const storePath = path.join(os.homedir(), ".screenpipe", "store.bin");
+    if (fs.existsSync(storePath)) {
+      const content = fs.readFileSync(storePath, "utf-8");
+      const parsed = JSON.parse(content);
+      const key = parsed?.settings?.apiKey || parsed?.state?.settings?.apiKey;
+      if (key) return key;
+    }
+  } catch {}
+
+  // 3. Legacy auth.json
+  try {
+    const os = require("os");
+    const fs = require("fs");
+    const path = require("path");
+    const authPath = path.join(os.homedir(), ".screenpipe", "auth.json");
+    if (fs.existsSync(authPath)) {
+      const parsed = JSON.parse(fs.readFileSync(authPath, "utf-8"));
+      if (parsed?.token) return parsed.token;
+    }
+  } catch {}
+
+  return "";
+}
+
+const API_KEY = discoverApiKey();
 
 // Read version from package.json (single source of truth)
 // eslint-disable-next-line @typescript-eslint/no-var-requires
