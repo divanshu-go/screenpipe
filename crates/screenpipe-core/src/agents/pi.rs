@@ -91,12 +91,10 @@ fn fetch_models_from_gateway(api_url: &str, token: Option<&str>) -> Option<serde
 }
 
 /// Minimal fallback when the gateway is unreachable.
-/// Only includes auto + a few core models so the app isn't completely broken offline.
+/// Only auto — if the gateway is down, nothing works anyway.
 fn fallback_cloud_models() -> serde_json::Value {
     json!([
         {"id": "auto", "name": "Auto (recommended)", "reasoning": true, "input": ["text", "image"], "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}, "contextWindow": 128000, "maxTokens": 32000},
-        {"id": "claude-haiku-4-5", "name": "Claude Haiku 4.5", "reasoning": true, "input": ["text", "image"], "cost": {"input": 0.8, "output": 4, "cacheRead": 0.08, "cacheWrite": 1}, "contextWindow": 200000, "maxTokens": 64000},
-        {"id": "gemini-3-flash", "name": "Gemini 3 Flash", "reasoning": false, "input": ["text", "image"], "cost": {"input": 0.10, "output": 0.40, "cacheRead": 0, "cacheWrite": 0}, "contextWindow": 1000000, "maxTokens": 65536},
     ])
 }
 
