@@ -700,6 +700,12 @@ impl SCServer {
                     axum::routing::post(crate::routes::pipe_store::pipe_store_review),
                 )
                 .with_state(pm.clone());
+            // Inject SecretStore as an Extension so pipe handlers can access it
+            let pipe_routes = if let Some(ref ss) = self.secret_store {
+                pipe_routes.layer(axum::Extension(ss.clone()))
+            } else {
+                pipe_routes
+            };
             router.nest("/pipes", pipe_routes)
         } else {
             router
@@ -707,7 +713,10 @@ impl SCServer {
 
         // Connections routes (pipe-facing integrations: Telegram, Slack, etc.)
         let cm: crate::connections_api::SharedConnectionManager = Arc::new(Mutex::new(
-            screenpipe_connect::connections::ConnectionManager::new(self.screenpipe_dir.clone()),
+            screenpipe_connect::connections::ConnectionManager::new(
+                self.screenpipe_dir.clone(),
+                self.secret_store.clone(),
+            ),
         ));
         let wa: crate::connections_api::SharedWhatsAppGateway = Arc::new(Mutex::new(
             screenpipe_connect::whatsapp::WhatsAppGateway::new(self.screenpipe_dir.clone()),
