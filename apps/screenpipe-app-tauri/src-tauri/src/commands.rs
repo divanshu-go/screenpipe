@@ -146,14 +146,16 @@ pub async fn get_local_api_config(
 ) -> serde_json::Value {
     use crate::recording::RecordingState;
     if let Some(state) = app_handle.try_state::<RecordingState>() {
-        if let Ok(guard) = state.server.try_lock() {
-            if let Some(ref core) = *guard {
-                return serde_json::json!({
-                    "key": core.local_api_key,
-                    "port": core.port,
-                    "auth_enabled": core.local_api_key.is_some(),
-                });
-            }
+        // Must await the lock: `try_lock` often failed while server_core held the mutex
+        // during startup, returning key:null to the webview. JS then cached "no API key" and
+        // opened WebSockets without ?token= → endless 403 / abnormal close (1006).
+        let guard = state.server.lock().await;
+        if let Some(ref core) = *guard {
+            return serde_json::json!({
+                "key": core.local_api_key,
+                "port": core.port,
+                "auth_enabled": core.local_api_key.is_some(),
+            });
         }
     }
     serde_json::json!({
@@ -1089,7 +1091,78 @@ pub async fn show_shortcut_reminder(
 
         if native_shortcut_reminder::is_available() {
             info!("Using native SwiftUI shortcut reminder");
-            if native_shortcut_reminder::show(Some(&shortcut)) {
+            use crate::recording::RecordingState;
+            use std::time::Duration;
+
+            // Startup runs before the engine binds :3030. Without waiting, Swift gets no
+            // `metrics_ws_url` and retries /ws/metrics without ?token= when API auth is on.
+            // Wait for server **core** (not only API key): when auth is disabled, key may stay
+            // None and we must not spin until the 90s timeout.
+            {
+                const MAX_WAIT: Duration = Duration::from_secs(90);
+                const STEP: Duration = Duration::from_millis(250);
+                let mut waited = Duration::ZERO;
+                loop {
+                    let ready = if let Some(state) = app_handle.try_state::<RecordingState>() {
+                        let guard = state.server.lock().await;
+                        guard.is_some()
+                    } else {
+                        false
+                    };
+                    if ready {
+                        break;
+                    }
+                    if waited >= MAX_WAIT {
+                        warn!(
+                            "native shortcut reminder: server core not ready after {:?} — pass authenticated metrics URLs to Swift after overlay is reopened",
+                            MAX_WAIT
+                        );
+                        break;
+                    }
+                    tokio::time::sleep(STEP).await;
+                    waited += STEP;
+                }
+            }
+
+            let mut map: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
+            match serde_json::from_str::<serde_json::Value>(&shortcut) {
+                Ok(serde_json::Value::Object(o)) => {
+                    for (k, v) in o {
+                        map.insert(k, v);
+                    }
+                }
+                _ => {
+                    map.insert(
+                        "overlay".to_string(),
+                        serde_json::Value::String(shortcut.clone()),
+                    );
+                }
+            }
+            if let Some(state) = app_handle.try_state::<RecordingState>() {
+                let guard = state.server.lock().await;
+                if let Some(ref core) = *guard {
+                    if let Some(ref key) = core.local_api_key {
+                        let enc = urlencoding::encode(key);
+                        let p = core.port;
+                        map.insert(
+                            "metrics_ws_url".to_string(),
+                            serde_json::json!(format!(
+                                "ws://127.0.0.1:{}/ws/metrics?token={}",
+                                p, enc
+                            )),
+                        );
+                        map.insert(
+                            "meetings_status_url".to_string(),
+                            serde_json::json!(format!(
+                                "http://127.0.0.1:{}/meetings/status?token={}",
+                                p, enc
+                            )),
+                        );
+                    }
+                }
+            }
+            let native_payload = serde_json::Value::Object(map).to_string();
+            if native_shortcut_reminder::show(Some(&native_payload)) {
                 return Ok(());
             }
             warn!("Native shortcut reminder failed, falling back to webview");

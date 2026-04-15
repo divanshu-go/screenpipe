@@ -10,7 +10,7 @@ use screenpipe_db::DatabaseManager;
 
 use screenpipe_audio::audio_manager::AudioManager;
 use screenpipe_core::sync::SyncServiceHandle;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::{
     analytics,
@@ -890,6 +890,18 @@ impl SCServer {
                             if authorized {
                                 next.run(req).await
                             } else {
+                                let upgrade = req
+                                    .headers()
+                                    .get(axum::http::header::UPGRADE)
+                                    .and_then(|v| v.to_str().ok())
+                                    .map(|s| s.eq_ignore_ascii_case("websocket"))
+                                    .unwrap_or(false);
+                                if upgrade {
+                                    warn!(
+                                        path = %path,
+                                        "api auth: rejected WebSocket upgrade (missing/invalid token; use Cookie screenpipe_auth, Authorization Bearer, or ?token=)"
+                                    );
+                                }
                                 axum::response::Response::builder()
                                     .status(403)
                                     .header("Content-Type", "application/json")
