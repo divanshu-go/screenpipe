@@ -151,6 +151,7 @@ export default function PermissionsStep({
       request: async () => {
         await commands.enableKeychainEncryption();
       },
+      macOnly: true, // Windows/Linux: auto-enabled below (no modal needed)
       optional: true,
     },
   ];
@@ -200,11 +201,14 @@ export default function PermissionsStep({
     commands.getInstalledBrowsers().then(setInstalledBrowsers).catch(() => {});
   }, [isPlatformLoading]);
 
-  // Non-mac: skip permissions entirely
+  // Non-mac: auto-enable encryption (no modal on Windows/Linux) then skip
   useEffect(() => {
     if (isPlatformLoading) return;
     if (!isMac && !hasAdvancedRef.current) {
       hasAdvancedRef.current = true;
+      // Silently enable keychain encryption — Windows Credential Manager
+      // and Linux Secret Service don't show permission modals
+      commands.enableKeychainEncryption().catch(() => {});
       handleNextSlide();
     }
   }, [isMac, isPlatformLoading, handleNextSlide]);
