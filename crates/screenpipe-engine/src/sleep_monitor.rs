@@ -343,8 +343,10 @@ pub fn start_sleep_monitor() {
                 return;
             }
             // Display topology changed — invalidate cached SCStream handles
+            // and audio streams (CoreAudio can go silent after display changes)
             #[cfg(target_os = "macos")]
             screenpipe_screen::stream_invalidation::request();
+            screenpipe_audio::stream_invalidation::request();
         }
 
         unsafe {
@@ -448,6 +450,11 @@ fn on_did_wake(handle: &tokio::runtime::Handle) {
     // recreates them with fresh frames after wake.
     #[cfg(target_os = "macos")]
     screenpipe_screen::stream_invalidation::request();
+
+    // Invalidate audio streams so the device monitor force-restarts all
+    // audio devices. CoreAudio streams can go silent after sleep/wake
+    // without triggering error callbacks.
+    screenpipe_audio::stream_invalidation::request();
 
     // Spawn a task on the captured tokio runtime handle to check recording
     // health after a short delay. We can't use bare tokio::spawn() here
@@ -630,5 +637,80 @@ mod tests {
         assert!(!is_wake_gap(Duration::from_secs(6), poll));
         assert!(!is_wake_gap(Duration::from_secs(20), poll));
         assert!(is_wake_gap(Duration::from_secs(21), poll));
+    }
+
+    /// Verifies that on_did_wake sets the audio stream invalidation flag.
+    /// This is the core of the fix — when macOS fires the wake notification,
+    /// on_did_wake must set both vision AND audio invalidation flags.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn test_on_did_wake_sets_audio_invalidation() {
+        // Clear stale flags
+        let _ = screenpipe_audio::stream_invalidation::take();
+        let _ = screenpipe_screen::stream_invalidation::take();
+        RECENTLY_WOKE.store(false, Ordering::SeqCst);
+
+        let handle = tokio::runtime::Handle::current();
+        on_did_wake(&handle);
+
+        assert!(
+            recently_woke_from_sleep(),
+            "RECENTLY_WOKE should be set after on_did_wake"
+        );
+        assert!(
+            screenpipe_audio::stream_invalidation::take(),
+            "Audio stream invalidation flag must be set after wake"
+        );
+        assert!(
+            screenpipe_screen::stream_invalidation::take(),
+            "Vision stream invalidation flag must be set after wake"
+        );
+        // Flags should be cleared after take()
+        assert!(
+            !screenpipe_audio::stream_invalidation::take(),
+            "Audio flag should be cleared after take()"
+        );
+    }
+
+    /// Manual test: lock your screen (Cmd+Ctrl+Q), wait 2-3s, unlock.
+    /// Run with: cargo test -p screenpipe-engine --lib -- test_screen_lock_unlock --ignored --nocapture
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    #[ignore = "requires manual screen lock/unlock"]
+    async fn test_screen_lock_unlock() {
+        SCREEN_IS_LOCKED.store(false, Ordering::SeqCst);
+
+        start_sleep_monitor();
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+        eprintln!("============================================");
+        eprintln!("  LOCK YOUR SCREEN NOW (Cmd+Ctrl+Q),");
+        eprintln!("  wait 2-3s, then UNLOCK it.");
+        eprintln!("  You have 60 seconds.");
+        eprintln!("============================================");
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+        let mut saw_locked = false;
+        let mut saw_unlocked_after_lock = false;
+
+        while tokio::time::Instant::now() < deadline {
+            if !saw_locked && screen_is_locked() {
+                saw_locked = true;
+                eprintln!("[OK] Screen lock detected");
+            }
+            if saw_locked && !screen_is_locked() {
+                saw_unlocked_after_lock = true;
+                eprintln!("[OK] Screen unlock detected after lock");
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+
+        assert!(saw_locked, "Screen lock was NOT detected — did you lock the screen?");
+        assert!(saw_unlocked_after_lock, "Screen unlock was NOT detected after lock");
+
+        eprintln!("============================================");
+        eprintln!("  LOCK/UNLOCK DETECTION PASSED");
+        eprintln!("============================================");
     }
 }
