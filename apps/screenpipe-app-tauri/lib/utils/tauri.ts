@@ -194,6 +194,22 @@ async stopScreenpipe() : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async startCapture() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("start_capture") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async stopCapture() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("stop_capture") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async getMonitors() : Promise<Result<MonitorDevice[], string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("get_monitors") };
