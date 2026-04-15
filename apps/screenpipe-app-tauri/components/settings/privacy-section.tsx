@@ -161,7 +161,7 @@ function EncryptDataCard({
     setToggling(false);
   };
 
-  if (keychainState === "loading" || keychainState === "unavailable") return null;
+  if (keychainState === "loading") return null;
 
   return (
     <Card className="border-border bg-card">
@@ -174,14 +174,16 @@ function EncryptDataCard({
                 Encrypt Data at Rest
               </h3>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Encrypt credentials and settings with your OS keychain.
+                {keychainState === "unavailable"
+                  ? "OS keychain not available on this system."
+                  : "Encrypt credentials and settings with your OS keychain."}
               </p>
             </div>
           </div>
           <Switch
             checked={isFullyEnabled}
             onCheckedChange={handleToggle}
-            disabled={toggling}
+            disabled={toggling || keychainState === "unavailable"}
           />
         </div>
       </CardContent>
