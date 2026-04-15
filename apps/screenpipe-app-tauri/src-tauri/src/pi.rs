@@ -1213,19 +1213,11 @@ pub async fn pi_start_inner(
         }
     }
 
-    // For local/small models (Ollama, custom), inject minimal API context directly
-    // because they often skip reading skill files.
-    // Auth details are in the skill file — this just gives them enough to make a call.
+    // For local/small models (Ollama, custom), explicitly tell them to read the
+    // screenpipe-api skill file — they often skip reading skills on their own.
     let is_local_model = matches!(pi_provider.as_str(), "ollama" | "custom");
     if is_local_model {
-        let api_hint = concat!(
-            "You have access to the Screenpipe API at http://localhost:3030.\n",
-            "Auth: add -H \"Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY\" to ALL curl requests.\n",
-            "Search: curl -H \"Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY\" ",
-            "\"http://localhost:3030/search?content_type=all&limit=10&start_time=1h%20ago\"\n",
-            "Params: q, content_type (all|ocr|audio), limit (1-20), start_time (REQUIRED, ISO 8601 or relative like '2h ago').\n",
-            "Read the screenpipe-api skill file for full docs."
-        );
+        let api_hint = "IMPORTANT: You MUST read the screenpipe-api skill file BEFORE making any API calls. It contains authentication instructions, endpoint docs, and examples. Without reading it first, your API calls will fail with 403 unauthorized.";
         cmd.args(["--append-system-prompt", api_hint]);
     }
 
