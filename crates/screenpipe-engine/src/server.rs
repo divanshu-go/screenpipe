@@ -497,6 +497,7 @@ impl SCServer {
                 origin.as_bytes().starts_with(b"http://localhost")
                     || origin.as_bytes().starts_with(b"https://localhost")
                     || origin.as_bytes().starts_with(b"tauri://localhost")
+                    || origin.as_bytes().starts_with(b"http://tauri.localhost") // Windows Tauri origin
                     || origin.as_bytes().starts_with(b"http://127.0.0.1")
                     || origin.as_bytes().starts_with(b"https://127.0.0.1")
             }))
