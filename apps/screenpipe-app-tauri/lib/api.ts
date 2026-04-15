@@ -41,10 +41,13 @@ function ensureInitialized(): Promise<void> {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
 
-      // Retry up to 10 times (5 seconds total) if server hasn't started yet.
+      // Retry up to 30 times (15 seconds total) if server hasn't started yet.
       // The server generates the API key on startup, but the webview may load
       // before it's ready — get_local_api_config returns key:null in that case.
-      const MAX_RETRIES = 10;
+      // Previously 10 retries / 5s, but on heavy DBs the server can take longer,
+      // and if get_local_api_config was sync (main thread) it would deadlock with
+      // tray/window setup — now it's async but we keep a generous timeout.
+      const MAX_RETRIES = 30;
       const RETRY_DELAY_MS = 500;
 
       for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {

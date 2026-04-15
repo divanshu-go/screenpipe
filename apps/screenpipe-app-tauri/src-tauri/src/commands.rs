@@ -133,11 +133,15 @@ pub fn is_enterprise_build_cmd(app_handle: tauri::AppHandle) -> bool {
 }
 
 /// Get the local API auth key and port for the frontend to use.
-/// Returns immediately (no async, no disk I/O) — the key is already in memory.
-/// Returns { key: string | null, port: number, auth_enabled: bool }.
+/// Returns the local API config (key, port, auth flag).
+///
+/// IMPORTANT: This is `async` so it runs on the tokio thread pool, NOT the
+/// main thread. The webview calls this via IPC during early init — if it ran
+/// on the main thread it would deadlock with tray/window setup that also
+/// needs the main thread, causing a 5-second blank screen.
 #[tauri::command]
 #[specta::specta]
-pub fn get_local_api_config(
+pub async fn get_local_api_config(
     app_handle: tauri::AppHandle,
 ) -> serde_json::Value {
     use crate::recording::RecordingState;
