@@ -690,7 +690,7 @@ fn default_max_tokens() -> i32 {
 /// Returns a map of provider entries to merge into the existing models.json.
 /// We merge instead of rebuilding from scratch to avoid a race condition where
 /// concurrent pipes overwrite each other's providers.
-fn build_models_json(
+async fn build_models_json(
     user_token: Option<&str>,
     provider_config: Option<&PiProviderConfig>,
 ) -> serde_json::Value {
@@ -698,12 +698,13 @@ fn build_models_json(
 
     // Always add screenpipe cloud provider
     let api_key_value = user_token.unwrap_or("SCREENPIPE_API_KEY");
+    let models = screenpipe_cloud_models(SCREENPIPE_API_URL, user_token).await;
     let screenpipe_provider = json!({
         "baseUrl": SCREENPIPE_API_URL,
         "api": "openai-completions",
         "apiKey": api_key_value,
         "authHeader": true,
-        "models": screenpipe_cloud_models(SCREENPIPE_API_URL, user_token)
+        "models": models
     });
     providers_map.insert("screenpipe".to_string(), screenpipe_provider);
 
@@ -798,7 +799,7 @@ fn build_models_json(
 }
 
 /// Write pi's provider config (models.json + auth.json).
-fn ensure_pi_config(
+async fn ensure_pi_config(
     user_token: Option<&str>,
     provider_config: Option<&PiProviderConfig>,
 ) -> Result<(), String> {
@@ -806,7 +807,7 @@ fn ensure_pi_config(
     std::fs::create_dir_all(&config_dir)
         .map_err(|e| format!("Failed to create pi config dir: {}", e))?;
 
-    let new_providers = build_models_json(user_token, provider_config);
+    let new_providers = build_models_json(user_token, provider_config).await;
 
     // Merge into existing models.json to avoid race conditions with concurrent pipes
     let models_path = config_dir.join("models.json");
@@ -1038,7 +1039,7 @@ pub async fn pi_start_inner(
     ensure_web_search_extension(&project_dir, provider_config.as_ref())?;
 
     // Ensure Pi is configured with the user's provider
-    ensure_pi_config(user_token.as_deref(), provider_config.as_ref())?;
+    ensure_pi_config(user_token.as_deref(), provider_config.as_ref()).await?;
 
     // Determine which Pi provider and model to use
     let (pi_provider, pi_model) = match &provider_config {
