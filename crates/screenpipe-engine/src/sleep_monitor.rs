@@ -422,6 +422,13 @@ pub fn start_sleep_monitor() {
 fn on_will_sleep() {
     SCREEN_IS_LOCKED.store(true, Ordering::SeqCst);
     screenpipe_config::set_screen_locked(true);
+
+    // Pause DB write queue before sleep to prevent WAL corruption.
+    // The drain loop will finish its current in-flight batch (already
+    // mid-COMMIT), then block until resumed on wake. This ensures no
+    // SQLite I/O happens while the disk is asleep.
+    screenpipe_db::request_write_pause();
+
     capture_event_nonblocking(
         "system_will_sleep",
         json!({
@@ -472,6 +479,10 @@ fn on_did_wake(handle: &tokio::runtime::Handle) {
             #[cfg(target_os = "macos")]
             screenpipe_screen::stream_invalidation::request();
         }
+
+        // Resume DB write queue now that the system is stable.
+        // The 5-second delay above gives the disk time to fully wake.
+        screenpipe_db::request_write_resume();
 
         // Check if recording is healthy
         let (audio_healthy, vision_healthy) = check_recording_health().await;
