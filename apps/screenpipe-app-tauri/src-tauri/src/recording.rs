@@ -72,12 +72,13 @@ fn build_config(app: &tauri::AppHandle) -> Result<RecordingConfig, String> {
 
 pub fn local_api_context_from_app(app: &tauri::AppHandle) -> LocalApiContext {
     if let Some(state) = app.try_state::<RecordingState>() {
-        let guard = state.server.blocking_lock();
-        if let Some(ref core) = *guard {
-            return LocalApiContext {
-                api_key: core.local_api_key.clone(),
-                port: core.port,
-            };
+        if let Ok(guard) = state.server.try_lock() {
+            if let Some(ref core) = *guard {
+                return LocalApiContext {
+                    api_key: core.local_api_key.clone(),
+                    port: core.port,
+                };
+            }
         }
     }
 
