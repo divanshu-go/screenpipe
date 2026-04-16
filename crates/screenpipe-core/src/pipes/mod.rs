@@ -1851,7 +1851,7 @@ impl PipeManager {
                 run_provider.as_deref(),
                 Some(&run_model),
                 run_provider_url.as_deref(),
-            ) {
+            ).await {
                 warn!("failed to pre-configure pi provider: {}", e);
             }
 
@@ -2325,7 +2325,7 @@ impl PipeManager {
                     run_provider.as_deref(),
                     Some(&run_model),
                     run_provider_url.as_deref(),
-                ) {
+                ).await {
                     warn!("failed to pre-configure pi provider: {}", e);
                 }
 
@@ -3302,7 +3302,7 @@ impl PipeManager {
                             provider.as_deref(),
                             Some(&model),
                             provider_url.as_deref(),
-                        ) {
+                        ).await {
                             warn!("scheduler: failed to pre-configure pi provider: {}", e);
                         }
 
