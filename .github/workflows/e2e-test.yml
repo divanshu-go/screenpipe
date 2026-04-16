@@ -206,6 +206,12 @@ jobs:
         sudo mkdir -p /usr/lib/x86_64-linux-gnu/openblas/include
         sudo ln -sf /usr/lib/x86_64-linux-gnu/libopenblas.so /usr/lib/x86_64-linux-gnu/openblas/lib/liblibopenblas.so
         sudo ln -sf /usr/lib/x86_64-linux-gnu/libopenblas.a /usr/lib/x86_64-linux-gnu/openblas/lib/liblibopenblas.a
+        # antirez-asr-sys emits `-l libopenblas` (double-lib) to match the Windows
+        # naming, but its build.rs doesn't add OPENBLAS_PATH/lib to the linker
+        # search path. Drop the symlink into /usr/lib/x86_64-linux-gnu/ — a
+        # standard search path — so mold resolves -llibopenblas.
+        sudo ln -sf /usr/lib/x86_64-linux-gnu/libopenblas.so /usr/lib/x86_64-linux-gnu/liblibopenblas.so
+        sudo ln -sf /usr/lib/x86_64-linux-gnu/libopenblas.a /usr/lib/x86_64-linux-gnu/liblibopenblas.a
         CBLAS_HEADER="$(find /usr/include /usr/lib -name cblas.h 2>/dev/null | head -n1 || true)"
         if [ -z "$CBLAS_HEADER" ]; then
           CBLAS_HEADER="$(dpkg -L libopenblas-dev | grep -m1 '/cblas\.h$' || true)"
