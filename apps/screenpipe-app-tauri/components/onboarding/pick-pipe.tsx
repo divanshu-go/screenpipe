@@ -72,23 +72,29 @@ async function installAndEnable(slug: string, retries = 3): Promise<void> {
 
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      // Try enabling first (pipe might already be installed)
+      // Try enabling first (pipe might already be installed).
+      // NOTE: enable_pipe returns HTTP 200 even on error (Axum Json handler),
+      // so we must check the body for { "error": ... } not just res.ok.
       const enableRes = await localFetch(`/pipes/${slug}/enable`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled: true }),
       });
-      if (enableRes.ok) return;
+      if (enableRes.ok) {
+        const enableBody = await enableRes.json().catch(() => ({}));
+        if (!enableBody.error) return; // pipe was already installed and is now enabled
+      }
 
       // Not installed — install from store
+      // pipe_store_install also returns HTTP 200 on error, so check body too
       const installRes = await localFetch("/pipes/store/install", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ slug }),
       });
-      if (!installRes.ok) {
-        const text = await installRes.text().catch(() => "");
-        throw new Error(`install ${slug}: ${installRes.status} ${text}`);
+      const installBody = await installRes.json().catch(() => ({}));
+      if (!installRes.ok || installBody.error) {
+        throw new Error(`install ${slug}: ${installBody.error || installRes.status}`);
       }
 
       // Enable after install
@@ -97,7 +103,11 @@ async function installAndEnable(slug: string, retries = 3): Promise<void> {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled: true }),
       });
-      if (enable2.ok) return;
+      if (enable2.ok) {
+        const enable2Body = await enable2.json().catch(() => ({}));
+        if (!enable2Body.error) return;
+        throw new Error(`enable ${slug} after install: ${enable2Body.error}`);
+      }
       throw new Error(`enable ${slug} after install: ${enable2.status}`);
     } catch (err) {
       if (attempt === retries) throw err;
