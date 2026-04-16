@@ -327,7 +327,9 @@ pub async fn disk_usage(
     let pipes_size: u64 = {
         let pipes_dir = screenpipe_dir.join("pipes");
         if pipes_dir.exists() {
-            directory_size(&pipes_dir).map_err(|e| e.to_string())?.unwrap_or(0)
+            directory_size(&pipes_dir)
+                .map_err(|e| e.to_string())?
+                .unwrap_or(0)
         } else {
             0
         }
@@ -337,7 +339,10 @@ pub async fn disk_usage(
     // Calculate "other" — everything not accounted for above
     let accounted = total_media_size_calculated + database_size + logs_size + pipes_size;
     let other_size: u64 = total_data_size_bytes.saturating_sub(accounted);
-    info!("Other size: {} bytes (total {} - accounted {})", other_size, total_data_size_bytes, accounted);
+    info!(
+        "Other size: {} bytes (total {} - accounted {})",
+        other_size, total_data_size_bytes, accounted
+    );
 
     // Calculate available space
     info!("Calculating available disk space");

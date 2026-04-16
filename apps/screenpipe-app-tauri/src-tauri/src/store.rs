@@ -72,8 +72,13 @@ fn decrypt_store_file(path: &Path) {
 /// To opt in: create ~/.screenpipe/.encrypt-store or set SCREENPIPE_ENCRYPT_STORE=1.
 fn encrypt_store_file(path: &Path) {
     // Check opt-in flag
-    let opted_in = std::env::var("SCREENPIPE_ENCRYPT_STORE").map(|v| v == "1").unwrap_or(false)
-        || path.parent().map(|p| p.join(".encrypt-store").exists()).unwrap_or(false);
+    let opted_in = std::env::var("SCREENPIPE_ENCRYPT_STORE")
+        .map(|v| v == "1")
+        .unwrap_or(false)
+        || path
+            .parent()
+            .map(|p| p.join(".encrypt-store").exists())
+            .unwrap_or(false);
     if !opted_in {
         return;
     }
@@ -371,13 +376,19 @@ pub struct SettingsStore {
     pub ocr_engine: String,
     #[serde(rename = "dataDir")]
     pub data_dir: String,
-    #[serde(rename = "embeddedLLM", deserialize_with = "deserialize_null_as_default")]
+    #[serde(
+        rename = "embeddedLLM",
+        deserialize_with = "deserialize_null_as_default"
+    )]
     pub embedded_llm: EmbeddedLLM,
     #[serde(rename = "autoStartEnabled")]
     pub auto_start_enabled: bool,
     #[serde(rename = "platform")]
     pub platform: String,
-    #[serde(rename = "disabledShortcuts", deserialize_with = "deserialize_null_as_default")]
+    #[serde(
+        rename = "disabledShortcuts",
+        deserialize_with = "deserialize_null_as_default"
+    )]
     pub disabled_shortcuts: Vec<String>,
     #[serde(rename = "user", deserialize_with = "deserialize_null_as_default")]
     pub user: User,
@@ -1260,7 +1271,10 @@ mod tests {
         if let Err(e) = &settings {
             println!("Deser error: {:?}", e);
         }
-        assert!(settings.is_ok(), "Failed to deserialize settings with null fields");
+        assert!(
+            settings.is_ok(),
+            "Failed to deserialize settings with null fields"
+        );
         let settings = settings.unwrap();
 
         assert_eq!(settings.user.token, None);

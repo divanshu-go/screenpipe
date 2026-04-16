@@ -8,11 +8,11 @@
 
 use screenpipe_core::agents::pi::screenpipe_cloud_models;
 use serde::{Deserialize, Serialize};
-use tauri::Manager;
 use serde_json::{json, Value};
 use specta::Type;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
+use tauri::Manager;
 use tokio::sync::oneshot;
 
 /// Read lines from a byte stream using lossy UTF-8 conversion.
@@ -1273,17 +1273,14 @@ pub async fn pi_start_inner(
         cmd.env("SCREENPIPE_API_KEY", token);
     }
 
-    // Pass local API auth key so the Pi agent can authenticate to localhost:3030
+    // Pass local API config so the Pi agent can authenticate to the runtime local API.
     {
-        use crate::recording::RecordingState;
-        if let Some(state) = app.try_state::<RecordingState>() {
-            if let Ok(guard) = state.server.try_lock() {
-                if let Some(ref core) = *guard {
-                    if let Some(ref key) = core.local_api_key {
-                        cmd.env("SCREENPIPE_LOCAL_API_KEY", key);
-                    }
-                }
-            }
+        use crate::recording::local_api_context_from_app;
+        let api = local_api_context_from_app(&app);
+        cmd.env("SCREENPIPE_LOCAL_API_PORT", api.port.to_string());
+        cmd.env("SCREENPIPE_LOCAL_API_URL", api.url(""));
+        if let Some(ref key) = api.api_key {
+            cmd.env("SCREENPIPE_LOCAL_API_KEY", key);
         }
     }
 
@@ -2619,7 +2616,10 @@ mod tests {
         pc.url = "http://localhost:8080/v1".to_string();
         let config = build_models_json(None, Some(&pc));
         let model = &config["providers"]["custom"]["models"][0];
-        assert!(model.get("compat").is_none(), "generic custom should not have compat");
+        assert!(
+            model.get("compat").is_none(),
+            "generic custom should not have compat"
+        );
     }
 
     #[test]
