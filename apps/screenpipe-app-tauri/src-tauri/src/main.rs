@@ -54,6 +54,7 @@ mod livetext;
 #[cfg(target_os = "macos")]
 mod livetext_ffi;
 mod oauth;
+mod permission_events;
 mod permissions;
 mod pi;
 mod pi_command_queue;
@@ -1627,10 +1628,28 @@ async fn main() {
                 }
             });
 
-            // Start permission monitor (polls permissions and emits events when lost)
+            // Subscribe to permission events emitted by the engine over /ws/events.
+            // Replaces the old TCC-preflight polling loop and the health-based
+            // degraded heuristic — detection now happens in `screenpipe-engine`
+            // (the actual capture module), not by polling from the app.
             let app_handle_clone = app_handle.clone();
             tauri::async_runtime::spawn(async move {
-                permissions::start_permission_monitor(app_handle_clone).await;
+                // Wait for the server core to be ready so we have port + API key.
+                use crate::recording::RecordingState;
+                use tokio::time::{sleep, Duration};
+                loop {
+                    if let Some(state) = app_handle_clone.try_state::<RecordingState>() {
+                        let guard = state.server.lock().await;
+                        if let Some(ref core) = *guard {
+                            let port = core.port;
+                            let key = core.local_api_key.clone();
+                            drop(guard);
+                            crate::permission_events::start(app_handle_clone.clone(), port, key);
+                            return;
+                        }
+                    }
+                    sleep(Duration::from_millis(500)).await;
+                }
             });
 
             #[cfg(target_os = "macos")]

@@ -669,6 +669,12 @@ async fn main() -> anyhow::Result<()> {
     // earlier init step (like DB) fails and the process exits.
     start_sleep_monitor();
 
+    // Start the permission monitor — polls OS permission state and emits
+    // `permission_lost` / `permission_restored` on the shared event bus.
+    // Capture modules emit loss events eagerly on OS errors; this task covers
+    // accessibility transitions and confirms restorations across all three.
+    let _permission_monitor_handle = screenpipe_engine::permission_monitor::start();
+
     // Start cloud sync service if enabled
     let sync_service_handle = if record_args.enable_sync {
         match start_sync_service(&record_args, db.clone()).await {
