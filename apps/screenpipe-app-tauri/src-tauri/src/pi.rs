@@ -754,19 +754,39 @@ fn build_models_json(
                     "openai-completions"
                 };
 
+                // Detect endpoints that require `max_completion_tokens` instead
+                // of `max_tokens`. Azure Foundry, Azure OpenAI (newer deployments),
+                // and GPT-5 / o-series models all reject `max_tokens`.
+                let requires_max_completion_tokens = base_url.contains("azure.com")
+                    || base_url.contains("openai.azure.com")
+                    || base_url.contains("services.ai.azure.com")
+                    || base_url.contains("cognitiveservices.azure.com")
+                    || config.model.starts_with("gpt-5")
+                    || config.model.starts_with("o1")
+                    || config.model.starts_with("o3")
+                    || config.model.starts_with("o4");
+
+                let mut model_def = serde_json::Map::new();
+                model_def.insert("id".into(), json!(config.model));
+                model_def.insert("name".into(), json!(config.model));
+                model_def.insert("input".into(), json!(["text", "image"]));
+                model_def.insert("maxTokens".into(), json!(config.max_tokens));
+                model_def.insert(
+                    "cost".into(),
+                    json!({"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}),
+                );
+                if requires_max_completion_tokens && wire_api == "openai-completions" {
+                    model_def.insert(
+                        "compat".into(),
+                        json!({"maxTokensField": "max_completion_tokens"}),
+                    );
+                }
+
                 let user_provider = json!({
                     "baseUrl": base_url,
                     "api": wire_api,
                     "apiKey": api_key,
-                    "models": [
-                        {
-                            "id": config.model,
-                            "name": config.model,
-                            "input": ["text", "image"],
-                            "maxTokens": config.max_tokens,
-                            "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}
-                        }
-                    ]
+                    "models": [ serde_json::Value::Object(model_def) ]
                 });
 
                 providers_map.insert(provider_name.to_string(), user_provider);
@@ -2587,6 +2607,79 @@ mod tests {
         assert_eq!(providers.len(), 2);
         assert!(providers.contains_key("custom"));
         assert_eq!(providers["custom"]["baseUrl"], "http://my-server:8080/v1");
+    }
+
+    #[test]
+    fn test_build_models_json_custom_generic_no_compat_override() {
+        // Plain OpenAI-compatible endpoints (Ollama, vLLM, OpenRouter-like)
+        // should NOT have compat.maxTokensField set — Pi's auto-detection
+        // defaults to max_completion_tokens which works for most of these.
+        let mut pc = make_provider_config("custom", "my-model");
+        pc.url = "http://localhost:8080/v1".to_string();
+        let config = build_models_json(None, Some(&pc));
+        let model = &config["providers"]["custom"]["models"][0];
+        assert!(model.get("compat").is_none(), "generic custom should not have compat");
+    }
+
+    #[test]
+    fn test_build_models_json_azure_openai_forces_max_completion_tokens() {
+        let mut pc = make_provider_config("custom", "gpt-4o");
+        pc.url = "https://myresource.openai.azure.com/openai/deployments/gpt-4o".to_string();
+        let config = build_models_json(None, Some(&pc));
+        let model = &config["providers"]["custom"]["models"][0];
+        assert_eq!(
+            model["compat"]["maxTokensField"], "max_completion_tokens",
+            "Azure OpenAI must use max_completion_tokens"
+        );
+    }
+
+    #[test]
+    fn test_build_models_json_azure_foundry_forces_max_completion_tokens() {
+        let mut pc = make_provider_config("custom", "gpt-5-mini");
+        pc.url = "https://myresource.services.ai.azure.com/api/projects/proj".to_string();
+        let config = build_models_json(None, Some(&pc));
+        let model = &config["providers"]["custom"]["models"][0];
+        assert_eq!(model["compat"]["maxTokensField"], "max_completion_tokens");
+    }
+
+    #[test]
+    fn test_build_models_json_azure_cognitive_services_forces_max_completion_tokens() {
+        let mut pc = make_provider_config("custom", "my-deployment");
+        pc.url = "https://myresource.cognitiveservices.azure.com/".to_string();
+        let config = build_models_json(None, Some(&pc));
+        let model = &config["providers"]["custom"]["models"][0];
+        assert_eq!(model["compat"]["maxTokensField"], "max_completion_tokens");
+    }
+
+    #[test]
+    fn test_build_models_json_gpt5_model_forces_max_completion_tokens() {
+        // Even on a generic OpenAI-compatible proxy, GPT-5 models require
+        // max_completion_tokens. Detect by model ID.
+        let mut pc = make_provider_config("custom", "gpt-5");
+        pc.url = "https://my-proxy.example.com/v1".to_string();
+        let config = build_models_json(None, Some(&pc));
+        let model = &config["providers"]["custom"]["models"][0];
+        assert_eq!(model["compat"]["maxTokensField"], "max_completion_tokens");
+    }
+
+    #[test]
+    fn test_build_models_json_o3_model_forces_max_completion_tokens() {
+        let mut pc = make_provider_config("custom", "o3-mini");
+        pc.url = "https://my-proxy.example.com/v1".to_string();
+        let config = build_models_json(None, Some(&pc));
+        let model = &config["providers"]["custom"]["models"][0];
+        assert_eq!(model["compat"]["maxTokensField"], "max_completion_tokens");
+    }
+
+    #[test]
+    fn test_build_models_json_regular_gpt4_no_compat_override() {
+        // gpt-4 and gpt-4o should NOT be forced — they work with both field names
+        // and Pi's default is already max_completion_tokens for non-chutes URLs.
+        let mut pc = make_provider_config("custom", "gpt-4o");
+        pc.url = "https://my-proxy.example.com/v1".to_string();
+        let config = build_models_json(None, Some(&pc));
+        let model = &config["providers"]["custom"]["models"][0];
+        assert!(model.get("compat").is_none());
     }
 
     #[test]

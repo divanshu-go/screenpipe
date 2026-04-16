@@ -1225,14 +1225,14 @@ mod tests {
 
     #[test]
     fn test_sanitize_legacy_fields_does_not_panic() {
-        let mut corrupted = json!({
+        let corrupted = json!({
             "aiPresets": ["corrupted_string_not_an_object"]
         });
 
-        let sanitized = SettingsStore::sanitize_legacy_fields(corrupted);
+        let _sanitized = SettingsStore::sanitize_legacy_fields(corrupted);
 
         // And let's test a valid object with missing/unknown provider to prove it works
-        let mut valid = json!({
+        let valid = json!({
             "aiPresets": [{"provider": "unknown_provider"}]
         });
         let sanitized2 = SettingsStore::sanitize_legacy_fields(valid);
@@ -1243,12 +1243,6 @@ mod tests {
             "custom"
         );
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
 
     #[test]
     fn test_deserialize_settings_with_null_fields() {
@@ -1268,7 +1262,7 @@ mod tests {
         }
         assert!(settings.is_ok(), "Failed to deserialize settings with null fields");
         let settings = settings.unwrap();
-        
+
         assert_eq!(settings.user.token, None);
         assert_eq!(settings.embedded_llm.enabled, false);
         assert_eq!(settings.ai_presets.len(), 0);
