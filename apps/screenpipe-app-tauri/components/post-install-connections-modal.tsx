@@ -23,6 +23,7 @@ import {
   IntegrationIcon,
   IntegrationInfo,
 } from "@/components/settings/connections-section";
+import { localFetch } from "@/lib/api";
 
 interface PostInstallConnectionsModalProps {
   open: boolean;
@@ -56,7 +57,7 @@ export function PostInstallConnectionsModal({
       setLoading(true);
       try {
         // Fetch all available integrations
-        const res = await fetch("http://localhost:3030/connections");
+        const res = await localFetch("/connections");
         const data = await res.json();
         const integrations: IntegrationInfo[] = data.data || [];
 
@@ -73,8 +74,8 @@ export function PostInstallConnectionsModal({
           // for non-OAuth named instances, check the specific instance status
           if (integration && instanceName && !integration.is_oauth) {
             try {
-              const instRes = await fetch(
-                `http://localhost:3030/connections/${baseId}/instances`
+              const instRes = await localFetch(
+                `/connections/${baseId}/instances`
               );
               if (instRes.ok) {
                 const instData = await instRes.json();

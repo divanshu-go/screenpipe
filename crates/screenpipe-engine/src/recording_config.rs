@@ -118,6 +118,15 @@ pub struct RecordingConfig {
     /// The API key for this instance (from SCREENPIPE_API_KEY env or auth.json).
     /// Used to validate incoming remote requests when api_auth is enabled.
     pub api_auth_key: Option<String>,
+
+    /// IP address the HTTP server listens on. Default: 127.0.0.1 (localhost only).
+    /// Set to 0.0.0.0 to allow access from other devices on the network.
+    /// When set to 0.0.0.0, api_auth should be enabled for security.
+    pub listen_address: std::net::Ipv4Addr,
+
+    /// When true, create a keychain encryption key if one doesn't exist.
+    /// Without this, the CLI only uses an existing key (created by the desktop app).
+    pub encrypt_secrets: bool,
 }
 
 impl RecordingConfig {
@@ -135,6 +144,10 @@ impl RecordingConfig {
         audio_engine_override: Option<&str>,
     ) -> Self {
         let engine_str = audio_engine_override.unwrap_or(&settings.audio_transcription_engine);
+
+        // Sync the record_while_locked preference to the shared atomic flag
+        // so the audio recording loop can read it without holding a config reference.
+        screenpipe_config::set_record_while_locked(settings.record_while_locked);
 
         Self {
             audio_chunk_duration: settings.audio_chunk_duration.max(0) as u64,
@@ -207,6 +220,8 @@ impl RecordingConfig {
             max_snapshot_width: settings.max_snapshot_width,
             api_auth: settings.api_auth,
             api_auth_key: None,
+            listen_address: std::net::Ipv4Addr::LOCALHOST,
+            encrypt_secrets: false, // desktop app handles keychain via Tauri commands
         }
     }
 

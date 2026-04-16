@@ -145,7 +145,7 @@ export function DisplaySection() {
               <div className="flex items-center space-x-2.5">
                 <MessageSquare className="h-4 w-4 text-muted-foreground shrink-0" />
                 <div>
-                  <h3 className="text-sm font-medium text-foreground">Chat always on top</h3>
+                  <h3 className="text-sm font-medium text-foreground">Chat Always on Top</h3>
                   <p className="text-xs text-muted-foreground">Keep chat window above other windows</p>
                 </div>
               </div>
@@ -224,7 +224,7 @@ export function DisplaySection() {
               <div className="flex items-center space-x-2.5">
                 <Monitor className="h-4 w-4 text-muted-foreground shrink-0" />
                 <div>
-                  <h3 className="text-sm font-medium text-foreground">Show shortcut reminder</h3>
+                  <h3 className="text-sm font-medium text-foreground">Show Shortcut Reminder</h3>
                   <p className="text-xs text-muted-foreground">Overlay showing the screenpipe shortcut</p>
                 </div>
               </div>
@@ -253,7 +253,7 @@ export function DisplaySection() {
                 <div className="flex items-center space-x-2.5">
                   <Maximize2 className="h-4 w-4 text-muted-foreground shrink-0" />
                   <div>
-                    <h3 className="text-sm font-medium text-foreground">Overlay size</h3>
+                    <h3 className="text-sm font-medium text-foreground">Overlay Size</h3>
                     <p className="text-xs text-muted-foreground">Size of the shortcut reminder overlay</p>
                   </div>
                 </div>

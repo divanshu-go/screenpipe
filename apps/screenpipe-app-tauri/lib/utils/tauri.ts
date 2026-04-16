@@ -170,6 +170,10 @@ async updateGlobalShortcuts(showShortcut: string, startShortcut: string, stopSho
     else return { status: "error", error: e  as any };
 }
 },
+/**
+ * Start the server (if not running) and capture.
+ * This is the main entry point called by the frontend.
+ */
 async spawnScreenpipe(overrideArgs: string[] | null) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("spawn_screenpipe", { overrideArgs }) };
@@ -178,9 +182,36 @@ async spawnScreenpipe(overrideArgs: string[] | null) : Promise<Result<null, stri
     else return { status: "error", error: e  as any };
 }
 },
+/**
+ * Stop everything — capture only. Server stays alive.
+ * This is the command called by the tray toggle and keyboard shortcut.
+ */
 async stopScreenpipe() : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("stop_screenpipe") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Start recording. Requires the server to be running.
+ */
+async startCapture() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("start_capture") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Stop recording without killing the server.
+ * Pipes, memories, search, and the HTTP API remain accessible.
+ */
+async stopCapture() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("stop_capture") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -403,6 +434,22 @@ async setOnboardingStep(step: string) : Promise<Result<null, string>> {
 async showOnboardingWindow() : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("show_onboarding_window") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async getKeychainStatus() : Promise<Result<KeychainStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_keychain_status") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async enableKeychainEncryption() : Promise<Result<KeychainStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("enable_keychain_encryption") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -778,10 +825,6 @@ async chatgptOauthStatus() : Promise<Result<ChatGptOAuthStatus, string>> {
     else return { status: "error", error: e  as any };
 }
 },
-/**
- * Return the current valid access token (auto-refreshing if needed).
- * Used by the frontend to call OpenAI APIs directly (e.g. /v1/models).
- */
 async chatgptOauthGetToken() : Promise<Result<string, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("chatgpt_oauth_get_token") };
@@ -798,9 +841,6 @@ async chatgptOauthLogout() : Promise<Result<boolean, string>> {
     else return { status: "error", error: e  as any };
 }
 },
-/**
- * Fetch available models from OpenAI using the stored OAuth token.
- */
 async chatgptOauthModels() : Promise<Result<string[], string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("chatgpt_oauth_models") };
@@ -1049,6 +1089,7 @@ export type AudioDeviceInfo = { name: string; isDefault: boolean }
 export type BrowserAutomationStatus = { name: string; status: string; running: boolean }
 export type BrowserLogEntry = { level: string; message: string }
 export type CacheFile = { path: string; label: string; size_bytes: bigint }
+export type KeychainStatus = { state: string }
 export type CachedSuggestions = { suggestions: Suggestion[]; generatedAt: string; mode: string; aiGenerated: boolean; tags: string[] }
 export type CalendarEventItem = { id: string; title: string; 
 /**
@@ -1250,6 +1291,11 @@ ignoreIncognitoWindows: boolean;
  */
 pauseOnDrmContent?: boolean; 
 /**
+ * Continue recording audio when the screen is locked.
+ * Default: false (audio pauses when screen is locked to save resources).
+ */
+recordWhileLocked?: boolean; 
+/**
  * Automatically append text typed during a meeting to the meeting's note
  * when the meeting ends. Groups typed text by app/window context.
  */
@@ -1348,7 +1394,15 @@ scheduleEnabled?: boolean;
 /**
  * Per-day schedule rules (only used when schedule_enabled is true)
  */
-scheduleRules?: ScheduleRule[] }) & 
+scheduleRules?: ScheduleRule[]; 
+/**
+ * Require authentication for remote (non-localhost) API access.
+ */
+apiAuth?: boolean; 
+/**
+ * Custom API key for remote authentication. If empty, a key is auto-generated.
+ */
+apiKey?: string }) & 
 /**
  * Catch-all for fields added by the frontend (e.g. chatHistory)
  * that the Rust struct doesn't know about. Without this, `save()` would

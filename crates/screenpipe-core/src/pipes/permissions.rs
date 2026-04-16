@@ -169,6 +169,11 @@ pub struct PipePermissions {
     /// extension will block all curl commands to non-localhost URLs.
     #[serde(default)]
     pub offline_mode: bool,
+
+    /// Absolute path to this pipe's working directory.
+    /// Used for filesystem sandboxing — pipes can only write within this directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pipe_dir: Option<String>,
 }
 
 impl PipePermissions {
@@ -189,6 +194,7 @@ impl PipePermissions {
             days,
             pipe_token: None,
             offline_mode: crate::offline::is_offline_mode(),
+            pipe_dir: None,
         }
     }
 
@@ -615,6 +621,7 @@ mod tests {
             days: None,
             pipe_token: None,
             offline_mode: false,
+            pipe_dir: None,
         }
     }
 
@@ -864,6 +871,7 @@ mod tests {
             source_slug: None,
             installed_version: None,
             source_hash: None,
+            subagent: false,
             trigger: None,
             config: std::collections::HashMap::new(),
         };
@@ -889,6 +897,7 @@ mod tests {
             source_slug: None,
             installed_version: None,
             source_hash: None,
+            subagent: false,
             trigger: None,
             config: std::collections::HashMap::new(),
         };
@@ -926,6 +935,7 @@ mod tests {
             source_slug: None,
             installed_version: None,
             source_hash: None,
+            subagent: false,
             trigger: None,
             config: std::collections::HashMap::new(),
         };
@@ -976,6 +986,7 @@ mod tests {
             source_slug: None,
             installed_version: None,
             source_hash: None,
+            subagent: false,
             trigger: None,
             config: std::collections::HashMap::new(),
         };

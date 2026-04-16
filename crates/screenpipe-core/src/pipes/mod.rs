@@ -145,6 +145,12 @@ pub struct PipeConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_hash: Option<String>,
 
+    /// Enable sub-agent spawning. Default: false.
+    /// When true, the pipe's agent can spawn parallel sub-agents via
+    /// `sub-agent run "prompt"` bash commands.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub subagent: bool,
+
     /// Catches any extra fields from front-matter (backwards compat).
     #[serde(default, flatten, skip_serializing_if = "HashMap::is_empty")]
     pub config: HashMap<String, serde_json::Value>,
@@ -319,6 +325,9 @@ fn is_default_agent(s: &String) -> bool {
 }
 fn is_default_model(s: &String) -> bool {
     s == "auto" || s == "claude-haiku-4-5" || s == "claude-haiku-4-5@20251001"
+}
+fn is_false(b: &bool) -> bool {
+    !b
 }
 /// Simple FNV-1a 64-bit hash, sufficient for change detection.
 fn simple_hash(content: &str) -> String {
@@ -676,6 +685,177 @@ struct ResolvedPreset {
     prompt: Option<String>,
 }
 
+/// Read the ChatGPT OAuth access token, with auto-refresh if expired.
+///
+/// Primary source: secrets store (`oauth:chatgpt` key in encrypted SQLite DB).
+/// Fallback: legacy `chatgpt-oauth.json` file for pre-migration installs.
+fn read_chatgpt_oauth_token() -> Option<String> {
+    // Try secrets store first (current path)
+    #[cfg(feature = "secrets")]
+    {
+        if let Some(token) = read_chatgpt_token_from_secrets() {
+            return Some(token);
+        }
+    }
+
+    // Fallback: legacy file
+    read_chatgpt_token_from_legacy_file()
+}
+
+/// Read and refresh ChatGPT token from the legacy `chatgpt-oauth.json` file.
+fn read_chatgpt_token_from_legacy_file() -> Option<String> {
+    let path = crate::paths::default_screenpipe_data_dir().join("chatgpt-oauth.json");
+    let content = std::fs::read_to_string(&path).ok()?;
+    let mut token_data: serde_json::Value = serde_json::from_str(&content).ok()?;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let expires_at = token_data
+        .get("expires_at")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+
+    if now >= expires_at.saturating_sub(60) {
+        refresh_chatgpt_token(&mut token_data, now);
+        if let Ok(updated) = serde_json::to_string_pretty(&token_data) {
+            let _ = std::fs::write(&path, updated);
+        }
+    }
+
+    token_data
+        .get("access_token")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+/// Read and refresh ChatGPT token from the encrypted secrets store.
+#[cfg(feature = "secrets")]
+fn read_chatgpt_token_from_secrets() -> Option<String> {
+    use screenpipe_secrets::keychain::{get_key, KeyResult};
+
+    let data_dir = crate::paths::default_screenpipe_data_dir();
+    let db_path = data_dir.join("db.sqlite");
+    if !db_path.exists() {
+        return None;
+    }
+
+    let secret_key = match get_key() {
+        KeyResult::Found(k) => Some(k),
+        _ => None,
+    };
+
+    let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
+
+    // We're in a sync context but need async for sqlx. Use block_in_place
+    // since the caller is always on a tokio runtime.
+    let result = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            let pool = sqlx::SqlitePool::connect(&db_url).await.ok()?;
+            let store = screenpipe_secrets::SecretStore::new(pool, secret_key)
+                .await
+                .ok()?;
+            let bytes = store.get("oauth:chatgpt").await.ok()??;
+            let mut token_data: serde_json::Value =
+                serde_json::from_slice(&bytes).ok()?;
+
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let expires_at = token_data
+                .get("expires_at")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+
+            if now >= expires_at.saturating_sub(60) {
+                refresh_chatgpt_token(&mut token_data, now);
+                // Write refreshed token back to secrets store
+                if let Ok(updated_bytes) = serde_json::to_vec(&token_data) {
+                    if let Err(e) = store.set("oauth:chatgpt", &updated_bytes).await {
+                        tracing::warn!("failed to write refreshed ChatGPT token to secrets: {}", e);
+                    }
+                }
+            }
+
+            token_data
+                .get("access_token")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
+    });
+
+    if result.is_none() {
+        tracing::debug!("ChatGPT OAuth token not found in secrets store");
+    }
+
+    result
+}
+
+/// Refresh an expired ChatGPT OAuth token using the refresh_token grant.
+/// Mutates `token_data` in place with the new access_token, refresh_token, and expires_at.
+fn refresh_chatgpt_token(token_data: &mut serde_json::Value, now: u64) {
+    let refresh_token = match token_data
+        .get("refresh_token")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+    {
+        Some(t) => t,
+        None => return,
+    };
+
+    tracing::info!("ChatGPT OAuth token expired, refreshing...");
+    let client = match reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+
+    let refresh_res = client
+        .post("https://auth.openai.com/oauth/token")
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({
+            "grant_type": "refresh_token",
+            "client_id": "app_EMoamEEZ73f0CkXaXp7hrann",
+            "refresh_token": refresh_token,
+            "scope": "openid profile email offline_access",
+        }))
+        .send();
+
+    match refresh_res {
+        Ok(resp) if resp.status().is_success() => {
+            if let Ok(v) = resp.json::<serde_json::Value>() {
+                if let Some(new_token) = v.get("access_token").and_then(|t| t.as_str()) {
+                    let new_refresh = v
+                        .get("refresh_token")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or(refresh_token.as_str());
+                    let new_expires_in = v
+                        .get("expires_in")
+                        .and_then(|t| t.as_u64())
+                        .unwrap_or(3600);
+
+                    token_data["access_token"] =
+                        serde_json::Value::String(new_token.to_string());
+                    token_data["refresh_token"] =
+                        serde_json::Value::String(new_refresh.to_string());
+                    token_data["expires_at"] = serde_json::json!(now + new_expires_in);
+                    tracing::info!("ChatGPT token refreshed successfully");
+                }
+            }
+        }
+        Ok(resp) => {
+            tracing::error!("ChatGPT token refresh failed ({})", resp.status());
+        }
+        Err(e) => {
+            tracing::error!("ChatGPT token refresh request failed: {}", e);
+        }
+    }
+}
+
 /// Read `~/.screenpipe/store.bin` and find the preset by id.
 /// Falls back to the default preset if `preset_id` is `"default"`.
 /// Creates store.bin with a default preset if it doesn't exist (CLI mode).
@@ -769,96 +949,10 @@ fn resolve_preset(pipes_dir: &Path, preset_id: &str) -> Option<ResolvedPreset> {
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string());
 
-    // ChatGPT OAuth: read token from stored file (no apiKey in preset),
+    // ChatGPT OAuth: read token from secrets store (primary) or legacy file (fallback),
     // auto-refreshing if expired.
     if provider.as_deref() == Some("openai-chatgpt") && api_key.is_none() {
-        let path = crate::paths::default_screenpipe_data_dir().join("chatgpt-oauth.json");
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            if let Ok(mut token_data) = serde_json::from_str::<serde_json::Value>(&content) {
-                // Check if token is expired (with 60s buffer)
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs();
-                let expires_at = token_data
-                    .get("expires_at")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0);
-                let is_expired = now >= expires_at.saturating_sub(60);
-
-                if is_expired {
-                    let refresh_token_owned = token_data
-                        .get("refresh_token")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
-                    if let Some(ref refresh_token) = refresh_token_owned {
-                        tracing::info!("ChatGPT OAuth token expired, refreshing...");
-                        if let Ok(client) = reqwest::blocking::Client::builder()
-                            .timeout(std::time::Duration::from_secs(30))
-                            .build()
-                        {
-                            let refresh_res = client
-                                .post("https://auth.openai.com/oauth/token")
-                                .header("Content-Type", "application/json")
-                                .json(&serde_json::json!({
-                                    "grant_type": "refresh_token",
-                                    "client_id": "app_EMoamEEZ73f0CkXaXp7hrann",
-                                    "refresh_token": refresh_token,
-                                    "scope": "openid profile email offline_access",
-                                }))
-                                .send();
-
-                            match refresh_res {
-                                Ok(resp) if resp.status().is_success() => {
-                                    if let Ok(v) = resp.json::<serde_json::Value>() {
-                                        if let Some(new_token) =
-                                            v.get("access_token").and_then(|t| t.as_str())
-                                        {
-                                            let new_refresh = v
-                                                .get("refresh_token")
-                                                .and_then(|t| t.as_str())
-                                                .unwrap_or(refresh_token.as_str());
-                                            let new_expires_in = v
-                                                .get("expires_in")
-                                                .and_then(|t| t.as_u64())
-                                                .unwrap_or(3600);
-
-                                            token_data["access_token"] =
-                                                serde_json::Value::String(new_token.to_string());
-                                            token_data["refresh_token"] =
-                                                serde_json::Value::String(new_refresh.to_string());
-                                            token_data["expires_at"] =
-                                                serde_json::json!(now + new_expires_in);
-
-                                            if let Ok(updated) =
-                                                serde_json::to_string_pretty(&token_data)
-                                            {
-                                                let _ = std::fs::write(&path, updated);
-                                            }
-                                            tracing::info!("ChatGPT token refreshed successfully");
-                                        }
-                                    }
-                                }
-                                Ok(resp) => {
-                                    tracing::error!(
-                                        "ChatGPT token refresh failed ({})",
-                                        resp.status()
-                                    );
-                                }
-                                Err(e) => {
-                                    tracing::error!("ChatGPT token refresh request failed: {}", e);
-                                }
-                            }
-                        }
-                    }
-                }
-
-                api_key = token_data
-                    .get("access_token")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-            }
-        }
+        api_key = read_chatgpt_oauth_token();
     }
 
     let prompt = preset
@@ -973,6 +1067,9 @@ async fn setup_pipe_permissions(
     if let Err(e) = PiExecutor::ensure_orphan_guard_extension(pipe_dir) {
         warn!("failed to install orphan-guard extension: {}", e);
     }
+    if let Err(e) = PiExecutor::ensure_subagent_extension(pipe_dir, config.subagent) {
+        warn!("failed to install sub-agent extension: {}", e);
+    }
     if let Err(e) = PiExecutor::ensure_screenpipe_skill_filtered(pipe_dir, config) {
         warn!("failed to install filtered skills: {}", e);
     }
@@ -998,9 +1095,10 @@ async fn setup_pipe_permissions(
     }
 
     let mut perms = permissions::PipePermissions::from_config(config);
+    perms.pipe_dir = Some(pipe_dir.to_string_lossy().to_string());
 
-    // In offline mode, force restrictions so the permissions JSON is always written
-    let force_write = offline;
+    // In offline mode or with filesystem sandbox, force restrictions so the permissions JSON is always written
+    let force_write = offline || perms.pipe_dir.is_some();
 
     if perms.has_any_restrictions() || force_write {
         // Generate a unique pipe token for server-side enforcement
@@ -1084,6 +1182,9 @@ pub struct PipeManager {
     token_registry: Option<Arc<dyn permissions::PipeTokenRegistry>>,
     /// Extra context appended to every pipe prompt (e.g. connected integrations).
     extra_context: Option<String>,
+    /// Local API auth key — injected into pipe subprocesses as SCREENPIPE_LOCAL_API_KEY
+    /// so pipes can authenticate to localhost:3030 when API auth is enabled.
+    local_api_key: Option<String>,
     /// Circuit breaker registry for AI preset fallback.
     fallback_registry: Arc<preset_fallback::PresetFallbackRegistry>,
 }
@@ -1121,6 +1222,7 @@ impl PipeManager {
             )),
             token_registry: None,
             extra_context: None,
+            local_api_key: None,
             fallback_registry: registry,
         }
     }
@@ -1148,6 +1250,20 @@ impl PipeManager {
     /// Clear extra context.
     pub fn clear_extra_context(&mut self) {
         self.extra_context = None;
+    }
+
+    /// Set the local API auth key. Injected into pipe subprocesses as
+    /// `SCREENPIPE_LOCAL_API_KEY` so they can authenticate to localhost.
+    ///
+    /// Sets it as a process-level env var so child processes inherit it
+    /// automatically via cmd.spawn(). Called once during initialization
+    /// before any async tasks are spawned.
+    pub fn set_local_api_key(&mut self, key: Option<String>) {
+        self.local_api_key = key.clone();
+        if let Some(ref k) = key {
+            // SAFETY: called during single-threaded init before scheduler starts
+            unsafe { std::env::set_var("SCREENPIPE_LOCAL_API_KEY", k) };
+        }
     }
 
     /// Set a token registry for server-side permission enforcement.
@@ -2663,8 +2779,13 @@ impl PipeManager {
             }
         }
 
-        // URL — try HTTP fetch
-        if source.starts_with("http://") || source.starts_with("https://") {
+        // URL — fetch over HTTPS only (reject plaintext HTTP to prevent MITM)
+        if source.starts_with("http://") {
+            return Err(anyhow!(
+                "pipe installation over plain HTTP is not allowed — use https:// instead"
+            ));
+        }
+        if source.starts_with("https://") {
             let name = url_to_pipe_name(source);
             let dest_dir = self.pipes_dir.join(&name);
             std::fs::create_dir_all(&dest_dir)?;
@@ -2896,11 +3017,24 @@ impl PipeManager {
         let api_port = self.api_port;
         let token_registry = self.token_registry.clone();
         let extra_context = self.extra_context.clone();
+        let _local_api_key = self.local_api_key.clone();
 
         let handle = tokio::spawn(async move {
             info!("pipe scheduler started (generation {})", generation);
             let mut last_run: HashMap<String, DateTime<Utc>> = HashMap::new();
             let mut last_cleanup = Instant::now();
+
+            // local_api_key is passed to each pipe subprocess via cmd.env() in the
+            // executor — see PiExecutor::spawn_pi / spawn_pi_streaming.
+
+            // Sequential execution: only one scheduled pipe runs at a time to
+            // avoid rate-limit stampedes when many pipes share the same cron.
+            // Event-triggered pipes bypass the queue for low-latency response.
+            let execution_semaphore = Arc::new(tokio::sync::Semaphore::new(1));
+            // Track pipes that are queued (waiting for semaphore) or running,
+            // so the scheduler doesn't double-queue the same pipe.
+            let queued_or_running: Arc<tokio::sync::Mutex<std::collections::HashSet<String>>> =
+                Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new()));
 
             // Load last_run from DB on first tick
             if let Some(ref store) = store {
@@ -3065,10 +3199,10 @@ impl PipeManager {
                         continue;
                     }
 
-                    // Check not already running (HashMap)
+                    // Check not already queued or running
                     {
-                        let r = running.lock().await;
-                        if r.contains_key(name) {
+                        let qr = queued_or_running.lock().await;
+                        if qr.contains(name) {
                             continue;
                         }
                     }
@@ -3106,17 +3240,22 @@ impl PipeManager {
                         continue;
                     }
 
-                    info!("scheduler: running pipe '{}'", name);
+                    info!(
+                        "scheduler: queuing pipe '{}' ({})",
+                        name,
+                        if triggered_by_event {
+                            "event"
+                        } else {
+                            "scheduled"
+                        }
+                    );
                     last_run.insert(name.clone(), Utc::now());
 
-                    // Mark running
+                    // Mark as queued so the next tick doesn't double-queue
                     {
-                        let mut r = running.lock().await;
-                        r.insert(name.clone(), ExecutionHandle { pid: 0 });
+                        let mut qr = queued_or_running.lock().await;
+                        qr.insert(name.clone());
                     }
-
-                    // Write pre-emptive PID file to claim the lock before spawn
-                    write_pid_file(&pipes_dir, name, std::process::id());
 
                     // Resolve preset → model/provider overrides (same as run_pipe)
                     let (model, provider, provider_url, api_key, preset_prompt) = if let Some(
@@ -3204,8 +3343,34 @@ impl PipeManager {
                     let store_ref = store.clone();
                     let token_registry_ref = token_registry.clone();
                     let pipe_timeout = config.timeout.unwrap_or(DEFAULT_TIMEOUT_SECS);
+                    let semaphore = execution_semaphore.clone();
+                    let pipes_dir_for_mark = pipes_dir.clone();
+                    let queued_ref = queued_or_running.clone();
 
                     tokio::spawn(async move {
+                        // Event-triggered pipes skip the queue for low-latency response.
+                        // Scheduled pipes wait for the previous one to finish.
+                        let _permit = if !is_event_triggered {
+                            Some(
+                                semaphore
+                                    .acquire()
+                                    .await
+                                    .expect("execution semaphore closed"),
+                            )
+                        } else {
+                            None
+                        };
+
+                        // Mark running + write PID file only after acquiring the permit,
+                        // so the UI shows accurate state (not "running" while queued).
+                        {
+                            let mut r = running_ref.lock().await;
+                            r.insert(pipe_name.clone(), ExecutionHandle { pid: 0 });
+                        }
+                        write_pid_file(&pipes_dir_for_mark, &pipe_name, std::process::id());
+
+                        info!("scheduler: running pipe '{}'", pipe_name);
+
                         // Create DB execution row
                         let trigger = if is_event_triggered {
                             "event"
@@ -3316,6 +3481,10 @@ impl PipeManager {
                         {
                             let mut exec_ids = running_exec_ids_ref.lock().await;
                             exec_ids.remove(&pipe_name);
+                        }
+                        {
+                            let mut qr = queued_ref.lock().await;
+                            qr.remove(&pipe_name);
                         }
                         remove_pid_file(&pipes_dir_for_log, &pipe_name);
 
@@ -3771,8 +3940,14 @@ fn render_pipe_system_prompt(body: &str, api_port: u16, system_prompt: Option<&s
         sys.push_str("\n\n");
     }
 
+    let api_auth_note = if std::env::var("SCREENPIPE_LOCAL_API_KEY").is_ok() {
+        "\nAPI Authentication: REQUIRED. Add `-H \"Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY\"` to ALL curl requests to the Screenpipe API. The env var is already set in your environment.\n"
+    } else {
+        ""
+    };
+
     sys.push_str(&format!(
-        "CRITICAL: You ARE this pipe. You are already running inside it. NEVER run `screenpipe pipe run` — that would create a recursive duplicate. Execute the task directly using the tools available to you (bash, file I/O, HTTP requests, etc.).\n\nOS: {os}\nOutput directory: ./output/\nScreenpipe API: http://localhost:{api_port}\nPrefer bun/TypeScript for scripts. Python may not be installed.\nSend notifications via POST http://localhost:11435/notify with {{\"title\": \"...\", \"body\": \"...\"}}. Body supports markdown. File links MUST use absolute paths (e.g. [View log](/Users/me/file.md)), never relative paths like ./output/file.md — relative paths break the notification link handler.\n\n"
+        "CRITICAL: You ARE this pipe. You are already running inside it. NEVER run `screenpipe pipe run` — that would create a recursive duplicate. Execute the task directly using the tools available to you (bash, file I/O, HTTP requests, etc.).\n\nOS: {os}\nOutput directory: ./output/\nScreenpipe API: http://localhost:{api_port}{api_auth_note}\nPrefer bun/TypeScript for scripts. Python may not be installed.\nSend notifications via POST http://localhost:11435/notify with {{\"title\": \"...\", \"body\": \"...\"}}. Body supports markdown. File links MUST use absolute paths (e.g. [View log](/Users/me/file.md)), never relative paths like ./output/file.md — relative paths break the notification link handler.\n\n"
     ));
     sys.push_str(body);
     sys
@@ -4465,6 +4640,7 @@ mod tests {
             source_slug: None,
             installed_version: None,
             source_hash: None,
+            subagent: false,
             trigger: None,
         };
         let body = "Do something useful";
@@ -4693,6 +4869,7 @@ mod tests {
             source_slug: None,
             installed_version: None,
             source_hash: None,
+            subagent: false,
             trigger: None,
         };
         let prompt = render_prompt_with_port(&config, "body text", 3031, None, None);
@@ -4723,6 +4900,7 @@ mod tests {
             source_slug: None,
             installed_version: None,
             source_hash: None,
+            subagent: false,
             trigger: None,
         };
         let sys = render_pipe_system_prompt("hello", 3030, None);
@@ -4746,6 +4924,7 @@ mod tests {
             source_slug: None,
             installed_version: None,
             source_hash: None,
+            subagent: false,
             trigger: None,
         };
         let sys = render_pipe_system_prompt("body text", 3030, Some("You are a helpful assistant"));
@@ -4771,6 +4950,7 @@ mod tests {
             source_slug: None,
             installed_version: None,
             source_hash: None,
+            subagent: false,
             trigger: None,
         };
         let sys = render_pipe_system_prompt("body text", 3030, None);
@@ -4849,6 +5029,7 @@ mod tests {
                 source_slug: None,
                 installed_version: None,
                 source_hash: None,
+                subagent: false,
                 trigger: None,
             },
             last_run: None,
@@ -5260,5 +5441,123 @@ mod tests {
             config2.config.get("another").and_then(|v| v.as_i64()),
             Some(42)
         );
+    }
+
+    // -- sequential pipe execution tests ------------------------------------
+
+    #[tokio::test]
+    async fn test_semaphore_serializes_scheduled_pipes() {
+        // Simulates 3 scheduled pipes acquiring the semaphore.
+        // They should run one at a time, not in parallel.
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(1));
+        let active_count = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let max_concurrent = Arc::new(std::sync::atomic::AtomicU32::new(0));
+
+        let mut handles = Vec::new();
+        for _ in 0..3 {
+            let sem = semaphore.clone();
+            let active = active_count.clone();
+            let max = max_concurrent.clone();
+            handles.push(tokio::spawn(async move {
+                let _permit = sem.acquire().await.unwrap();
+                let current = active.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                // Update max if this is the highest we've seen
+                max.fetch_max(current, std::sync::atomic::Ordering::SeqCst);
+                // Simulate pipe execution
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                active.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            }));
+        }
+
+        for h in handles {
+            h.await.unwrap();
+        }
+
+        // Max concurrent should be 1 — pipes ran sequentially
+        assert_eq!(
+            max_concurrent.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "scheduled pipes should run sequentially (max concurrent = 1)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_event_triggered_bypasses_semaphore() {
+        // Simulates 1 scheduled pipe holding the semaphore while an
+        // event-triggered pipe starts without waiting.
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(1));
+        let event_started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let scheduled_running = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+        let sem = semaphore.clone();
+        let sched_flag = scheduled_running.clone();
+        let event_flag = event_started.clone();
+
+        // Scheduled pipe: holds permit for 200ms
+        let scheduled = tokio::spawn(async move {
+            let _permit = sem.acquire().await.unwrap();
+            sched_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            sched_flag.store(false, std::sync::atomic::Ordering::SeqCst);
+        });
+
+        // Give the scheduled pipe time to acquire the permit
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert!(scheduled_running.load(std::sync::atomic::Ordering::SeqCst));
+
+        // Event-triggered pipe: skips semaphore (None permit)
+        let event = tokio::spawn(async move {
+            // Event pipes don't acquire the semaphore
+            let _permit: Option<tokio::sync::OwnedSemaphorePermit> = None;
+            event_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+
+        event.await.unwrap();
+
+        // Event pipe should have started while scheduled pipe was still running
+        assert!(
+            event_started.load(std::sync::atomic::Ordering::SeqCst),
+            "event-triggered pipe should start immediately without waiting for semaphore"
+        );
+        assert!(
+            scheduled_running.load(std::sync::atomic::Ordering::SeqCst),
+            "scheduled pipe should still be running when event pipe completes"
+        );
+
+        scheduled.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_queued_set_prevents_double_queue() {
+        let queued: Arc<tokio::sync::Mutex<std::collections::HashSet<String>>> =
+            Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new()));
+
+        // First queue attempt should succeed
+        {
+            let mut qr = queued.lock().await;
+            assert!(
+                qr.insert("my-pipe".to_string()),
+                "first insert should succeed"
+            );
+        }
+
+        // Second queue attempt should be blocked
+        {
+            let qr = queued.lock().await;
+            assert!(qr.contains("my-pipe"), "pipe should be in queued set");
+        }
+
+        // After removal, should be queueable again
+        {
+            let mut qr = queued.lock().await;
+            qr.remove("my-pipe");
+        }
+        {
+            let mut qr = queued.lock().await;
+            assert!(
+                qr.insert("my-pipe".to_string()),
+                "should be queueable after removal"
+            );
+        }
     }
 }

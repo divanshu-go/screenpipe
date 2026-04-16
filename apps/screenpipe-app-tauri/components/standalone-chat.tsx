@@ -49,8 +49,7 @@ import { useAutoSuggestions } from "@/lib/hooks/use-auto-suggestions";
 import { SummaryCards } from "@/components/chat/summary-cards";
 import { type CustomTemplate } from "@/lib/summary-templates";
 import { usePipes } from "@/lib/hooks/use-pipes";
-
-const SCREENPIPE_API = "http://localhost:3030";
+import { localFetch, getApiBaseUrl } from "@/lib/api";
 // Session ID is per-conversation — set on mount (new conv) and updated on load/new.
 // Stored as a ref so event listeners always see the current value without stale closures.
 
@@ -111,6 +110,34 @@ function buildDailyLimitMessage(errorStr: string): string {
   } catch {
     return "You've reached your daily limit. Try a free model like Qwen3 Coder or Gemini Flash.";
   }
+}
+
+function classifyQuotaError(errorStr: string): "daily" | "rate" | "none" {
+  const normalized = errorStr.toLowerCase();
+  const isDailyLimit =
+    normalized.includes("credits_exhausted") ||
+    normalized.includes("daily_limit_exceeded") ||
+    normalized.includes("daily_cost_limit_exceeded");
+  if (isDailyLimit) {
+    return "daily";
+  }
+
+  const isRateLimit =
+    normalized.includes("429") ||
+    normalized.includes("rate limit") ||
+    normalized.includes("rate_limit") ||
+    normalized.includes("requests per minute") ||
+    normalized.includes("too many requests");
+  return isRateLimit ? "rate" : "none";
+}
+
+function buildRateLimitMessage(errorStr: string): string {
+  const waitMatch = errorStr.match(/wait (\d+) seconds/i);
+  const waitTime = waitMatch ? waitMatch[1] : "a moment";
+  const isPerMinuteRate = /rate limit exceeded|requests per minute/i.test(errorStr);
+  return isPerMinuteRate
+    ? `Rate limited — please wait ${waitTime} seconds and try again.`
+    : "Rate limited — try again in a moment or switch to a different model.";
 }
 
 /** Extract the gateway-reported tier from an error string, if present. */
@@ -722,7 +749,7 @@ function MarkdownBlock({ text, isUser }: { text: string; isUser: boolean }) {
             try {
               imgSrc = convertFileSrc(src);
             } catch {
-              imgSrc = `http://localhost:3030/experimental/frames/from-file?path=${encodeURIComponent(src)}`;
+              imgSrc = `${getApiBaseUrl()}/experimental/frames/from-file?path=${encodeURIComponent(src)}`;
             }
           }
           return (
@@ -1073,6 +1100,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
   const [deletingConvId, setDeletingConvId] = useState<string | null>(null);
   const [activePreset, setActivePreset] = useState<AIPreset | undefined>();
   const [showMentionDropdown, setShowMentionDropdown] = useState(false);
+  const [isComposing, setIsComposing] = useState(false);
   const [mentionFilter, setMentionFilter] = useState("");
   const [selectedMentionIndex, setSelectedMentionIndex] = useState(0);
   const [speakerSuggestions, setSpeakerSuggestions] = useState<MentionSuggestion[]>([]);
@@ -1527,8 +1555,8 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
     const searchSpeakers = async () => {
       setIsLoadingSpeakers(true);
       try {
-        const response = await fetch(
-          `${SCREENPIPE_API}/speakers/search?name=${encodeURIComponent(mentionFilter)}`
+        const response = await localFetch(
+          `/speakers/search?name=${encodeURIComponent(mentionFilter)}`
         );
         if (response.ok) {
           const speakers: Speaker[] = await response.json();
@@ -1606,6 +1634,14 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
     // Prevent '/' from triggering app shortcuts while typing
     if (e.key === '/') {
       e.stopPropagation();
+    }
+
+    const nativeEvent = e.nativeEvent as KeyboardEvent & { isComposing?: boolean; keyCode?: number };
+    const nativeIsComposing = nativeEvent.isComposing || nativeEvent.keyCode === 229;
+
+    // Ignore Enter while an IME composition is active so confirmation does not submit the message.
+    if (isComposing || nativeIsComposing) {
+      return;
     }
 
     // Enter without shift submits the form
@@ -1725,7 +1761,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
     if (!appFilterOpen || recentSpeakers.length > 0) return;
     (async () => {
       try {
-        const response = await fetch(`${SCREENPIPE_API}/speakers/search?name=`);
+        const response = await localFetch("/speakers/search?name=");
         if (response.ok) {
           const speakers: Speaker[] = await response.json();
           setRecentSpeakers(
@@ -1937,28 +1973,17 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
           console.error("[Pi] Auto-retry failed:", errorStr);
 
           // Detect rate limit or daily limit from the error
-          if (errorStr.includes("daily_limit_exceeded") || errorStr.includes("daily_cost_limit_exceeded") || errorStr.includes("429") || errorStr.includes("rate limit")) {
-            // Distinguish between daily limit and per-minute rate limit
-            const isDailyLimit = errorStr.includes("daily_limit_exceeded") || errorStr.includes("daily_cost_limit_exceeded");
-            const isPerMinuteRate = errorStr.includes("rate limit exceeded") || errorStr.includes("requests per minute");
-
-            if (isDailyLimit) {
+          const quotaErrorType = classifyQuotaError(errorStr);
+          if (quotaErrorType === "daily" || quotaErrorType === "rate") {
+            if (quotaErrorType === "daily") {
               posthog.capture("wall_hit", { reason: "daily_limit", source: "chat" });
             }
 
             if (piMessageIdRef.current) {
               const msgId = piMessageIdRef.current;
-              let content: string;
-              if (isDailyLimit) {
-                content = buildDailyLimitMessage(errorStr);
-              } else if (isPerMinuteRate) {
-                // Extract wait time from error
-                const waitMatch = errorStr.match(/wait (\d+) seconds/i);
-                const waitTime = waitMatch ? waitMatch[1] : "a moment";
-                content = `Rate limited — please wait ${waitTime} seconds and try again.`;
-              } else {
-                content = "Rate limited — try again in a moment or switch to a different model.";
-              }
+              const content = quotaErrorType === "daily"
+                ? buildDailyLimitMessage(errorStr)
+                : buildRateLimitMessage(errorStr);
               setMessages((prev) =>
                 prev.map((m) => m.id === msgId ? { ...m, content } : m)
               );
@@ -1982,10 +2007,9 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
             const msgId = piMessageIdRef.current;
             const fullError = `${reason} ${errorDetail}`.trim();
 
-            if (fullError.includes("daily_limit_exceeded") || fullError.includes("daily_cost_limit_exceeded") || fullError.includes("429") || fullError.includes("rate limit")) {
-              const isDailyLimit = fullError.includes("daily_limit_exceeded") || fullError.includes("daily_cost_limit_exceeded");
-              const isPerMinuteRate = fullError.includes("rate limit exceeded") || fullError.includes("requests per minute");
-              if (isDailyLimit) {
+            const quotaErrorType = classifyQuotaError(fullError);
+            if (quotaErrorType === "daily" || quotaErrorType === "rate") {
+              if (quotaErrorType === "daily") {
                 try {
                   const match = fullError.match(/"resets_at":\s*"([^"]+)"/);
                 } catch {}
@@ -1993,11 +2017,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
                   prev.map((m) => m.id === msgId ? { ...m, content: buildDailyLimitMessage(fullError) } : m)
                 );
               } else {
-                  const waitMatch = fullError.match(/wait (\d+) seconds/i);
-                const waitTime = waitMatch ? waitMatch[1] : "a moment";
-                const content = isPerMinuteRate
-                  ? `Rate limited — please wait ${waitTime} seconds and try again.`
-                  : "Rate limited — try again in a moment or switch to a different model.";
+                const content = buildRateLimitMessage(fullError);
                 setMessages((prev) =>
                   prev.map((m) => m.id === msgId ? { ...m, content } : m)
                 );
@@ -2025,7 +2045,8 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
           if (piMessageIdRef.current) {
             const msgId = piMessageIdRef.current;
 
-            if (errMsg.includes("credits_exhausted") || errMsg.includes("daily_limit_exceeded") || errMsg.includes("daily_cost_limit_exceeded") || errMsg.includes("429")) {
+            const quotaErrorType = classifyQuotaError(errMsg);
+            if (quotaErrorType === "daily") {
               try {
                 const resetsAtMatch = errMsg.match(/"resets_at":\s*"([^"]+)"/);
                 } catch {}
@@ -2033,9 +2054,9 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
               setMessages((prev) =>
                 prev.map((m) => m.id === msgId ? { ...m, content: buildDailyLimitMessage(errMsg) } : m)
               );
-            } else if (errMsg.includes("rate limit") || errMsg.includes("rate_limit")) {
+            } else if (quotaErrorType === "rate") {
               setMessages((prev) =>
-                prev.map((m) => m.id === msgId ? { ...m, content: "Rate limited — try again in a moment." } : m)
+                prev.map((m) => m.id === msgId ? { ...m, content: buildRateLimitMessage(errMsg) } : m)
               );
             } else {
               setMessages((prev) =>
@@ -2080,13 +2101,14 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
             // Surface credits_exhausted / rate limit errors from agent_end
             if (agentEndError && !content) {
               const errStr = agentEndError;
-              if (errStr.includes("credits_exhausted") || errStr.includes("daily_limit_exceeded") || errStr.includes("daily_cost_limit_exceeded") || errStr.includes("429")) {
+              const quotaErrorType = classifyQuotaError(errStr);
+              if (quotaErrorType === "daily") {
                 try {
                   const resetsAtMatch = errStr.match(/"resets_at":\s*"([^"]+)"/);
                     } catch {}
                                   content = buildDailyLimitMessage(errStr);
-              } else if (errStr.includes("rate limit")) {
-                  content = "Rate limited — try again in a moment.";
+              } else if (quotaErrorType === "rate") {
+                  content = buildRateLimitMessage(errStr);
               } else {
                 content = `Error: ${errStr}`;
               }
@@ -2174,10 +2196,9 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
           if (piMessageIdRef.current) {
             const msgId = piMessageIdRef.current;
 
-            if (errorStr.includes("daily_limit_exceeded") || errorStr.includes("daily_cost_limit_exceeded") || errorStr.includes("429") || errorStr.includes("rate limit")) {
-              const isDailyLimit = errorStr.includes("daily_limit_exceeded") || errorStr.includes("daily_cost_limit_exceeded");
-              const isPerMinuteRate = errorStr.includes("rate limit exceeded") || errorStr.includes("requests per minute");
-              if (isDailyLimit) {
+            const quotaErrorType = classifyQuotaError(errorStr);
+            if (quotaErrorType === "daily" || quotaErrorType === "rate") {
+              if (quotaErrorType === "daily") {
                 try {
                   const match = errorStr.match(/"resets_at":\s*"([^"]+)"/);
                 } catch {}
@@ -2185,11 +2206,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
                   prev.map((m) => m.id === msgId ? { ...m, content: buildDailyLimitMessage(errorStr) } : m)
                 );
               } else {
-                  const waitMatch = errorStr.match(/wait (\d+) seconds/i);
-                const waitTime = waitMatch ? waitMatch[1] : "a moment";
-                const content = isPerMinuteRate
-                  ? `Rate limited — please wait ${waitTime} seconds and try again.`
-                  : "Rate limited — try again in a moment or switch to a different model.";
+                const content = buildRateLimitMessage(errorStr);
                 setMessages((prev) =>
                   prev.map((m) => m.id === msgId ? { ...m, content } : m)
                 );
@@ -2222,8 +2239,9 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
               );
             }
           }
-          const errorCategory = errorStr.includes("daily_limit") ? "daily_limit"
-            : errorStr.includes("rate limit") || errorStr.includes("429") ? "rate_limit"
+          const quotaErrorType = classifyQuotaError(errorStr);
+          const errorCategory = quotaErrorType === "daily" ? "daily_limit"
+            : quotaErrorType === "rate" ? "rate_limit"
             : errorStr.includes("model_not_allowed") ? "model_not_allowed"
             : "other";
           posthog.capture("chat_response_error", {
@@ -2444,7 +2462,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
     // Poll execution API to check if pipe already finished (race condition fix)
     const pollExecutionStatus = async (pipeName: string, executionId: number, msgId: string) => {
       try {
-        const res = await fetch(`http://localhost:3030/pipes/${pipeName}/executions?limit=20`);
+        const res = await localFetch(`/pipes/${pipeName}/executions?limit=20`);
         if (!res.ok) return;
         const data = await res.json();
         const exec = (data.data || []).find((e: any) => e.id === executionId);
@@ -2601,7 +2619,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
   async function generateFollowUps(userMsg: string, partialResponse: string) {
     try {
       // Check if Apple Intelligence is available
-      const statusResp = await fetch("http://localhost:3030/ai/status");
+      const statusResp = await localFetch("/ai/status");
       if (!statusResp.ok) return;
       const statusData = await statusResp.json();
       if (!statusData.available) return;
@@ -2609,7 +2627,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
       const controller = new AbortController();
       followUpAbortRef.current = controller;
 
-      const resp = await fetch("http://localhost:3030/ai/chat/completions", {
+      const resp = await localFetch("/ai/chat/completions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         signal: controller.signal,
@@ -2677,8 +2695,8 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
         console.log("[Pi] Not running, auto-starting before sending message");
         piStartInFlightRef.current = true;
         setPiStarting(true);
+        const providerConfig = buildProviderConfig();
         try {
-          const providerConfig = buildProviderConfig();
           const home = await homeDir();
           const dir = await join(home, ".screenpipe", "pi-chat");
           const result = await commands.piStart(piSessionIdRef.current, dir, settings.user?.token ?? null, providerConfig);
@@ -2691,11 +2709,13 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
               piRunningConfigRef.current = { provider: providerConfig.provider, model: providerConfig.model, token: settings.user?.token ?? null };
             }
           } else {
-            toast({ title: "Failed to start Screenpipe Cloud", description: result.status === "error" ? result.error : "Unknown error", variant: "destructive" });
+            const providerLabel = providerConfig?.provider || "AI";
+            toast({ title: `failed to start ${providerLabel}`, description: result.status === "error" ? result.error : "Unknown error", variant: "destructive" });
             return;
           }
         } catch (e) {
-          toast({ title: "Failed to start Screenpipe Cloud", description: String(e), variant: "destructive" });
+          const providerLabel = providerConfig?.provider || "AI";
+          toast({ title: `failed to start ${providerLabel}`, description: String(e), variant: "destructive" });
           return;
         } finally {
           setPiStarting(false);
@@ -2770,7 +2790,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
 
       if (prefillFrameId) {
         try {
-          const response = await fetch(`http://localhost:3030/frames/${prefillFrameId}`);
+          const response = await localFetch(`/frames/${prefillFrameId}`);
           if (response.ok) {
             const blob = await response.blob();
             const arrayBuffer = await blob.arrayBuffer();
@@ -2925,7 +2945,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
       const controller = new AbortController();
       const searchTimeoutId = setTimeout(() => controller.abort(), 120000);
 
-      const response = await fetch(`${SCREENPIPE_API}/search?${params.toString()}`, {
+      const response = await localFetch(`/search?${params.toString()}`, {
         signal: controller.signal,
       });
       clearTimeout(searchTimeoutId);
@@ -3571,7 +3591,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
                   <div className="relative group">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
-                      src={`http://localhost:3030/frames/${prefillFrameId}`}
+                      src={`${getApiBaseUrl()}/frames/${prefillFrameId}`}
                       alt="Attached frame"
                       className="w-16 h-12 object-cover rounded border border-border/50"
                     />
@@ -3949,6 +3969,8 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
                 ref={inputRef}
                 value={input}
                 onChange={handleInputChange}
+                onCompositionStart={() => setIsComposing(true)}
+                onCompositionEnd={() => setIsComposing(false)}
                 onKeyDown={handleKeyDown}
                 placeholder={
                   disabledReason

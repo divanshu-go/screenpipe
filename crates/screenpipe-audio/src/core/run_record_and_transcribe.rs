@@ -52,8 +52,7 @@ pub async fn run_record_and_transcribe(
     // Per-device source buffer: detects Bluetooth packet-drop gaps and inserts
     // digital silence in place of crackle/noise. Silence is filtered by VAD before
     // reaching Whisper, so it has no transcription impact.
-    let mut source_buffer =
-        SourceBuffer::new(device_name.as_str(), sample_rate as u32);
+    let mut source_buffer = SourceBuffer::new(device_name.as_str(), sample_rate as u32);
 
     info!(
         "starting continuous recording for {} ({} / {}s segments)",
@@ -68,9 +67,44 @@ pub async fn run_record_and_transcribe(
     let stream_start = std::time::Instant::now();
     let mut segment_count: u64 = 0;
 
+    let mut was_paused_for_lock = false;
+
     while is_running.load(Ordering::Relaxed)
         && !audio_stream.is_disconnected.load(Ordering::Relaxed)
     {
+        // Skip recording while the screen is locked (unless record_while_locked is enabled).
+        // This avoids wasting CPU/disk on audio captured during lock screen.
+        if screenpipe_config::should_pause_audio_for_lock() {
+            if !was_paused_for_lock {
+                info!("screen locked, pausing audio recording for {}", device_name);
+                was_paused_for_lock = true;
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            continue;
+        }
+
+        // Transitioning from locked → unlocked: discard stale audio and reset segment timing.
+        // The broadcast channel accumulated data while we were paused — drain it to avoid
+        // transcribing audio from the lock screen period.
+        if was_paused_for_lock {
+            info!(
+                "screen unlocked, resuming audio recording for {}",
+                device_name
+            );
+            was_paused_for_lock = false;
+            collected_audio.clear();
+            segment_start_time = now_epoch_secs();
+            // Drain stale audio from the broadcast channel.
+            // Lagged means messages were dropped (channel full) — also fine, keep draining.
+            loop {
+                match receiver.try_recv() {
+                    Ok(_) => continue,
+                    Err(broadcast::error::TryRecvError::Lagged(_)) => continue,
+                    Err(_) => break, // Empty or Closed
+                }
+            }
+        }
+
         while collected_audio.len() < max_samples && is_running.load(Ordering::Relaxed) {
             match recv_audio_chunk(
                 &mut receiver,

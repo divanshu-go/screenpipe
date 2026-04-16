@@ -169,7 +169,7 @@ export default function GeneralSettings() {
               <div className="flex items-center space-x-2.5">
                 <RefreshCw className="h-4 w-4 text-muted-foreground shrink-0" />
                 <div>
-                  <h3 className="text-sm font-medium text-foreground">Auto-update pipes</h3>
+                  <h3 className="text-sm font-medium text-foreground">Auto-Update Pipes</h3>
                   <p className="text-xs text-muted-foreground">Update store pipes you haven&apos;t modified</p>
                 </div>
               </div>
@@ -193,7 +193,7 @@ export default function GeneralSettings() {
                 <div>
                   <h3 className="text-sm font-medium text-foreground">Enhanced AI</h3>
                   <p className="text-xs text-muted-foreground">
-                    use screenpipe cloud for smarter suggestions
+                    Use Screenpipe Cloud for smarter suggestions
                   </p>
                   <p className="text-[10px] text-muted-foreground/60 mt-0.5">
                     sends recent activity to screenpipe cloud for processing. we don&apos;t store your data (zero retention).
@@ -227,7 +227,7 @@ export default function GeneralSettings() {
                       Version{currentVersion ? ` ${currentVersion}` : ""}
                     </h3>
                     <p className="text-xs text-muted-foreground">
-                      install a previous version (at your own risk)
+                      Install a previous version (at your own risk)
                     </p>
                   </div>
                 </div>
@@ -277,7 +277,7 @@ export default function GeneralSettings() {
               <div className="flex items-center space-x-2.5">
                 <Trash2 className="h-4 w-4 text-muted-foreground shrink-0" />
                 <div>
-                  <h3 className="text-sm font-medium text-foreground">Clear cache</h3>
+                  <h3 className="text-sm font-medium text-foreground">Clear Cache</h3>
                   <p className="text-xs text-muted-foreground">
                     Remove AI agent cache, old logs, and recovery artifacts
                   </p>
@@ -365,7 +365,7 @@ export default function GeneralSettings() {
             <div className="flex items-center space-x-2.5">
               <RefreshCw className="h-4 w-4 text-muted-foreground shrink-0" />
               <div>
-                <h3 className="text-sm font-medium text-foreground">Reset onboarding</h3>
+                <h3 className="text-sm font-medium text-foreground">Reset Onboarding</h3>
                 <p className="text-xs text-muted-foreground">Run the setup wizard again</p>
               </div>
             </div>

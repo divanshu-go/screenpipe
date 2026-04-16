@@ -28,6 +28,74 @@ for (let i = 0; i < args.length; i++) {
 
 const SCREENPIPE_API = `http://localhost:${port}`;
 
+// Discover API key: env var > db.sqlite direct read > npx fallbacks
+function discoverApiKey(): string {
+  const envKey = process.env.SCREENPIPE_LOCAL_API_KEY || process.env.SCREENPIPE_API_KEY;
+  if (envKey) return envKey;
+
+  const os = require("os");
+  const path = require("path");
+  const fs = require("fs");
+  const { execFileSync, execSync } = require("child_process");
+
+  // Read api_auth_key directly from ~/.screenpipe/db.sqlite.
+  // The key may be stored as plaintext base64 (nonce=zeros, keychain unavailable)
+  // or encrypted (non-zero nonce, keychain was available at write time).
+  // If plaintext: decode and return. If encrypted: skip, fall through to CLI.
+  try {
+    const dbPath = path.join(os.homedir(), ".screenpipe", "db.sqlite");
+    if (fs.existsSync(dbPath)) {
+      const sqliteBin = process.platform === "win32" ? "sqlite3.exe" : "sqlite3";
+      // Check nonce — all zeros means plaintext base64, non-zero means encrypted
+      const row = execFileSync(sqliteBin, [
+        dbPath,
+        "SELECT hex(nonce), value FROM secrets WHERE key = 'api_auth_key';",
+      ], {
+        timeout: 5000,
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "pipe"],
+      }).trim();
+      if (row) {
+        const sepIdx = row.indexOf("|");
+        const nonceHex = sepIdx >= 0 ? row.substring(0, sepIdx) : "";
+        const value = sepIdx >= 0 ? row.substring(sepIdx + 1) : row;
+        const isPlaintext = !nonceHex || /^0+$/.test(nonceHex);
+        if (isPlaintext && value) {
+          const decoded = Buffer.from(value, "base64").toString("utf-8");
+          if (decoded && decoded.startsWith("sp-")) return decoded;
+          if (value.startsWith("sp-")) return value;
+        }
+        // Non-zero nonce = encrypted — fall through to CLI which can decrypt via keychain
+      }
+    }
+  } catch {}
+
+  // Fallback: use the current Node binary to find npx (no PATH dependency)
+  try {
+    const npxPath = path.join(path.dirname(process.execPath), "npx");
+    const token = execFileSync(npxPath, ["screenpipe@latest", "auth", "token"], {
+      timeout: 15000,
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
+    if (token) return token;
+  } catch {}
+
+  // Last resort: npx on PATH
+  try {
+    const token = execSync("npx screenpipe@latest auth token", {
+      timeout: 15000,
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
+    if (token) return token;
+  } catch {}
+
+  return "";
+}
+
+const API_KEY = discoverApiKey();
+
 // Read version from package.json (single source of truth)
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const PKG_VERSION: string = require("../package.json").version;
@@ -531,6 +599,7 @@ async function fetchAPI(
     ...options,
     headers: {
       "Content-Type": "application/json",
+      ...(API_KEY ? { Authorization: `Bearer ${API_KEY}` } : {}),
       ...options.headers,
     },
   });

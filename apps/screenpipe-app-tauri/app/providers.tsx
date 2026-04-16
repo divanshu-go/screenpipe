@@ -10,6 +10,7 @@ import { ChangelogDialogProvider } from "@/lib/hooks/use-changelog-dialog";
 import { SettingsProvider } from "@/lib/hooks/use-settings";
 import { ThemeProvider } from "@/components/theme-provider";
 import { PermissionMonitorProvider } from "@/lib/hooks/use-permission-monitor";
+import { AuthGuard } from "@/lib/auth-guard";
 import { forwardRef } from "react";
 import { NuqsAdapter } from "nuqs/adapters/next/app";
 import { invoke } from "@tauri-apps/api/core";
@@ -109,13 +110,15 @@ export const Providers = forwardRef<
     <Suspense>
     <NuqsAdapter>
       <SettingsProvider>
-        <ThemeProvider defaultTheme="system" storageKey="screenpipe-ui-theme">
-          <ChangelogDialogProvider>
-            <PermissionMonitorProvider>
-              <PostHogProvider client={posthog}>{children}</PostHogProvider>
-            </PermissionMonitorProvider>
-          </ChangelogDialogProvider>
-        </ThemeProvider>
+        <AuthGuard>
+          <ThemeProvider defaultTheme="system" storageKey="screenpipe-ui-theme">
+            <ChangelogDialogProvider>
+              <PermissionMonitorProvider>
+                <PostHogProvider client={posthog}>{children}</PostHogProvider>
+              </PermissionMonitorProvider>
+            </ChangelogDialogProvider>
+          </ThemeProvider>
+        </AuthGuard>
       </SettingsProvider>
     </NuqsAdapter>
     </Suspense>

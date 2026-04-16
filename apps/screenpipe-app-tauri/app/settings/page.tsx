@@ -176,8 +176,8 @@ function SettingsContent() {
   const { isTranslucent } = useSidebarContext();
 
   const [section, setSection] = useQueryState<SettingsSection>("section", {
-    defaultValue: "general",
-    parse: (v) => (ALL_SETTINGS_SECTIONS.includes(v as SettingsSection) ? (v as SettingsSection) : "general"),
+    defaultValue: "display",
+    parse: (v) => (ALL_SETTINGS_SECTIONS.includes(v as SettingsSection) ? (v as SettingsSection) : "display"),
     serialize: (v) => v,
   });
 
@@ -185,7 +185,7 @@ function SettingsContent() {
   // first visible section. Prevents direct-URL bypass of enterprise restrictions.
   useEffect(() => {
     if (!isSectionHidden(section)) return;
-    const fallback = ALL_SETTINGS_SECTIONS.find((s) => !isSectionHidden(s)) ?? "general";
+    const fallback = ALL_SETTINGS_SECTIONS.find((s) => !isSectionHidden(s)) ?? "display";
     setSection(fallback as SettingsSection);
   }, [section, isSectionHidden, setSection]);
 

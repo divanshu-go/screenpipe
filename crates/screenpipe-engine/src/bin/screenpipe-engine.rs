@@ -298,6 +298,17 @@ async fn main() -> anyhow::Result<()> {
             screenpipe_engine::cli::login::handle_whoami_command().await?;
             return Ok(());
         }
+        Command::Auth { ref subcommand } => {
+            screenpipe_engine::cli::auth::handle_auth_command(subcommand).await?;
+            return Ok(());
+        }
+        Command::Backup {
+            ref subcommand,
+            ref data_dir,
+        } => {
+            screenpipe_engine::cli::backup::handle_backup_command(subcommand, data_dir).await?;
+            return Ok(());
+        }
         Command::Doctor => {
             eprintln!("screenpipe doctor");
             eprintln!("=================");
@@ -428,6 +439,9 @@ async fn main() -> anyhow::Result<()> {
                         json!(record_args.sync_interval_secs),
                     );
                     map.insert("debug".into(), json!(record_args.debug));
+                    map.insert("api_auth".into(), json!(record_args.api_auth));
+                    map.insert("encrypt_secrets".into(), json!(record_args.encrypt_secrets));
+                    map.insert("retention_days".into(), json!(record_args.retention_days));
                     // Only send counts for privacy-sensitive lists (not actual values)
                     map.insert(
                         "audio_device_count".into(),
@@ -468,7 +482,8 @@ async fn main() -> anyhow::Result<()> {
     // Build unified RecordingConfig from CLI args
     let config = record_args
         .clone()
-        .into_recording_config(local_data_dir.clone());
+        .into_recording_config(local_data_dir.clone())
+        .await;
 
     // Replace the current conditional check with:
     let ffmpeg_path = find_ffmpeg_path();
@@ -690,6 +705,10 @@ async fn main() -> anyhow::Result<()> {
 
     let (shutdown_tx, _) = broadcast::channel::<()>(1);
 
+    // Reset schedule pause flag before (optionally) starting the monitor.
+    // Ensures a clean state on every startup.
+    screenpipe_engine::schedule_monitor::reset_schedule_paused();
+
     // Start work-hours schedule monitor if enabled
     if config.schedule_enabled {
         screenpipe_engine::schedule_monitor::start_schedule_monitor(
@@ -848,9 +867,24 @@ async fn main() -> anyhow::Result<()> {
     let manual_meeting: std::sync::Arc<tokio::sync::RwLock<Option<i64>>> =
         std::sync::Arc::new(tokio::sync::RwLock::new(None));
 
+    if config.listen_address.is_loopback() {
+        info!(
+            "API server listening on 127.0.0.1:{} (localhost only)",
+            config.port
+        );
+    } else {
+        warn!(
+            "API server listening on {}:{} — accessible from the network",
+            config.listen_address, config.port
+        );
+    }
+    if config.api_auth {
+        info!("API auth enabled — run `screenpipe auth token` to view your key");
+    }
+
     let mut server = SCServer::new(
         db_server,
-        SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), config.port),
+        SocketAddr::new(IpAddr::V4(config.listen_address), config.port),
         local_data_dir_clone_2,
         config.disable_vision,
         config.disable_audio,
@@ -865,6 +899,64 @@ async fn main() -> anyhow::Result<()> {
     server.manual_meeting = Some(manual_meeting.clone());
     server.api_auth = config.api_auth;
     server.api_auth_key = config.api_auth_key.clone();
+
+    // Initialize secret store for unified credential management
+    {
+        // Read-only keychain access: pick up existing key without triggering modals.
+        // Use --encrypt-secrets to create a key if one doesn't exist.
+        let secret_key = if config.encrypt_secrets {
+            match screenpipe_secrets::keychain::get_or_create_key() {
+                Some(k) => {
+                    info!("keychain: encryption key ready (--encrypt-secrets)");
+                    Some(k)
+                }
+                None => {
+                    warn!("keychain: failed to create encryption key — secrets will be stored unencrypted");
+                    None
+                }
+            }
+        } else {
+            match screenpipe_secrets::keychain::get_key() {
+                screenpipe_secrets::keychain::KeyResult::Found(k) => {
+                    info!("keychain: using existing encryption key");
+                    Some(k)
+                }
+                _ => None,
+            }
+        };
+        let secret_store_result = screenpipe_secrets::SecretStore::new(db.pool.clone(), secret_key).await;
+        match secret_store_result {
+            Ok(store) => {
+                // Run startup permission sweep
+                let fixed = screenpipe_secrets::fix_secret_file_permissions(&local_data_dir);
+                if fixed > 0 {
+                    info!("fixed permissions on {} credential files", fixed);
+                }
+
+                // Run legacy migration
+                match screenpipe_secrets::migrate_legacy_secrets(&store, &local_data_dir).await {
+                    Ok(report) => {
+                        if !report.migrated.is_empty() {
+                            info!(
+                                "migrated {} legacy secrets: {:?}",
+                                report.migrated.len(),
+                                report.migrated
+                            );
+                        }
+                        if !report.errors.is_empty() {
+                            warn!("secret migration errors: {:?}", report.errors);
+                        }
+                    }
+                    Err(e) => warn!("legacy secret migration failed: {}", e),
+                }
+
+                server.secret_store = Some(Arc::new(store));
+            }
+            Err(e) => {
+                warn!("failed to initialize secret store: {}", e);
+            }
+        }
+    }
 
     // Attach sync handle if sync is enabled
     let server = if let Some(ref handle) = sync_service_handle {
@@ -917,6 +1009,10 @@ async fn main() -> anyhow::Result<()> {
             analytics::capture_event_nonblocking("pipe_scheduled_run", props);
         },
     ));
+    // Inject local API key so pipe subprocesses can authenticate to localhost
+    if config.api_auth {
+        pipe_manager.set_local_api_key(config.api_auth_key.clone());
+    }
     pipe_manager.install_builtin_pipes().ok();
     if let Err(e) = pipe_manager.load_pipes().await {
         tracing::warn!("failed to load pipes: {}", e);
@@ -1024,6 +1120,29 @@ async fn main() -> anyhow::Result<()> {
             "set (masked)"
         } else {
             "not set"
+        }
+    );
+    println!(
+        "│ api auth               │ {:<34} │",
+        if record_args.api_auth { "enabled" } else { "disabled" }
+    );
+    println!(
+        "│ encrypt secrets        │ {:<34} │",
+        if record_args.encrypt_secrets {
+            "enabled (--encrypt-secrets)"
+        } else {
+            match screenpipe_secrets::keychain::get_key() {
+                screenpipe_secrets::keychain::KeyResult::Found(_) => "enabled (existing key)",
+                _ => "disabled",
+            }
+        }
+    );
+    println!(
+        "│ retention days         │ {:<34} │",
+        if record_args.retention_days == 0 {
+            "forever".to_string()
+        } else {
+            format!("{}", record_args.retention_days)
         }
     );
 
@@ -1225,12 +1344,18 @@ async fn main() -> anyhow::Result<()> {
     let server_future = server.start();
     pin_mut!(server_future);
 
-    // Auto-enable local data retention (14 days) for CLI users.
+    // Auto-enable local data retention for CLI users.
     // The Tauri app does this via auto_start_retention(); for CLI we hit the
     // same HTTP endpoint after a short delay to let the server bind.
     {
         let port = config.port;
+        let retention_days = record_args.retention_days;
+        let retention_enabled = retention_days > 0;
         tokio::spawn(async move {
+            if !retention_enabled {
+                tracing::info!("local retention disabled (--retention-days 0)");
+                return;
+            }
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             let client = reqwest::Client::new();
             let url = format!("http://localhost:{}/retention/configure", port);
@@ -1238,13 +1363,13 @@ async fn main() -> anyhow::Result<()> {
                 .post(&url)
                 .json(&serde_json::json!({
                     "enabled": true,
-                    "retention_days": 14,
+                    "retention_days": retention_days,
                 }))
                 .send()
                 .await
             {
                 Ok(r) if r.status().is_success() => {
-                    tracing::info!("local retention auto-enabled (14 days)");
+                    tracing::info!("local retention auto-enabled ({} days)", retention_days);
                 }
                 Ok(r) => {
                     tracing::debug!("retention configure returned {}", r.status());

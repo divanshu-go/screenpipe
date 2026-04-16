@@ -22,10 +22,10 @@
   <a href="https://discord.gg/screenpipe">
     <img src="https://img.shields.io/discord/823813159592001537?style=for-the-badge&logo=discord&logoColor=white" alt="discord">
   </a>
-  <a href="https://twitter.com/screen_pipe">
-    <img src="https://img.shields.io/twitter/follow/screen_pipe?style=for-the-badge&logo=x&logoColor=white&label=follow" alt="twitter">
+  <a href="https://twitter.com/screenpipe">
+    <img src="https://img.shields.io/twitter/follow/screenpipe?style=for-the-badge&logo=x&logoColor=white&label=follow" alt="twitter">
   </a>
-  <a href="https://www.youtube.com/@screen_pipe">
+  <a href="https://www.youtube.com/@screenpipe">
     <img src="https://img.shields.io/youtube/channel/subscribers/UCwjkpAsb70_mENKvy7hT5bw?style=for-the-badge&logo=youtube&logoColor=white&label=subscribers" alt="youtube">
   </a>
 </p>
@@ -93,8 +93,8 @@ then ask claude `what did i see in the last 5 mins?` or `summarize today convers
 <p align="center">
     <a href="https://docs.screenpi.pe">docs</a> ·
     <a href="https://discord.gg/screenpipe">discord</a> ·
-    <a href="https://twitter.com/screen_pipe">x</a> ·
-    <a href="https://www.youtube.com/@screen_pipe">youtube</a> ·
+    <a href="https://twitter.com/screenpipe">x</a> ·
+    <a href="https://www.youtube.com/@screenpipe">youtube</a> ·
     <a href="https://www.reddit.com/r/screen_pipe">reddit</a>
 </p>
 
@@ -303,7 +303,7 @@ Each pipe supports YAML frontmatter fields (allow-apps, deny-apps, deny-windows,
 Built by screenpipe (Mediar, Inc.). Founded 2024. Based in San Francisco, CA.
 
 - Founder: Louis Beaumont (@louis030195)
-- Twitter: @screen_pipe
+- Twitter: @screenpipe
 - Email: louis@screenpi.pe
 
 </details>

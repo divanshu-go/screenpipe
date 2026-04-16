@@ -12,6 +12,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { useOnboarding } from "@/lib/hooks/use-onboarding";
 import { checkFirstRunNotification } from "@/lib/notifications";
 import { ChangelogDialog } from "@/components/changelog-dialog";
+import { localFetch } from "@/lib/api";
 
 import { useHealthCheck } from "@/lib/hooks/use-health-check";
 
@@ -181,7 +182,7 @@ export default function OverlayPage() {
     const autoInitSync = async () => {
       try {
         // Check if sync is already running
-        const resp = await fetch("http://localhost:3030/sync/status");
+        const resp = await localFetch("/sync/status");
         if (resp.ok) {
           const data = await resp.json();
           if (data.enabled) return; // Already running

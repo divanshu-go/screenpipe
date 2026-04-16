@@ -622,11 +622,11 @@ jobs:
           # On GH-hosted runners this will timeout and that's fine — they have
           # Apple Root CA in SystemRootCertificates.keychain already.
           echo "=== Setting trust policies ==="
-          timeout 10 security add-trusted-cert -r trustRoot -p codeSign -k "$BUILD_KC" \
+          perl -e 'alarm 10; exec @ARGV' security add-trusted-cert -r trustRoot -p codeSign -k "$BUILD_KC" \
             ~/apple-certs/AppleRootCA.cer 2>&1 || echo "  (trust AppleRootCA: skipped or already set)"
-          timeout 10 security add-trusted-cert -r unspecified -p codeSign -k "$BUILD_KC" \
+          perl -e 'alarm 10; exec @ARGV' security add-trusted-cert -r unspecified -p codeSign -k "$BUILD_KC" \
             ~/apple-certs/DeveloperIDCA.cer 2>&1 || echo "  (trust DeveloperIDCA: skipped or already set)"
-          timeout 10 security add-trusted-cert -r unspecified -p codeSign -k "$BUILD_KC" \
+          perl -e 'alarm 10; exec @ARGV' security add-trusted-cert -r unspecified -p codeSign -k "$BUILD_KC" \
             ~/apple-certs/DeveloperIDG2CA.cer 2>&1 || echo "  (trust DeveloperIDG2CA: skipped or already set)"
 
           # Ensure login keychain + System Roots are in the search list

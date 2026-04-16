@@ -45,13 +45,13 @@ impl InputDeviceKind {
         // Tier 2 — major brand Bluetooth headsets (95 % accuracy)
         let tier2 = [
             "bluetooth",
-            "wh-1000x",    // Sony WH-1000XM series
-            "wf-1000x",    // Sony WF in-ear
+            "wh-1000x", // Sony WH-1000XM series
+            "wf-1000x", // Sony WF in-ear
             "wl-1000x",
             "quietcomfort", // Bose QC
             "bose 700",
             "bose nc",
-            "freebuds",    // Huawei
+            "freebuds", // Huawei
             "galaxy buds",
             "surface headphones",
             "beats studio",
@@ -62,7 +62,7 @@ impl InputDeviceKind {
             "plantronics",
             "poly",
             "sennheiser",
-            "momentum",    // Sennheiser Momentum BT
+            "momentum", // Sennheiser Momentum BT
             "jbl tune",
             "jbl live",
             "anker",
@@ -75,7 +75,15 @@ impl InputDeviceKind {
         }
 
         // Tier 3 — generic Bluetooth markers (85 % accuracy)
-        let tier3 = [" bt ", " bt\t", "(bt)", "bt-", "-bt-", "wireless mic", "wireless headset"];
+        let tier3 = [
+            " bt ",
+            " bt\t",
+            "(bt)",
+            "bt-",
+            "-bt-",
+            "wireless mic",
+            "wireless headset",
+        ];
         if tier3.iter().any(|p| lower.contains(p)) {
             return InputDeviceKind::Bluetooth;
         }
@@ -87,7 +95,15 @@ impl InputDeviceKind {
         }
 
         // Built-in / internal: definitely wired
-        let wired = ["built-in", "internal", "macbook", "imac", "hdmi", "displayport", "usb"];
+        let wired = [
+            "built-in",
+            "internal",
+            "macbook",
+            "imac",
+            "hdmi",
+            "displayport",
+            "usb",
+        ];
         if wired.iter().any(|p| lower.contains(p)) {
             return InputDeviceKind::Wired;
         }
@@ -108,18 +124,9 @@ impl InputDeviceKind {
     /// - Wired USB/built-in: < 20 ms latency, negligible jitter
     pub fn buffer_timeout(&self) -> (Duration, Duration) {
         match self {
-            InputDeviceKind::Wired => (
-                Duration::from_millis(20),
-                Duration::from_millis(50),
-            ),
-            InputDeviceKind::Bluetooth => (
-                Duration::from_millis(80),
-                Duration::from_millis(200),
-            ),
-            InputDeviceKind::Unknown => (
-                Duration::from_millis(80),
-                Duration::from_millis(180),
-            ),
+            InputDeviceKind::Wired => (Duration::from_millis(20), Duration::from_millis(50)),
+            InputDeviceKind::Bluetooth => (Duration::from_millis(80), Duration::from_millis(200)),
+            InputDeviceKind::Unknown => (Duration::from_millis(80), Duration::from_millis(180)),
         }
     }
 
@@ -142,33 +149,66 @@ mod tests {
 
     #[test]
     fn detects_airpods() {
-        assert_eq!(InputDeviceKind::detect("AirPods Pro"), InputDeviceKind::Bluetooth);
-        assert_eq!(InputDeviceKind::detect("Ansh's AirPods Max"), InputDeviceKind::Bluetooth);
-        assert_eq!(InputDeviceKind::detect("AirPods (3rd generation)"), InputDeviceKind::Bluetooth);
+        assert_eq!(
+            InputDeviceKind::detect("AirPods Pro"),
+            InputDeviceKind::Bluetooth
+        );
+        assert_eq!(
+            InputDeviceKind::detect("Ansh's AirPods Max"),
+            InputDeviceKind::Bluetooth
+        );
+        assert_eq!(
+            InputDeviceKind::detect("AirPods (3rd generation)"),
+            InputDeviceKind::Bluetooth
+        );
     }
 
     #[test]
     fn detects_sony_wh() {
-        assert_eq!(InputDeviceKind::detect("WH-1000XM5"), InputDeviceKind::Bluetooth);
-        assert_eq!(InputDeviceKind::detect("Sony WH-1000XM4"), InputDeviceKind::Bluetooth);
+        assert_eq!(
+            InputDeviceKind::detect("WH-1000XM5"),
+            InputDeviceKind::Bluetooth
+        );
+        assert_eq!(
+            InputDeviceKind::detect("Sony WH-1000XM4"),
+            InputDeviceKind::Bluetooth
+        );
     }
 
     #[test]
     fn detects_jabra() {
-        assert_eq!(InputDeviceKind::detect("Jabra Evolve2 65"), InputDeviceKind::Bluetooth);
+        assert_eq!(
+            InputDeviceKind::detect("Jabra Evolve2 65"),
+            InputDeviceKind::Bluetooth
+        );
     }
 
     #[test]
     fn detects_virtual_as_wired() {
-        assert_eq!(InputDeviceKind::detect("BlackHole 2ch"), InputDeviceKind::Wired);
-        assert_eq!(InputDeviceKind::detect("VB-Audio Virtual Cable"), InputDeviceKind::Wired);
-        assert_eq!(InputDeviceKind::detect("Loopback Audio"), InputDeviceKind::Wired);
+        assert_eq!(
+            InputDeviceKind::detect("BlackHole 2ch"),
+            InputDeviceKind::Wired
+        );
+        assert_eq!(
+            InputDeviceKind::detect("VB-Audio Virtual Cable"),
+            InputDeviceKind::Wired
+        );
+        assert_eq!(
+            InputDeviceKind::detect("Loopback Audio"),
+            InputDeviceKind::Wired
+        );
     }
 
     #[test]
     fn detects_builtin_as_wired() {
-        assert_eq!(InputDeviceKind::detect("MacBook Pro Microphone"), InputDeviceKind::Wired);
-        assert_eq!(InputDeviceKind::detect("Built-in Microphone"), InputDeviceKind::Wired);
+        assert_eq!(
+            InputDeviceKind::detect("MacBook Pro Microphone"),
+            InputDeviceKind::Wired
+        );
+        assert_eq!(
+            InputDeviceKind::detect("Built-in Microphone"),
+            InputDeviceKind::Wired
+        );
     }
 
     #[test]

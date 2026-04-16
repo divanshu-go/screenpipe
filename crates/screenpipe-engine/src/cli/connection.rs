@@ -6,16 +6,40 @@ use super::ConnectionCommand;
 use screenpipe_connect::connections::ConnectionManager;
 use screenpipe_connect::oauth;
 use serde_json::{json, Map, Value};
+use std::sync::Arc;
 
 /// Handle connection subcommands (standalone — does NOT require a running server).
 pub async fn handle_connection_command(command: &ConnectionCommand) -> anyhow::Result<()> {
     let screenpipe_dir = screenpipe_core::paths::default_screenpipe_data_dir();
 
-    let cm = ConnectionManager::new(screenpipe_dir.clone());
+    // Open SecretStore in CLI mode (no encryption key — reads plaintext entries
+    // from the DB, encrypted entries written by the desktop app won't be readable
+    // but the file fallback still works for those).
+    let db_path = screenpipe_dir.join("db.sqlite");
+    let secret_store = if db_path.exists() {
+        let db_url = format!("sqlite:{}", db_path.display());
+        match sqlx::SqlitePool::connect(&db_url).await {
+            Ok(pool) => match screenpipe_secrets::SecretStore::new(pool, None).await {
+                Ok(store) => Some(Arc::new(store)),
+                Err(e) => {
+                    tracing::debug!("failed to open SecretStore: {e:#}");
+                    None
+                }
+            },
+            Err(e) => {
+                tracing::debug!("failed to connect to db for SecretStore: {e:#}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let cm = ConnectionManager::new(screenpipe_dir.clone(), secret_store);
 
     match command {
         ConnectionCommand::List { json: use_json } => {
-            let list = cm.list();
+            let list = cm.list().await;
 
             // Add WhatsApp — check session on disk AND whether gateway is actually reachable
             let has_session = screenpipe_dir
@@ -122,8 +146,8 @@ pub async fn handle_connection_command(command: &ConnectionCommand) -> anyhow::R
             }
 
             // Check credential store first, then fall back to OAuth token
-            let has_creds = cm.get_credentials(id)?;
-            let has_oauth = oauth::read_oauth_token(id);
+            let has_creds = cm.get_credentials(id).await?;
+            let has_oauth = oauth::read_oauth_token(id).await;
 
             if let Some(creds) = has_creds {
                 if *use_json {
@@ -166,15 +190,15 @@ pub async fn handle_connection_command(command: &ConnectionCommand) -> anyhow::R
                     .ok_or_else(|| anyhow::anyhow!("invalid format '{}' — use key=value", pair))?;
                 creds.insert(key.to_string(), Value::String(value.to_string()));
             }
-            cm.connect(id, creds)?;
+            cm.connect(id, creds).await?;
             println!("saved credentials for {}", id);
         }
 
         ConnectionCommand::Test { id } => {
             // For OAuth integrations, test with empty creds — the test()
             // implementation reads the token from the OAuth file itself.
-            let creds = cm.get_credentials(id)?.unwrap_or_default();
-            let has_oauth = oauth::read_oauth_token(id).is_some();
+            let creds = cm.get_credentials(id).await?.unwrap_or_default();
+            let has_oauth = oauth::read_oauth_token(id).await.is_some();
 
             if creds.is_empty() && !has_oauth {
                 eprintln!("{} has no saved credentials", id);
@@ -192,7 +216,7 @@ pub async fn handle_connection_command(command: &ConnectionCommand) -> anyhow::R
         }
 
         ConnectionCommand::Remove { id } => {
-            cm.disconnect(id)?;
+            cm.disconnect(id).await?;
             println!("disconnected {}", id);
         }
     }

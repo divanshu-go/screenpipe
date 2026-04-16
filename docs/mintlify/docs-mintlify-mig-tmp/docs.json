@@ -94,7 +94,7 @@
   "footer": {
     "socials": {
       "github": "https://github.com/screenpipe/screenpipe",
-      "x": "https://x.com/screen_pipe",
+      "x": "https://x.com/screenpipe",
       "discord": "https://discord.gg/screenpipe"
     }
   },
@@ -104,7 +104,7 @@
   "metadata": {
     "og:site_name": "screenpipe docs",
     "og:image": "https://screenpi.pe/og-image.png",
-    "twitter:site": "@screen_pipe"
+    "twitter:site": "@screenpipe"
   },
   "integrations": {
     "posthog": {

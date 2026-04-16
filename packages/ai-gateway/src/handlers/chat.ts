@@ -8,10 +8,10 @@ import { logModelOutcome } from '../services/model-health';
 
 // Auto model waterfall — ordered by quality/cost ratio (all free or near-free)
 const AUTO_WATERFALL = [
-  'glm-5',
+  'glm-5.1',
+  'minimax-m2.7',
   'kimi-k2.5',
-  'glm-4.7',
-  'qwen/qwen3.5-flash-02-23',
+  'deepseek-v3.2',
   'gemini-3-flash',
 ];
 

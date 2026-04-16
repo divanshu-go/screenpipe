@@ -96,7 +96,7 @@ import * as Sentry from "@sentry/react";
 import { defaultOptions } from "tauri-plugin-sentry-api";
 import { useLoginDialog } from "../login-dialog";
 import { BatterySaverSection } from "./battery-saver-section";
-import { ScheduleSettings } from "./schedule-settings";
+// ScheduleSettings moved to privacy-section
 import { ValidatedInput } from "../ui/validated-input";
 import {
   validateField,
@@ -290,7 +290,7 @@ function TranscriptionDictionary({
           <Languages className="h-4 w-4 text-muted-foreground shrink-0" />
           <div className="flex-1 min-w-0">
             <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-              custom vocabulary
+              Custom Vocabulary
               <HelpTooltip text="Add custom words (names, brands, jargon) to improve transcription accuracy. You can also add replacements to auto-correct common mistranscriptions." />
               {vocabularyWords.length > 0 && (
                 <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
@@ -822,14 +822,14 @@ export function RecordingSettings() {
         }
       }
 
-      await commands.stopScreenpipe();
+      await commands.stopCapture();
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      await commands.startCapture();
       await new Promise((resolve) => setTimeout(resolve, 1000));
-      await commands.spawnScreenpipe(null);
-      await new Promise((resolve) => setTimeout(resolve, 2000));
 
       toast({
         title: "Settings updated successfully",
-        description: "Screenpipe has been restarted with new settings",
+        description: "Recording restarted with new settings",
       });
     } catch (error) {
       console.error("Failed to update settings:", error);
@@ -1113,15 +1113,6 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
         </CardContent>
       </Card>
 
-      {/* Recording Schedule */}
-      <ScheduleSettings
-        enabled={settings.scheduleEnabled ?? false}
-        rules={(settings.scheduleRules as any[]) ?? []}
-        onChange={(enabled, rules) => {
-          handleSettingsChange({ scheduleEnabled: enabled, scheduleRules: rules } as any);
-        }}
-      />
-
       {/* Audio */}
       <LockedSetting settingKey="audio_recording">
       <div className="space-y-2 pt-2">
@@ -1134,7 +1125,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
               <div className="flex items-center space-x-2.5">
                 <Mic className="h-4 w-4 text-muted-foreground shrink-0" />
                 <div>
-                  <h3 className="text-sm font-medium text-foreground">Audio recording</h3>
+                  <h3 className="text-sm font-medium text-foreground">Audio Recording</h3>
                   <p className="text-xs text-muted-foreground">Capture audio from microphone and system</p>
                 </div>
               </div>
@@ -1510,7 +1501,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   <Zap className="h-4 w-4 text-muted-foreground shrink-0" />
                   <div>
                     <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                      Batch transcription
+                      Batch Transcription
                       <HelpTooltip text="Accumulates longer audio chunks (30s-5min) using silence-gap detection before sending to Whisper. Gives the model more context for better transcription quality and speaker diarization." />
                     </h3>
                     <p className="text-xs text-muted-foreground">Longer audio chunks for better transcription quality</p>
@@ -1567,7 +1558,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   <Music className="h-4 w-4 text-muted-foreground shrink-0" />
                   <div>
                     <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                      Filter music
+                      Filter Music
                       <HelpTooltip text="Detect and filter out music-dominant audio (e.g. Spotify, YouTube) before transcription using spectral analysis. Reduces garbage transcriptions from background music." />
                     </h3>
                     <p className="text-xs text-muted-foreground">Remove background music from transcriptions</p>
@@ -1593,8 +1584,8 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
               <div className="flex items-center space-x-2.5">
                 <Monitor className="h-4 w-4 text-muted-foreground shrink-0" />
                 <div>
-                  <h3 className="text-sm font-medium text-foreground">Follow system default</h3>
-                  <p className="text-xs text-muted-foreground">Auto-switch when you change default device</p>
+                  <h3 className="text-sm font-medium text-foreground">Auto-select audio devices</h3>
+                  <p className="text-xs text-muted-foreground">Records all default devices. Turn off to exclude bluetooth headphones or pick specific devices.</p>
                 </div>
               </div>
               <Switch

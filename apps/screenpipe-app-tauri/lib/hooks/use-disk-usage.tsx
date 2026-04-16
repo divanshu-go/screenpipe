@@ -20,6 +20,8 @@ export interface DiskUsedByMedia {
 export interface DiskUsedByOther {
   database_size: string;
   logs_size: string;
+  pipes_size: string;
+  other_size: string;
 }
 
 export interface DiskUsage {

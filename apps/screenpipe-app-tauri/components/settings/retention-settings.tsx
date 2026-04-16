@@ -26,6 +26,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { localFetch } from "@/lib/api";
 
 interface RetentionStatus {
   enabled: boolean;
@@ -69,7 +70,7 @@ export function RetentionSettings() {
 
   const fetchStatus = useCallback(async () => {
     try {
-      const res = await fetch("http://localhost:3030/retention/status");
+      const res = await localFetch("/retention/status");
       if (res.ok) {
         setStatus(await res.json());
       }
@@ -92,7 +93,7 @@ export function RetentionSettings() {
 
     setToggling(true);
     try {
-      const res = await fetch("http://localhost:3030/retention/configure", {
+      const res = await localFetch("/retention/configure", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled: false }),
@@ -121,7 +122,7 @@ export function RetentionSettings() {
     setShowConfirm(false);
     setToggling(true);
     try {
-      const res = await fetch("http://localhost:3030/retention/configure", {
+      const res = await localFetch("/retention/configure", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled: true, retention_days: retentionDays }),
@@ -152,7 +153,7 @@ export function RetentionSettings() {
 
     if (enabled) {
       try {
-        await fetch("http://localhost:3030/retention/configure", {
+        await localFetch("/retention/configure", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ retention_days: days }),
@@ -166,7 +167,7 @@ export function RetentionSettings() {
   const handleRunNow = async () => {
     setRunning(true);
     try {
-      const res = await fetch("http://localhost:3030/retention/run", {
+      const res = await localFetch("/retention/run", {
         method: "POST",
       });
       if (!res.ok) {

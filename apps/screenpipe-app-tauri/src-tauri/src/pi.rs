@@ -8,6 +8,7 @@
 
 use screenpipe_core::agents::pi::screenpipe_cloud_models;
 use serde::{Deserialize, Serialize};
+use tauri::Manager;
 use serde_json::{json, Value};
 use specta::Type;
 use std::collections::HashMap;
@@ -702,7 +703,7 @@ fn build_models_json(
         "api": "openai-completions",
         "apiKey": api_key_value,
         "authHeader": true,
-        "models": screenpipe_cloud_models()
+        "models": screenpipe_cloud_models(SCREENPIPE_API_URL, user_token)
     });
     providers_map.insert("screenpipe".to_string(), screenpipe_provider);
 
@@ -1212,19 +1213,11 @@ pub async fn pi_start_inner(
         }
     }
 
-    // For local/small models, inject minimal screenpipe API context directly into the system prompt
-    // so they don't need to discover and read the skill file (which they often skip)
+    // For local/small models (Ollama, custom), explicitly tell them to read the
+    // screenpipe-api skill file — they often skip reading skills on their own.
     let is_local_model = matches!(pi_provider.as_str(), "ollama" | "custom");
     if is_local_model {
-        let api_hint = concat!(
-            "You are a screen activity assistant. The user has screenpipe running locally.\n",
-            "Search their data with: curl \"http://localhost:3030/search?q=QUERY&content_type=all&limit=10&start_time=ISO8601\"\n",
-            "Parameters: q (keywords), content_type (all|ocr|audio), limit (1-20), start_time (ISO 8601, REQUIRED), end_time, app_name, window_name\n",
-            "ALWAYS include start_time. Use date -u for UTC. Example:\n",
-            "curl \"http://localhost:3030/search?content_type=all&limit=5&start_time=$(date -u -v-5M +%Y-%m-%dT%H:%M:%SZ)\"\n",
-            "For Linux use: date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%SZ\n",
-            "Response is JSON with data[] array containing type (OCR/Audio/UI) and content with text/transcription, timestamp, app_name."
-        );
+        let api_hint = "IMPORTANT: You MUST read the screenpipe-api skill file BEFORE making any API calls. It contains authentication instructions, endpoint docs, and examples. Without reading it first, your API calls will fail with 403 unauthorized.";
         cmd.args(["--append-system-prompt", api_hint]);
     }
 
@@ -1259,9 +1252,23 @@ pub async fn pi_start_inner(
         cmd.env("SCREENPIPE_API_KEY", token);
     }
 
+    // Pass local API auth key so the Pi agent can authenticate to localhost:3030
+    {
+        use crate::recording::RecordingState;
+        if let Some(state) = app.try_state::<RecordingState>() {
+            if let Ok(guard) = state.server.try_lock() {
+                if let Some(ref core) = *guard {
+                    if let Some(ref key) = core.local_api_key {
+                        cmd.env("SCREENPIPE_LOCAL_API_KEY", key);
+                    }
+                }
+            }
+        }
+    }
+
     // Pass the user's API key as env var for non-screenpipe providers
     if let Some(ref config) = provider_config {
-        // ChatGPT OAuth: inject token from stored OAuth file (no api_key in config)
+        // ChatGPT OAuth: inject token from secret store (no api_key in config)
         if config.provider == "openai-chatgpt" {
             match crate::chatgpt_oauth::get_valid_token().await {
                 Ok(token) => {

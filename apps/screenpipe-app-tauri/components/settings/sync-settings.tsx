@@ -34,6 +34,7 @@ import {
   EyeOff,
   Key,
 } from "lucide-react";
+import { localFetch } from "@/lib/api";
 import { toast } from "@/components/ui/use-toast";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -758,7 +759,7 @@ export function SyncSettings() {
 
     // 1. Check if the server-side sync service is already running (same session, navigated away and back)
     try {
-      const serverStatus = await fetch("http://localhost:3030/sync/status");
+      const serverStatus = await localFetch("/sync/status");
       if (serverStatus.ok) {
         const serverData = await serverStatus.json();
         console.log("[sync] step 1 - server status:", serverData);
@@ -853,7 +854,7 @@ export function SyncSettings() {
   };
 
   const fetchDeviceCounts = () => {
-    fetch("http://localhost:3030/data/device-storage")
+    localFetch("/data/device-storage")
       .then((r) => r.ok ? r.json() : [])
       .then((data: { machine_id: string; frames: number; audio_chunks: number }[]) => {
         const map: Record<string, { frames: number; audioChunks: number }> = {};
@@ -952,8 +953,7 @@ export function SyncSettings() {
         const subscriptionStatus = data.subscription?.status;
         const hasSubscription = data.hasSubscription ||
           subscriptionStatus === "trialing" ||
-          subscriptionStatus === "active" ||
-          !!settings.user?.cloud_subscribed;
+          subscriptionStatus === "active";
         setSubscription({
           hasSubscription,
           tier: data.subscription?.tier || null,
@@ -973,6 +973,21 @@ export function SyncSettings() {
           }
           return await initSyncBackend();
         } else {
+          // Subscription expired/cancelled — clear cloud flag and revert engine
+          // only if it's still set to cloud (don't touch disabled or other engines)
+          if (settings.user?.cloud_subscribed) {
+            const revertUpdate: Record<string, any> = {
+              user: { ...settings.user, cloud_subscribed: false },
+            };
+            if (settings.audioTranscriptionEngine === "screenpipe-cloud") {
+              const { platform: getPlatform } = await import("@tauri-apps/plugin-os");
+              const os = getPlatform();
+              revertUpdate.audioTranscriptionEngine = os === "macos"
+                ? "whisper-large-v3-turbo-quantized"
+                : "parakeet";
+            }
+            await updateSettings(revertUpdate);
+          }
           setStep("onboarding");
           return false;
         }

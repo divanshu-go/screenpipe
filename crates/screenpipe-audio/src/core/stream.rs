@@ -239,7 +239,7 @@ impl AudioStream {
         };
         (stream, tx_arc)
     }
-}  // end impl AudioStream
+} // end impl AudioStream
 
 #[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
 fn create_error_callback(

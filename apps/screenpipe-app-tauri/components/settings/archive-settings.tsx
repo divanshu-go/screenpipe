@@ -21,6 +21,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Lock, CloudUpload, AlertTriangle, Loader2, Play } from "lucide-react";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { commands } from "@/lib/utils/tauri";
+import { localFetch } from "@/lib/api";
 
 interface ArchiveStatus {
   enabled: boolean;
@@ -80,7 +81,7 @@ export function ArchiveSettings() {
 
   const fetchStatus = useCallback(async () => {
     try {
-      const res = await fetch("http://localhost:3030/archive/status");
+      const res = await localFetch("/archive/status");
       if (res.ok) {
         setStatus(await res.json());
       }
@@ -118,7 +119,7 @@ export function ArchiveSettings() {
       if (enabled) {
         // Initialize archive — encryption keys are derived locally from the
         // token, completely independent of cloud sync.
-        const res = await fetch("http://localhost:3030/archive/init", {
+        const res = await localFetch("/archive/init", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -139,7 +140,7 @@ export function ArchiveSettings() {
         // Disable archive — always update local settings even if server
         // is unreachable (the intent is to turn it off).
         try {
-          await fetch("http://localhost:3030/archive/configure", {
+          await localFetch("/archive/configure", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ enabled: false }),
@@ -172,7 +173,7 @@ export function ArchiveSettings() {
 
     if (archiveEnabled) {
       try {
-        await fetch("http://localhost:3030/archive/configure", {
+        await localFetch("/archive/configure", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ retention_days: days }),
@@ -401,7 +402,7 @@ export function ArchiveSettings() {
                     className="w-full"
                     onClick={async () => {
                       try {
-                        await fetch("http://localhost:3030/archive/run", {
+                        await localFetch("/archive/run", {
                           method: "POST",
                         });
                         toast({ title: "Archive run started" });

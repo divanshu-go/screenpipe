@@ -14,8 +14,8 @@
 //! This buffer:
 //! 1. Detects gaps by comparing elapsed wall-clock time vs. expected chunk duration.
 //! 2. Inserts digital silence (0.0 samples) proportional to the gap length.
-//! 3. Logs gaps at different levels depending on device type (debug for Bluetooth
-//!    where gaps are expected; warn for wired devices where they indicate a problem).
+//! 3. Logs gaps at `debug` (Bluetooth: expected jitter; wired: routine CPAL/Core Audio
+//!    jitter on built-in mics). `warn` only for unusually large gaps on wired hardware.
 //!
 //! # Design
 //!
@@ -38,9 +38,15 @@ use super::device_detection::InputDeviceKind;
 /// (the 30 s segment just has fewer real samples, which Whisper handles fine via VAD).
 const MAX_SILENCE_INSERT_MS: f64 = 500.0;
 
-/// Gap threshold multiplier: a gap must be > N × expected chunk duration to trigger insertion.
-/// Using 1.5× means we only fire on genuine packet drops, not on normal OS scheduler jitter.
-const GAP_THRESHOLD_MULTIPLIER: f64 = 1.5;
+/// Bluetooth / unknown: tight threshold — packet drops show up as large gaps vs chunk cadence.
+const GAP_THRESHOLD_MULTIPLIER_BLUETOOTH: f64 = 1.5;
+
+/// Wired (built-in, USB): CPAL on macOS often has 8–15 ms inter-chunk jitter vs a ~5 ms nominal
+/// chunk; 1.5× was far too tight and produced constant false positives and log spam.
+const GAP_THRESHOLD_MULTIPLIER_WIRED: f64 = 3.0;
+
+/// Wired-only: log at `warn` if wall-clock gap exceeds this (ms) — indicates driver/load issues.
+const WIRED_GAP_WARN_MIN_ELAPSED_MS: f64 = 80.0;
 
 /// Per-device buffer that detects Bluetooth packet gaps and inserts silence.
 pub struct SourceBuffer {
@@ -68,11 +74,7 @@ impl SourceBuffer {
     pub fn new(device_name: impl Into<String>, sample_rate: u32) -> Self {
         let name = device_name.into();
         let kind = InputDeviceKind::detect(&name);
-        debug!(
-            "SourceBuffer created for '{}' ({})",
-            name,
-            kind.label()
-        );
+        debug!("SourceBuffer created for '{}' ({})", name, kind.label());
         Self {
             device_name: name,
             device_kind: kind,
@@ -97,8 +99,7 @@ impl SourceBuffer {
         }
 
         let now = Instant::now();
-        let chunk_duration_ms =
-            (samples.len() as f64 / self.sample_rate as f64) * 1000.0;
+        let chunk_duration_ms = (samples.len() as f64 / self.sample_rate as f64) * 1000.0;
 
         // Update expected chunk duration using a simple exponential moving average.
         // This adapts if CPAL changes its callback chunk size mid-stream.
@@ -112,7 +113,12 @@ impl SourceBuffer {
             (self.last_chunk_time, self.expected_chunk_duration_ms)
         {
             let elapsed_ms = last_time.elapsed().as_secs_f64() * 1000.0;
-            let threshold_ms = expected_ms * GAP_THRESHOLD_MULTIPLIER;
+            let mult = if self.device_kind.is_bluetooth() {
+                GAP_THRESHOLD_MULTIPLIER_BLUETOOTH
+            } else {
+                GAP_THRESHOLD_MULTIPLIER_WIRED
+            };
+            let threshold_ms = expected_ms * mult;
 
             if elapsed_ms > threshold_ms {
                 // How many ms of audio are genuinely missing?
@@ -125,10 +131,19 @@ impl SourceBuffer {
                         "[{}] bluetooth gap: {:.1}ms elapsed (expected {:.1}ms) → inserting {:.1}ms silence ({} samples)",
                         self.device_name, elapsed_ms, expected_ms, gap_ms, silence_samples
                     );
-                } else {
+                } else if elapsed_ms >= WIRED_GAP_WARN_MIN_ELAPSED_MS {
                     warn!(
-                        "[{}] unexpected gap on wired device: {:.1}ms elapsed (expected {:.1}ms) → inserting silence",
-                        self.device_name, elapsed_ms, expected_ms
+                        "[{}] large gap on wired device: {:.1}ms elapsed (expected {:.1}ms) → inserting {:.1}ms silence ({} samples)",
+                        self.device_name,
+                        elapsed_ms,
+                        expected_ms,
+                        gap_ms,
+                        silence_samples
+                    );
+                } else {
+                    debug!(
+                        "[{}] wired gap: {:.1}ms elapsed (expected {:.1}ms) → inserting {:.1}ms silence ({} samples)",
+                        self.device_name, elapsed_ms, expected_ms, gap_ms, silence_samples
                     );
                 }
 
@@ -165,8 +180,7 @@ impl SourceBuffer {
         if self.chunks_received == 0 {
             return;
         }
-        let silence_ms =
-            (self.silence_inserted_samples as f64 / self.sample_rate as f64) * 1000.0;
+        let silence_ms = (self.silence_inserted_samples as f64 / self.sample_rate as f64) * 1000.0;
         debug!(
             "[{}] source-buffer stats: {} chunks, {} gaps, {:.0}ms silence inserted",
             self.device_name, self.chunks_received, self.gaps_detected, silence_ms
@@ -271,14 +285,16 @@ mod tests {
         buf.drain_all(); // consume, establish expected_chunk_duration
 
         // Simulate a 100ms wall-clock gap — Bluetooth packet drop
-        buf.last_chunk_time =
-            Some(Instant::now() - std::time::Duration::from_millis(100));
+        buf.last_chunk_time = Some(Instant::now() - std::time::Duration::from_millis(100));
 
         // Next real chunk arrives
         buf.push(real_chunk.clone());
         let out = buf.drain_all();
 
-        assert!(buf.gaps_detected > 0, "gap must be detected for this test to be valid");
+        assert!(
+            buf.gaps_detected > 0,
+            "gap must be detected for this test to be valid"
+        );
 
         let n_silence = buf.silence_inserted_samples as usize;
         assert!(n_silence > 0, "silence must have been inserted");
@@ -320,8 +336,7 @@ mod tests {
 
         // 150ms gap — at 16kHz, that's 2400 samples of missing audio
         let gap_ms = 150_u64;
-        buf.last_chunk_time =
-            Some(Instant::now() - std::time::Duration::from_millis(gap_ms));
+        buf.last_chunk_time = Some(Instant::now() - std::time::Duration::from_millis(gap_ms));
         buf.push(vec![0.1_f32; 320]);
         buf.drain_all();
 

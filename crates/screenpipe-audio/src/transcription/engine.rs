@@ -600,6 +600,9 @@ impl TranscriptionSession {
 
             #[cfg(feature = "parakeet-mlx")]
             Self::ParakeetMlx { model, .. } => {
+                // GPU serialization is handled by audiopipe's Model::GPU_LOCK.
+                // The per-model mutex here just prevents concurrent Rust access
+                // to the same Model instance.
                 let mut engine = model.lock().map_err(|e| anyhow!("stt model lock: {}", e))?;
                 // Clear GPU cache before transcription to reduce Metal command buffer
                 // errors from GPU memory pressure (prevents abort in MLX completion handler)

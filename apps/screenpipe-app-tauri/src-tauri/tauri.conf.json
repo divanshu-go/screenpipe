@@ -114,8 +114,7 @@
         "enable": true,
         "scope": [
           "$APPDATA/**",
-          "$HOME/.screenpipe/**",
-          "**"
+          "$HOME/.screenpipe/**"
         ]
       },
       "csp": null

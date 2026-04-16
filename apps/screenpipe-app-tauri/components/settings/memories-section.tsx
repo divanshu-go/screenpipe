@@ -31,6 +31,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { MemoizedReactMarkdown } from "@/components/markdown";
 import remarkGfm from "remark-gfm";
+import { localFetch } from "@/lib/api";
 
 interface MemoryRecord {
   id: number;
@@ -161,7 +162,7 @@ export function MemoriesSection() {
     try {
       await Promise.all(
         Array.from(selectedIds).map((id) =>
-          fetch(`http://localhost:3030/memories/${id}`, { method: "DELETE" })
+          localFetch(`/memories/${id}`, { method: "DELETE" })
         )
       );
       setMemories((prev) => prev.filter((m) => !selectedIds.has(m.id)));
@@ -195,7 +196,7 @@ export function MemoriesSection() {
 
   // fetch all tags once on mount
   useEffect(() => {
-    fetch("http://localhost:3030/memories/tags")
+    localFetch("/memories/tags")
       .then((r) => (r.ok ? r.json() : []))
       .then((tags: string[]) => {
         const filtered = tags.filter(
@@ -227,8 +228,8 @@ export function MemoriesSection() {
         });
         if (debouncedQuery) params.set("q", debouncedQuery);
         if (activeTag) params.set("tags", activeTag);
-        const res = await fetch(
-          `http://localhost:3030/memories?${params}`,
+        const res = await localFetch(
+          `/memories?${params}`,
           { signal: controller.signal },
         );
         clearTimeout(timeout);
@@ -291,7 +292,7 @@ export function MemoriesSection() {
     setDeletingId(id);
     setConfirmDeleteId(null);
     try {
-      const res = await fetch(`http://localhost:3030/memories/${id}`, {
+      const res = await localFetch(`/memories/${id}`, {
         method: "DELETE",
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -335,7 +336,7 @@ export function MemoriesSection() {
       const body: Record<string, unknown> = {};
       if (contentChanged) body.content = trimmed;
       if (tagsChanged) body.tags = editTags;
-      const res = await fetch(`http://localhost:3030/memories/${id}`, {
+      const res = await localFetch(`/memories/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -390,7 +391,7 @@ export function MemoriesSection() {
     if (!trimmed) return;
     setSavingNew(true);
     try {
-      const res = await fetch("http://localhost:3030/memories", {
+      const res = await localFetch("/memories", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

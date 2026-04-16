@@ -89,7 +89,7 @@ export function StorageSection() {
                 <Folder className="h-4 w-4 text-muted-foreground shrink-0" />
                 <div>
                   <h3 className="text-sm font-medium text-foreground">
-                    Data directory
+                    Data Directory
                   </h3>
                   <p className="text-xs text-muted-foreground truncate max-w-[250px]">
                     {!settings.dataDir || settings.dataDir === "default"

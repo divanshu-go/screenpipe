@@ -1,6 +1,6 @@
 [package]
 name = "screenpipe-app"
-version = "2.3.69"
+version = "2.3.98"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""
@@ -108,7 +108,7 @@ urlencoding = "2"
 hostname = "0.4"
 
 # Screenpipe core (for sync)
-screenpipe-core = { path = "../../../crates/screenpipe-core", features = ["cloud-sync"] }
+screenpipe-core = { path = "../../../crates/screenpipe-core", features = ["cloud-sync", "secrets"] }
 
 # Embedded screenpipe server
 screenpipe-config = { path = "../../../crates/screenpipe-config", features = ["specta"] }
@@ -119,7 +119,9 @@ screenpipe-audio = { path = "../../../crates/screenpipe-audio" }
 screenpipe-db = { path = "../../../crates/screenpipe-db" }
 screenpipe-vault = { path = "../../../crates/screenpipe-vault" }
 screenpipe-connect = { path = "../../../crates/screenpipe-connect" }
+screenpipe-secrets = { path = "../../../crates/screenpipe-secrets" }
 screenpipe-events = { path = "../../../crates/screenpipe-events" }
+sqlx = { version = "0.7", features = ["sqlite", "runtime-tokio-rustls"] }
 image = "0.25.5"
 icalendar = "0.17"
 

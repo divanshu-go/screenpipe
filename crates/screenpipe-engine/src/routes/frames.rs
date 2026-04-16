@@ -131,21 +131,45 @@ pub async fn get_frame_data(
 
                 if is_snapshot {
                     // Snapshot frame — serve JPEG directly (no ffmpeg needed)
-                    if query.redact_pii {
-                        return apply_pii_redaction(&state, frame_id, &file_path).await;
-                    }
-                    // Cache snapshot path too
-                    if let Some(cache) = &state.frame_image_cache {
-                        if let Ok(mut cache) = cache.try_lock() {
-                            cache.put(frame_id, (file_path.clone(), Instant::now()));
+                    match serve_file(&file_path).await {
+                        Ok(resp) => {
+                            if query.redact_pii {
+                                return apply_pii_redaction(&state, frame_id, &file_path).await;
+                            }
+                            // Cache snapshot path
+                            if let Some(cache) = &state.frame_image_cache {
+                                if let Ok(mut cache) = cache.try_lock() {
+                                    cache.put(frame_id, (file_path.clone(), Instant::now()));
+                                }
+                            }
+                            debug!(
+                                "Snapshot frame {} served in {:?}",
+                                frame_id,
+                                start_time.elapsed()
+                            );
+                            return Ok(resp);
+                        }
+                        Err(_) => {
+                            // Snapshot file missing (compacted/deleted) — try nearest frame
+                            debug!(
+                                "Snapshot file missing for frame {}, trying nearest frame",
+                                frame_id
+                            );
+                            if let Some(fallback) =
+                                try_nearest_frame(&state, frame_id, query.redact_pii).await
+                            {
+                                return Ok(fallback);
+                            }
+                            return Err((
+                                StatusCode::NOT_FOUND,
+                                JsonResponse(json!({
+                                    "error": "Snapshot file missing and no nearby frame available",
+                                    "error_type": "snapshot_missing",
+                                    "frame_id": frame_id
+                                })),
+                            ));
                         }
                     }
-                    debug!(
-                        "Snapshot frame {} served in {:?}",
-                        frame_id,
-                        start_time.elapsed()
-                    );
-                    return serve_file(&file_path).await;
                 }
 
                 // Legacy video-chunk frame — extract via ffmpeg

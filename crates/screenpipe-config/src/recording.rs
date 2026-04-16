@@ -145,6 +145,11 @@ pub struct RecordingSettings {
     #[serde(rename = "pauseOnDrmContent", default)]
     pub pause_on_drm_content: bool,
 
+    /// Continue recording audio when the screen is locked.
+    /// Default: false (audio pauses when screen is locked to save resources).
+    #[serde(rename = "recordWhileLocked", default)]
+    pub record_while_locked: bool,
+
     /// Automatically append text typed during a meeting to the meeting's note
     /// when the meeting ends. Groups typed text by app/window context.
     #[serde(rename = "appendTypedTextToMeetingNotes", default = "default_true")]
@@ -255,8 +260,12 @@ pub struct RecordingSettings {
     pub schedule_rules: Vec<ScheduleRule>,
 
     /// Require authentication for remote (non-localhost) API access.
-    #[serde(rename = "apiAuth", default)]
+    #[serde(rename = "apiAuth", default = "default_true")]
     pub api_auth: bool,
+
+    /// Custom API key for remote authentication. If empty, a key is auto-generated.
+    #[serde(rename = "apiKey", default)]
+    pub api_key: String,
 }
 
 impl RecordingSettings {
@@ -286,11 +295,10 @@ impl Default for RecordingSettings {
     fn default() -> Self {
         Self {
             disable_audio: false,
-            audio_transcription_engine: if cfg!(target_os = "macos") {
-                "whisper-large-v3-turbo-quantized".to_string()
-            } else {
-                "parakeet".to_string()
-            },
+            audio_transcription_engine: crate::best_engine_for_platform(
+                crate::detect_tier(),
+            )
+            .to_string(),
             transcription_mode: "batch".to_string(),
             audio_devices: vec![],
             use_system_default_audio: true,
@@ -310,6 +318,7 @@ impl Default for RecordingSettings {
             ignored_urls: vec![],
             ignore_incognito_windows: true,
             pause_on_drm_content: false,
+            record_while_locked: false,
             append_typed_text_to_meeting_notes: true,
             languages: vec![],
             use_pii_removal: false,
@@ -333,7 +342,8 @@ impl Default for RecordingSettings {
             device_tier: None,
             schedule_enabled: false,
             schedule_rules: vec![],
-            api_auth: false,
+            api_auth: true,
+            api_key: String::new(),
         }
     }
 }

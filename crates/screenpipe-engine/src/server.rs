@@ -10,7 +10,7 @@ use screenpipe_db::DatabaseManager;
 
 use screenpipe_audio::audio_manager::AudioManager;
 use screenpipe_core::sync::SyncServiceHandle;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::{
     analytics,
@@ -25,7 +25,10 @@ use crate::{
             add_tags, add_to_database, execute_raw_sql, get_tags_batch, merge_frames_handler,
             remove_tags, validate_media_handler,
         },
-        data::{delete_device_data_handler, delete_time_range_handler, device_storage_handler},
+        data::{
+            backup_handler, checkpoint_handler, delete_device_data_handler,
+            delete_time_range_handler, device_storage_handler,
+        },
         elements::{get_frame_elements, search_elements},
         frames::{
             get_frame_context, get_frame_data, get_frame_metadata, get_frame_text_data,
@@ -72,7 +75,10 @@ use std::{
 };
 use tokio::{net::TcpListener, sync::Mutex};
 use tower_http::{cors::Any, trace::TraceLayer};
-use tower_http::{cors::CorsLayer, trace::DefaultMakeSpan};
+use tower_http::{
+    cors::{AllowOrigin, CorsLayer},
+    trace::DefaultMakeSpan,
+};
 
 /// Bind a TcpListener with SO_REUSEADDR on Windows to avoid TIME_WAIT port conflicts.
 /// On non-Windows platforms, falls back to the standard tokio bind.
@@ -170,6 +176,8 @@ pub struct AppState {
     pub api_auth: bool,
     /// The API key to validate against (from SCREENPIPE_API_KEY or auth.json)
     pub api_auth_key: Option<String>,
+    /// Unified credential store for OAuth tokens, API keys, etc.
+    pub secret_store: Option<Arc<screenpipe_secrets::SecretStore>>,
 }
 
 pub struct SCServer {
@@ -198,6 +206,8 @@ pub struct SCServer {
     pub api_auth: bool,
     /// API key for remote auth validation
     pub api_auth_key: Option<String>,
+    /// Unified credential store for OAuth tokens, API keys, etc.
+    pub secret_store: Option<Arc<screenpipe_secrets::SecretStore>>,
 }
 
 impl SCServer {
@@ -232,6 +242,7 @@ impl SCServer {
             manual_meeting: None,
             api_auth: false,
             api_auth_key: None,
+            secret_store: None,
         }
     }
 
@@ -475,10 +486,21 @@ impl SCServer {
             browser_bridge: crate::routes::browser::BrowserBridge::new(),
             api_auth: self.api_auth,
             api_auth_key: self.api_auth_key.clone(),
+            secret_store: self.secret_store.clone(),
         });
 
+        // Restrict CORS to localhost origins (Tauri webview + local development).
+        // Remote origins are blocked to prevent malicious websites from making
+        // cross-origin requests to the local API.
         let cors = CorsLayer::new()
-            .allow_origin(Any)
+            .allow_origin(AllowOrigin::predicate(|origin, _| {
+                origin.as_bytes().starts_with(b"http://localhost")
+                    || origin.as_bytes().starts_with(b"https://localhost")
+                    || origin.as_bytes().starts_with(b"tauri://localhost")
+                    || origin.as_bytes().starts_with(b"http://tauri.localhost") // Windows Tauri origin
+                    || origin.as_bytes().starts_with(b"http://127.0.0.1")
+                    || origin.as_bytes().starts_with(b"https://127.0.0.1")
+            }))
             .allow_methods(Any)
             .allow_headers(Any)
             .expose_headers([
@@ -567,6 +589,9 @@ impl SCServer {
             .post("/data/delete-range", delete_time_range_handler)
             .post("/data/delete-device", delete_device_data_handler)
             .get("/data/device-storage", device_storage_handler)
+            // Database backup & checkpoint
+            .post("/data/checkpoint", checkpoint_handler)
+            .get("/data/backup", backup_handler)
             .route_yaml_spec("/openapi.yaml")
             .route_json_spec("/openapi.json")
             .freeze();
@@ -676,6 +701,12 @@ impl SCServer {
                     axum::routing::post(crate::routes::pipe_store::pipe_store_review),
                 )
                 .with_state(pm.clone());
+            // Inject SecretStore as an Extension so pipe handlers can access it
+            let pipe_routes = if let Some(ref ss) = self.secret_store {
+                pipe_routes.layer(axum::Extension(ss.clone()))
+            } else {
+                pipe_routes
+            };
             router.nest("/pipes", pipe_routes)
         } else {
             router
@@ -683,7 +714,10 @@ impl SCServer {
 
         // Connections routes (pipe-facing integrations: Telegram, Slack, etc.)
         let cm: crate::connections_api::SharedConnectionManager = Arc::new(Mutex::new(
-            screenpipe_connect::connections::ConnectionManager::new(self.screenpipe_dir.clone()),
+            screenpipe_connect::connections::ConnectionManager::new(
+                self.screenpipe_dir.clone(),
+                self.secret_store.clone(),
+            ),
         ));
         let wa: crate::connections_api::SharedWhatsAppGateway = Arc::new(Mutex::new(
             screenpipe_connect::whatsapp::WhatsAppGateway::new(self.screenpipe_dir.clone()),
@@ -702,7 +736,10 @@ impl SCServer {
             }
         }
 
-        let router = router.nest("/connections", crate::connections_api::router(cm, wa));
+        let router = router.nest(
+            "/connections",
+            crate::connections_api::router(cm, wa, self.secret_store.clone()),
+        );
 
         // Power management routes (if power manager is available)
         let router = if let Some(ref pm) = self.power_manager {
@@ -785,8 +822,18 @@ impl SCServer {
                 crate::routes::timezone::timestamp_middleware,
             ))
             .layer({
-                // Remote API auth middleware — when api_auth is enabled,
+                // API auth middleware — when api_auth is enabled,
                 // non-localhost requests must include a valid bearer token.
+                //
+                // Localhost is bypassed because the Tauri webview can't
+                // synchronously inject auth before React renders. Tauri's
+                // invoke() is async, so there's always a window where
+                // useEffect fires fetch calls before the key is available.
+                //
+                // Auth middleware: requires Bearer token for ALL requests (including
+                // localhost) when api_auth is enabled. The Tauri frontend injects the
+                // token via localFetch (loaded from get_local_api_config IPC on import).
+                // Health endpoint is exempt so status polling works before auth init.
                 let auth_enabled = self.api_auth;
                 let auth_key = self.api_auth_key.clone();
                 axum::middleware::from_fn(
@@ -798,36 +845,78 @@ impl SCServer {
                                 return next.run(req).await;
                             }
 
-                            // Always allow localhost
-                            let is_localhost = req
-                                .extensions()
-                                .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-                                .map(|ci| ci.0.ip().is_loopback())
-                                .unwrap_or(true); // default to allow if no connect info
-
-                            if is_localhost {
+                            // Allow specific endpoints without auth:
+                            // - /health: device monitor, tray status, startup polling
+                            //   (called before frontend loads API key via IPC)
+                            // - /connections/oauth/callback: browser redirect from
+                            //   OAuth providers (no bearer token in redirect)
+                            let path = req.uri().path();
+                            if path == "/health"
+                                || path == "/ws/health"
+                                || path == "/audio/device/status"
+                                || path == "/connections/oauth/callback"
+                                || path.starts_with("/frames/")
+                                || path == "/notify"
+                            {
                                 return next.run(req).await;
                             }
 
-                            // Check bearer token
-                            let authorized = req
+                            // Check auth via (in priority order):
+                            // 1. Authorization: Bearer <token> header (localFetch)
+                            // 2. screenpipe_auth=<token> cookie (img src, WebSocket)
+                            // 3. ?token=<token> query param (fallback)
+                            let header_token = req
                                 .headers()
                                 .get(axum::http::header::AUTHORIZATION)
                                 .and_then(|v| v.to_str().ok())
                                 .and_then(|v| v.strip_prefix("Bearer "))
-                                .map(|token| {
-                                    auth_key.as_deref() == Some(token)
-                                })
+                                .map(|s| s.to_string());
+
+                            let cookie_token = req
+                                .headers()
+                                .get(axum::http::header::COOKIE)
+                                .and_then(|v| v.to_str().ok())
+                                .and_then(|cookies| {
+                                    cookies.split(';')
+                                        .map(|c| c.trim())
+                                        .find_map(|c| c.strip_prefix("screenpipe_auth="))
+                                        .map(|s| s.to_string())
+                                });
+
+                            let query_token = req
+                                .uri()
+                                .query()
+                                .and_then(|q| {
+                                    q.split('&')
+                                        .find_map(|pair| pair.strip_prefix("token="))
+                                        .map(|s| s.to_string())
+                                });
+
+                            let token = header_token.or(cookie_token).or(query_token);
+                            let authorized = token
+                                .map(|t| auth_key.as_deref() == Some(t.as_str()))
                                 .unwrap_or(false);
 
                             if authorized {
                                 next.run(req).await
                             } else {
+                                let upgrade = req
+                                    .headers()
+                                    .get(axum::http::header::UPGRADE)
+                                    .and_then(|v| v.to_str().ok())
+                                    .map(|s| s.eq_ignore_ascii_case("websocket"))
+                                    .unwrap_or(false);
+                                if upgrade {
+                                    warn!(
+                                        path = %path,
+                                        "api auth: rejected WebSocket upgrade (missing/invalid token; use Cookie screenpipe_auth, Authorization Bearer, or ?token=)"
+                                    );
+                                }
                                 axum::response::Response::builder()
                                     .status(403)
                                     .header("Content-Type", "application/json")
                                     .body(axum::body::Body::from(
-                                        r#"{"error":"unauthorized: remote API access requires authentication. Pass Authorization: Bearer <SCREENPIPE_API_KEY>"}"#,
+                                        r#"{"error":"unauthorized: API access requires authentication. Pass Authorization: Bearer <your-api-key> (find your key in Settings > Privacy)"}"#,
                                     ))
                                     .unwrap()
                             }
