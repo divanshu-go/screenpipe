@@ -33,7 +33,10 @@ pub async fn screenpipe_cloud_models(api_url: &str, token: Option<&str>) -> serd
 }
 
 /// Fetch models from the gateway and transform into Pi's format.
-async fn fetch_models_from_gateway(api_url: &str, token: Option<&str>) -> Option<serde_json::Value> {
+async fn fetch_models_from_gateway(
+    api_url: &str,
+    token: Option<&str>,
+) -> Option<serde_json::Value> {
     let url = format!("{}/models", api_url.trim_end_matches('/'));
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
@@ -59,14 +62,23 @@ async fn fetch_models_from_gateway(api_url: &str, token: Option<&str>) -> Option
         .map(|m| {
             let id = m.get("id").and_then(|v| v.as_str()).unwrap_or("");
             let name = m.get("name").and_then(|v| v.as_str()).unwrap_or(id);
-            let ctx = m.get("context_window").and_then(|v| v.as_u64()).unwrap_or(128000);
-            let intelligence = m.get("intelligence").and_then(|v| v.as_str()).unwrap_or("standard");
+            let ctx = m
+                .get("context_window")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(128000);
+            let intelligence = m
+                .get("intelligence")
+                .and_then(|v| v.as_str())
+                .unwrap_or("standard");
             let reasoning = intelligence == "highest" || intelligence == "high";
 
             // Determine input modalities from best_for/tags
             let best_for = m.get("best_for").and_then(|v| v.as_array());
             let has_vision = best_for
-                .map(|arr| arr.iter().any(|v| v.as_str().map_or(false, |s| s.contains("vision"))))
+                .map(|arr| {
+                    arr.iter()
+                        .any(|v| v.as_str().map_or(false, |s| s.contains("vision")))
+                })
                 .unwrap_or(false);
             let input = if has_vision {
                 json!(["text", "image"])
@@ -865,7 +877,8 @@ impl AgentExecutor for PiExecutor {
             provider,
             Some(model),
             provider_url,
-        ).await?;
+        )
+        .await?;
         // Use filtered skills if permissions are configured, unfiltered otherwise
         Self::ensure_screenpipe_skill_auto(working_dir)?;
 
@@ -920,7 +933,8 @@ impl AgentExecutor for PiExecutor {
                 provider,
                 Some(&resolved_model),
                 provider_url,
-            ).await?;
+            )
+            .await?;
             return self
                 .spawn_pi(
                     &pi_path,
@@ -961,7 +975,8 @@ impl AgentExecutor for PiExecutor {
             provider,
             Some(&resolved_model),
             provider_url,
-        ).await?;
+        )
+        .await?;
         // Use filtered skills if permissions are configured, unfiltered otherwise
         Self::ensure_screenpipe_skill_auto(working_dir)?;
         Self::ensure_web_search_extension(working_dir, Some(&resolved_provider))?;
@@ -1009,7 +1024,8 @@ impl AgentExecutor for PiExecutor {
                 provider,
                 Some(&resolved_model),
                 provider_url,
-            ).await?;
+            )
+            .await?;
             return self
                 .spawn_pi_streaming(
                     &pi_path,

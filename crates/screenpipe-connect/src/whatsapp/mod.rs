@@ -448,14 +448,17 @@ impl WhatsAppGateway {
                             let mut lines = reader.lines();
                             while let Ok(Some(line)) = lines.next_line().await {
                                 // Only WARN for actual errors. Bun prints noisy warnings
-                // (e.g. "ws.WebSocket 'upgrade' event is not implemented")
-                // and info messages to stderr that aren't actionable.
-                let lower = line.to_lowercase();
-                if lower.contains("error") || lower.contains("fatal") || lower.contains("panic") {
-                    warn!("whatsapp gateway stderr: {}", line);
-                } else {
-                    debug!("whatsapp gateway stderr: {}", line);
-                }
+                                // (e.g. "ws.WebSocket 'upgrade' event is not implemented")
+                                // and info messages to stderr that aren't actionable.
+                                let lower = line.to_lowercase();
+                                if lower.contains("error")
+                                    || lower.contains("fatal")
+                                    || lower.contains("panic")
+                                {
+                                    warn!("whatsapp gateway stderr: {}", line);
+                                } else {
+                                    debug!("whatsapp gateway stderr: {}", line);
+                                }
                             }
                         });
 

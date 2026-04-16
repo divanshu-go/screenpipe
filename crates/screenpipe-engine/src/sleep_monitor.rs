@@ -721,8 +721,14 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         }
 
-        assert!(saw_locked, "Screen lock was NOT detected — did you lock the screen?");
-        assert!(saw_unlocked_after_lock, "Screen unlock was NOT detected after lock");
+        assert!(
+            saw_locked,
+            "Screen lock was NOT detected — did you lock the screen?"
+        );
+        assert!(
+            saw_unlocked_after_lock,
+            "Screen unlock was NOT detected after lock"
+        );
 
         eprintln!("============================================");
         eprintln!("  LOCK/UNLOCK DETECTION PASSED");

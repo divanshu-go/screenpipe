@@ -56,11 +56,19 @@ pub struct PermissionEvent {
 
 impl PermissionEvent {
     pub fn lost(kind: PermissionKind, reason: impl Into<Option<String>>) -> Self {
-        Self { kind, state: PermissionState::Lost, reason: reason.into() }
+        Self {
+            kind,
+            state: PermissionState::Lost,
+            reason: reason.into(),
+        }
     }
 
     pub fn restored(kind: PermissionKind) -> Self {
-        Self { kind, state: PermissionState::Restored, reason: None }
+        Self {
+            kind,
+            state: PermissionState::Restored,
+            reason: None,
+        }
     }
 
     /// Event name to publish on the bus. Split by state so subscribers can

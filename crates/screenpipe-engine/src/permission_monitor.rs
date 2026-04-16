@@ -69,7 +69,10 @@ struct LastKnown {
 
 impl LastKnown {
     const fn new(granted: bool) -> Self {
-        Self { granted, last_lost_at: None }
+        Self {
+            granted,
+            last_lost_at: None,
+        }
     }
 }
 
@@ -143,7 +146,10 @@ pub fn report_state(kind: PermissionKind, now_granted: bool, reason: Option<Stri
     // be picked up by the next poll once the grace expires.
     if let Some(until) = state.wake_grace_until {
         if Instant::now() < until {
-            debug!(?kind, now_granted, "permission change suppressed (wake grace)");
+            debug!(
+                ?kind,
+                now_granted, "permission change suppressed (wake grace)"
+            );
             return;
         }
     }
@@ -184,7 +190,11 @@ pub fn report_state(kind: PermissionKind, now_granted: bool, reason: Option<Stri
         info!(?kind, "permission restored");
         PermissionEvent::restored(kind)
     } else {
-        info!(?kind, reason = reason.as_deref().unwrap_or("(unknown)"), "permission lost");
+        info!(
+            ?kind,
+            reason = reason.as_deref().unwrap_or("(unknown)"),
+            "permission lost"
+        );
         PermissionEvent::lost(kind, reason)
     };
     let _ = send_event(evt.event_name(), evt);
@@ -196,7 +206,10 @@ pub fn report_state(kind: PermissionKind, now_granted: bool, reason: Option<Stri
 pub fn notify_wake() {
     let mut state = STATE.lock().unwrap_or_else(|e| e.into_inner());
     state.wake_grace_until = Some(Instant::now() + WAKE_GRACE);
-    debug!("permission monitor: wake grace period started ({:?})", WAKE_GRACE);
+    debug!(
+        "permission monitor: wake grace period started ({:?})",
+        WAKE_GRACE
+    );
 }
 
 async fn run() {
