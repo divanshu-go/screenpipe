@@ -214,8 +214,21 @@ fn decide_status(
                 current_status
             }
         }
+        Ok(health) if health.status == "degraded" => {
+            // Server responding but degraded — vision or audio pipeline failed.
+            // Most common cause: screen recording permission revoked (macOS TCC).
+            // CGPreflightScreenCaptureAccess may still return true (stale TCC cache)
+            // so this health-based check is the only reliable detection.
+            if consecutive_unhealthy >= unhealthy_threshold {
+                RecordingStatus::Error
+            } else if current_status == RecordingStatus::Recording {
+                RecordingStatus::Recording
+            } else {
+                current_status
+            }
+        }
         Ok(_) => {
-            // Server is responding (healthy, degraded, or stale) — it's running.
+            // Server is responding healthy or stale — it's running.
             // "stale" means timestamps are old but the server process is alive;
             // this happens during DB pool saturation and resolves on its own.
             RecordingStatus::Recording
@@ -365,7 +378,7 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
             // Connection errors = server unreachable (crash, restart, port conflict).
             // Unhealthy = server responding but reporting a problem (DB issues, stalls).
             match &health_result {
-                Ok(health) if health.status == "unhealthy" || health.status == "error" => {
+                Ok(health) if health.status == "unhealthy" || health.status == "error" || health.status == "degraded" => {
                     ever_connected = true;
                     consecutive_failures = 0;
                     consecutive_unhealthy = consecutive_unhealthy.saturating_add(1);
@@ -394,6 +407,35 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                 CONSECUTIVE_UNHEALTHY_THRESHOLD,
                 current_status,
             );
+
+            // Emit permission-lost when health reports degraded with vision/audio failure.
+            // CGPreflightScreenCaptureAccess can return stale results when the user
+            // toggles the permission off in System Settings, so the health endpoint
+            // is the only reliable detection. Show recovery modal after debounce.
+            if let Ok(health) = &health_result {
+                if health.status == "degraded" && consecutive_unhealthy == CONSECUTIVE_UNHEALTHY_THRESHOLD {
+                    let vision_down = health.frame_status.as_deref() == Some("not_started")
+                        || health.frame_status.as_deref() == Some("stale");
+                    let audio_down = health.audio_status.as_deref() == Some("not_started");
+                    if vision_down || audio_down {
+                        warn!(
+                            "health check: degraded for {}s — vision={}, audio={}. emitting permission-lost",
+                            CONSECUTIVE_UNHEALTHY_THRESHOLD,
+                            health.frame_status.as_deref().unwrap_or("unknown"),
+                            health.audio_status.as_deref().unwrap_or("unknown"),
+                        );
+                        let _ = app.emit(
+                            "permission-lost",
+                            serde_json::json!({
+                                "screen_recording": vision_down,
+                                "microphone": audio_down,
+                                "accessibility": false,
+                                "browser_automation": false,
+                            }),
+                        );
+                    }
+                }
+            }
 
             // Parse device info from health response, filtered by monitor settings
             let mut devices = parse_devices_from_health(&health_result);
