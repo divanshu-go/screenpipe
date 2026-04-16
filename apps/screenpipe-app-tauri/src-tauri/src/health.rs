@@ -214,21 +214,11 @@ fn decide_status(
                 current_status
             }
         }
-        Ok(health) if health.status == "degraded" => {
-            // Server responding but degraded — vision or audio pipeline failed.
-            // Most common cause: screen recording permission revoked (macOS TCC).
-            // CGPreflightScreenCaptureAccess may still return true (stale TCC cache)
-            // so this health-based check is the only reliable detection.
-            if consecutive_unhealthy >= unhealthy_threshold {
-                RecordingStatus::Error
-            } else if current_status == RecordingStatus::Recording {
-                RecordingStatus::Recording
-            } else {
-                current_status
-            }
-        }
         Ok(_) => {
-            // Server is responding healthy or stale — it's running.
+            // Server is responding (healthy, degraded, or stale) — it's running.
+            // "degraded" means vision or audio pipeline failed (likely permission loss)
+            // but the server process is alive. The health check loop handles degraded
+            // by emitting permission-lost events separately (macOS only).
             // "stale" means timestamps are old but the server process is alive;
             // this happens during DB pool saturation and resolves on its own.
             RecordingStatus::Recording
@@ -366,6 +356,9 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
     let mut last_restart_triggered: Option<Instant> = None;
     // Track last known spawn epoch to detect user-initiated restarts
     let mut last_known_spawn_epoch: u64 = 0;
+    // Cooldown for health-based permission-lost emission (macOS only)
+    #[cfg(target_os = "macos")]
+    let mut last_emitted_health_permission: Option<Instant> = None;
 
     tokio::spawn(async move {
         loop {
@@ -408,31 +401,57 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                 current_status,
             );
 
-            // Emit permission-lost when health reports degraded with vision/audio failure.
-            // CGPreflightScreenCaptureAccess can return stale results when the user
-            // toggles the permission off in System Settings, so the health endpoint
-            // is the only reliable detection. Show recovery modal after debounce.
+            // macOS only: emit permission-lost when health reports degraded with
+            // vision/audio pipeline failure. CGPreflightScreenCaptureAccess returns
+            // stale results when the user toggles the permission off in System Settings
+            // (the app stays in TCC but preflight still says "permitted"), so the
+            // health endpoint is the only reliable detection.
+            //
+            // Guards against false positives:
+            // - Skip during startup grace period (pipelines still initializing)
+            // - Skip during restart grace period (wake, settings change, etc.)
+            // - Skip if DRM pause is active (intentional capture stop)
+            // - macOS only (Windows/Linux don't have TCC permissions)
+            // - 5-minute cooldown between emissions (same as permission monitor)
+            #[cfg(target_os = "macos")]
             if let Ok(health) = &health_result {
-                if health.status == "degraded" && consecutive_unhealthy == CONSECUTIVE_UNHEALTHY_THRESHOLD {
-                    let vision_down = health.frame_status.as_deref() == Some("not_started")
-                        || health.frame_status.as_deref() == Some("stale");
+                let past_startup = start_time.elapsed() > STARTUP_GRACE_PERIOD * 2;
+                let past_restart = last_restart_triggered
+                    .map(|t| t.elapsed() > Duration::from_secs(120))
+                    .unwrap_or(true);
+
+                if health.status == "degraded"
+                    && consecutive_unhealthy >= CONSECUTIVE_UNHEALTHY_THRESHOLD
+                    && past_startup
+                    && past_restart
+                    && !health.drm_content_paused
+                {
+                    let vision_down = health.frame_status.as_deref() == Some("not_started");
                     let audio_down = health.audio_status.as_deref() == Some("not_started");
                     if vision_down || audio_down {
-                        warn!(
-                            "health check: degraded for {}s — vision={}, audio={}. emitting permission-lost",
-                            CONSECUTIVE_UNHEALTHY_THRESHOLD,
-                            health.frame_status.as_deref().unwrap_or("unknown"),
-                            health.audio_status.as_deref().unwrap_or("unknown"),
-                        );
-                        let _ = app.emit(
-                            "permission-lost",
-                            serde_json::json!({
-                                "screen_recording": vision_down,
-                                "microphone": audio_down,
-                                "accessibility": false,
-                                "browser_automation": false,
-                            }),
-                        );
+                        // Cooldown: don't re-emit within 5 minutes
+                        let should_emit = match last_emitted_health_permission {
+                            Some(t) => t.elapsed() >= Duration::from_secs(300),
+                            None => true,
+                        };
+                        if should_emit {
+                            warn!(
+                                "health check: degraded for {}s — vision={}, audio={}. emitting permission-lost",
+                                consecutive_unhealthy,
+                                health.frame_status.as_deref().unwrap_or("unknown"),
+                                health.audio_status.as_deref().unwrap_or("unknown"),
+                            );
+                            let _ = app.emit(
+                                "permission-lost",
+                                serde_json::json!({
+                                    "screen_recording": vision_down,
+                                    "microphone": audio_down,
+                                    "accessibility": false,
+                                    "browser_automation": false,
+                                }),
+                            );
+                            last_emitted_health_permission = Some(Instant::now());
+                        }
                     }
                 }
             }
