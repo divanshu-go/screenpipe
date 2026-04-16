@@ -523,6 +523,22 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
     check();
   }, []);
 
+  // Poll for pro status while screen is open — catches payment completed via
+  // any checkout (account section, external browser, etc.), not just the one
+  // opened from this screen. Calls loadUser every 8s while user is free;
+  // stops as soon as isPro becomes true.
+  useEffect(() => {
+    if (isPro) return; // already pro — nothing to poll
+    if (!settings.user?.token) return;
+    const token = settings.user.token;
+    const interval = setInterval(async () => {
+      try {
+        await loadUser(token);
+      } catch { /* ignore — next tick will retry */ }
+    }, 8000);
+    return () => clearInterval(interval);
+  }, [isPro, settings.user?.token, loadUser]);
+
   // Pro unlock animation sequence
   // Cards enter at ~200-320ms. Locked state visible for ~400ms before unlock starts.
   // Each card's unlock: 550ms animation, staggered 150ms apart.
@@ -573,7 +589,7 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
         },
         body: JSON.stringify({
           tier: "pro",
-          billingPeriod: "monthly",
+          billingPeriod: "yearly",
           userId: settings.user.id,
           email: settings.user.email,
         }),
@@ -592,56 +608,9 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
       return;
     }
 
-    // Poll the server for subscription activation after Stripe checkout opens.
-    // Strategy: call loadUser (POST /api/user) each tick — it fetches the full
-    // authoritative user object and calls updateSettings internally.
-    // When cloud_subscribed becomes true on the server, loadUser propagates it
-    // to React state and the component re-renders with isPro=true, triggering
-    // the unlock animation automatically.
-    //
-    // This is more reliable than the subscription endpoint because:
-    //   - Stripe webhooks activate the account asynchronously even when the
-    //     Stripe success page fails to auto-activate ("Missing purchase token")
-    //   - loadUser reflects the true server-side state, not a client-side flag
-    const token = settings.user.token!;
-    const userId = settings.user.id;
-    const email = settings.user.email;
-    let pollCount = 0;
-    const maxPolls = 60;
-    let delay = 2000;
-    let stopped = false;
-
-    const poll = async (): Promise<void> => {
-      if (stopped) return;
-      pollCount++;
-      try {
-        // Check subscription status directly — avoids stale closure on settings
-        const subResponse = await fetch(
-          `https://screenpi.pe/api/cloud-sync/subscription?userId=${userId}&email=${encodeURIComponent(email || "")}`,
-          { headers: { Authorization: `Bearer ${token}` } }
-        );
-        if (subResponse.ok) {
-          const subData = await subResponse.json();
-          const status = subData.subscription?.status;
-          const isActive = subData.hasSubscription || status === "trialing" || status === "active";
-          if (isActive) {
-            stopped = true;
-            // loadUser fetches the full user object from the server (including
-            // cloud_subscribed) and updates React state — this is the authoritative
-            // refresh that makes isPro flip to true and triggers the animation.
-            await loadUser(token);
-            return;
-          }
-        }
-      } catch { /* network blip — keep polling */ }
-
-      if (pollCount < maxPolls) {
-        delay = Math.min(delay * 1.5, 30000);
-        setTimeout(poll, delay);
-      }
-    };
-
-    setTimeout(poll, delay);
+    // The background interval (above) already polls loadUser every 8s —
+    // it will detect the activated subscription automatically once Stripe
+    // webhook fires and /api/user returns cloud_subscribed: true.
   }, [isPro, settings.user, loadUser]);
 
   const handleConnect = useCallback(
