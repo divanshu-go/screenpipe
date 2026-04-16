@@ -214,13 +214,24 @@ fn decide_status(
                 current_status
             }
         }
+        Ok(health) if health.status == "degraded" && !health.drm_content_paused => {
+            // Server responding but degraded (vision or audio pipeline failed)
+            // and NOT caused by DRM content detection.
+            // Most common cause: screen recording permission revoked.
+            // Show Error after debounce so the tray icon reflects the problem.
+            if consecutive_unhealthy >= unhealthy_threshold {
+                RecordingStatus::Error
+            } else if current_status == RecordingStatus::Recording {
+                RecordingStatus::Recording
+            } else {
+                current_status
+            }
+        }
         Ok(_) => {
-            // Server is responding (healthy, degraded, or stale) — it's running.
-            // "degraded" means vision or audio pipeline failed (likely permission loss)
-            // but the server process is alive. The health check loop handles degraded
-            // by emitting permission-lost events separately (macOS only).
+            // Server is responding (healthy, stale, or degraded-with-DRM-pause).
             // "stale" means timestamps are old but the server process is alive;
             // this happens during DB pool saturation and resolves on its own.
+            // DRM pause is intentional — don't show error for it.
             RecordingStatus::Recording
         }
         Err(_) => {
