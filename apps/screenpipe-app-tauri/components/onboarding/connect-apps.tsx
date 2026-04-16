@@ -245,6 +245,7 @@ function IntegrationCard({
   proPhase,
   unlockDelay,
   onConnect,
+  onUpgradeToPro,
 }: {
   integration: Integration;
   isPro: boolean;
@@ -253,6 +254,7 @@ function IntegrationCard({
   proPhase: ProPhase;
   unlockDelay: number;
   onConnect: () => void;
+  onUpgradeToPro: () => void;
 }) {
   const isLocked = integration.isPro && !isPro;
   const isConnected = state === "connected";
@@ -264,6 +266,13 @@ function IntegrationCard({
   const [localPhase, setLocalPhase] = useState<ProPhase>(
     shouldAnimate ? "locked" : "unlocked"
   );
+
+  // Reset to locked whenever parent snaps back to "locked" (e.g. free→pro transition)
+  useEffect(() => {
+    if (proPhase === "locked" && isPro && integration.isPro) {
+      setLocalPhase("locked");
+    }
+  }, [proPhase, isPro, integration.isPro]);
 
   useEffect(() => {
     if (!shouldAnimate) return;
@@ -295,7 +304,7 @@ function IntegrationCard({
             <Lock className="w-5 h-5 text-foreground/70" strokeWidth={1.5} />
           </motion.div>
           <button
-            onClick={() => openUrl("https://screenpi.pe/onboarding")}
+            onClick={onUpgradeToPro}
             className="font-mono text-[9px] text-foreground/55 hover:text-foreground transition-colors underline underline-offset-2"
           >
             upgrade to pro →
@@ -454,7 +463,7 @@ interface ConnectAppsProps {
 }
 
 export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
-  const { settings } = useSettings();
+  const { settings, loadUser } = useSettings();
   const isPro = !!settings.user?.cloud_subscribed;
 
   const [cardStates, setCardStates] = useState<Record<string, CardState>>({});
@@ -518,8 +527,12 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
   // Cards enter at ~200-320ms. Locked state visible for ~400ms before unlock starts.
   // Each card's unlock: 550ms animation, staggered 150ms apart.
   // Last card (index 2) starts at 700 + 300 = 1000ms, finishes at 1550ms.
+  // Also handles the free→pro transition mid-session (e.g. after Stripe checkout).
   useEffect(() => {
     if (!isPro) return;
+    // Snap to locked first — ensures overlay is visible before the burst animation
+    // (covers both initial load and returning from Stripe as a new pro user)
+    setProPhase("locked");
     const t1 = setTimeout(() => setProPhase("unlocking"), 700);
     const t2 = setTimeout(() => setProPhase("unlocked"), 1650);
     return () => { clearTimeout(t1); clearTimeout(t2); };
@@ -539,6 +552,97 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
   const setCardState = useCallback((key: string, state: CardState) => {
     setCardStates((prev) => ({ ...prev, [key]: state }));
   }, []);
+
+  const handleUpgradeToPro = useCallback(async () => {
+    if (!settings.user?.id || !settings.user?.token) {
+      await commands.openLoginWindow();
+      return;
+    }
+
+    posthog.capture("onboarding_upgrade_clicked", {
+      source: "connect_apps",
+      user_type: isPro ? "pro" : "free",
+    });
+
+    try {
+      const response = await fetch("https://screenpi.pe/api/cloud-sync/checkout", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${settings.user.token}`,
+        },
+        body: JSON.stringify({
+          tier: "pro",
+          billingPeriod: "monthly",
+          userId: settings.user.id,
+          email: settings.user.email,
+        }),
+      });
+
+      const data = await response.json();
+      if (data.url) {
+        await openUrl(data.url);
+      } else {
+        await openUrl("https://screenpi.pe/billing");
+        return;
+      }
+    } catch (error) {
+      console.error("failed to start onboarding checkout:", error);
+      await openUrl("https://screenpi.pe/billing");
+      return;
+    }
+
+    // Poll the server for subscription activation after Stripe checkout opens.
+    // Strategy: call loadUser (POST /api/user) each tick — it fetches the full
+    // authoritative user object and calls updateSettings internally.
+    // When cloud_subscribed becomes true on the server, loadUser propagates it
+    // to React state and the component re-renders with isPro=true, triggering
+    // the unlock animation automatically.
+    //
+    // This is more reliable than the subscription endpoint because:
+    //   - Stripe webhooks activate the account asynchronously even when the
+    //     Stripe success page fails to auto-activate ("Missing purchase token")
+    //   - loadUser reflects the true server-side state, not a client-side flag
+    const token = settings.user.token!;
+    const userId = settings.user.id;
+    const email = settings.user.email;
+    let pollCount = 0;
+    const maxPolls = 60;
+    let delay = 2000;
+    let stopped = false;
+
+    const poll = async (): Promise<void> => {
+      if (stopped) return;
+      pollCount++;
+      try {
+        // Check subscription status directly — avoids stale closure on settings
+        const subResponse = await fetch(
+          `https://screenpi.pe/api/cloud-sync/subscription?userId=${userId}&email=${encodeURIComponent(email || "")}`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        if (subResponse.ok) {
+          const subData = await subResponse.json();
+          const status = subData.subscription?.status;
+          const isActive = subData.hasSubscription || status === "trialing" || status === "active";
+          if (isActive) {
+            stopped = true;
+            // loadUser fetches the full user object from the server (including
+            // cloud_subscribed) and updates React state — this is the authoritative
+            // refresh that makes isPro flip to true and triggers the animation.
+            await loadUser(token);
+            return;
+          }
+        }
+      } catch { /* network blip — keep polling */ }
+
+      if (pollCount < maxPolls) {
+        delay = Math.min(delay * 1.5, 30000);
+        setTimeout(poll, delay);
+      }
+    };
+
+    setTimeout(poll, delay);
+  }, [isPro, settings.user, loadUser]);
 
   const handleConnect = useCallback(
     async (integration: Integration) => {
@@ -693,6 +797,7 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
                   proPhase={proPhase}
                   unlockDelay={i * 0.15}
                   onConnect={() => handleConnect(integration)}
+                  onUpgradeToPro={handleUpgradeToPro}
                 />
               </motion.div>
             ))}
@@ -727,6 +832,7 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
                   proPhase={proPhase}
                   unlockDelay={0}
                   onConnect={() => handleConnect(integration)}
+                  onUpgradeToPro={handleUpgradeToPro}
                 />
               </motion.div>
             ))}
@@ -751,6 +857,7 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
                   proPhase={proPhase}
                   unlockDelay={0}
                   onConnect={() => handleConnect(integration)}
+                  onUpgradeToPro={handleUpgradeToPro}
                 />
               </motion.div>
             ))}
@@ -763,7 +870,7 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
           >
             gmail, gcal &amp; notion unlock with{" "}
             <button
-              onClick={() => openUrl("https://screenpi.pe/onboarding")}
+              onClick={handleUpgradeToPro}
               className="underline underline-offset-2 hover:text-muted-foreground/50 transition-colors"
             >
               screenpipe pro
