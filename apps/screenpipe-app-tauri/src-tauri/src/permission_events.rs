@@ -60,16 +60,25 @@ async fn connect(
 ) -> Result<(), String> {
     // The /ws/events endpoint streams all events (meetings, workflows, permissions…).
     // We filter by event name client-side — lighter than a query param.
-    let url = match api_key {
-        Some(k) if !k.is_empty() => format!(
-            "ws://127.0.0.1:{}/ws/events?token={}",
-            port,
-            urlencoding::encode(k)
-        ),
-        _ => format!("ws://127.0.0.1:{}/ws/events", port),
+    use crate::recording::LocalApiContext;
+    let ctx = LocalApiContext {
+        port,
+        api_key: api_key.map(|s| s.to_string()),
     };
 
-    let req = url.as_str().into_client_request().map_err(|e| e.to_string())?;
+    let mut ws_url = ctx.url("/ws/events");
+    // Convert http:// to ws://
+    if ws_url.starts_with("http://") {
+        ws_url = format!("ws://{}", &ws_url[7..]);
+    } else if ws_url.starts_with("https://") {
+        ws_url = format!("wss://{}", &ws_url[8..]);
+    }
+    // Add auth token to query param if present
+    if let Some(k) = api_key.filter(|k| !k.is_empty()) {
+        ws_url = format!("{}?token={}", ws_url, urlencoding::encode(k));
+    }
+
+    let req = ws_url.as_str().into_client_request().map_err(|e| e.to_string())?;
     let (mut ws, _) = connect_async(req).await.map_err(|e| e.to_string())?;
     info!("permission events WS connected");
 
