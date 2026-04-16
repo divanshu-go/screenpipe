@@ -13,19 +13,80 @@ use crate::config;
 use crate::permissions::do_permissions_check;
 use crate::server_core::ServerCore;
 use crate::store::SettingsStore;
+use screenpipe_engine::RecordingConfig;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use screenpipe_engine::RecordingConfig;
-use tauri::{Emitter, State};
+use tauri::{Emitter, Manager, State};
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
+
+pub const DEFAULT_LOCAL_API_PORT: u16 = 3030;
+
+#[derive(Clone, Debug)]
+pub struct LocalApiContext {
+    pub api_key: Option<String>,
+    pub port: u16,
+}
+
+impl Default for LocalApiContext {
+    fn default() -> Self {
+        Self {
+            api_key: None,
+            port: DEFAULT_LOCAL_API_PORT,
+        }
+    }
+}
+
+impl LocalApiContext {
+    pub fn url(&self, path: &str) -> String {
+        format!("http://localhost:{}{}", self.port, path)
+    }
+
+    pub fn apply_auth(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        if let Some(ref key) = self.api_key {
+            request.header("Authorization", format!("Bearer {}", key))
+        } else {
+            request
+        }
+    }
+
+    pub fn apply_auth_blocking(
+        &self,
+        request: reqwest::blocking::RequestBuilder,
+    ) -> reqwest::blocking::RequestBuilder {
+        if let Some(ref key) = self.api_key {
+            request.header("Authorization", format!("Bearer {}", key))
+        } else {
+            request
+        }
+    }
+}
 
 /// Build a `RecordingConfig` from the current settings store.
 fn build_config(app: &tauri::AppHandle) -> Result<RecordingConfig, String> {
     let store = SettingsStore::get(app).ok().flatten().unwrap_or_default();
     let (data_dir, _) = config::resolve_data_dir(&store.data_dir);
     Ok(store.to_recording_config(data_dir))
+}
+
+pub fn local_api_context_from_app(app: &tauri::AppHandle) -> LocalApiContext {
+    if let Some(state) = app.try_state::<RecordingState>() {
+        let guard = state.server.blocking_lock();
+        if let Some(ref core) = *guard {
+            return LocalApiContext {
+                api_key: core.local_api_key.clone(),
+                port: core.port,
+            };
+        }
+    }
+
+    build_config(app)
+        .map(|config| LocalApiContext {
+            api_key: config.api_auth_key,
+            port: config.port,
+        })
+        .unwrap_or_default()
 }
 
 /// Minimum seconds between consecutive stop→spawn cycles.
@@ -267,7 +328,9 @@ pub async fn spawn_screenpipe(
             {
                 let server_guard = server_arc.lock().await;
                 if server_guard.is_some() {
-                    info!("Deferred spawn: server exists but unhealthy, skipping (may be starting)");
+                    info!(
+                        "Deferred spawn: server exists but unhealthy, skipping (may be starting)"
+                    );
                     return;
                 }
             }
@@ -436,7 +499,8 @@ pub async fn spawn_screenpipe(
                         crate::secrets::KeyResult::Found(k) => Some(k),
                         _ => None,
                     };
-                    if let Ok(store) = screenpipe_secrets::SecretStore::new(pool, secret_key).await {
+                    if let Ok(store) = screenpipe_secrets::SecretStore::new(pool, secret_key).await
+                    {
                         if let Err(e) = store.set("api_auth_key", key_clone.as_bytes()).await {
                             tracing::warn!("failed to persist API key to secret store: {}", e);
                         } else {
