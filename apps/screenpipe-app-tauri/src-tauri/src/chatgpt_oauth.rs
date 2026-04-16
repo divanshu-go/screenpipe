@@ -271,7 +271,10 @@ pub async fn chatgpt_oauth_login(app_handle: AppHandle) -> Result<bool, String> 
         .append_pair("response_type", "code")
         .append_pair("client_id", CLIENT_ID)
         .append_pair("redirect_uri", &redirect_uri)
-        .append_pair("scope", "openid profile email offline_access api.connectors.read api.connectors.invoke")
+        .append_pair(
+            "scope",
+            "openid profile email offline_access api.connectors.read api.connectors.invoke",
+        )
         .append_pair("code_challenge", &code_challenge)
         .append_pair("code_challenge_method", "S256")
         .append_pair("id_token_add_organizations", "true")

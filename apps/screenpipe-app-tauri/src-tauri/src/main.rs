@@ -40,13 +40,12 @@ mod analytics;
 mod icons;
 use crate::analytics::start_analytics;
 mod calendar;
+mod capture_session;
 mod chatgpt_oauth;
 #[allow(deprecated)]
 mod commands;
 mod disk_usage;
-mod capture_session;
 mod embedded_server;
-mod server_core;
 mod enterprise_policy;
 mod hardware;
 mod ics_calendar;
@@ -61,11 +60,12 @@ mod pi_command_queue;
 mod pipe_suggestions_scheduler;
 mod recording;
 mod remote_sync_commands;
+mod secrets;
 mod server;
+mod server_core;
 #[cfg(target_os = "macos")]
 #[allow(deprecated)]
 mod space_monitor;
-mod secrets;
 mod store;
 mod suggestions;
 mod sync;
@@ -306,13 +306,9 @@ async fn upload_file_to_s3(file_path: &str, signed_url: &str) -> Result<bool, St
 #[specta::specta]
 #[allow(dead_code)]
 async fn is_server_running(app: AppHandle) -> Result<bool, String> {
-    let store = app.state::<store::SettingsStore>();
-    let port = store.recording.port;
+    let api = crate::recording::local_api_context_from_app(&app);
     let client = reqwest::Client::new();
-    let response = client
-        .get(format!("http://localhost:{}", port))
-        .send()
-        .await;
+    let response = api.apply_auth(client.get(api.url("/health"))).send().await;
     Ok(response.is_ok())
 }
 
@@ -373,21 +369,19 @@ async fn main() {
 
     // Check if telemetry is disabled via store setting (analyticsEnabled) or offline mode
     let store_path = screenpipe_core::paths::default_screenpipe_data_dir().join("store.bin");
-    let store_json = std::fs::read(&store_path)
-        .ok()
-        .and_then(|data| {
-            if data.len() >= 8 && &data[..8] == b"SPSTORE1" {
-                // Encrypted store — try to decrypt with keychain key
-                let key = match secrets::get_key() {
-                    secrets::KeyResult::Found(k) => k,
-                    _ => return None,
-                };
-                let plain = screenpipe_vault::crypto::decrypt_small(&data[8..], &key).ok()?;
-                serde_json::from_slice::<serde_json::Value>(&plain).ok()
-            } else {
-                serde_json::from_slice::<serde_json::Value>(&data).ok()
-            }
-        });
+    let store_json = std::fs::read(&store_path).ok().and_then(|data| {
+        if data.len() >= 8 && &data[..8] == b"SPSTORE1" {
+            // Encrypted store — try to decrypt with keychain key
+            let key = match secrets::get_key() {
+                secrets::KeyResult::Found(k) => k,
+                _ => return None,
+            };
+            let plain = screenpipe_vault::crypto::decrypt_small(&data[8..], &key).ok()?;
+            serde_json::from_slice::<serde_json::Value>(&plain).ok()
+        } else {
+            serde_json::from_slice::<serde_json::Value>(&data).ok()
+        }
+    });
     // Helper: look up a bool key in the store JSON (check both top-level and nested "settings")
     let store_bool = |key: &str| -> Option<bool> {
         store_json.as_ref().and_then(|data| {
@@ -1472,16 +1466,23 @@ async fn main() {
                             .expect("Failed to create server runtime");
 
                         server_runtime.block_on(async move {
+                            let config = store_clone.to_recording_config(data_dir_clone.clone());
+
                             // Check if server already running
                             let server_running = tokio::time::timeout(
                                 std::time::Duration::from_secs(2),
                                 async {
-                                    reqwest::Client::new()
-                                        .get("http://localhost:3030/health")
-                                        .timeout(std::time::Duration::from_secs(1))
-                                        .send()
-                                        .await
-                                        .is_ok()
+                                    let client = reqwest::Client::new();
+                                    let mut request = client
+                                        .get(format!("http://localhost:{}/health", config.port))
+                                        .timeout(std::time::Duration::from_secs(1));
+                                    if let Some(ref key) = config.api_auth_key {
+                                        request = request.header(
+                                            "Authorization",
+                                            format!("Bearer {}", key),
+                                        );
+                                    }
+                                    request.send().await.is_ok()
                                 }
                             ).await.unwrap_or(false);
 
@@ -1506,7 +1507,6 @@ async fn main() {
                             }
 
                             info!("Starting server core + capture on dedicated runtime...");
-                            let config = store_clone.to_recording_config(data_dir_clone);
 
                             // Phase 1: Start server core
                             let server = match server_core::ServerCore::start(&config, on_pipe_output).await {
@@ -1600,6 +1600,7 @@ async fn main() {
             // Use persistent analytics_id for PostHog (consistent across frontend and backend)
             let unique_id = store.recording.analytics_id.clone();
             let email = store.user.email.unwrap_or_default();
+            let local_api = crate::recording::local_api_context_from_app(&app_handle);
 
             if is_analytics_enabled {
                 match start_analytics(
@@ -1607,7 +1608,8 @@ async fn main() {
                     email,
                     posthog_api_key,
                     interval_hours,
-                    "http://localhost:3030".to_string(),
+                    local_api.url(""),
+                    local_api.api_key.clone(),
                     data_dir.clone(),
                     is_analytics_enabled,
                 ) {
@@ -1694,8 +1696,13 @@ async fn main() {
                 scheduler_handle: suggestions_state.scheduler_handle.clone(),
                 enhanced_ai: suggestions_state.enhanced_ai.clone(),
             };
+            let app_handle_for_suggestions = app_handle.clone();
             tauri::async_runtime::spawn(async move {
-                suggestions::auto_start_scheduler(&suggestions_state_clone).await;
+                suggestions::auto_start_scheduler(
+                    app_handle_for_suggestions,
+                    &suggestions_state_clone,
+                )
+                .await;
             });
 
             // Auto-start pipe suggestions scheduler if enabled
