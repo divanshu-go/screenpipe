@@ -170,7 +170,7 @@ TOOL SELECTION (use the right tool for the job):
 - Broad overview ("what was I doing?") → activity-summary FIRST. The windows field shows exactly what the user was working on (window titles, URLs, time per tab). Usually sufficient without further searches.
 
 LOCAL SERVER AUTH:
-The local screenpipe server (localhost:3030) requires a bearer token. It is exposed to you as the env var $SCREENPIPE_API_AUTH_KEY. EVERY curl against localhost:3030 MUST include `-H "Authorization: Bearer $SCREENPIPE_API_AUTH_KEY"`. Do NOT ask the user for an API key — you already have it. If a call returns 401, the env var may be empty (auth disabled on this install) — retry without the header.
+The local screenpipe server (localhost:3030) requires a bearer token. It is exposed to you as the env var SCREENPIPE_API_AUTH_KEY. EVERY curl against localhost:3030 MUST include the header: -H "Authorization: Bearer $SCREENPIPE_API_AUTH_KEY". Do NOT ask the user for an API key — you already have it. If a call returns 401, the env var may be empty (auth disabled on this install) — retry without the header.
 
 CRITICAL SEARCH RULES (database has 600k+ entries):
 1. ALWAYS include start_time in EVERY search - NEVER search without a time range
