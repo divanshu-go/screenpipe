@@ -17,6 +17,7 @@ pub mod confluence;
 pub mod discord;
 pub mod email;
 pub mod financialsense;
+pub mod fireflies;
 pub mod github_issues;
 pub mod glean;
 pub mod gmail;
@@ -25,6 +26,7 @@ pub mod granola;
 pub mod hubspot;
 pub mod intercom;
 pub mod jira;
+pub mod lexi;
 pub mod limitless;
 pub mod linear;
 pub mod logseq;
@@ -35,6 +37,7 @@ pub mod n8n;
 pub mod notion;
 pub mod ntfy;
 pub mod obsidian;
+pub mod otter;
 pub mod perplexity;
 pub mod pipedrive;
 pub mod pushover;
@@ -192,6 +195,9 @@ pub fn all_integrations() -> Vec<Box<dyn Integration>> {
         Box::new(zendesk::Zendesk),
         Box::new(stripe::Stripe),
         Box::new(financialsense::FinancialSense),
+        Box::new(fireflies::Fireflies),
+        Box::new(otter::Otter),
+        Box::new(lexi::Lexi),
         Box::new(sentry::Sentry),
         Box::new(vercel::Vercel),
         Box::new(pipedrive::Pipedrive),
