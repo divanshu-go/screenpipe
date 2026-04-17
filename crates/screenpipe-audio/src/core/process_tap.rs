@@ -73,7 +73,11 @@ fn detect_os_version() -> Option<(u64, u64, u64)> {
 struct TapCallbackCtx {
     tx: broadcast::Sender<Vec<f32>>,
     channels: u16,
-    is_running: Arc<AtomicBool>,
+    // Deliberately no is_running — it's initialized false by device_manager
+    // and only flipped true AFTER AudioStream::from_device returns, which
+    // races with the IO callback (drops every frame for the first tick)
+    // and with the polling thread below (drops the whole capture in ~30μs).
+    // cpal/SCK paths don't check is_running either — only is_disconnected.
     is_disconnected: Arc<AtomicBool>,
 }
 
@@ -91,7 +95,7 @@ extern "C" fn tap_io_proc(
         None => return Default::default(),
     };
 
-    if !ctx.is_running.load(Ordering::Relaxed) || ctx.is_disconnected.load(Ordering::Relaxed) {
+    if ctx.is_disconnected.load(Ordering::Relaxed) {
         return Default::default();
     }
 
@@ -143,10 +147,12 @@ impl Drop for ProcessTapCapture {
 /// Create and start a CoreAudio Process Tap for system audio capture.
 ///
 /// Returns the audio config and a thread handle. The thread keeps capture
-/// resources alive until `is_running` or `is_disconnected` flip.
+/// resources alive until `is_disconnected` flips. `_is_running` is accepted
+/// for signature parity with the cpal path but deliberately not read — see
+/// the TapCallbackCtx comment.
 pub fn spawn_process_tap_capture(
     tx: broadcast::Sender<Vec<f32>>,
-    is_running: Arc<AtomicBool>,
+    _is_running: Arc<AtomicBool>,
     is_disconnected: Arc<AtomicBool>,
 ) -> Result<(AudioStreamConfig, tokio::task::JoinHandle<()>)> {
     info!("Creating CoreAudio Process Tap for system audio");
@@ -215,7 +221,6 @@ pub fn spawn_process_tap_capture(
     let mut ctx = Box::new(TapCallbackCtx {
         tx,
         channels,
-        is_running: is_running.clone(),
         is_disconnected: is_disconnected.clone(),
     });
 
@@ -236,7 +241,9 @@ pub fn spawn_process_tap_capture(
     info!("Process Tap capture started");
 
     let handle = tokio::task::spawn_blocking(move || {
-        while is_running.load(Ordering::Relaxed) && !is_disconnected.load(Ordering::Relaxed) {
+        // Gate only on is_disconnected — is_running starts false and flips
+        // true asynchronously, so checking it here drops the capture in ~30μs.
+        while !is_disconnected.load(Ordering::Relaxed) {
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
         drop(capture);
