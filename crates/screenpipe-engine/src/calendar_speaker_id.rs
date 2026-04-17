@@ -1190,10 +1190,7 @@ mod tests {
         deduplicate_speaker_by_name(&db, id_b, "louis@screenpi.pe").await;
 
         // After merge: "louis@screenpi.pe" entry should be gone
-        let email_speaker = db
-            .find_speaker_by_name("louis@screenpi.pe")
-            .await
-            .unwrap();
+        let email_speaker = db.find_speaker_by_name("louis@screenpi.pe").await.unwrap();
         assert!(
             email_speaker.is_none(),
             "louis@screenpi.pe should have been merged away"
@@ -1223,10 +1220,7 @@ mod tests {
         deduplicate_speaker_by_name(&db, id_b, "louis@screenpi.pe").await;
 
         // Both should still exist independently
-        let email_speaker = db
-            .find_speaker_by_name("louis@screenpi.pe")
-            .await
-            .unwrap();
+        let email_speaker = db.find_speaker_by_name("louis@screenpi.pe").await.unwrap();
         assert!(
             email_speaker.is_some(),
             "different-voice speakers must not be merged"

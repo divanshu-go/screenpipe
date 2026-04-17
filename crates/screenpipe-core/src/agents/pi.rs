@@ -1851,8 +1851,8 @@ mod tests {
         assert_eq!(lines[1], "OK");
     }
 
-    #[test]
-    fn test_ensure_pi_config_adds_ollama_provider() {
+    #[tokio::test]
+    async fn test_ensure_pi_config_adds_ollama_provider() {
         // Call ensure_pi_config with ollama provider info
         PiExecutor::ensure_pi_config(
             None,
@@ -1861,6 +1861,7 @@ mod tests {
             Some("qwen3:8b"),
             Some("http://localhost:11434/v1"),
         )
+        .await
         .expect("ensure_pi_config should succeed");
 
         // Read models.json and verify ollama provider was added
