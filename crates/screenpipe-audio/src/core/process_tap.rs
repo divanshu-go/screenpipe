@@ -144,28 +144,22 @@ impl Drop for ProcessTapCapture {
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Create and start a CoreAudio Process Tap for system audio capture.
-///
-/// Returns the audio config and a thread handle. The thread keeps capture
-/// resources alive until `is_disconnected` flips. `_is_running` is accepted
-/// for signature parity with the cpal path but deliberately not read — see
-/// the TapCallbackCtx comment.
-pub fn spawn_process_tap_capture(
+/// Build a fresh Process Tap + aggregate device against the current default
+/// output. Returns the capture handle, its audio config, and the UID of the
+/// device it's anchored to (so callers can detect when the default changes).
+fn build_capture(
     tx: broadcast::Sender<Vec<f32>>,
-    _is_running: Arc<AtomicBool>,
     is_disconnected: Arc<AtomicBool>,
-) -> Result<(AudioStreamConfig, tokio::task::JoinHandle<()>)> {
-    info!("Creating CoreAudio Process Tap for system audio");
-
+) -> Result<(ProcessTapCapture, AudioStreamConfig, String)> {
     let output_device = ca::System::default_output_device()
         .map_err(|s| anyhow!("No default output device: {:?}", s))?;
     let output_uid = output_device
         .uid()
         .map_err(|s| anyhow!("Failed to get output device UID: {:?}", s))?;
-    debug!("Process Tap: anchoring to '{}'", output_uid);
+    let output_uid_str = output_uid.to_string();
+    debug!("Process Tap: anchoring to '{}'", output_uid_str);
 
-    let tap_desc =
-        ca::TapDesc::with_stereo_global_tap_excluding_processes(&ns::Array::new());
+    let tap_desc = ca::TapDesc::with_stereo_global_tap_excluding_processes(&ns::Array::new());
     let tap = tap_desc.create_process_tap().map_err(|s| {
         anyhow!(
             "Failed to create process tap ({:?}). \
@@ -179,20 +173,18 @@ pub fn spawn_process_tap_capture(
         .map_err(|s| anyhow!("Failed to read tap format: {:?}", s))?;
     let sample_rate = asbd.sample_rate;
     let channels = asbd.channels_per_frame as u16;
-    info!("Process Tap: {:.0} Hz, {} ch, {} bit", sample_rate, channels, asbd.bits_per_channel);
+    info!(
+        "Process Tap: {:.0} Hz, {} ch, {} bit",
+        sample_rate, channels, asbd.bits_per_channel
+    );
     let config = AudioStreamConfig::new(sample_rate as u32, channels);
 
-    let sub_device = cf::DictionaryOf::with_keys_values(
-        &[sub_keys::uid()],
-        &[output_uid.as_type_ref()],
-    );
+    let sub_device =
+        cf::DictionaryOf::with_keys_values(&[sub_keys::uid()], &[output_uid.as_type_ref()]);
     let tap_uid = tap
         .uid()
         .map_err(|s| anyhow!("Failed to get tap UID: {:?}", s))?;
-    let sub_tap = cf::DictionaryOf::with_keys_values(
-        &[sub_keys::uid()],
-        &[tap_uid.as_type_ref()],
-    );
+    let sub_tap = cf::DictionaryOf::with_keys_values(&[sub_keys::uid()], &[tap_uid.as_type_ref()]);
     let agg_desc = cf::DictionaryOf::with_keys_values(
         &[
             agg_keys::is_private(),
@@ -221,7 +213,7 @@ pub fn spawn_process_tap_capture(
     let mut ctx = Box::new(TapCallbackCtx {
         tx,
         channels,
-        is_disconnected: is_disconnected.clone(),
+        is_disconnected,
     });
 
     let proc_id = agg_device
@@ -238,15 +230,87 @@ pub fn spawn_process_tap_capture(
         _ctx_ptr: ctx_ptr,
     };
 
-    info!("Process Tap capture started");
+    Ok((capture, config, output_uid_str))
+}
+
+/// Create and start a CoreAudio Process Tap for system audio capture.
+///
+/// Returns the audio config and a thread handle. The thread keeps capture
+/// resources alive until `is_disconnected` flips, and **re-anchors the tap
+/// when the user switches the default output device** (speakers → AirPods,
+/// etc.). Without this, the aggregate device stays bound to the old sub-
+/// device UID and captures silence after a switch.
+///
+/// `_is_running` is accepted for signature parity with the cpal path but
+/// deliberately not read — see the TapCallbackCtx comment.
+pub fn spawn_process_tap_capture(
+    tx: broadcast::Sender<Vec<f32>>,
+    _is_running: Arc<AtomicBool>,
+    is_disconnected: Arc<AtomicBool>,
+) -> Result<(AudioStreamConfig, tokio::task::JoinHandle<()>)> {
+    info!("Creating CoreAudio Process Tap for system audio");
+    let (capture, config, initial_uid) = build_capture(tx.clone(), is_disconnected.clone())?;
+    info!("Process Tap capture started (device: {})", initial_uid);
 
     let handle = tokio::task::spawn_blocking(move || {
-        // Gate only on is_disconnected — is_running starts false and flips
-        // true asynchronously, so checking it here drops the capture in ~30μs.
+        let mut current: Option<ProcessTapCapture> = Some(capture);
+        let mut current_uid = initial_uid;
+
+        // ~500ms poll: responsive enough that a device switch is inaudible
+        // in the downstream pipeline (30s segment window dominates), cheap
+        // enough that we don't hammer CoreAudio.
+        const POLL: std::time::Duration = std::time::Duration::from_millis(500);
+
         while !is_disconnected.load(Ordering::Relaxed) {
-            std::thread::sleep(std::time::Duration::from_millis(100));
+            std::thread::sleep(POLL);
+
+            // Check the current default output device UID.
+            let new_uid = match ca::System::default_output_device().and_then(|d| d.uid()) {
+                Ok(uid) => uid.to_string(),
+                Err(_) => {
+                    // Transient — output device may be momentarily absent
+                    // during Bluetooth pairing / USB reconnect. Next tick.
+                    continue;
+                }
+            };
+
+            if new_uid == current_uid {
+                continue;
+            }
+
+            info!(
+                "Default output changed ({} → {}), respawning Process Tap",
+                current_uid, new_uid
+            );
+
+            // Drop the old capture BEFORE building the new one. The old
+            // aggregate device is still bound to the previous sub-device
+            // which is no longer the default — keeping it alive just wastes
+            // a CoreAudio slot and leaks a device entry if rebuild succeeds.
+            current = None;
+
+            match build_capture(tx.clone(), is_disconnected.clone()) {
+                Ok((cap, _cfg, uid)) => {
+                    info!("Process Tap re-anchored to '{}'", uid);
+                    current = Some(cap);
+                    current_uid = uid;
+                }
+                Err(e) => {
+                    // Rebuild failed — most commonly because the new device
+                    // isn't fully available yet (Bluetooth handoff). Update
+                    // current_uid so we don't retry the same switch every
+                    // tick; capture stays silent until the user switches
+                    // again or the next default-change fires.
+                    warn!(
+                        "Process Tap rebuild failed after switch to '{}': {}",
+                        new_uid, e
+                    );
+                    current_uid = new_uid;
+                }
+            }
         }
-        drop(capture);
+
+        drop(current);
         debug!("Process Tap capture thread exited");
     });
 
