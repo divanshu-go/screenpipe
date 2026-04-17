@@ -245,6 +245,21 @@ const CURATED_MODELS: ModelEntry[] = [
     cost_tier: 'free',
     recommended_for: ['pipes', 'chat'],
   },
+  {
+    id: 'gemini-3.1-flash-lite',
+    object: 'model',
+    owned_by: 'google',
+    name: 'Gemini 3.1 Flash-Lite',
+    description: 'cheapest multimodal — high-volume, low-latency',
+    tags: ['free', 'general', 'vision'],
+    free: true,
+    context_window: 1000000,
+    best_for: ['high-volume', 'extraction', 'general'],
+    speed: 'fast',
+    intelligence: 'medium',
+    cost_tier: 'free',
+    recommended_for: ['pipes', 'chat'],
+  },
   // ── Confidential inference (Tinfoil — secure enclaves) ──
   {
     id: 'gemma4-31b',
