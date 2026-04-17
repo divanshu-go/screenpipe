@@ -486,31 +486,29 @@ pub async fn spawn_screenpipe(
 
     let recording_config = store.to_recording_config(data_dir);
 
-    // Persist auto-generated API key to the SecretStore (encrypted in db.sqlite)
-    // so it survives restarts and is discoverable by `screenpipe auth token`.
+    // Mirror the resolved API auth key to the SecretStore in db.sqlite so it's
+    // the single source of truth for every reader: the running server, the
+    // `screenpipe auth token` CLI, and external MCP clients that read db.sqlite
+    // directly. Stored as plaintext (zero nonce, base64-encoded) — this is a
+    // localhost-only API key and encryption-at-rest would block cross-process
+    // readers that don't share the keychain key (notably the MCP server, which
+    // is a Node.js process without keychain access).
     if let Some(ref key) = recording_config.api_auth_key {
-        if store.recording.api_key.is_empty() {
-            let key_clone = key.clone();
-            let data_dir = recording_config.data_dir.clone();
-            tauri::async_runtime::spawn(async move {
-                let db_path = data_dir.join("db.sqlite");
-                let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
-                if let Ok(pool) = sqlx::SqlitePool::connect(&db_url).await {
-                    let secret_key = match crate::secrets::get_key() {
-                        crate::secrets::KeyResult::Found(k) => Some(k),
-                        _ => None,
-                    };
-                    if let Ok(store) = screenpipe_secrets::SecretStore::new(pool, secret_key).await
-                    {
-                        if let Err(e) = store.set("api_auth_key", key_clone.as_bytes()).await {
-                            tracing::warn!("failed to persist API key to secret store: {}", e);
-                        } else {
-                            tracing::info!("api auth: key persisted to encrypted secret store");
-                        }
+        let key_clone = key.clone();
+        let data_dir = recording_config.data_dir.clone();
+        tauri::async_runtime::spawn(async move {
+            let db_path = data_dir.join("db.sqlite");
+            let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
+            if let Ok(pool) = sqlx::SqlitePool::connect(&db_url).await {
+                if let Ok(store) = screenpipe_secrets::SecretStore::new(pool, None).await {
+                    if let Err(e) = store.set("api_auth_key", key_clone.as_bytes()).await {
+                        tracing::warn!("failed to sync API key to secret store: {}", e);
+                    } else {
+                        tracing::info!("api auth: key synced to secret store");
                     }
                 }
-            });
-        }
+            }
+        });
     }
 
     let server_arc = state.server.clone();
