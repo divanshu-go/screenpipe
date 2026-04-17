@@ -10,8 +10,9 @@ import { motion, AnimatePresence } from "framer-motion";
 import { commands } from "@/lib/utils/tauri";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { readTextFile, writeFile } from "@tauri-apps/plugin-fs";
-import { homeDir, join } from "@tauri-apps/api/path";
+import { readTextFile, writeFile, mkdir } from "@tauri-apps/plugin-fs";
+import { homeDir, join, dirname } from "@tauri-apps/api/path";
+import { platform } from "@tauri-apps/plugin-os";
 import posthog from "posthog-js";
 
 // ─── Icons ───────────────────────────────────────────────────────────────────
@@ -87,6 +88,8 @@ async function readMcpConfig(configPath: string): Promise<Record<string, unknown
 async function writeMcpConfig(configPath: string, config: Record<string, unknown>): Promise<void> {
   if (!config.mcpServers || typeof config.mcpServers !== "object") config.mcpServers = {};
   (config.mcpServers as Record<string, unknown>).screenpipe = SCREENPIPE_MCP_CONFIG;
+  // Ensure parent directory exists (Claude Desktop may not have created it yet)
+  await mkdir(await dirname(configPath), { recursive: true });
   await writeFile(configPath, new TextEncoder().encode(JSON.stringify(config, null, 2)));
 }
 
@@ -109,6 +112,43 @@ async function installCursorMcp(): Promise<void> {
   await writeMcpConfig(configPath, config);
 }
 
+// Claude Desktop
+async function getClaudeMcpConfigPath(): Promise<string> {
+  const home = await homeDir();
+  const os = platform();
+  console.log("[claude-mcp] platform:", os, "home:", home);
+  if (os === "windows") {
+    return join(home, "AppData", "Roaming", "Claude", "claude_desktop_config.json");
+  }
+  return join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json");
+}
+
+async function isClaudeMcpInstalled(): Promise<boolean> {
+  try {
+    const configPath = await getClaudeMcpConfigPath();
+    console.log("[claude-mcp] checking install at:", configPath);
+    const content = await readTextFile(configPath);
+    return !!JSON.parse(content)?.mcpServers?.screenpipe;
+  } catch (e) {
+    console.log("[claude-mcp] isInstalled check failed:", e);
+    return false;
+  }
+}
+
+async function installClaudeMcp(): Promise<void> {
+  const configPath = await getClaudeMcpConfigPath();
+  console.log("[claude-mcp] installing to:", configPath);
+  const config = await readMcpConfig(configPath);
+  console.log("[claude-mcp] existing config:", JSON.stringify(config));
+  try {
+    await writeMcpConfig(configPath, config);
+    console.log("[claude-mcp] write succeeded");
+  } catch (e) {
+    console.error("[claude-mcp] write failed:", e);
+    throw e;
+  }
+}
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 interface Integration {
@@ -118,7 +158,7 @@ interface Integration {
   valueProp: string;
   ahaCopy: string;
   isPro: boolean;
-  type: "oauth" | "mcp" | "chatgpt" | "lmstudio";
+  type: "oauth" | "mcp" | "chatgpt" | "claude";
 }
 
 type CardState = "idle" | "connecting" | "connected" | "error";
@@ -157,15 +197,6 @@ const PRO_INTEGRATIONS: Integration[] = [
 
 const FREE_INTEGRATIONS: Integration[] = [
   {
-    id: "github",
-    cardKey: "github",
-    name: "GitHub",
-    valueProp: "link commits & PRs to work context",
-    ahaCopy: "code context active",
-    isPro: false,
-    type: "oauth",
-  },
-  {
     id: "cursor",
     cardKey: "cursor",
     name: "Cursor",
@@ -184,29 +215,29 @@ const FREE_INTEGRATIONS: Integration[] = [
     type: "chatgpt",
   },
   {
-    id: "lmstudio",
-    cardKey: "lmstudio",
-    name: "LM Studio",
-    valueProp: "run local AI models with full screen context",
-    ahaCopy: "local AI connected",
+    id: "claude",
+    cardKey: "claude",
+    name: "Claude",
+    valueProp: "give Claude Desktop full memory of your screen",
+    ahaCopy: "MCP installed — restart Claude",
     isPro: false,
-    type: "lmstudio",
+    type: "claude",
   },
 ];
 
-// Pro user "also free" section — GitHub, Cursor, ChatGPT (no LM Studio, it's a free-tier highlight)
+// Pro user "also free" section — Claude, Cursor, ChatGPT
 const PRO_FREE_SECTION: Integration[] = [
-  FREE_INTEGRATIONS[0], // GitHub
-  FREE_INTEGRATIONS[1], // Cursor
-  FREE_INTEGRATIONS[2], // ChatGPT
+  FREE_INTEGRATIONS[2], // Claude
+  FREE_INTEGRATIONS[0], // Cursor
+  FREE_INTEGRATIONS[1], // ChatGPT
 ];
 
-// Free-user view: 2×2 grid — Cursor, Gmail (locked teaser), ChatGPT, LM Studio
+// Free-user view: 2×2 grid — Cursor, Gmail (locked teaser), ChatGPT, Claude
 const FREE_USER_ORDER: Integration[] = [
-  FREE_INTEGRATIONS[1], // Cursor
+  FREE_INTEGRATIONS[0], // Cursor
   PRO_INTEGRATIONS[0],  // Gmail (locked teaser)
-  FREE_INTEGRATIONS[2], // ChatGPT
-  FREE_INTEGRATIONS[3], // LM Studio
+  FREE_INTEGRATIONS[1], // ChatGPT
+  FREE_INTEGRATIONS[2], // Claude
 ];
 
 const ICONS: Record<string, React.ReactNode> = {
@@ -219,15 +250,11 @@ const ICONS: Record<string, React.ReactNode> = {
     // eslint-disable-next-line @next/next/no-img-element
     <img src="/images/notion.svg" alt="Notion" className="w-5 h-5 dark:invert" />
   ),
-  github: (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img src="/images/github.png" alt="GitHub" className="w-5 h-5 rounded" />
-  ),
   cursor: <CursorIcon className="w-5 h-5 rounded" />,
   chatgpt: <ChatGptIcon className="w-5 h-5" />,
-  lmstudio: (
+  claude: (
     // eslint-disable-next-line @next/next/no-img-element
-    <img src="/images/lmstudio.png" alt="LM Studio" className="w-5 h-5 rounded" />
+    <img src="/images/claude-ai.svg" alt="Claude" className="w-5 h-5 rounded" />
   ),
 };
 
@@ -509,11 +536,10 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
         if (await isCursorMcpInstalled()) stateUpdates["cursor"] = "connected";
       } catch { /* ignore */ }
 
-      // LM Studio — check if local server is reachable
+      // Claude Desktop MCP
       try {
-        const res = await fetch("http://localhost:1234/v1/models", { signal: AbortSignal.timeout(1500) });
-        if (res.ok) stateUpdates["lmstudio"] = "connected";
-      } catch { /* not running */ }
+        if (await isClaudeMcpInstalled()) stateUpdates["claude"] = "connected";
+      } catch { /* ignore */ }
 
       if (Object.keys(stateUpdates).length > 0)
         setCardStates((prev) => ({ ...prev, ...stateUpdates }));
@@ -622,31 +648,6 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
       setCardState(integration.cardKey, "connecting");
 
       try {
-        if (integration.type === "lmstudio") {
-          const deeplink = "lmstudio://add_mcp?name=screenpipe&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsInNjcmVlbnBpcGUtbWNwIl19";
-          await openUrl(deeplink);
-          // Poll localhost:1234 for up to 8s to confirm LM Studio is running
-          let connected = false;
-          for (let i = 0; i < 8; i++) {
-            await new Promise((r) => setTimeout(r, 1000));
-            try {
-              const res = await fetch("http://localhost:1234/v1/models", { signal: AbortSignal.timeout(800) });
-              if (res.ok) { connected = true; break; }
-            } catch { /* still starting */ }
-          }
-          if (connected) {
-            setCardState("lmstudio", "connected");
-            setDisplayNames((prev) => ({ ...prev, lmstudio: "LM Studio" }));
-            posthog.capture("onboarding_integration_connected", { integration: "lmstudio" });
-          } else {
-            // Deeplink was opened but LM Studio not detected running — treat as connected optimistically
-            setCardState("lmstudio", "connected");
-            setDisplayNames((prev) => ({ ...prev, lmstudio: "MCP added" }));
-            posthog.capture("onboarding_integration_connected", { integration: "lmstudio", optimistic: true });
-          }
-          return;
-        }
-
         if (integration.type === "chatgpt") {
           const res = await commands.chatgptOauthLogin();
           if (res.status === "ok" && res.data) {
@@ -666,8 +667,23 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
           return;
         }
 
-        // Standard OAuth
-        const res = await commands.oauthConnect(integration.id, null);
+        if (integration.type === "claude") {
+          await installClaudeMcp();
+          setCardState(integration.cardKey, "connected");
+          posthog.capture("onboarding_integration_connected", { integration: integration.id });
+          return;
+        }
+
+        // Standard OAuth — race against a 2-min timeout so closing the browser
+        // tab doesn't leave the card stuck in "connecting" forever.
+        const OAUTH_TIMEOUT_MS = 120_000;
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("oauth_timeout")), OAUTH_TIMEOUT_MS)
+        );
+        const res = await Promise.race([
+          commands.oauthConnect(integration.id, null),
+          timeoutPromise,
+        ]);
         if (res.status === "ok" && res.data.connected) {
           setCardState(integration.cardKey, "connected");
           if (res.data.display_name) {
@@ -682,8 +698,13 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
           setCardState(integration.cardKey, "idle");
         }
       } catch (err) {
-        setCardState(integration.cardKey, "error");
-        setTimeout(() => setCardState(integration.cardKey, "idle"), 3000);
+        // Timeout = user closed the browser tab — silently go back to idle
+        if (err instanceof Error && err.message === "oauth_timeout") {
+          setCardState(integration.cardKey, "idle");
+        } else {
+          setCardState(integration.cardKey, "error");
+          setTimeout(() => setCardState(integration.cardKey, "idle"), 3000);
+        }
       }
     },
     [isPro, setCardState]
@@ -808,7 +829,7 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
           </div>
         </div>
       ) : (
-        /* Free layout: 2×2 — Cursor, Gmail (locked teaser), ChatGPT, LM Studio */
+        /* Free layout: 2×2 — Cursor, Gmail (locked teaser), ChatGPT, Claude */
         <>
           <div className="grid grid-cols-2 gap-2 w-full">
             {FREE_USER_ORDER.map((integration, i) => (
