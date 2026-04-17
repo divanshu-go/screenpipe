@@ -241,13 +241,24 @@ pub fn get_store(
     app: &AppHandle,
     _profile_name: Option<String>, // Keep parameter for API compatibility but ignore it
 ) -> anyhow::Result<Arc<tauri_plugin_store::Store<tauri::Wry>>> {
-    let mut guard = STORE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    {
+        let guard = STORE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(ref cached) = *guard {
+            return Ok(cached.clone());
+        }
+    }
 
+    let in_tokio = tokio::runtime::Handle::try_current().is_ok();
+    let store = if in_tokio {
+        tokio::task::block_in_place(|| build_store(app))?
+    } else {
+        build_store(app)?
+    };
+
+    let mut guard = STORE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(ref cached) = *guard {
         return Ok(cached.clone());
     }
-
-    let store = build_store(app)?;
     *guard = Some(store.clone());
     Ok(store)
 }
