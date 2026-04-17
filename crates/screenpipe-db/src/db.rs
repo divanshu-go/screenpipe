@@ -139,6 +139,16 @@ impl Drop for ImmediateTx {
     }
 }
 
+/// True when `e` is a UNIQUE-constraint violation from SQLite. Used by
+/// callers that want to treat benign duplicates as a no-op instead of
+/// letting the ImmediateTx drop uncommitted (which logs a warning).
+fn is_unique_violation(e: &sqlx::Error) -> bool {
+    if let sqlx::Error::Database(db_err) = e {
+        return db_err.is_unique_violation();
+    }
+    false
+}
+
 pub struct DatabaseManager {
     /// Read-only pool. Used for all SELECT queries.
     /// Separated from writes so read bursts (search, timeline, API) can never
@@ -1163,19 +1173,32 @@ impl DatabaseManager {
         let mut tx = self.begin_immediate_with_retry().await?;
 
         // Insert the full transcription
-        let affected = sqlx::query(
+        let result = sqlx::query(
             "UPDATE audio_transcriptions SET transcription = ?1, text_length = ?2 WHERE audio_chunk_id = ?3",
         )
         .bind(trimmed)
         .bind(text_length)
         .bind(audio_chunk_id)
         .execute(&mut **tx.conn())
-        .await?
-        .rows_affected();
+        .await;
 
-        // Commit the transaction for the full transcription
-        tx.commit().await?;
-        Ok(affected as i64)
+        match result {
+            Ok(r) => {
+                tx.commit().await?;
+                Ok(r.rows_affected() as i64)
+            }
+            // UNIQUE(audio_chunk_id, transcription) is enforced by
+            // idx_audio_transcription_chunk_text. Re-transcribing an already-
+            // stored chunk with identical text collides benignly; callers
+            // already treat this as a no-op (see transcription_result.rs).
+            // Commit an empty tx so Drop doesn't fire the noisy
+            // "ImmediateTx dropped without commit" warning.
+            Err(e) if is_unique_violation(&e) => {
+                tx.commit().await?;
+                Ok(0)
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// Replace all transcription rows for an audio chunk with a single new transcription.
