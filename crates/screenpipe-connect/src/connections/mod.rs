@@ -16,6 +16,7 @@ pub mod clickup;
 pub mod confluence;
 pub mod discord;
 pub mod email;
+pub mod financialsense;
 pub mod github_issues;
 pub mod glean;
 pub mod gmail;
@@ -190,6 +191,7 @@ pub fn all_integrations() -> Vec<Box<dyn Integration>> {
         Box::new(trello::Trello),
         Box::new(zendesk::Zendesk),
         Box::new(stripe::Stripe),
+        Box::new(financialsense::FinancialSense),
         Box::new(sentry::Sentry),
         Box::new(vercel::Vercel),
         Box::new(pipedrive::Pipedrive),

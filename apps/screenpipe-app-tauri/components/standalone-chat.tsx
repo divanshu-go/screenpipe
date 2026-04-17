@@ -285,13 +285,11 @@ function GridDissolveLoader({
   label,
   toolName,
   thinkingSecs,
-  tokenCount,
 }: {
   phase?: LoaderPhase;
   label?: string;
   toolName?: string;
   thinkingSecs?: number;
-  tokenCount?: number;
 }) {
   const ROWS = 3;
   const COLS = 5;
@@ -341,12 +339,6 @@ function GridDissolveLoader({
     "analyzing..."
   );
 
-  const tokenLabel = tokenCount != null && tokenCount > 0
-    ? tokenCount >= 1000
-      ? `${(tokenCount / 1000).toFixed(1)}k tokens`
-      : `${tokenCount} tokens`
-    : null;
-
   return (
     <div className="flex items-center gap-2">
       <div
@@ -373,7 +365,7 @@ function GridDissolveLoader({
         ))}
       </div>
       <span className="text-[11px] font-mono text-muted-foreground tracking-wide">
-        {displayLabel}{tokenLabel && <span className="ml-1.5 opacity-60">· {tokenLabel}</span>}
+        {displayLabel}
       </span>
     </div>
   );
@@ -3467,25 +3459,6 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
                       <RefreshCw className="h-3 w-3" />
                     </button>
                   )}
-                  {message.role === "assistant" && !message.content.includes("used all your free queries") && !message.content.startsWith("Error") && message.content !== "Processing..." && (
-                    <button
-                      onClick={() => {
-                        // Find the user message that triggered this response
-                        const msgIndex = messages.findIndex((m) => m.id === message.id);
-                        const userMsg = messages.slice(0, msgIndex).reverse().find((m) => m.role === "user");
-                        if (userMsg) {
-                          setScheduleDialogMessage({
-                            prompt: userMsg.content,
-                            response: message.content,
-                          });
-                        }
-                      }}
-                      className="p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"
-                      title="Run on schedule"
-                    >
-                      <Clock className="h-3 w-3" />
-                    </button>
-                  )}
                   {message.role === "assistant" && (
                     <Popover
                       open={openMessageMenuId === message.id}
@@ -3503,6 +3476,30 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
                         <div className="text-xs text-muted-foreground px-2 py-1 mb-1">
                           {new Date(message.timestamp).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
                         </div>
+                        {!message.content.includes("used all your free queries") &&
+                          !message.content.startsWith("Error") &&
+                          message.content !== "Processing..." && (
+                          <button
+                            onClick={() => {
+                              setOpenMessageMenuId(null);
+                              const msgIndex = messages.findIndex((m) => m.id === message.id);
+                              const userMsg = messages
+                                .slice(0, msgIndex)
+                                .reverse()
+                                .find((m) => m.role === "user");
+                              if (userMsg) {
+                                setScheduleDialogMessage({
+                                  prompt: userMsg.content,
+                                  response: message.content,
+                                });
+                              }
+                            }}
+                            className="w-full flex items-center gap-2 px-2 py-1.5 text-sm rounded-md hover:bg-muted text-left"
+                          >
+                            <Clock className="h-3.5 w-3.5 shrink-0" />
+                            Run on schedule
+                          </button>
+                        )}
                         <button
                           onClick={() => {
                             setOpenMessageMenuId(null);
@@ -3559,7 +3556,6 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
                   phase={loaderPhase}
                   toolName={toolName}
                   thinkingSecs={thinkingSecs}
-                  tokenCount={Math.round(streamedCharCount / 4)}
                 />
               </motion.div>
             );

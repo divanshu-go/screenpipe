@@ -249,20 +249,44 @@ const DEFAULT_IGNORED_WINDOWS_PER_OS: Record<string, string[]> = {
 	linux: ["Info center", "Discover", "Parted"],
 };
 
-// Default Screenpipe Cloud preset
-const DEFAULT_CLOUD_PRESET: AIPreset = {
-	id: "screenpipe-cloud",
-	provider: "screenpipe-cloud",
-	url: "",
-	model: "auto",
-	maxContextChars: 1000000,
-	defaultPreset: true,
-	prompt: "",
-};
+// Two default screenpipe-cloud presets on first install:
+// - "Chat":  Claude Opus 4.7 if the user is pro, Claude Sonnet 4.5 otherwise.
+//           Opus is gated in the ai-gateway (subscribed tier), so pushing
+//           it to non-pro users would 403 their first message.
+// - "Pipes": Claude Haiku 4.5 — cheap/fast for recurring pipe runs.
+//           Pipes default to this preset; users can override per-pipe.
+const CHAT_PRESET_ID = "chat";
+const PIPES_PRESET_ID = "pipes";
 
-// Legacy presets removed — screenpipe-cloud is the only default now
+export function makeDefaultPresets(isPro: boolean): AIPreset[] {
+	return [
+		{
+			id: CHAT_PRESET_ID,
+			provider: "screenpipe-cloud",
+			url: "",
+			model: isPro ? "claude-opus-4-7" : "claude-sonnet-4-5",
+			maxContextChars: 200000,
+			defaultPreset: true,
+			prompt: "",
+		},
+		{
+			id: PIPES_PRESET_ID,
+			provider: "screenpipe-cloud",
+			url: "",
+			model: "claude-haiku-4-5",
+			maxContextChars: 200000,
+			defaultPreset: false,
+			prompt: "",
+		},
+	];
+}
+
+// Seed value — module load can't know pro status yet, so fall back to non-pro.
+// ensureDefaultPreset() re-seeds with pro status once settings.user is loaded.
+const DEFAULT_CLOUD_PRESET: AIPreset = makeDefaultPresets(false)[0];
+
 let DEFAULT_SETTINGS: Settings = {
-			aiPresets: [DEFAULT_CLOUD_PRESET as any],
+			aiPresets: makeDefaultPresets(false) as any,
 			deviceId: crypto.randomUUID(),
 			deepgramApiKey: "",
 			isLoading: false,
@@ -428,7 +452,8 @@ function createSettingsStore() {
 
 		// Migration: Add default presets if user has none
 		if (!settings.aiPresets || settings.aiPresets.length === 0) {
-			settings.aiPresets = [DEFAULT_CLOUD_PRESET as any];
+			const isPro = settings.user?.cloud_subscribed === true;
+			settings.aiPresets = makeDefaultPresets(isPro) as any;
 			needsUpdate = true;
 		}
 
