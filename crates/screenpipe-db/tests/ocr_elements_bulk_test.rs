@@ -63,14 +63,24 @@ mod tests {
             assert_eq!(row.0, frame_id, "frame_id mismatch at idx {}", i);
             assert_eq!(row.1, "ocr", "source != 'ocr' at idx {}", i);
             assert_eq!(row.2, "block", "role != 'block' at idx {}", i);
-            assert_eq!(row.3.as_deref(), Some(format!("text-{}", i).as_str()), "text mismatch at idx {}", i);
+            assert_eq!(
+                row.3.as_deref(),
+                Some(format!("text-{}", i).as_str()),
+                "text mismatch at idx {}",
+                i
+            );
             assert!(row.4.is_none(), "parent_id should be NULL at idx {}", i);
             assert_eq!(row.5, 0, "depth != 0 at idx {}", i);
             assert_eq!(row.6, Some(10.0 + i as f64), "left mismatch at idx {}", i);
             assert_eq!(row.7, Some(20.0 + i as f64), "top mismatch at idx {}", i);
             assert_eq!(row.8, Some(100.0 + i as f64), "width mismatch at idx {}", i);
             assert_eq!(row.9, Some(30.0 + i as f64), "height mismatch at idx {}", i);
-            assert_eq!(row.10, Some((80 + (i % 20) as i64) as f64), "conf mismatch at idx {}", i);
+            assert_eq!(
+                row.10,
+                Some((80 + (i % 20) as i64) as f64),
+                "conf mismatch at idx {}",
+                i
+            );
             assert_eq!(row.11, i as i32, "sort_order mismatch at idx {}", i);
         }
     }
@@ -184,7 +194,11 @@ mod tests {
                 top: "0".into(),
                 width: "10".into(),
                 height: "10".into(),
-                text: if i % 2 == 0 { format!("kept-{}", i) } else { "   ".into() },
+                text: if i % 2 == 0 {
+                    format!("kept-{}", i)
+                } else {
+                    "   ".into()
+                },
             });
         }
         let text_json = serde_json::to_string(&blocks).unwrap();
@@ -208,13 +222,12 @@ mod tests {
             .unwrap();
         let frame_id = inserted[0].0;
         // Only 3 non-empty rows survive (idx 0, 2, 4).
-        let texts: Vec<(String,)> = sqlx::query_as(
-            "SELECT text FROM elements WHERE frame_id = ?1 ORDER BY sort_order ASC",
-        )
-        .bind(frame_id)
-        .fetch_all(&db.pool)
-        .await
-        .unwrap();
+        let texts: Vec<(String,)> =
+            sqlx::query_as("SELECT text FROM elements WHERE frame_id = ?1 ORDER BY sort_order ASC")
+                .bind(frame_id)
+                .fetch_all(&db.pool)
+                .await
+                .unwrap();
         let texts: Vec<&str> = texts.iter().map(|t| t.0.as_str()).collect();
         assert_eq!(texts, vec!["kept-0", "kept-2", "kept-4"]);
     }

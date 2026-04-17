@@ -38,7 +38,11 @@ pub fn is_process_tap_available() -> bool {
                 "Process Tap: macOS {}.{} — {}",
                 major,
                 minor,
-                if available { "available" } else { "not available" }
+                if available {
+                    "available"
+                } else {
+                    "not available"
+                }
             );
             available
         }
@@ -135,7 +139,9 @@ impl Drop for ProcessTapCapture {
     fn drop(&mut self) {
         info!("Process Tap capture stopping");
         if !self._ctx_ptr.is_null() {
-            unsafe { let _ = Box::from_raw(self._ctx_ptr); }
+            unsafe {
+                let _ = Box::from_raw(self._ctx_ptr);
+            }
         }
     }
 }

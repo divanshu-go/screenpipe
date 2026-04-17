@@ -1884,7 +1884,10 @@ impl DatabaseManager {
                 sort_order += 1;
                 if buf.len() >= BULK_CHUNK {
                     if let Err(e) = flush_level0_bulk(tx, frame_id, &buf).await {
-                        debug!("elements: OCR bulk insert failed for frame {}: {}", frame_id, e);
+                        debug!(
+                            "elements: OCR bulk insert failed for frame {}: {}",
+                            frame_id, e
+                        );
                         return;
                     }
                     buf.clear();
@@ -1896,7 +1899,10 @@ impl DatabaseManager {
             // first so sort_order interleaves correctly.
             if !buf.is_empty() {
                 if let Err(e) = flush_level0_bulk(tx, frame_id, &buf).await {
-                    debug!("elements: OCR bulk insert failed for frame {}: {}", frame_id, e);
+                    debug!(
+                        "elements: OCR bulk insert failed for frame {}: {}",
+                        frame_id, e
+                    );
                     return;
                 }
                 buf.clear();
@@ -1989,7 +1995,10 @@ impl DatabaseManager {
         // Flush any remaining buffered level-0 rows.
         if !buf.is_empty() {
             if let Err(e) = flush_level0_bulk(tx, frame_id, &buf).await {
-                debug!("elements: OCR bulk insert failed for frame {}: {}", frame_id, e);
+                debug!(
+                    "elements: OCR bulk insert failed for frame {}: {}",
+                    frame_id, e
+                );
             }
         }
     }

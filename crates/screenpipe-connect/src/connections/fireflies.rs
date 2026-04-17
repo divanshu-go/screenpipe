@@ -70,7 +70,9 @@ impl Integration for Fireflies {
             }
         }
         let email = body["data"]["user"]["email"].as_str().unwrap_or("");
-        let name = body["data"]["user"]["name"].as_str().unwrap_or("authenticated");
+        let name = body["data"]["user"]["name"]
+            .as_str()
+            .unwrap_or("authenticated");
         Ok(if email.is_empty() {
             format!("connected — {}", name)
         } else {
