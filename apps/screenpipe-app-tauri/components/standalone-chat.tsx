@@ -1349,8 +1349,77 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
         setTimeout(() => emit("chat-prefill", data), 500);
       } catch {}
     }
+    // Clean up stale pipe-generation markers (>30 min old) so they don't
+    // leak into a future unrelated chat session.
+    try {
+      const raw = sessionStorage.getItem("pipeGenerationContext");
+      if (raw) {
+        const ctx = JSON.parse(raw);
+        if (!ctx?.started_at || Date.now() - ctx.started_at > 30 * 60 * 1000) {
+          sessionStorage.removeItem("pipeGenerationContext");
+          if (ctx?.generation_id) {
+            posthog.capture("pipe_generation_abandoned", {
+              generation_id: ctx.generation_id,
+              age_ms: Date.now() - (ctx.started_at ?? Date.now()),
+            });
+          }
+        }
+      }
+    } catch {}
     return () => { unlisten.then((fn) => fn()); };
   }, []);
+
+  // Pipe-generation funnel completion detector.
+  // Fires `pipe_generation_completed` the first time Pi's message stream
+  // ends (isLoading: true → false) AFTER we see a new pipe installed
+  // compared to the baseline captured when the user submitted the
+  // "describe a pipe to create" form. Single-shot per generation_id.
+  const prevIsLoadingRef = useRef(isLoading);
+  useEffect(() => {
+    const wasLoading = prevIsLoadingRef.current;
+    prevIsLoadingRef.current = isLoading;
+    if (!wasLoading || isLoading) return; // only fire on true → false edge
+
+    let cancelled = false;
+    (async () => {
+      let ctx: { generation_id: string; started_at: number; baseline_pipes: string[] } | null = null;
+      try {
+        const raw = sessionStorage.getItem("pipeGenerationContext");
+        if (!raw) return;
+        ctx = JSON.parse(raw);
+      } catch {
+        return;
+      }
+      if (!ctx?.generation_id) return;
+
+      try {
+        const res = await localFetch("/pipes");
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled) return;
+        const installedNames: string[] = (data?.data ?? [])
+          .map((p: any) => p?.config?.name ?? p?.name)
+          .filter((n: unknown): n is string => typeof n === "string");
+        const baseline = new Set(ctx.baseline_pipes ?? []);
+        const newPipes = installedNames.filter((n) => !baseline.has(n));
+        if (newPipes.length === 0) return;
+
+        posthog.capture("pipe_generation_completed", {
+          generation_id: ctx.generation_id,
+          pipe_name: newPipes[0],
+          new_pipes_count: newPipes.length,
+          duration_ms: Date.now() - ctx.started_at,
+        });
+        sessionStorage.removeItem("pipeGenerationContext");
+      } catch {
+        // Leave context in place — maybe the next assistant turn installs the pipe.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isLoading]);
 
   // Guard against duplicate chat-prefill processing. The listener below
   // re-subscribes when piInfo changes; during the brief overlap window
