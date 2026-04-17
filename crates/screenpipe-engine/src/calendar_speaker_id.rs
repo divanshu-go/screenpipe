@@ -369,9 +369,14 @@ async fn deduplicate_speaker_by_name(
             continue;
         }
         if names_match(name, &candidate.name) {
-            // Voice matches AND name matches → same person
-            let our_count = db.count_embeddings_for_speaker(newly_named_id).await.unwrap_or(0);
-            let their_count = db.count_embeddings_for_speaker(candidate.id).await.unwrap_or(0);
+            // Voice matches AND name matches → same person.
+            // Count both speakers' samples in parallel — independent DB reads.
+            let (our_res, their_res) = tokio::join!(
+                db.count_embeddings_for_speaker(newly_named_id),
+                db.count_embeddings_for_speaker(candidate.id),
+            );
+            let our_count = our_res.unwrap_or(0);
+            let their_count = their_res.unwrap_or(0);
             // Prefer keeping the candidate (existing, previously-named speaker) when equal —
             // it was identified first and likely has the cleaner display name.
             let (keep_id, merge_id) = if our_count > their_count {
