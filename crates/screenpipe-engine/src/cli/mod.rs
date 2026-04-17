@@ -269,6 +269,12 @@ pub struct RecordArgs {
     #[arg(long, default_value_t = true)]
     pub use_system_default_audio: bool,
 
+    /// [experimental, macOS 14.4+] Capture System Audio via CoreAudio Process
+    /// Tap instead of ScreenCaptureKit. Off by default; ignored on older macOS
+    /// and non-macOS.
+    #[arg(long, default_value_t = false)]
+    pub experimental_coreaudio_system_audio: bool,
+
     /// Data directory. Default to $HOME/.screenpipe
     #[arg(long, value_hint = ValueHint::DirPath)]
     pub data_dir: Option<String>,
@@ -429,6 +435,7 @@ impl RecordArgs {
             transcription_mode: mode_str.to_string(),
             audio_devices: self.audio_device.clone(),
             use_system_default_audio: self.use_system_default_audio,
+            experimental_coreaudio_system_audio: self.experimental_coreaudio_system_audio,
             monitor_ids: self.monitor_id.iter().map(|id| id.to_string()).collect(),
             use_all_monitors: self.use_all_monitors,
             ignored_windows: self.ignored_windows.clone(),

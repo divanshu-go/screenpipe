@@ -70,6 +70,14 @@ pub struct RecordingSettings {
     #[serde(rename = "useSystemDefaultAudio")]
     pub use_system_default_audio: bool,
 
+    /// Experimental: capture System Audio via the CoreAudio Process Tap API
+    /// (macOS 14.4+) instead of ScreenCaptureKit. Avoids SCK's display
+    /// enumeration failures after sleep/wake and the GPU/compositor wake
+    /// overhead. Off by default — existing users keep the SCK path.
+    /// Ignored on macOS <14.4 and on non-macOS platforms.
+    #[serde(rename = "experimentalCoreaudioSystemAudio", default)]
+    pub experimental_coreaudio_system_audio: bool,
+
     /// Duration of each audio chunk in seconds before transcription.
     /// Stored as i32 to match existing store.bin schema (cast to u64 by engine).
     #[serde(rename = "audioChunkDuration")]
@@ -303,6 +311,7 @@ impl Default for RecordingSettings {
             transcription_mode: "batch".to_string(),
             audio_devices: vec![],
             use_system_default_audio: true,
+            experimental_coreaudio_system_audio: false,
             audio_chunk_duration: 30,
             deepgram_api_key: String::new(),
             vad_sensitivity: "high".to_string(),
