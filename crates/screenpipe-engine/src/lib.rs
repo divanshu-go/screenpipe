@@ -5,8 +5,8 @@
 pub mod analytics;
 #[cfg(feature = "apple-intelligence")]
 mod apple_intelligence_api;
-pub mod auth_key;
 pub mod archive;
+pub mod auth_key;
 mod auto_destruct;
 pub mod calendar_speaker_id;
 pub mod cli;

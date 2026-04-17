@@ -21,10 +21,7 @@ use std::path::Path;
 /// 3. plaintext `api_auth_key` in the `db.sqlite` secret store
 /// 4. legacy `~/.screenpipe/auth.json`
 /// 5. auto-generated `sp-<uuid8>`, persisted to the secret store before return
-pub async fn resolve_api_auth_key(
-    data_dir: &Path,
-    settings_key: Option<&str>,
-) -> Result<String> {
+pub async fn resolve_api_auth_key(data_dir: &Path, settings_key: Option<&str>) -> Result<String> {
     let store = open_secret_store(data_dir).await.ok();
 
     // Read the existing secret-store value once — used both as a fallback
