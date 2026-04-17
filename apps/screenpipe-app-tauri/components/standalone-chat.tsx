@@ -3127,13 +3127,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
         >
           <History size={14} />
         </Button>
-        <div className="relative z-10 p-1.5 rounded-lg bg-foreground/5 border border-border/50">
-          <PipeAIIcon size={18} animated={false} className="text-foreground" />
-        </div>
-        <div className="flex-1">
-          <h2 className="font-semibold text-sm tracking-tight">Pipe AI</h2>
-          <p className="text-[10px] text-muted-foreground font-mono uppercase tracking-wider">Screen Activity Assistant</p>
-        </div>
+        <div className="flex-1" />
         <Button
           variant="default"
           size="sm"
