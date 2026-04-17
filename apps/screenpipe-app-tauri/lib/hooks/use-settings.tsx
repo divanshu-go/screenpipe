@@ -699,36 +699,42 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [isSettingsLoaded, settings.user?.token]);
 
-	// Identify with persistent analyticsId for consistent tracking across frontend/backend
+	// Identify the user in PostHog. When a Clerk-authenticated user is present,
+	// we identify by clerk_id (matches the web's identify call), so PostHog
+	// merges the web profile (carrying UTM/gclid from ad attribution) with the
+	// desktop-app profile. Before switching, alias the machine analyticsId to
+	// the clerk_id so prior anonymous app events also merge forward.
 	useEffect(() => {
-		if (settings.analyticsId) {
-			getVersion()
-				.then((appVersion) => {
-					posthog.identify(settings.analyticsId, {
-						email: settings.user?.email,
-						name: settings.user?.name,
-						user_id: settings.user?.id,
-						github_username: settings.user?.github_username,
-						website: settings.user?.website,
-						contact: settings.user?.contact,
-						cloud_subscribed: !!settings.user?.cloud_subscribed,
-						app_version: appVersion,
-					});
-				})
-				.catch(() => {
-					posthog.identify(settings.analyticsId, {
-						email: settings.user?.email,
-						name: settings.user?.name,
-						user_id: settings.user?.id,
-						github_username: settings.user?.github_username,
-						website: settings.user?.website,
-						contact: settings.user?.contact,
-						cloud_subscribed: !!settings.user?.cloud_subscribed,
-					});
-				});
+		if (!settings.analyticsId) return;
+
+		const clerkId = settings.user?.clerk_id || undefined;
+		const distinctId = clerkId || settings.analyticsId;
+
+		if (clerkId) {
+			try { posthog.alias(clerkId); } catch {}
 		}
+
+		const baseProps = {
+			email: settings.user?.email,
+			name: settings.user?.name,
+			user_id: settings.user?.id,
+			clerk_id: clerkId,
+			github_username: settings.user?.github_username,
+			website: settings.user?.website,
+			contact: settings.user?.contact,
+			cloud_subscribed: !!settings.user?.cloud_subscribed,
+			machine_analytics_id: settings.analyticsId,
+		};
+
+		getVersion()
+			.then((appVersion) => {
+				posthog.identify(distinctId, { ...baseProps, app_version: appVersion });
+			})
+			.catch(() => {
+				posthog.identify(distinctId, baseProps);
+			});
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [settings.analyticsId, settings.user?.id, settings.user?.cloud_subscribed]);
+	}, [settings.analyticsId, settings.user?.id, settings.user?.clerk_id, settings.user?.cloud_subscribed]);
 
 	// When user becomes a Pro subscriber, default to cloud transcription (one-time)
 	useEffect(() => {
