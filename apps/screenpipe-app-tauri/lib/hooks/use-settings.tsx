@@ -565,6 +565,37 @@ function createSettingsStore() {
 			needsUpdate = true;
 		}
 
+		// Post-migration: if user becomes pro and the Chat preset is still on the
+		// non-pro fallback (Sonnet), upgrade it to Opus 4.7.
+		// Guards:
+		//   - only touches the preset with id === "chat" (leaves user-created presets alone)
+		//   - only if provider is still screenpipe-cloud and model is exactly the seeded
+		//     Sonnet value (prevents clobbering a manual override like glm-5)
+		//   - _chatOpusAppliedForPro flag prevents re-upgrading after user manually
+		//     switches back to something else
+		if (
+			settings.user?.cloud_subscribed &&
+			!(settings as any)._chatOpusAppliedForPro &&
+			Array.isArray(settings.aiPresets)
+		) {
+			let upgraded = false;
+			settings.aiPresets = settings.aiPresets.map((p: any) => {
+				if (
+					p?.id === "chat" &&
+					p?.provider === "screenpipe-cloud" &&
+					p?.model === "claude-sonnet-4-5"
+				) {
+					upgraded = true;
+					return { ...p, model: "claude-opus-4-7" };
+				}
+				return p;
+			});
+			if (upgraded) {
+				(settings as any)._chatOpusAppliedForPro = true;
+				needsUpdate = true;
+			}
+		}
+
 		// Save migrations if needed
 		if (needsUpdate) {
 			await store.set("settings", settings);
@@ -769,6 +800,40 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 		// Mark migration as done — we no longer force cloud transcription for Pro users.
 		// Local engines (whisper/qwen3) are now the default for all users.
 		settingsStore.set({ _proCloudMigrationDone: true } as any);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [settings.user?.cloud_subscribed, isSettingsLoaded]);
+
+	// Upgrade the seeded "chat" preset Sonnet → Opus 4.7 the moment the user
+	// becomes pro (mirrors the on-load migration for same-session transitions).
+	// Guards match the migration: only touch the unmodified seeded chat preset,
+	// never clobber a user override, only fire once.
+	useEffect(() => {
+		if (!isSettingsLoaded) return;
+		if (!settings.user?.cloud_subscribed) return;
+		if ((settings as any)._chatOpusAppliedForPro) return;
+		if (!Array.isArray(settings.aiPresets)) return;
+
+		const idx = settings.aiPresets.findIndex(
+			(p: any) =>
+				p?.id === "chat" &&
+				p?.provider === "screenpipe-cloud" &&
+				p?.model === "claude-sonnet-4-5"
+		);
+		if (idx === -1) {
+			// Nothing to upgrade, but still record the decision so we don't re-check
+			// every render. User either (a) already has Opus, (b) customized, or
+			// (c) deleted the chat preset.
+			settingsStore.set({ _chatOpusAppliedForPro: true } as any);
+			return;
+		}
+
+		const nextPresets = settings.aiPresets.map((p: any, i: number) =>
+			i === idx ? { ...p, model: "claude-opus-4-7" } : p
+		);
+		settingsStore.set({
+			aiPresets: nextPresets,
+			_chatOpusAppliedForPro: true,
+		} as any);
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [settings.user?.cloud_subscribed, isSettingsLoaded]);
 
