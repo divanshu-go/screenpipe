@@ -956,9 +956,10 @@ async fn do_capture(
         config.walk_timeout_override = Some(decision.timeout);
     }
 
-    let tree_walk_result =
-        tokio::task::spawn_blocking(move || crate::paired_capture::walk_accessibility_tree(&config))
-            .await?;
+    let tree_walk_result = tokio::task::spawn_blocking(move || {
+        crate::paired_capture::walk_accessibility_tree(&config)
+    })
+    .await?;
 
     // If the window was skipped (incognito/private browsing or user filter),
     // bail out entirely — don't OCR the screenshot.
