@@ -141,8 +141,25 @@ pub async fn paired_capture(
             .map(|s| a11y_content_is_thin(s, ctx.window_name, ctx.browser_url, ctx.app_name))
             .unwrap_or(false);
 
+    // Apps where OCR fallback is known to produce low-value output at high CPU
+    // cost. See #3002: Obsidian's fullscreen editor fills OCR with gutter line
+    // numbers + tab-bar cruft, running Apple Vision at ~150% CPU per capture
+    // while the user's actual notes are already plain-text .md files on disk
+    // (the obsidian-sync pipe reads them directly). Skipping the fallback here
+    // saves the CPU and leaves the frame accessibility_text empty — search
+    // for those frames returns nothing for now, which is no worse than the
+    // garbage we'd otherwise index.
+    let app_skips_ocr_fallback = ctx.app_name.is_some_and(|name| {
+        let n = name.to_lowercase();
+        n == "obsidian"
+    });
+
     // Run OCR when: no a11y text, app prefers OCR, OR a11y text is thin (hybrid)
-    let (ocr_text, ocr_text_json) = if !has_accessibility_text || a11y_is_thin {
+    // Skip when the app is on the low-value-OCR list (regardless of a11y state —
+    // if a11y had text we wouldn't be here anyway).
+    let (ocr_text, ocr_text_json) = if (!has_accessibility_text || a11y_is_thin)
+        && !app_skips_ocr_fallback
+    {
         // Windows native OCR is async, so call it directly (not inside spawn_blocking)
         #[cfg(target_os = "windows")]
         {

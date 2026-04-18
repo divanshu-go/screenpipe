@@ -258,6 +258,17 @@ impl MacosTreeWalker {
             let eui_attr_name = cf::String::from_str("AXEnhancedUserInterface");
             let eui_attr = ax::Attr::with_string(&eui_attr_name);
             let _ = ax_app.set_attr(eui_attr, cf::Boolean::value_true());
+
+            // Also set AXManualAccessibility — the Chromium-specific flag.
+            // Newer Electron builds (and Chrome itself) respond to this without
+            // the "screen reader is active" side effects of EnhancedUserInterface.
+            // Some apps (Obsidian in particular — issue #3002) never materialize
+            // their tree under EnhancedUserInterface alone. Idempotent to set
+            // both: the better-supported flag wins.
+            let ama_attr_name = cf::String::from_str("AXManualAccessibility");
+            let ama_attr = ax::Attr::with_string(&ama_attr_name);
+            let _ = ax_app.set_attr(ama_attr, cf::Boolean::value_true());
+
             debug!("enhanced AX mode enabled for pid={} app={}", pid, app_name);
         }
 
