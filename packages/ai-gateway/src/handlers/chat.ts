@@ -6,10 +6,15 @@ import { createProvider } from '../providers';
 import { addCorsHeaders } from '../utils/cors';
 import { logModelOutcome } from '../services/model-health';
 
-// Auto model waterfall — ordered by quality/cost ratio (all free or near-free)
+// Auto model waterfall — ordered by quality/cost ratio (all free or near-free).
+//
+// `glm-5.1` and `minimax-m2.7` (vertexIds zai-org/glm-5.1-maas and
+// minimax/minimax-m2-maas) removed 2026-04-17 after Vertex started
+// returning 404 for both — the publisher model paths we configured on
+// 04-14 aren't valid. Users on `auto` were paying 2 × failed-request
+// latency per chat message. Re-add once IDs are re-verified against
+// Vertex Model Garden.
 const AUTO_WATERFALL = [
-  'glm-5.1',
-  'minimax-m2.7',
   'kimi-k2.5',
   'deepseek-v3.2',
   'gemini-3-flash',
