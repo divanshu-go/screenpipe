@@ -85,6 +85,15 @@ struct TapCallbackCtx {
     is_disconnected: Arc<AtomicBool>,
 }
 
+// Diagnostic counters — report callback rate + peak amplitude once per
+// second when `screenpipe_audio::core::process_tap=debug` is enabled.
+// Stays silent at default log level. Lets us tell from a user's log whether
+// the tap "isn't firing" vs "fires but captures zeros" vs "captures real
+// audio" without forcing the user to rebuild with extra instrumentation.
+static TAP_CALLBACKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static TAP_LAST_LOG_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static TAP_MAX_AMP_BITS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 extern "C" fn tap_io_proc(
     _device: ca::Device,
     _now: &cat::AudioTimeStamp,
@@ -94,6 +103,8 @@ extern "C" fn tap_io_proc(
     _output_time: &cat::AudioTimeStamp,
     ctx: Option<&mut TapCallbackCtx>,
 ) -> os::Status {
+    TAP_CALLBACKS.fetch_add(1, Ordering::Relaxed);
+
     let ctx = match ctx {
         Some(c) => c,
         None => return Default::default(),
@@ -114,6 +125,50 @@ extern "C" fn tap_io_proc(
 
     let sample_count = buf.data_bytes_size as usize / std::mem::size_of::<f32>();
     let samples = unsafe { std::slice::from_raw_parts(buf.data as *const f32, sample_count) };
+
+    // Track peak amplitude this window via lock-free CAS. We bit-cast f32
+    // into u32 so AtomicU32 works — fine because abs()'d f32 values are
+    // always >= 0 and compare-ordering works in that half of the float range.
+    let local_max = samples.iter().copied().fold(0.0f32, |a, b| a.max(b.abs()));
+    let local_max_bits = local_max.to_bits();
+    loop {
+        let cur_bits = TAP_MAX_AMP_BITS.load(Ordering::Relaxed);
+        if f32::from_bits(local_max_bits) <= f32::from_bits(cur_bits) {
+            break;
+        }
+        if TAP_MAX_AMP_BITS
+            .compare_exchange(
+                cur_bits,
+                local_max_bits,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            )
+            .is_ok()
+        {
+            break;
+        }
+    }
+
+    // ~1s throttled log. `debug!` is a no-op when the module's level is
+    // below debug, so the per-call syscall to SystemTime::now() here is
+    // the only real overhead — call rate is ~200Hz which is negligible.
+    let now_ns = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let last = TAP_LAST_LOG_NS.load(Ordering::Relaxed);
+    if now_ns.saturating_sub(last) > 1_000_000_000
+        && TAP_LAST_LOG_NS
+            .compare_exchange(last, now_ns, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+    {
+        let count = TAP_CALLBACKS.swap(0, Ordering::Relaxed);
+        let max_amp = f32::from_bits(TAP_MAX_AMP_BITS.swap(0, Ordering::Relaxed));
+        debug!(
+            "[tap_io_proc] {} callbacks/s, {} samples/call, peak_amp={:.4} ch={}",
+            count, sample_count, max_amp, ctx.channels
+        );
+    }
 
     let mono = audio_to_mono(samples, ctx.channels);
     let _ = ctx.tx.send(mono);
