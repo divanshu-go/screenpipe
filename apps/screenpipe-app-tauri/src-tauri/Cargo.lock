@@ -9725,7 +9725,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.4.5"
+version = "2.4.12"
 dependencies = [
  "anyhow",
  "arboard",
@@ -9830,13 +9830,14 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio"
-version = "0.3.285"
+version = "0.3.286"
 dependencies = [
  "anyhow",
  "audiopipe",
  "bytemuck",
  "bytes",
  "chrono",
+ "cidre 0.15.0",
  "clap",
  "cpal",
  "crossbeam",
@@ -9885,7 +9886,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
-version = "0.3.285"
+version = "0.3.286"
 dependencies = [
  "dirs 6.0.0",
  "serde",
@@ -9897,7 +9898,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.3.285"
+version = "0.3.286"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -9926,7 +9927,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.3.285"
+version = "0.3.286"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -9974,7 +9975,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-db"
-version = "0.3.285"
+version = "0.3.286"
 dependencies = [
  "anyhow",
  "chrono",
@@ -9999,9 +10000,10 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-engine"
-version = "0.3.285"
+version = "0.3.286"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "async-trait",
  "axum 0.7.9",
  "base64 0.22.1",
@@ -10063,7 +10065,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.3.285"
+version = "0.3.286"
 dependencies = [
  "anyhow",
  "chrono",
@@ -10079,7 +10081,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.3.285"
+version = "0.3.286"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -10132,7 +10134,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-vault"
-version = "0.3.285"
+version = "0.3.286"
 dependencies = [
  "argon2",
  "chacha20poly1305",
