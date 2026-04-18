@@ -14,6 +14,8 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use image::DynamicImage;
+use once_cell::sync::Lazy;
+use regex::Regex;
 use screenpipe_a11y::tree::{create_tree_walker, TreeSnapshot, TreeWalkerConfig};
 use screenpipe_core::pii_removal::remove_pii;
 use screenpipe_db::DatabaseManager;
@@ -25,6 +27,20 @@ use std::time::Instant;
 #[cfg(not(target_os = "windows"))]
 use tokio::sync::Semaphore;
 use tracing::{debug, warn};
+
+/// Strip gutter-line-number runs from OCR output.
+///
+/// Obsidian and other code/markdown editors render a line-number gutter that
+/// Apple Vision extracts as long digit globs: "93154155156157158159…". These
+/// blob into the indexed text and dominate search results without adding
+/// information. A run of 30+ digits (optionally separated by whitespace) is
+/// almost certainly a gutter — real prose rarely has that density. Phone
+/// numbers, UUIDs, and timestamps are all shorter than the 30-digit threshold.
+fn strip_gutter_noise(text: &str) -> String {
+    static GUTTER: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?:\d[\s]*){30,}").expect("valid regex"));
+    GUTTER.replace_all(text, " ").into_owned()
+}
 
 /// Limits concurrent OCR tasks to avoid CPU spikes when multiple monitors
 /// trigger capture simultaneously.
@@ -141,28 +157,11 @@ pub async fn paired_capture(
             .map(|s| a11y_content_is_thin(s, ctx.window_name, ctx.browser_url, ctx.app_name))
             .unwrap_or(false);
 
-    // Apps where OCR fallback is known to produce low-value output at high CPU
-    // cost. See #3002: Obsidian's fullscreen editor fills OCR with gutter line
-    // numbers + tab-bar cruft, running Apple Vision at ~150% CPU per capture
-    // while the user's actual notes are already plain-text .md files on disk
-    // (the obsidian-sync pipe reads them directly). Skipping the fallback here
-    // saves the CPU and leaves the frame accessibility_text empty — search
-    // for those frames returns nothing for now, which is no worse than the
-    // garbage we'd otherwise index.
-    let app_skips_ocr_fallback = ctx.app_name.is_some_and(|name| {
-        let n = name.to_lowercase();
-        n == "obsidian"
-    });
-
     // Run OCR when: no a11y text, app prefers OCR, OR a11y text is thin (hybrid)
-    // Skip when the app is on the low-value-OCR list (regardless of a11y state —
-    // if a11y had text we wouldn't be here anyway).
-    let (ocr_text, ocr_text_json) = if (!has_accessibility_text || a11y_is_thin)
-        && !app_skips_ocr_fallback
-    {
+    let (ocr_text, ocr_text_json) = if !has_accessibility_text || a11y_is_thin {
         // Windows native OCR is async, so call it directly (not inside spawn_blocking)
         #[cfg(target_os = "windows")]
-        {
+        let raw = {
             match screenpipe_screen::perform_ocr_windows(&ctx.image).await {
                 Ok((text, json, _confidence)) => (text, json),
                 Err(e) => {
@@ -170,15 +169,15 @@ pub async fn paired_capture(
                     (String::new(), "[]".to_string())
                 }
             }
-        }
+        };
         // Apple and Tesseract OCR are sync, use spawn_blocking with semaphore
         // to limit concurrent OCR and avoid CPU spikes on multi-monitor setups.
         #[cfg(not(target_os = "windows"))]
-        {
+        let raw = {
             let _permit = ocr_semaphore().acquire().await.unwrap();
             let image_for_ocr = ctx.image.clone();
             let languages = ctx.languages.clone();
-            let ocr_result = tokio::task::spawn_blocking(move || {
+            tokio::task::spawn_blocking(move || {
                 #[cfg(target_os = "macos")]
                 {
                     let (text, json, _confidence) =
@@ -193,9 +192,13 @@ pub async fn paired_capture(
                 }
             })
             .await
-            .unwrap_or_else(|_| (String::new(), "[]".to_string()));
-            ocr_result
-        }
+            .unwrap_or_else(|_| (String::new(), "[]".to_string()))
+        };
+
+        // Strip editor gutter noise (see strip_gutter_noise doc). Applied to
+        // the flat text but NOT to text_json — the JSON carries per-box OCR
+        // coordinates which downstream overlay/highlight UIs need intact.
+        (strip_gutter_noise(&raw.0), raw.1)
     } else {
         (String::new(), "[]".to_string())
     };

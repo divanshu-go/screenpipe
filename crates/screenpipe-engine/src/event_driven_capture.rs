@@ -802,10 +802,18 @@ fn resolve_capture_metadata(
     (app_name, window_name, browser_url)
 }
 
-/// Rate-limit OCR-only apps (terminals). These apps bypass accessibility entirely
-/// and always run Vision OCR, which costs ~300ms per frame. Users typing in a
-/// terminal can fire typing-pause/visual-change triggers every few seconds; each
-/// one burns a full core. Cap captures to once per 30s per terminal app.
+/// Rate-limit OCR-heavy apps. Two groups:
+///
+/// **Terminals** (wezterm/alacritty/…): bypass accessibility entirely and
+/// always run Vision OCR (~300ms/frame). Typing-pause triggers fire every
+/// few seconds, so cap at 1/30s.
+///
+/// **Electron document editors** (Obsidian today): AX tree often comes back
+/// empty or thin, forcing OCR on a fullscreen editor. Every capture hits
+/// ~150% CPU for a frame of mostly-useless OCR (gutter line numbers + tab
+/// bar). Same 30s cap keeps the app visible in the timeline while cutting
+/// CPU ~30× — still captures ~2 frames/min of what the user is writing.
+/// See issue #3002.
 ///
 /// Returns `true` if this capture should be skipped (too recent).
 fn terminal_ocr_throttled(app_name: &str) -> bool {
@@ -818,7 +826,11 @@ fn terminal_ocr_throttled(app_name: &str) -> bool {
         || n.contains("kitty")
         || n.contains("hyper")
         || n.contains("warp");
-    if !is_ocr_only {
+    // Electron editors whose AX tree is frequently empty/thin. OCR would run
+    // as a fallback on every capture otherwise — prohibitively expensive on a
+    // fullscreen Obsidian editor.
+    let is_electron_editor = n == "obsidian";
+    if !is_ocr_only && !is_electron_editor {
         return false;
     }
 
