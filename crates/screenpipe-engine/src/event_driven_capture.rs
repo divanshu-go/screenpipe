@@ -1184,20 +1184,56 @@ async fn do_capture(
 /// Cheaply get the focused app name. Used to tag captures and to apply
 /// per-app throttles (walk budget, terminal OCR, Obsidian OCR).
 ///
-/// Tries NSWorkspace first: `Workspace::running_apps()` filtered to
-/// `is_active()` is authoritative at the AppKit level and works for
-/// Electron apps (Obsidian, Discord, …) where the AX sys-wide query
-/// returns empty — see issue #3002. Falls back to the AX path only for
-/// cases where NSWorkspace somehow doesn't report any active app.
+/// Tries NSWorkspace first: filters `running_apps()` to the one with
+/// `is_active() == true`. This is authoritative at the AppKit level and
+/// works for Electron apps (Obsidian, Discord, …) where the AX sys-wide
+/// query returns empty — see issue #3002. Falls back to AX only for
+/// edge cases where NSWorkspace reports no active app (space
+/// transitions, post-login).
 ///
-/// Wrapped in an autorelease pool because `running_apps()` returns
-/// autoreleased `NSRunningApplication` objects; without draining they
-/// leak across polls (same precedent as get_frontmost_pid in
-/// screenpipe-screen).
+/// **Caching**: `running_apps()` allocates an NSArray of every process
+/// (50–200 entries on a typical mac) and the iteration plus `is_active()`
+/// check costs a few ms. Capture triggers fire on every click / typing
+/// pause / visual change — paying that cost on every trigger is wasteful
+/// when the frontmost app rarely changes between triggers. A 1-second
+/// TTL keeps staleness bounded to something no human perceives while
+/// collapsing the common case to a single atomic load.
 #[cfg(target_os = "macos")]
 fn get_focused_app_name_lightweight() -> Option<String> {
+    use arc_swap::ArcSwap;
+    use std::sync::OnceLock;
+    use std::time::{Duration, Instant};
+
+    const CACHE_TTL: Duration = Duration::from_secs(1);
+
+    // (name, captured_at). ArcSwap gives lock-free reads; in the common
+    // case the whole function is one atomic load + a clock read + clone.
+    static CACHE: OnceLock<ArcSwap<(Option<String>, Instant)>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| {
+        ArcSwap::from_pointee((None, Instant::now() - CACHE_TTL - Duration::from_secs(1)))
+    });
+
+    let now = Instant::now();
+    {
+        let snap = cache.load();
+        if now.duration_since(snap.1) < CACHE_TTL {
+            return snap.0.clone();
+        }
+    }
+
+    let fresh = query_frontmost_app_name_uncached();
+    cache.store(std::sync::Arc::new((fresh.clone(), now)));
+    fresh
+}
+
+#[cfg(target_os = "macos")]
+fn query_frontmost_app_name_uncached() -> Option<String> {
     use cidre::{ax, ns, objc};
 
+    // Wrapped in an autorelease pool because `running_apps()` returns
+    // autoreleased NSRunningApplication objects; without draining they
+    // leak across polls (same precedent as get_frontmost_pid in
+    // screenpipe-screen).
     let from_ns = objc::ar_pool(|| {
         let workspace = ns::Workspace::shared();
         let apps = workspace.running_apps();
@@ -1212,9 +1248,8 @@ fn get_focused_app_name_lightweight() -> Option<String> {
         return from_ns;
     }
 
-    // AX fallback — same path that used to be primary. Kept for the edge
-    // case where NSWorkspace reports no active app (rare, e.g. during
-    // space transitions or right after login).
+    // AX fallback — the pre-#3002 path. Kept for the edge cases where
+    // NSWorkspace itself reports no active app.
     let sys = ax::UiElement::sys_wide();
     let app = sys.focused_app().ok()?;
     let pid = app.pid().ok()?;
