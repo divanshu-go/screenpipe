@@ -5,6 +5,7 @@ import { Env, RequestBody } from '../types';
 import { createProvider } from '../providers';
 import { addCorsHeaders } from '../utils/cors';
 import { logModelOutcome } from '../services/model-health';
+import { captureException } from '@sentry/cloudflare';
 
 // Auto model waterfall — ordered by quality/cost ratio (all free or near-free).
 //
@@ -71,9 +72,25 @@ async function tryModel(model: string, body: RequestBody, env: Env): Promise<Res
     if (status === 429 || status >= 500 || status === 408 || msg.includes('429') || msg.includes('Resource exhausted')) {
       console.warn(`auto: ${model} failed (${status}), trying next`);
       logModelOutcome(env, { model, outcome: status === 429 ? 'rate_limited' : 'error' }).catch(() => {});
+      // Rate limits are expected/noisy — skip Sentry for those. 5xx is a
+      // real upstream failure worth knowing about even though we retry.
+      if (status !== 429) {
+        try {
+          captureException(error, {
+            tags: { model, error_path: 'auto_waterfall', status: String(status) },
+            level: 'warning',
+          });
+        } catch {}
+      }
       return null;
     }
     // Non-retriable (400, 401, 403) — bubble up
+    try {
+      captureException(error, {
+        tags: { model, error_path: 'auto_waterfall_fatal', status: String(status) },
+        level: 'error',
+      });
+    } catch {}
     throw error;
   }
 }
