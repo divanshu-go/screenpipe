@@ -4,7 +4,6 @@
 "use client";
 
 import React, { useState, useCallback, useEffect, useMemo } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { LockedSetting, ManagedSwitch } from "@/components/enterprise-locked-setting";
 import {
   Eye,
@@ -204,18 +203,6 @@ export function PrivacySection() {
   const [filterView, setFilterView] = useState<"all" | "personal" | "team">("all");
   const [pushingFilter, setPushingFilter] = useState<string | null>(null);
 
-  // Gate for the experimental CoreAudio System Audio toggle. We only show the
-  // switch on macOS 14.4+ where the Process Tap API actually exists — on any
-  // other platform flipping it is a no-op, so the toggle would just be
-  // confusing. Probed once via a Tauri command that proxies to
-  // `screenpipe_audio::core::process_tap::is_process_tap_available()`.
-  const [coreaudioTapAvailable, setCoreaudioTapAvailable] = useState<boolean | null>(null);
-  useEffect(() => {
-    invoke<boolean>("check_coreaudio_process_tap_available")
-      .then(setCoreaudioTapAvailable)
-      .catch(() => setCoreaudioTapAvailable(false));
-  }, []);
-
   const { items: windowItems, isLoading: isWindowItemsLoading } =
     useSqlAutocomplete("window");
   const { items: urlItems, isLoading: isUrlItemsLoading } =
@@ -304,11 +291,6 @@ export function PrivacySection() {
 
   const handleDrmPauseToggle = (checked: boolean) => {
     handleSettingsChange({ pauseOnDrmContent: checked }, true);
-  };
-
-  const handleCoreaudioSystemAudioToggle = (checked: boolean) => {
-    handleSettingsChange({ experimentalCoreaudioSystemAudio: checked }, true);
-    posthog.capture("experimental_coreaudio_system_audio_toggled", { enabled: checked });
   };
 
   const handleRecordWhileLockedToggle = (checked: boolean) => {
@@ -670,34 +652,6 @@ export function PrivacySection() {
           </div>
         </CardContent>
       </Card>
-
-      {/* Experimental: CoreAudio System Audio (macOS 14.4+ only) */}
-      {coreaudioTapAvailable && (
-        <Card>
-          <CardContent className="px-3 py-2.5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2.5">
-                <Tv className="h-4 w-4 text-muted-foreground shrink-0" />
-                <div>
-                  <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                    Experimental: CoreAudio System Audio
-                    <Badge variant="outline" className="h-4 text-[10px] px-1">beta</Badge>
-                    <HelpTooltip text="use the coreaudio process tap api (macos 14.4+) to capture system audio instead of screencapturekit. avoids sck display enumeration and sleep/wake issues. if disabled or on an older macos, system audio uses screencapturekit as before. restart recording after changing." />
-                  </h3>
-                  <p className="text-xs text-muted-foreground">
-                    Capture System Audio via CoreAudio instead of ScreenCaptureKit
-                  </p>
-                </div>
-              </div>
-              <Switch
-                id="experimentalCoreaudioSystemAudio"
-                checked={Boolean(settings.experimentalCoreaudioSystemAudio ?? false)}
-                onCheckedChange={handleCoreaudioSystemAudioToggle}
-              />
-            </div>
-          </CardContent>
-        </Card>
-      )}
 
       {/* Record While Locked */}
       <Card>
