@@ -1181,13 +1181,40 @@ async fn do_capture(
     })
 }
 
-/// Cheaply get the focused app name via AX APIs without walking the tree.
-/// Used to apply the walk budget to non-AppSwitch triggers (visual change,
-/// idle, manual) so that expensive apps like Chrome get throttled even
-/// when the capture wasn't triggered by an app switch.
+/// Cheaply get the focused app name. Used to tag captures and to apply
+/// per-app throttles (walk budget, terminal OCR, Obsidian OCR).
+///
+/// Tries NSWorkspace first: `Workspace::running_apps()` filtered to
+/// `is_active()` is authoritative at the AppKit level and works for
+/// Electron apps (Obsidian, Discord, …) where the AX sys-wide query
+/// returns empty — see issue #3002. Falls back to the AX path only for
+/// cases where NSWorkspace somehow doesn't report any active app.
+///
+/// Wrapped in an autorelease pool because `running_apps()` returns
+/// autoreleased `NSRunningApplication` objects; without draining they
+/// leak across polls (same precedent as get_frontmost_pid in
+/// screenpipe-screen).
 #[cfg(target_os = "macos")]
 fn get_focused_app_name_lightweight() -> Option<String> {
-    use cidre::{ax, ns};
+    use cidre::{ax, ns, objc};
+
+    let from_ns = objc::ar_pool(|| {
+        let workspace = ns::Workspace::shared();
+        let apps = workspace.running_apps();
+        for app in apps.iter() {
+            if app.is_active() {
+                return app.localized_name().map(|s| s.to_string());
+            }
+        }
+        None
+    });
+    if from_ns.as_deref().is_some_and(|n| !n.is_empty()) {
+        return from_ns;
+    }
+
+    // AX fallback — same path that used to be primary. Kept for the edge
+    // case where NSWorkspace reports no active app (rare, e.g. during
+    // space transitions or right after login).
     let sys = ax::UiElement::sys_wide();
     let app = sys.focused_app().ok()?;
     let pid = app.pid().ok()?;
