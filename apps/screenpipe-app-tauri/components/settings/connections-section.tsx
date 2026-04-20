@@ -1063,10 +1063,13 @@ function OAuthPanel({ integrationId, integrationName }: { integrationId: string;
 
   const handleCancel = async () => {
     connectingRef.current = false;
-    setStatus("idle");
-    // Drop the pending OAuth sender on the backend so the awaiting oauth_connect
-    // call returns immediately instead of hanging on the 120s timeout.
+    // Stay in "loading" (cancel button visible, connect button hidden) until the
+    // backend has actually dropped the pending sender. Otherwise a quick
+    // cancel→connect sequence can race: a late-arriving oauth_cancel would
+    // retain-drop the new flow's entry by integration_id. Keeping the connect
+    // button hidden during the cancel IPC eliminates that window.
     try { await commands.oauthCancel(integrationId); } catch { /* ignore */ }
+    setStatus("idle");
   };
 
   const handleDisconnect = async () => {
