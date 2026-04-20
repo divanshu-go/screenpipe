@@ -3295,13 +3295,31 @@ impl PipeManager {
                             ),
                         }
                     } else {
-                        (
-                            config.model.clone(),
-                            config.provider.clone(),
-                            None,
-                            None,
-                            None,
-                        )
+                        // No preset in pipe config — use the user's default preset
+                        // so scheduled pipes respect the user's AI settings instead
+                        // of silently falling through to screenpipe cloud.
+                        match resolve_preset(&pipes_dir, "default") {
+                            Some(resolved) => {
+                                info!(
+                                    "scheduler: pipe '{}' has no preset configured, using user's default preset → model={}, provider={:?}",
+                                    name, resolved.model, resolved.provider
+                                );
+                                (
+                                    resolved.model,
+                                    resolved.provider,
+                                    resolved.url,
+                                    resolved.api_key,
+                                    resolved.prompt,
+                                )
+                            }
+                            None => (
+                                config.model.clone(),
+                                config.provider.clone(),
+                                None,
+                                None,
+                                None,
+                            ),
+                        }
                     };
 
                     // Pre-configure pi with the pipe's provider
