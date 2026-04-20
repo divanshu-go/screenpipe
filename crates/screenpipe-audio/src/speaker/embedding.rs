@@ -17,7 +17,8 @@ impl EmbeddingExtractor {
             .map_err(anyhow::Error::msg)
             .context("compute_fbank failed")?;
         let features = features.insert_axis(ndarray::Axis(0)); // Add batch dimension
-        let inputs = ort::inputs!["feats" => ort::value::TensorRef::from_array_view(features.view())?];
+        let inputs =
+            ort::inputs!["feats" => ort::value::TensorRef::from_array_view(features.view())?];
 
         let ort_outs = self.session.run(inputs)?;
         let ort_out = ort_outs

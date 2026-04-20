@@ -331,7 +331,10 @@ impl PresetFallbackRegistry {
                     breaker.state = BreakerState::Closed;
                     breaker.failure_count = 0;
                     breaker.success_streak = 0;
-                    info!("startup recovery: preset '{}' reset to closed (stale open >24h)", id);
+                    info!(
+                        "startup recovery: preset '{}' reset to closed (stale open >24h)",
+                        id
+                    );
                 } else {
                     breaker.state = BreakerState::HalfOpen;
                     info!("startup recovery: preset '{}' moved to half-open", id);
