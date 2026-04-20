@@ -58,7 +58,14 @@ pub const OAUTH_REDIRECT_URI: &str = "http://localhost:3030/connections/oauth/ca
 // /connections/oauth/callback HTTP handler (screenpipe-engine)
 // ---------------------------------------------------------------------------
 
-pub static PENDING_OAUTH: Lazy<Mutex<HashMap<String, oneshot::Sender<String>>>> =
+/// A pending OAuth flow: the sender that delivers the callback payload,
+/// tagged with its `integration_id` so `oauth_cancel` can find and drop it.
+pub struct PendingOAuth {
+    pub integration_id: String,
+    pub sender: oneshot::Sender<String>,
+}
+
+pub static PENDING_OAUTH: Lazy<Mutex<HashMap<String, PendingOAuth>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 // ---------------------------------------------------------------------------

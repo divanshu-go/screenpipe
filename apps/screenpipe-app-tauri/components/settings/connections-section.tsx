@@ -1019,7 +1019,7 @@ function OAuthPanel({ integrationId, integrationName }: { integrationId: string;
   const [status, setStatus] = useState<"idle" | "loading" | "connected">("idle");
   const [displayName, setDisplayName] = useState<string | null>(null);
   // Ref guard so a cancelled or timed-out connect attempt doesn't update state after cancel.
-  const connectingRef = React.useRef(false);
+  const connectingRef = useRef(false);
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -1047,14 +1047,13 @@ function OAuthPanel({ integrationId, integrationName }: { integrationId: string;
     connectingRef.current = true;
     try {
       const res = await commands.oauthConnect(integrationId, null);
+      if (!connectingRef.current) return; // cancelled — handleCancel owns the UI
       if (res.status === "ok" && res.data.connected) {
-        // always reflect a successful connection, even if user hit cancel
         setStatus("connected");
         await fetchStatus();
-      } else if (connectingRef.current) {
+      } else {
         setStatus("idle");
       }
-      // if cancelled and not connected: handleCancel already set idle, leave it
     } catch {
       if (connectingRef.current) setStatus("idle");
     } finally {
@@ -1062,9 +1061,12 @@ function OAuthPanel({ integrationId, integrationName }: { integrationId: string;
     }
   };
 
-  const handleCancel = () => {
+  const handleCancel = async () => {
     connectingRef.current = false;
     setStatus("idle");
+    // Drop the pending OAuth sender on the backend so the awaiting oauth_connect
+    // call returns immediately instead of hanging on the 120s timeout.
+    try { await commands.oauthCancel(integrationId); } catch { /* ignore */ }
   };
 
   const handleDisconnect = async () => {

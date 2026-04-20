@@ -668,6 +668,7 @@ async fn main() {
                 chatgpt_oauth::chatgpt_oauth_models,
                 // Generic OAuth commands (works for any OAuth integration)
                 oauth::oauth_connect,
+                oauth::oauth_cancel,
                 oauth::oauth_status,
                 oauth::oauth_disconnect,
                 oauth::oauth_list_instances,
@@ -944,6 +945,7 @@ async fn main() {
             chatgpt_oauth::chatgpt_oauth_models,
             // Generic OAuth commands (works for any OAuth integration)
             oauth::oauth_connect,
+            oauth::oauth_cancel,
             oauth::oauth_status,
             oauth::oauth_disconnect,
             oauth::oauth_list_instances,

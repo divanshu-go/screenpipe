@@ -863,6 +863,20 @@ async oauthConnect(integrationId: string, instance: string | null) : Promise<Res
 }
 },
 /**
+ * Cancel any in-flight OAuth flow(s) for the given integration.
+ * Dropping the stored sender makes the awaiting `oauth_connect` call fail fast
+ * with "OAuth channel closed before code was received" instead of hanging for
+ * the full 120s timeout.
+ */
+async oauthCancel(integrationId: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("oauth_cancel", { integrationId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Check whether a valid (non-expired) OAuth token exists for the given integration.
  */
 async oauthStatus(integrationId: string, instance: string | null) : Promise<Result<OAuthStatus, string>> {
