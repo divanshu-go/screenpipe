@@ -44,7 +44,6 @@ use crate::{
         ffmpeg::{get_new_file_path_with_timestamp, write_audio_to_file},
     },
     vad::{
-        self,
         silero::SileroVad,
         swift_coreml::SwiftCoreMLVad,
         webrtc::WebRtcVad,
@@ -128,7 +127,6 @@ impl AudioManager {
             DeviceManager::new(options.experimental_coreaudio_system_audio).await?;
         let segmentation_manager = Arc::new(SegmentationManager::new(options.is_disabled).await?);
         let status = RwLock::new(AudioManagerStatus::Stopped);
-        vad::set_output_speech_threshold(options.output_speech_threshold);
         let vad_engine: Arc<Mutex<Box<dyn VadEngine + Send>>> = if options.is_disabled {
             Arc::new(Mutex::new(Box::new(WebRtcVad::new())))
         } else {
@@ -142,8 +140,7 @@ impl AudioManager {
                 },
                 VadEngineEnum::WebRtc => Arc::new(Mutex::new(Box::new(WebRtcVad::new()))),
                 VadEngineEnum::SwiftCoreML => match SwiftCoreMLVad::new().await {
-                    Ok(mut vad) => {
-                        vad.set_profiles(options.swift_vad_profiles.clone());
+                    Ok(vad) => {
                         info!("using swift coreml vad backend");
                         Arc::new(Mutex::new(Box::new(vad)))
                     }
