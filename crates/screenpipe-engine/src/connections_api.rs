@@ -883,6 +883,9 @@ pub struct OAuthCallbackQuery {
     pub code: Option<String>,
     pub state: Option<String>,
     pub error: Option<String>,
+    // QuickBooks Online returns realmId (company ID) as a callback param alongside the code.
+    #[serde(rename = "realmId")]
+    pub realm_id: Option<String>,
 }
 
 /// GET /connections/oauth/callback — receives the provider redirect after user approves.
@@ -917,7 +920,15 @@ async fn oauth_callback(Query(params): Query<OAuthCallbackQuery>) -> (StatusCode
 
     match sender {
         Some(tx) => {
-            let _ = tx.send(code);
+            // For providers that return extra callback params (e.g. QuickBooks realmId),
+            // encode them alongside the code as JSON so the Tauri command can extract both.
+            let payload = match params.realm_id {
+                Some(ref rid) => {
+                    serde_json::json!({"code": code, "realmId": rid}).to_string()
+                }
+                None => code,
+            };
+            let _ = tx.send(payload);
             let html =
                 "<html><body style=\"font-family:system-ui;text-align:center;padding:60px\">\
                 <h2>Connected!</h2>\
@@ -1078,8 +1089,42 @@ async fn connection_proxy(
         }
     };
 
-    // Load credentials
-    let creds = mgr.get_credentials(&id).await.ok().flatten();
+    // Load credentials from connections.json, then merge non-secret fields from the OAuth
+    // token JSON so that {placeholder} patterns in base_url (e.g. {realmId} for QuickBooks)
+    // resolve correctly without requiring a separate credential write.
+    let raw_creds = mgr.get_credentials(&id).await.ok().flatten();
+    let creds: Option<Map<String, Value>> = {
+        let mut merged = raw_creds.unwrap_or_default();
+        if let Some(oauth_json) = screenpipe_connect::oauth::load_oauth_json(
+            state.secret_store.as_deref(),
+            &id,
+            None,
+        )
+        .await
+        {
+            const SKIP: &[&str] = &[
+                "access_token",
+                "refresh_token",
+                "id_token",
+                "token_type",
+                "expires_in",
+                "expires_at",
+                "scope",
+            ];
+            if let Some(obj) = oauth_json.as_object() {
+                for (k, v) in obj {
+                    if !SKIP.contains(&k.as_str()) && !merged.contains_key(k) {
+                        merged.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+        }
+        if merged.is_empty() {
+            None
+        } else {
+            Some(merged)
+        }
+    };
     let oauth_token = screenpipe_connect::oauth::read_oauth_token_instance(
         state.secret_store.as_deref(),
         &id,
