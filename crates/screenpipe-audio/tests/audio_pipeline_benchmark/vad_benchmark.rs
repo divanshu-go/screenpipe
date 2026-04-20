@@ -16,9 +16,10 @@ use crate::audio_fixtures::{self, SAMPLE_RATE};
 use crate::ground_truth::ScenarioManifest;
 use crate::metrics::{self, VadSweepResult};
 
+use rstest::rstest;
 use screenpipe_audio::utils::audio::normalize_v2;
 use screenpipe_audio::vad::silero::SileroVad;
-use screenpipe_audio::vad::VadEngine;
+use screenpipe_audio::vad::{VadEngine, VadEngineEnum};
 use vad_rs::VadStatus;
 
 /// The thresholds to sweep. Includes the current production value (0.05).
@@ -441,13 +442,24 @@ fn vad_threshold_sweep_framework() {
     }
 }
 
-/// Silero VAD integration test: verifies the model loads and processes audio.
+fn vad_engine_name(kind: VadEngineEnum) -> &'static str {
+    match kind {
+        VadEngineEnum::Silero => "silero",
+        VadEngineEnum::SwiftCoreML => "swift_coreml",
+        VadEngineEnum::WebRtc => "webrtc",
+    }
+}
+
+/// VAD integration test: verifies both Silero and SwiftCoreML load and process audio.
 /// Uses silence and white noise (won't trigger speech detection, but validates
-/// the VAD engine works end-to-end).
+/// the VAD engines work end-to-end).
+#[rstest]
+#[case(VadEngineEnum::Silero)]
+#[cfg_attr(target_os = "macos", case(VadEngineEnum::SwiftCoreML))]
 #[tokio::test]
-async fn vad_silero_integration() {
+async fn vad_engine_integration(#[case] vad_kind: VadEngineEnum) {
     println!("\n{}", "=".repeat(70));
-    println!(" VAD SILERO INTEGRATION TEST");
+    println!(" VAD {} INTEGRATION TEST", vad_engine_name(vad_kind).to_uppercase());
     println!("{}", "=".repeat(70));
 
     let mut vad = crate::new_test_vad().await;

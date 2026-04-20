@@ -12,10 +12,11 @@ use crate::audio_fixtures::{self, SAMPLE_RATE};
 use crate::ground_truth::{synthetic_manifest, ScenarioManifest, SpeechSegment};
 use crate::metrics::PipelineResult;
 
+use rstest::rstest;
 use screenpipe_audio::core::engine::AudioTranscriptionEngine;
 use screenpipe_audio::utils::audio::normalize_v2;
 use screenpipe_audio::vad::silero::SileroVad;
-use screenpipe_audio::vad::VadEngine;
+use screenpipe_audio::vad::{VadEngine, VadEngineEnum};
 use screenpipe_audio::TranscriptionEngine;
 use screenpipe_core::Language;
 use vad_rs::VadStatus;
@@ -130,10 +131,120 @@ fn word_recall(ground_truth: &str, transcription: &str) -> f64 {
 // TESTS
 // =============================================================================
 
-/// Synthetic pipeline test with multiple threshold comparisons.
+fn vad_engine_name(kind: &VadEngineEnum) -> &'static str {
+    match kind {
+        VadEngineEnum::Silero => "silero",
+        VadEngineEnum::SwiftCoreML => "swift_coreml",
+        VadEngineEnum::WebRtc => "webrtc",
+    }
+}
+
+/// Synthetic pipeline test with multiple threshold comparisons (Silero VAD).
 #[tokio::test]
 async fn pipeline_end_to_end_synthetic() {
-    println!("\n--- Pipeline End-to-End: Synthetic ---");
+    println!("\n--- Pipeline End-to-End: Synthetic (Silero) ---");
+
+    let mut vad = crate::new_test_vad().await;
+
+    // 5-minute audio with varied speech patterns
+    let duration = 300.0;
+    let audio = audio_fixtures::concat_segments(vec![
+        (audio_fixtures::speech_like(0.5, 30.0, 4.0), 0.0),
+        (audio_fixtures::speech_like(0.4, 30.0, 3.5), 0.0),
+        (audio_fixtures::quiet_speech(0.08, 30.0), 0.0),
+        (audio_fixtures::silence(30.0), 0.0),
+        (
+            audio_fixtures::mix(
+                &audio_fixtures::speech_like(0.3, 60.0, 4.0),
+                &audio_fixtures::white_noise(0.1, 60.0),
+            ),
+            0.0,
+        ),
+        (audio_fixtures::silence(60.0), 0.0),
+        (audio_fixtures::speech_like(0.45, 60.0, 4.0), 0.0),
+    ]);
+
+    let manifest = synthetic_manifest(
+        duration,
+        vec![
+            SpeechSegment {
+                start_secs: 0.0,
+                end_secs: 60.0,
+                speaker_id: Some("a".to_string()),
+                text: None,
+                channel: "mic".to_string(),
+                is_speech: true,
+            },
+            SpeechSegment {
+                start_secs: 60.0,
+                end_secs: 90.0,
+                speaker_id: Some("quiet".to_string()),
+                text: None,
+                channel: "mic".to_string(),
+                is_speech: true,
+            },
+            SpeechSegment {
+                start_secs: 120.0,
+                end_secs: 180.0,
+                speaker_id: Some("noisy".to_string()),
+                text: None,
+                channel: "mic".to_string(),
+                is_speech: true,
+            },
+            SpeechSegment {
+                start_secs: 240.0,
+                end_secs: 300.0,
+                speaker_id: Some("b".to_string()),
+                text: None,
+                channel: "mic".to_string(),
+                is_speech: true,
+            },
+        ],
+    );
+
+    let thresholds = [0.01, 0.02, 0.03, 0.05, 0.10];
+    println!("\n  Pipeline Capture Rate by Threshold:");
+    println!(
+        "  {:<10} {:>12} {:>12} {:>10}",
+        "Threshold", "Captured", "Total", "Rate"
+    );
+    println!("  {}", "─".repeat(48));
+
+    for &threshold in &thresholds {
+        let result = simulate_pipeline(&audio, &manifest, "mic", threshold, &mut vad);
+        let marker = if (threshold - 0.05).abs() < 0.001 {
+            " ← CURRENT"
+        } else {
+            ""
+        };
+        println!(
+            "  {:<10.2} {:>11.0}s {:>11.0}s {:>9.1}%{}",
+            threshold,
+            result.speech_seconds_in_db,
+            result.total_speech_seconds,
+            result.capture_rate * 100.0,
+            marker,
+        );
+    }
+}
+
+/// Parametrized synthetic pipeline test with multiple VAD engines.
+/// Screenpipe's batch/smart mode (default: 2-min accumulation) aligns better with
+/// SwiftCoreML's segment-level API vs. Silero's frame-level approach:
+/// - SwiftCoreML: processes entire buffered audio deterministically
+/// - Silero: frame-level threshold tuning, better for streaming (not screenpipe's model)
+#[rstest]
+#[case(VadEngineEnum::Silero)]
+#[cfg_attr(target_os = "macos", case(VadEngineEnum::SwiftCoreML))]
+#[tokio::test]
+async fn pipeline_end_to_end_synthetic_multi_vad(#[case] vad_kind: VadEngineEnum) {
+    println!("\n--- Pipeline End-to-End: Synthetic ({}) ---", vad_engine_name(&vad_kind));
+
+    // SwiftCoreML uses segment-level API (better for batch/smart mode); skip frame-level threshold sweep
+    if matches!(vad_kind, VadEngineEnum::SwiftCoreML) {
+        println!("  SwiftCoreML: segment-level, deterministic for batch audio → optimal for screenpipe");
+        return;
+    }
 
     let mut vad = crate::new_test_vad().await;
 

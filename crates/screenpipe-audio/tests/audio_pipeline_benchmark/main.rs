@@ -34,6 +34,7 @@ mod pipeline_benchmark;
 mod quality_regression;
 mod smart_mode_benchmark;
 mod vad_benchmark;
+mod vad_comparison_benchmark;
 
 /// Construct a SileroVad after ensuring the model is fully downloaded.
 /// Fixes a race in parallel test runs: `SileroVad::new()` on its own is
@@ -49,4 +50,33 @@ pub async fn new_test_vad() -> screenpipe_audio::vad::silero::SileroVad {
     screenpipe_audio::vad::silero::SileroVad::new()
         .await
         .expect("failed to init SileroVad")
+}
+
+/// Construct a VAD engine of the specified type.
+#[allow(dead_code)]
+pub async fn new_test_vad_engine(kind: screenpipe_audio::vad::VadEngineEnum) -> Box<dyn screenpipe_audio::vad::VadEngine + Send> {
+    use screenpipe_audio::vad::VadEngineEnum;
+
+    match kind {
+        VadEngineEnum::Silero => {
+            screenpipe_audio::vad::silero::SileroVad::ensure_model_available()
+                .await
+                .expect("silero model prefetch failed");
+            Box::new(screenpipe_audio::vad::silero::SileroVad::new()
+                .await
+                .expect("failed to init SileroVad"))
+        }
+        VadEngineEnum::SwiftCoreML => {
+            #[cfg(target_os = "macos")]
+            {
+                use screenpipe_audio::vad::swift_coreml::SwiftCoreMLVad;
+                Box::new(SwiftCoreMLVad::new()
+                    .await
+                    .expect("failed to init SwiftCoreMLVad"))
+            }
+            #[cfg(not(target_os = "macos"))]
+            panic!("SwiftCoreMLVad only available on macOS")
+        }
+        VadEngineEnum::WebRtc => panic!("WebRtc VAD not tested in benchmarks"),
+    }
 }

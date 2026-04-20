@@ -143,6 +143,29 @@ fn get_e2e_seed_flags() -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn default_vad_backend_label() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        "swift_coreml"
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        "silero"
+    }
+}
+
+fn resolve_startup_vad_backend_preference() -> (String, Option<String>) {
+    let resolved = default_vad_backend_label();
+
+    let mut note = None;
+    if resolved == "swift_coreml" {
+        note = Some("using automatic swift_coreml model discovery".to_string());
+    }
+
+    (resolved.to_string(), note)
+}
+
 use tokio::time::{sleep, Duration};
 
 #[tauri::command]
@@ -1527,6 +1550,19 @@ async fn main() {
 
                             if !disable_audio && !permissions_check.microphone.permitted() {
                                 warn!("Microphone permission not granted: {:?}. Audio recording will not work.", permissions_check.microphone);
+                            }
+
+                            let (vad_backend, vad_note) = resolve_startup_vad_backend_preference();
+                            if let Some(note) = vad_note {
+                                info!(
+                                    "Audio VAD backend preference at startup: {} [{}]",
+                                    vad_backend, note
+                                );
+                            } else {
+                                info!(
+                                    "Audio VAD backend preference at startup: {}",
+                                    vad_backend
+                                );
                             }
 
                             info!("Starting server core + capture on dedicated runtime...");

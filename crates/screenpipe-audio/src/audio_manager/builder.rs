@@ -18,7 +18,7 @@ use crate::{
     transcription::{
         deepgram::CUSTOM_DEEPGRAM_API_TOKEN, stt::OpenAICompatibleConfig, VocabularyEntry,
     },
-    vad::VadEngineEnum,
+    vad::{swift_coreml::SwiftVadProfiles, VadEngineEnum},
 };
 
 use crate::audio_manager::AudioManager;
@@ -40,6 +40,8 @@ pub enum TranscriptionMode {
 pub struct AudioManagerOptions {
     pub transcription_engine: Arc<AudioTranscriptionEngine>,
     pub vad_engine: VadEngineEnum,
+    pub swift_vad_profiles: SwiftVadProfiles,
+    pub output_speech_threshold: f32,
     pub languages: Vec<Language>,
     pub deepgram_api_key: Option<String>,
     /// Configuration for OpenAI Compatible transcription engine
@@ -82,13 +84,47 @@ pub struct AudioManagerOptions {
 
 impl Default for AudioManagerOptions {
     fn default() -> Self {
+        fn env_f32(key: &str, default: f32) -> f32 {
+            env::var(key)
+                .ok()
+                .and_then(|v| v.parse::<f32>().ok())
+                .unwrap_or(default)
+        }
+
+        fn env_f64(key: &str, default: f64) -> f64 {
+            env::var(key)
+                .ok()
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(default)
+        }
+
         let deepgram_api_key = env::var("DEEPGRAM_API_KEY").ok();
         let deepgram_url = env::var("DEEPGRAM_API_URL").ok();
         let enabled_devices = HashSet::new();
+        #[cfg(target_os = "macos")]
+        let vad_engine = VadEngineEnum::SwiftCoreML;
+        #[cfg(not(target_os = "macos"))]
+        let vad_engine = VadEngineEnum::Silero;
+
+        let swift_vad_profiles = SwiftVadProfiles {
+            input: crate::vad::swift_coreml::SwiftVadTuningProfile::new(
+                env_f32("SWIFT_VAD_INPUT_SPEECH_THRESHOLD", 0.015),
+                env_f64("SWIFT_VAD_INPUT_MIN_DURATION_ON", 0.25),
+                env_f64("SWIFT_VAD_INPUT_MIN_DURATION_OFF", 0.10),
+            ),
+            output: crate::vad::swift_coreml::SwiftVadTuningProfile::new(
+                env_f32("SWIFT_VAD_OUTPUT_SPEECH_THRESHOLD", 0.15),
+                env_f64("SWIFT_VAD_OUTPUT_MIN_DURATION_ON", 0.12),
+                env_f64("SWIFT_VAD_OUTPUT_MIN_DURATION_OFF", 0.08),
+            ),
+        };
+
         Self {
             output_path: None,
             transcription_engine: Arc::new(AudioTranscriptionEngine::default()),
-            vad_engine: VadEngineEnum::Silero,
+            vad_engine,
+            swift_vad_profiles,
+            output_speech_threshold: env_f32("OUTPUT_SPEECH_THRESHOLD", 0.15),
             languages: vec![],
             deepgram_api_key,
             openai_compatible_config: None,
@@ -132,6 +168,16 @@ impl AudioManagerBuilder {
 
     pub fn vad_engine(mut self, vad_engine: VadEngineEnum) -> Self {
         self.options.vad_engine = vad_engine;
+        self
+    }
+
+    pub fn swift_vad_profiles(mut self, profiles: SwiftVadProfiles) -> Self {
+        self.options.swift_vad_profiles = profiles;
+        self
+    }
+
+    pub fn output_speech_threshold(mut self, threshold: f32) -> Self {
+        self.options.output_speech_threshold = threshold;
         self
     }
 

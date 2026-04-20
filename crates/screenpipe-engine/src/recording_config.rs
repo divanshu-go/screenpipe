@@ -249,10 +249,12 @@ impl RecordingConfig {
         output_path: PathBuf,
         audio_devices: Vec<String>,
     ) -> AudioManagerBuilder {
+        let vad_engine = Self::default_vad_engine();
+
         AudioManagerBuilder::new()
             .is_disabled(self.disable_audio)
             .audio_chunk_duration(Duration::from_secs(self.audio_chunk_duration))
-            .vad_engine(VadEngineEnum::Silero)
+            .vad_engine(vad_engine)
             .languages(self.languages.clone())
             .transcription_engine(self.audio_transcription_engine.clone())
             .enabled_devices(audio_devices)
@@ -266,6 +268,18 @@ impl RecordingConfig {
             .vocabulary(self.vocabulary.clone())
             .batch_max_duration_secs(self.batch_max_duration_secs)
             .channel_config(self.channel_config.clone())
+    }
+
+    fn default_vad_engine() -> VadEngineEnum {
+        #[cfg(target_os = "macos")]
+        {
+            VadEngineEnum::SwiftCoreML
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            VadEngineEnum::Silero
+        }
     }
 
     /// Build a `VisionManagerConfig` from this config.

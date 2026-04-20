@@ -43,7 +43,14 @@ use crate::{
         audio::resample,
         ffmpeg::{get_new_file_path_with_timestamp, write_audio_to_file},
     },
-    vad::{silero::SileroVad, webrtc::WebRtcVad, VadEngine, VadEngineEnum},
+    vad::{
+        self,
+        silero::SileroVad,
+        swift_coreml::SwiftCoreMLVad,
+        webrtc::WebRtcVad,
+        VadEngine,
+        VadEngineEnum,
+    },
     AudioInput, TranscriptionResult,
 };
 
@@ -121,6 +128,7 @@ impl AudioManager {
             DeviceManager::new(options.experimental_coreaudio_system_audio).await?;
         let segmentation_manager = Arc::new(SegmentationManager::new(options.is_disabled).await?);
         let status = RwLock::new(AudioManagerStatus::Stopped);
+        vad::set_output_speech_threshold(options.output_speech_threshold);
         let vad_engine: Arc<Mutex<Box<dyn VadEngine + Send>>> = if options.is_disabled {
             Arc::new(Mutex::new(Box::new(WebRtcVad::new())))
         } else {
@@ -133,6 +141,29 @@ impl AudioManager {
                     }
                 },
                 VadEngineEnum::WebRtc => Arc::new(Mutex::new(Box::new(WebRtcVad::new()))),
+                VadEngineEnum::SwiftCoreML => match SwiftCoreMLVad::new().await {
+                    Ok(mut vad) => {
+                        vad.set_profiles(options.swift_vad_profiles.clone());
+                        info!("using swift coreml vad backend");
+                        Arc::new(Mutex::new(Box::new(vad)))
+                    }
+                    Err(e) => {
+                        warn!(
+                            "swift coreml vad unavailable, falling back to silero: {}",
+                            e
+                        );
+                        match SileroVad::new().await {
+                            Ok(vad) => Arc::new(Mutex::new(Box::new(vad))),
+                            Err(silero_err) => {
+                                warn!(
+                                    "silero vad unavailable after swift fallback, using webrtc: {}",
+                                    silero_err
+                                );
+                                Arc::new(Mutex::new(Box::new(WebRtcVad::new())))
+                            }
+                        }
+                    }
+                },
             }
         };
 
@@ -537,17 +568,7 @@ impl AudioManager {
     async fn start_audio_receiver_handler(&self) -> Result<JoinHandle<()>> {
         let transcription_sender = self.transcription_sender.clone();
         let segmentation_manager = self.segmentation_manager.clone();
-        let segmentation_model_path = segmentation_manager
-            .segmentation_model_path
-            .lock()
-            .await
-            .clone();
         let embedding_manager = segmentation_manager.embedding_manager.clone();
-        let embedding_extractor = segmentation_manager
-            .embedding_extractor
-            .lock()
-            .await
-            .clone();
         let options = self.options.read().await;
         let output_path = options.output_path.clone();
         let languages = options.languages.clone();
@@ -608,6 +629,20 @@ impl AudioManager {
             while let Ok(audio) = whisper_receiver.recv() {
                 metrics.record_chunk_received();
                 debug!("received audio from device: {:?}", audio.device.name);
+
+                // Model/extractor availability can change after startup (background download).
+                // Re-read current state per chunk so we don't stay in fallback mode for the
+                // entire session if models become available a few seconds later.
+                let segmentation_model_path = segmentation_manager
+                    .segmentation_model_path
+                    .lock()
+                    .await
+                    .clone();
+                let embedding_extractor = segmentation_manager
+                    .embedding_extractor
+                    .lock()
+                    .await
+                    .clone();
 
                 // Audio-based call detection: update meeting detector with speech activity.
                 // Output devices (SCK on macOS) produce much quieter audio than mic input,

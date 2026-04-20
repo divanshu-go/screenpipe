@@ -11,7 +11,7 @@ use crate::{
 use anyhow::Result;
 use std::{path::PathBuf, sync::Arc, sync::Mutex as StdMutex};
 use tokio::sync::Mutex;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 use vad_rs::VadStatus;
 
 use super::{
@@ -29,7 +29,8 @@ pub async fn prepare_segments(
     is_output_device: bool,
     filter_music: bool,
 ) -> Result<(tokio::sync::mpsc::Receiver<SpeechSegment>, bool, f32)> {
-    let mut audio_data = normalize_v2(audio_data);
+    let raw_audio_data = audio_data;
+    let mut audio_data = normalize_v2(raw_audio_data);
 
     if filter_music {
         filter_music_frames(&mut audio_data);
@@ -52,7 +53,81 @@ pub async fn prepare_segments(
         vad_engine
             .lock()
             .await
-            .set_speech_threshold(Some(crate::vad::OUTPUT_SPEECH_THRESHOLD));
+            .set_speech_threshold(Some(crate::vad::output_speech_threshold()));
+    }
+
+    let (tx, rx) = tokio::sync::mpsc::channel(100);
+
+    // Apple-native path: use high-fidelity native speech intervals directly when available.
+    // This avoids frame-by-frame proxying in Rust and preserves native timestamps.
+    let native_intervals = vad_engine
+        .lock()
+        .await
+        .speech_segments(raw_audio_data, 16000)?;
+
+    if is_output_device {
+        vad_engine.lock().await.set_speech_threshold(None);
+    }
+
+    if let Some(intervals) = native_intervals {
+        if intervals.is_empty() {
+            debug!(
+                "native vad returned zero intervals for {}; falling back to legacy segmentation",
+                device
+            );
+        } else {
+            let total_duration = raw_audio_data.len() as f32 / 16000.0;
+            let mut speech_duration = 0.0f32;
+
+            for (start, end) in &intervals {
+                speech_duration += (*end - *start).max(0.0) as f32;
+            }
+
+            let speech_ratio = if total_duration > 0.0 {
+                speech_duration / total_duration
+            } else {
+                0.0
+            };
+            let current_min_ratio = crate::vad::min_speech_ratio();
+            let threshold_met = speech_ratio > current_min_ratio;
+
+            debug!(
+                "native vad intervals for {}: {}, speech_ratio: {}, min_speech_ratio: {}",
+                device,
+                intervals.len(),
+                speech_ratio,
+                current_min_ratio
+            );
+
+            if threshold_met {
+                let audio_len = raw_audio_data.len();
+                for (start, end) in intervals {
+                    let start_idx = ((start * 16000.0).floor() as usize).min(audio_len);
+                    let end_idx = ((end * 16000.0).ceil() as usize).min(audio_len);
+                    if end_idx <= start_idx {
+                        continue;
+                    }
+
+                    let samples = raw_audio_data[start_idx..end_idx].to_vec();
+                    if tx
+                        .send(SpeechSegment {
+                            start,
+                            end,
+                            samples,
+                            speaker: "unknown".to_string(),
+                            embedding: Vec::new(),
+                            sample_rate: 16000,
+                        })
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            }
+
+            return Ok((rx, threshold_met, speech_ratio));
+        }
     }
 
     let mut noise = 0.;
@@ -98,9 +173,18 @@ pub async fn prepare_segments(
 
     let threshold_met = speech_ratio > current_min_ratio;
 
-    let (tx, rx) = tokio::sync::mpsc::channel(100);
     if !audio_frames.is_empty() && threshold_met {
         if segmentation_model_path.is_none() || embedding_extractor.is_none() {
+            let missing = match (segmentation_model_path.is_none(), embedding_extractor.is_none()) {
+                (true, true) => "segmentation model and embedding extractor",
+                (true, false) => "segmentation model",
+                (false, true) => "embedding extractor",
+                (false, false) => "none",
+            };
+            warn!(
+                "speaker segmentation fallback for {}: {} unavailable; transcribing full chunk",
+                device, missing
+            );
             let mut fallback_segment = Vec::new();
             fallback_segment.extend_from_slice(&audio_data);
 

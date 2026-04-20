@@ -23,7 +23,7 @@ use screenpipe_core::Language;
 use std::path::PathBuf;
 use std::{sync::Arc, sync::Mutex as StdMutex};
 use tokio::sync::Mutex;
-use tracing::error;
+use tracing::{debug, error};
 use whisper_rs::WhisperState;
 
 use crate::{AudioInput, TranscriptionResult};
@@ -293,17 +293,135 @@ pub async fn process_audio_input(
     };
 
     let is_output_device = audio.device.device_type == crate::core::device::DeviceType::Output;
-    let (mut segments, speech_ratio_ok, speech_ratio) = prepare_segments(
-        &audio_data,
-        vad_engine,
-        segmentation_model_path.as_ref(),
-        embedding_manager,
-        embedding_extractor,
-        &audio.device.to_string(),
-        is_output_device,
-        filter_music,
-    )
-    .await?;
+    let (mut segments, speech_ratio_ok, speech_ratio) = if let Some(path) = pre_written_path.as_ref() {
+        if is_output_device {
+            vad_engine
+                .lock()
+                .await
+                .set_speech_threshold(Some(crate::vad::output_speech_threshold()));
+        }
+
+        let prewritten_path = std::path::Path::new(path);
+        let is_wav = prewritten_path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.eq_ignore_ascii_case("wav"))
+            .unwrap_or(false);
+
+        let native_file_intervals = if is_wav {
+            vad_engine
+                .lock()
+                .await
+                .speech_segments_from_file(prewritten_path)?
+        } else {
+            debug!(
+                "pre-written audio is not WAV ({}), using in-memory native VAD intervals",
+                path
+            );
+            vad_engine
+                .lock()
+                .await
+                .speech_segments(&audio_data, SAMPLE_RATE as usize)?
+        };
+
+        if is_output_device {
+            vad_engine.lock().await.set_speech_threshold(None);
+        }
+
+        if let Some(intervals) = native_file_intervals {
+            if intervals.is_empty() {
+                debug!(
+                    "native file-based vad returned zero intervals for {}; falling back to legacy segmentation",
+                    audio.device
+                );
+                prepare_segments(
+                    &audio_data,
+                    vad_engine,
+                    segmentation_model_path.as_ref(),
+                    embedding_manager,
+                    embedding_extractor,
+                    &audio.device.to_string(),
+                    is_output_device,
+                    filter_music,
+                )
+                .await?
+            } else {
+                let (tx, rx) = tokio::sync::mpsc::channel(100);
+                let total_duration = audio_data.len() as f32 / SAMPLE_RATE as f32;
+                let mut speech_duration = 0.0f32;
+
+                for (start, end) in &intervals {
+                    speech_duration += (*end - *start).max(0.0) as f32;
+                }
+
+                let speech_ratio = if total_duration > 0.0 {
+                    speech_duration / total_duration
+                } else {
+                    0.0
+                };
+                let threshold_met = speech_ratio > crate::vad::min_speech_ratio();
+
+                if threshold_met {
+                    let audio_len = audio_data.len();
+                    for (start, end) in intervals {
+                        let start_idx = ((start * SAMPLE_RATE as f64).floor() as usize).min(audio_len);
+                        let end_idx = ((end * SAMPLE_RATE as f64).ceil() as usize).min(audio_len);
+                        if end_idx <= start_idx {
+                            continue;
+                        }
+
+                        if tx
+                            .send(SpeechSegment {
+                                start,
+                                end,
+                                samples: audio_data[start_idx..end_idx].to_vec(),
+                                speaker: "unknown".to_string(),
+                                embedding: Vec::new(),
+                                sample_rate: SAMPLE_RATE,
+                            })
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                }
+
+                debug!(
+                    "using native file-based vad intervals for {}: {} segments, speech_ratio: {}",
+                    audio.device,
+                    if threshold_met { "accepted" } else { "rejected" },
+                    speech_ratio
+                );
+
+                (rx, threshold_met, speech_ratio)
+            }
+        } else {
+            prepare_segments(
+                &audio_data,
+                vad_engine,
+                segmentation_model_path.as_ref(),
+                embedding_manager,
+                embedding_extractor,
+                &audio.device.to_string(),
+                is_output_device,
+                filter_music,
+            )
+            .await?
+        }
+    } else {
+        prepare_segments(
+            &audio_data,
+            vad_engine,
+            segmentation_model_path.as_ref(),
+            embedding_manager,
+            embedding_extractor,
+            &audio.device.to_string(),
+            is_output_device,
+            filter_music,
+        )
+        .await?
+    };
 
     metrics.record_vad_result(speech_ratio_ok, speech_ratio);
 
