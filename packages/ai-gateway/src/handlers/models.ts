@@ -4,7 +4,7 @@
 
 import { Env, UserTier } from '../types';
 import { createSuccessResponse, createErrorResponse, addCorsHeaders } from '../utils/cors';
-import { getTierConfig } from '../services/usage-tracker';
+import { getTierConfig, getModelWeight } from '../services/usage-tracker';
 import { listAnthropicModels } from '../providers/anthropic-proxy';
 import { getModelHealth, ModelHealthStatus } from '../services/model-health';
 
@@ -29,6 +29,15 @@ interface ModelEntry {
   warning?: string;
   /** Live health status from rolling 5-minute error rate */
   health?: ModelHealthStatus;
+  /**
+   * How many "daily query" units one message on this model consumes.
+   * 0 = doesn't count against the user's daily cap (free-tier Vertex,
+   * auto, gemini-3-flash, etc.). Higher = fewer messages before cap.
+   * UI uses `floor(remaining / query_weight)` to warn when the user is
+   * about to run out for a weighted model. Populated server-side from
+   * `getModelWeight()` so client doesn't have to mirror the table.
+   */
+  query_weight?: number;
 }
 
 /** Curated model catalog — single source of truth */
@@ -402,6 +411,10 @@ export async function handleModelListing(env: Env, tier: UserTier = 'subscribed'
         model.health = health[model.id];
       }
       // Default: healthy (no data = no errors)
+
+      // Attach per-message query weight so UIs can warn the user before
+      // they run out for a weighted model. 0 means "doesn't count."
+      model.query_weight = getModelWeight(model.id);
     }
 
     return addCorsHeaders(createSuccessResponse({
