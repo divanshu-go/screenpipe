@@ -1133,7 +1133,18 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
   const piThinkingStartRef = useRef<number | null>(null);
   const piSessionSyncedRef = useRef(false);
   const piSessionIdRef = useRef<string>(crypto.randomUUID());
-  const piRunningConfigRef = useRef<{ provider: string; model: string; token: string | null } | null>(null);
+  // Tracks the config Pi is currently running with so `handlePiRestart` can
+  // decide between a hot-swap (`pi_set_model`) and a full respawn. Update
+  // this ref on every Pi start/restart/swap.
+  const piRunningConfigRef = useRef<{
+    provider: string;
+    model: string;
+    url: string;
+    apiKey: string | null;
+    maxTokens: number;
+    systemPrompt: string | null;
+    token: string | null;
+  } | null>(null);
 
   // Active pipe execution (when watching a running pipe)
   const [activePipeExecution, setActivePipeExecution] = useState<{
@@ -1892,11 +1903,69 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
     return () => clearInterval(interval);
   }, []);
 
-  // Restart Pi explicitly when user saves a preset — no useEffect, no debounce.
+  // Apply a preset change to the running Pi process.
+  //
+  // - If ONLY provider/model changed: `pi_set_model` — keeps the subprocess
+  //   alive and preserves the full conversation, so the user can switch
+  //   haiku ↔ sonnet ↔ opus mid-session without losing context.
+  // - If any other spawn-time field changed (url, apiKey, maxTokens, systemPrompt):
+  //   full restart via `pi_update_config` — those are baked into Pi's CLI args
+  //   and models.json, so the subprocess has to be respawned to see them.
+  //
   // Called directly from the AIPresetsSelector onPresetSaved callback.
   const handlePiRestart = useCallback((preset: AIPreset) => {
     const providerConfig = buildProviderConfig(preset);
-    console.log("[Pi] User saved preset, restarting:", providerConfig?.provider, providerConfig?.model);
+    if (!providerConfig) return;
+
+    // Compare against the currently-running config. If we only know
+    // provider+model (older ref shape), we can still decide on the hot-swap
+    // path as long as the non-tracked fields are unchanged from the last
+    // full restart — which is exactly the invariant we maintain here by
+    // updating the ref on every hot-swap/restart.
+    const running = piRunningConfigRef.current;
+    const providerChanged = !running || running.provider !== providerConfig.provider;
+    const modelChanged = !running || running.model !== providerConfig.model;
+    const spawnTimeFieldsChanged =
+      !running ||
+      running.url !== providerConfig.url ||
+      running.apiKey !== providerConfig.apiKey ||
+      running.maxTokens !== providerConfig.maxTokens ||
+      running.systemPrompt !== providerConfig.systemPrompt ||
+      running.token !== (settings.user?.token ?? null);
+
+    if (!providerChanged && !modelChanged && !spawnTimeFieldsChanged) {
+      // Preset save that didn't actually change anything Pi cares about.
+      return;
+    }
+
+    if (!spawnTimeFieldsChanged && (providerChanged || modelChanged)) {
+      // Hot-swap path — preserves conversation state.
+      console.log("[Pi] Hot-swap model:", providerConfig.provider, providerConfig.model);
+      commands
+        .piSetModel(piSessionIdRef.current, providerConfig)
+        .then(() => {
+          piRunningConfigRef.current = {
+            provider: providerConfig.provider,
+            model: providerConfig.model,
+            url: providerConfig.url,
+            apiKey: providerConfig.apiKey,
+            maxTokens: providerConfig.maxTokens,
+            systemPrompt: providerConfig.systemPrompt,
+            token: settings.user?.token ?? null,
+          };
+        })
+        .catch((e) => {
+          console.error("[Pi] Hot-swap failed, falling back to full restart:", e);
+          piSessionSyncedRef.current = false;
+          commands.piUpdateConfig(settings.user?.token ?? null, providerConfig).catch((err) => {
+            console.error("[Pi] Fallback restart also failed:", err);
+          });
+        });
+      return;
+    }
+
+    // Full restart — spawn-time field changed.
+    console.log("[Pi] Full restart (spawn-time field changed):", providerConfig.provider, providerConfig.model);
     piSessionSyncedRef.current = false;
     commands.piUpdateConfig(settings.user?.token ?? null, providerConfig).catch((e) => {
       console.error("[Pi] Preset switch failed:", e);
@@ -2434,7 +2503,15 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
                 piSessionSyncedRef.current = false;
                 // Keep running-config ref in sync so preset watcher doesn't re-trigger
                 if (providerConfig) {
-                  piRunningConfigRef.current = { provider: providerConfig.provider, model: providerConfig.model, token: settings.user?.token ?? null };
+                  piRunningConfigRef.current = {
+                    provider: providerConfig.provider,
+                    model: providerConfig.model,
+                    url: providerConfig.url,
+                    apiKey: providerConfig.apiKey,
+                    maxTokens: providerConfig.maxTokens,
+                    systemPrompt: providerConfig.systemPrompt,
+                    token: settings.user?.token ?? null,
+                  };
                 }
               } else {
                 console.error("[Pi] Auto-restart failed:", result.error);
@@ -2770,7 +2847,15 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
             piCrashCountRef.current = 0; // reset crash loop counter on manual start
             // Keep running-config ref in sync so preset watcher doesn't re-trigger
             if (providerConfig) {
-              piRunningConfigRef.current = { provider: providerConfig.provider, model: providerConfig.model, token: settings.user?.token ?? null };
+              piRunningConfigRef.current = {
+                provider: providerConfig.provider,
+                model: providerConfig.model,
+                url: providerConfig.url,
+                apiKey: providerConfig.apiKey,
+                maxTokens: providerConfig.maxTokens,
+                systemPrompt: providerConfig.systemPrompt,
+                token: settings.user?.token ?? null,
+              };
             }
           } else {
             const providerLabel = providerConfig?.provider || "AI";

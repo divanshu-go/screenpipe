@@ -659,6 +659,7 @@ async fn main() {
                 pi::pi_prompt,
                 pi::pi_abort,
                 pi::pi_new_session,
+                pi::pi_set_model,
                 pi::pi_update_config,
                 // ChatGPT OAuth commands
                 chatgpt_oauth::chatgpt_oauth_login,
@@ -936,6 +937,7 @@ async fn main() {
             pi::pi_prompt,
             pi::pi_abort,
             pi::pi_new_session,
+            pi::pi_set_model,
             pi::pi_update_config,
             // ChatGPT OAuth commands
             chatgpt_oauth::chatgpt_oauth_login,
@@ -1065,14 +1067,9 @@ async fn main() {
                     }
                 });
 
-                // Hide overlay when user switches Spaces (e.g. three-finger swipe).
-                // This no longer causes feedback loops because we removed
-                // activateIgnoringOtherApps + activation policy toggling.
-                space_monitor::setup_space_listener(app.handle().clone());
-
-                // Set up pinch-to-zoom: store the app handle so the gesture
-                // recognizer callback (in window/gesture.rs) can emit Tauri events.
-                crate::window::init_magnify_handler(app.handle().clone());
+                // 26.5 repro bisect: startup hooks disabled
+                // space_monitor::setup_space_listener(app.handle().clone());
+                // crate::window::init_magnify_handler(app.handle().clone());
 
             }
 

@@ -54,6 +54,15 @@ async checkArcInstalled() : Promise<boolean> {
     return await TAURI_INVOKE("check_arc_installed");
 },
 /**
+ * Returns true on macOS 14.4+ where the CoreAudio Process Tap API is
+ * available. Used to gate the "experimental System Audio via CoreAudio"
+ * toggle — we don't show it on platforms where flipping it would be a
+ * no-op. False on Windows, Linux, and older macOS.
+ */
+async checkCoreaudioProcessTapAvailable() : Promise<boolean> {
+    return await TAURI_INVOKE("check_coreaudio_process_tap_available");
+},
+/**
  * Check if Automation permission for Arc is already granted.
  * In production (.app bundle): uses direct FFI check (correct identity, no Terminal).
  * In dev mode: runs the binary itself via launchctl (detached from Terminal) so
@@ -798,8 +807,30 @@ async piNewSession(sessionId: string | null) : Promise<Result<null, string>> {
 }
 },
 /**
+ * Hot-swap Pi's active model without killing the subprocess. Preserves the
+ * full conversation state in-place — the user can switch haiku ↔ sonnet ↔ opus
+ * mid-session and the new model sees the real threaded history, not a
+ * glued-transcript workaround.
+ * 
+ * Pi's RPC `set_model` is the right path for provider+model changes only. If
+ * other preset fields change (url, apiKey, maxTokens, systemPrompt) the
+ * caller should fall back to `pi_update_config` which does a full restart
+ * because those are spawn-time args baked into models.json / CLI flags.
+ */
+async piSetModel(sessionId: string | null, providerConfig: PiProviderConfig) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("pi_set_model", { sessionId, providerConfig }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Update Pi config and restart the chat session so the new model takes effect.
  * Without restart, Pi keeps using the provider/model from its original CLI args.
+ * 
+ * Prefer `pi_set_model` when only provider+model changed — it preserves the
+ * conversation state instead of killing the subprocess.
  */
 async piUpdateConfig(userToken: string | null, providerConfig: PiProviderConfig | null) : Promise<Result<null, string>> {
     try {
@@ -1103,7 +1134,6 @@ export type AudioDeviceInfo = { name: string; isDefault: boolean }
 export type BrowserAutomationStatus = { name: string; status: string; running: boolean }
 export type BrowserLogEntry = { level: string; message: string }
 export type CacheFile = { path: string; label: string; size_bytes: bigint }
-export type KeychainStatus = { state: string }
 export type CachedSuggestions = { suggestions: Suggestion[]; generatedAt: string; mode: string; aiGenerated: boolean; tags: string[] }
 export type CalendarEventItem = { id: string; title: string; 
 /**
@@ -1134,6 +1164,7 @@ export type EmbeddedLLM = { enabled: boolean; model: string; port: number }
 export type HardwareCapability = { hasGpu: boolean; cpuCores: bigint; totalMemoryGb: number; recommendedEngine: string; reason: string }
 export type IcsCalendarEntry = { name: string; url: string; enabled: boolean }
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue }
+export type KeychainStatus = { state: string }
 export type LogFile = { name: string; path: string; modified_at: bigint }
 export type MonitorDevice = { id: number; stableId: string; name: string; isDefault: boolean; width: number; height: number }
 export type OAuthInstanceInfo = { instance: string | null; display_name: string | null }
@@ -1232,6 +1263,14 @@ audioDevices: string[];
  */
 useSystemDefaultAudio: boolean; 
 /**
+ * Experimental: capture System Audio via the CoreAudio Process Tap API
+ * (macOS 14.4+) instead of ScreenCaptureKit. Avoids SCK's display
+ * enumeration failures after sleep/wake and the GPU/compositor wake
+ * overhead. Off by default — existing users keep the SCK path.
+ * Ignored on macOS <14.4 and on non-macOS platforms.
+ */
+experimentalCoreaudioSystemAudio?: boolean; 
+/**
  * Duration of each audio chunk in seconds before transcription.
  * Stored as i32 to match existing store.bin schema (cast to u64 by engine).
  */
@@ -1301,22 +1340,17 @@ ignoredUrls?: string[];
 ignoreIncognitoWindows: boolean; 
 /**
  * Experimental: pause screen capture when a DRM-protected streaming app
- * (Netflix, Disney+, etc.) or a remote-desktop client (Omnissa/VMware Horizon)
- * is focused. These apps blank their windows while screen recording is active.
+ * (Netflix, Disney+, etc.) or a remote-desktop client (Omnissa/VMware
+ * Horizon) is focused. These apps blank their windows while screen
+ * recording is active.
  * Off by default; engine-only pause (no full app shutdown).
  */
-pauseOnDrmContent?: boolean;
-/**
- * Experimental: capture System Audio via the CoreAudio Process Tap API
- * on macOS 14.4+ instead of ScreenCaptureKit. Off by default. Ignored on
- * older macOS and non-macOS — falls back to SCK there.
- */
-experimentalCoreaudioSystemAudio?: boolean;
+pauseOnDrmContent?: boolean; 
 /**
  * Continue recording audio when the screen is locked.
  * Default: false (audio pauses when screen is locked to save resources).
  */
-recordWhileLocked?: boolean;
+recordWhileLocked?: boolean; 
 /**
  * Automatically append text typed during a meeting to the meeting's note
  * when the meeting ends. Groups typed text by app/window context.
