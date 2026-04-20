@@ -923,9 +923,7 @@ async fn oauth_callback(Query(params): Query<OAuthCallbackQuery>) -> (StatusCode
             // For providers that return extra callback params (e.g. QuickBooks realmId),
             // encode them alongside the code as JSON so the Tauri command can extract both.
             let payload = match params.realm_id {
-                Some(ref rid) => {
-                    serde_json::json!({"code": code, "realmId": rid}).to_string()
-                }
+                Some(ref rid) => serde_json::json!({"code": code, "realmId": rid}).to_string(),
                 None => code,
             };
             let _ = tx.send(payload);
@@ -1095,12 +1093,9 @@ async fn connection_proxy(
     let raw_creds = mgr.get_credentials(&id).await.ok().flatten();
     let creds: Option<Map<String, Value>> = {
         let mut merged = raw_creds.unwrap_or_default();
-        if let Some(oauth_json) = screenpipe_connect::oauth::load_oauth_json(
-            state.secret_store.as_deref(),
-            &id,
-            None,
-        )
-        .await
+        if let Some(oauth_json) =
+            screenpipe_connect::oauth::load_oauth_json(state.secret_store.as_deref(), &id, None)
+                .await
         {
             const SKIP: &[&str] = &[
                 "access_token",

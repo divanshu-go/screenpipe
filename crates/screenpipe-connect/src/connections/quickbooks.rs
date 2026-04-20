@@ -25,14 +25,9 @@ static DEF: IntegrationDef = IntegrationDef {
     fields: &[],
 };
 
-// TODO: register an app at https://developer.intuit.com/ (sandbox or production),
-// set redirect URI to http://localhost:3030/connections/oauth/callback,
-// then replace QUICKBOOKS_CLIENT_ID_PLACEHOLDER with the real client_id and
-// set OAUTH_QUICKBOOKS_CLIENT_ID / OAUTH_QUICKBOOKS_CLIENT_SECRET env vars on the
-// screenpi.pe backend (website/app/api/oauth/exchange/route.ts).
 static OAUTH: OAuthConfig = OAuthConfig {
     auth_url: "https://appcenter.intuit.com/connect/oauth2",
-    client_id: "QUICKBOOKS_CLIENT_ID_PLACEHOLDER",
+    client_id: "ABNRiJAvFPuyXbm2qHmb6RHdKCjvlNIDJWqc31JNMxyC44aIdr",
     extra_auth_params: &[("scope", "com.intuit.quickbooks.accounting")],
     redirect_uri_override: None,
 };
@@ -68,14 +63,11 @@ impl Integration for QuickBooks {
         _creds: &Map<String, Value>,
         secret_store: Option<&SecretStore>,
     ) -> Result<String> {
-        let token =
-            oauth::get_valid_token_instance(secret_store, client, "quickbooks", None)
-                .await
-                .ok_or_else(|| {
-                    anyhow!(
-                        "not connected — connect QuickBooks Online in Settings > Connections"
-                    )
-                })?;
+        let token = oauth::get_valid_token_instance(secret_store, client, "quickbooks", None)
+            .await
+            .ok_or_else(|| {
+                anyhow!("not connected — connect QuickBooks Online in Settings > Connections")
+            })?;
 
         let stored = oauth::load_oauth_json(secret_store, "quickbooks", None)
             .await

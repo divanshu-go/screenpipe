@@ -23,16 +23,9 @@ static DEF: IntegrationDef = IntegrationDef {
     fields: &[],
 };
 
-// TODO: create a new OAuth 2.0 client in the screenpipe GCP project
-// (https://console.cloud.google.com/ → APIs & Services → Credentials),
-// add http://localhost:3030/connections/oauth/callback as an authorised redirect URI,
-// enable the Google Sheets API, then:
-//   • replace GOOGLE_SHEETS_CLIENT_ID_PLACEHOLDER with the new client_id
-//   • set OAUTH_GOOGLE_SHEETS_CLIENT_ID / OAUTH_GOOGLE_SHEETS_CLIENT_SECRET env vars
-//     on the screenpi.pe backend (website/app/api/oauth/exchange/route.ts).
 static OAUTH: OAuthConfig = OAuthConfig {
     auth_url: "https://accounts.google.com/o/oauth2/v2/auth",
-    client_id: "GOOGLE_SHEETS_CLIENT_ID_PLACEHOLDER",
+    client_id: "7048263620-6k41um04kbtd7v51k6tv9r5jtohs8iic.apps.googleusercontent.com",
     extra_auth_params: &[
         (
             "scope",
@@ -74,14 +67,11 @@ impl Integration for GoogleSheets {
         _creds: &Map<String, Value>,
         secret_store: Option<&SecretStore>,
     ) -> Result<String> {
-        let token =
-            oauth::get_valid_token_instance(secret_store, client, "google-sheets", None)
-                .await
-                .ok_or_else(|| {
-                    anyhow!(
-                        "not connected — connect Google Sheets in Settings > Connections"
-                    )
-                })?;
+        let token = oauth::get_valid_token_instance(secret_store, client, "google-sheets", None)
+            .await
+            .ok_or_else(|| {
+                anyhow!("not connected — connect Google Sheets in Settings > Connections")
+            })?;
 
         let resp: Value = client
             .get("https://www.googleapis.com/oauth2/v2/userinfo")
