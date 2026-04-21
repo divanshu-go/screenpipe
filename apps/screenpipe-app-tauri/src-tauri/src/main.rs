@@ -1067,9 +1067,14 @@ async fn main() {
                     }
                 });
 
-                // 26.5 repro bisect: startup hooks disabled
-                // space_monitor::setup_space_listener(app.handle().clone());
-                // crate::window::init_magnify_handler(app.handle().clone());
+                // Hide overlay when user switches Spaces (e.g. three-finger swipe).
+                // This no longer causes feedback loops because we removed
+                // activateIgnoringOtherApps + activation policy toggling.
+                space_monitor::setup_space_listener(app.handle().clone());
+
+                // Set up pinch-to-zoom: store the app handle so the gesture
+                // recognizer callback (in window/gesture.rs) can emit Tauri events.
+                crate::window::init_magnify_handler(app.handle().clone());
 
             }
 
