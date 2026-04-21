@@ -129,6 +129,11 @@ struct Inner {
     current: AtomicU32,
     stop_flag: AtomicBool,
     unknown_emitted: Mutex<bool>,
+    // Handle to the tokio runtime captured at start(). The WinEvent callback
+    // runs on the Win32 message-pump thread (no tokio context), so we drive
+    // async calls via this handle instead of `futures::executor::block_on`,
+    // which would panic on `tokio::task::spawn_blocking` inside list_monitors.
+    runtime: tokio::runtime::Handle,
 }
 
 impl Inner {
@@ -211,16 +216,17 @@ pub struct WindowsFocusTracker {
 impl WindowsFocusTracker {
     #[cfg(target_os = "windows")]
     pub fn start() -> Result<Self> {
+        let handle = tokio::runtime::Handle::try_current()
+            .map_err(|e| anyhow::anyhow!("no tokio runtime for focus tracker: {e}"))?;
+
         let (tx, _) = broadcast::channel::<FocusEvent>(16);
         let inner = Arc::new(Inner {
             tx,
             current: AtomicU32::new(0),
             stop_flag: AtomicBool::new(false),
             unknown_emitted: Mutex::new(false),
+            runtime: handle.clone(),
         });
-
-        let handle = tokio::runtime::Handle::try_current()
-            .map_err(|e| anyhow::anyhow!("no tokio runtime for focus tracker: {e}"))?;
 
         win_event_shared::set(&inner);
 
@@ -293,12 +299,15 @@ fn run_win_event_observer() {
         if inner.stop_flag.load(Ordering::Relaxed) {
             return;
         }
-        // Resolve the monitor list on-the-fly. `list_monitors()` is async —
-        // use a short-lived tokio runtime via `futures::executor::block_on`.
-        // Accepts some overhead for the rare case of very fast focus changes;
-        // the hook is not called at high frequency in practice (a few per
-        // second at most during window switching).
-        let monitors = futures::executor::block_on(screenpipe_screen::monitor::list_monitors());
+        // `list_monitors()` is async and internally uses `tokio::task::spawn_blocking`,
+        // so it MUST run on the tokio runtime captured at start(). This callback fires
+        // on the Win32 message-pump thread, which has no tokio context — driving the
+        // future via the captured `Handle` is the only safe option here. Using
+        // `futures::executor::block_on` would panic ("no reactor running") inside
+        // `spawn_blocking`.
+        let monitors = inner
+            .runtime
+            .block_on(screenpipe_screen::monitor::list_monitors());
         inner.resolve_and_emit(&monitors);
     }
 
