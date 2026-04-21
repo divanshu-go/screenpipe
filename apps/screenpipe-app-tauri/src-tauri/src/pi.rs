@@ -1284,6 +1284,13 @@ pub async fn pi_start_inner(
         }
     }
 
+    // Auto-auth the agent's `curl localhost:3030/...` calls via a bash
+    // shim sourced from $BASH_ENV on every subshell. See bash_env.rs in
+    // screenpipe-core.
+    if let Ok(p) = screenpipe_core::agents::bash_env::ensure_wrapper_in_default_dir() {
+        cmd.env("BASH_ENV", p);
+    }
+
     // Pass the user's API key as env var for non-screenpipe providers
     if let Some(ref config) = provider_config {
         // ChatGPT OAuth: inject token from secret store (no api_key in config)
