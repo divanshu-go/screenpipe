@@ -58,9 +58,7 @@ pub fn load(pipes_dir: &Path) -> Vec<String> {
 /// input are collapsed but order is preserved.
 pub fn save(pipes_dir: &Path, favorites: &[String]) -> Result<()> {
     let deduped = dedup_preserve(favorites.to_vec());
-    let file = FavoritesFile {
-        favorites: deduped,
-    };
+    let file = FavoritesFile { favorites: deduped };
     let final_path = path(pipes_dir);
     let tmp_path = pipes_dir.join(TMP_FILE);
 
@@ -70,19 +68,10 @@ pub fn save(pipes_dir: &Path, favorites: &[String]) -> Result<()> {
     }
 
     let json = serde_json::to_string_pretty(&file)?;
-    std::fs::write(&tmp_path, json).with_context(|| {
-        format!(
-            "writing favorites tempfile at {}",
-            tmp_path.display()
-        )
-    })?;
-    std::fs::rename(&tmp_path, &final_path).with_context(|| {
-        format!(
-            "renaming {} → {}",
-            tmp_path.display(),
-            final_path.display()
-        )
-    })?;
+    std::fs::write(&tmp_path, json)
+        .with_context(|| format!("writing favorites tempfile at {}", tmp_path.display()))?;
+    std::fs::rename(&tmp_path, &final_path)
+        .with_context(|| format!("renaming {} → {}", tmp_path.display(), final_path.display()))?;
     Ok(())
 }
 
@@ -229,7 +218,11 @@ mod tests {
     fn save_dedupes_input() {
         let d = tmpdir();
         // A caller passes duplicates — we collapse but keep first-seen order.
-        save(d.path(), &["a".into(), "b".into(), "a".into(), "c".into(), "b".into()]).unwrap();
+        save(
+            d.path(),
+            &["a".into(), "b".into(), "a".into(), "c".into(), "b".into()],
+        )
+        .unwrap();
         assert_eq!(load(d.path()), vec!["a", "b", "c"]);
     }
 
