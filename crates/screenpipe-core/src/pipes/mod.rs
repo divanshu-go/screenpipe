@@ -10,6 +10,7 @@
 //! parses configs, runs the scheduler, and delegates execution to an
 //! [`AgentExecutor`].
 
+pub mod favorites;
 pub mod permissions;
 pub mod preset_fallback;
 pub mod sync;

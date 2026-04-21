@@ -632,11 +632,21 @@ impl SCServer {
                     "/install",
                     axum::routing::post(crate::pipes_api::install_pipe),
                 )
+                // Favorites — register before `/:id` so axum doesn't match
+                // "favorites" as a pipe id.
+                .route(
+                    "/favorites",
+                    axum::routing::get(crate::pipes_api::list_favorites),
+                )
                 .route("/:id", axum::routing::get(crate::pipes_api::get_pipe))
                 .route("/:id", axum::routing::delete(crate::pipes_api::delete_pipe))
                 .route(
                     "/:id/enable",
                     axum::routing::post(crate::pipes_api::enable_pipe),
+                )
+                .route(
+                    "/:id/favorite",
+                    axum::routing::post(crate::pipes_api::set_pipe_favorite),
                 )
                 .route(
                     "/:id/run",
