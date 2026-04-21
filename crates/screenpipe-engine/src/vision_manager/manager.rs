@@ -17,6 +17,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 
 use crate::event_driven_capture::{CaptureTrigger, TriggerSender};
+use crate::focus_aware_controller::FocusAwareController;
 use crate::hot_frame_cache::HotFrameCache;
 use crate::power::PowerProfile;
 
@@ -66,6 +67,12 @@ pub struct VisionManager {
     hot_frame_cache: Option<Arc<HotFrameCache>>,
     /// Power profile receiver — each monitor gets a clone.
     power_profile_rx: Option<watch::Receiver<PowerProfile>>,
+    /// Focus-aware capture controller — always constructed.
+    /// If focus resolution fails on a given platform (Linux Wayland, permission
+    /// denied, etc.) the NullFocusTracker + Unknown event path makes the
+    /// controller report Active for all monitors, preserving the pre-feature
+    /// behaviour for those users.
+    focus_controller: Arc<FocusAwareController>,
 }
 
 impl VisionManager {
@@ -77,6 +84,18 @@ impl VisionManager {
     ) -> Self {
         // Single broadcast channel shared across all monitors + UI recorder.
         let (trigger_tx, _rx) = tokio::sync::broadcast::channel::<CaptureTrigger>(64);
+
+        // Focus-aware capture is always on. `new_tracker()` always succeeds —
+        // returns a null tracker on platforms without a native impl. Controller
+        // fallback handles `Unknown` events by treating all monitors as Active,
+        // so users whose systems can't report focus still get the pre-feature
+        // behaviour (every monitor captured at full rate).
+        let focus_controller = {
+            let _guard = vision_handle.enter();
+            let tracker = crate::focus_tracker::new_tracker();
+            FocusAwareController::new(tracker)
+        };
+
         Self {
             config,
             db,
@@ -86,6 +105,7 @@ impl VisionManager {
             trigger_tx,
             hot_frame_cache: None,
             power_profile_rx: None,
+            focus_controller,
         }
     }
 
@@ -229,6 +249,9 @@ impl VisionManager {
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
 
+        // Shut down the focus controller.
+        self.focus_controller.shutdown();
+
         let mut status = self.status.write().await;
         *status = VisionManagerStatus::Stopped;
 
@@ -323,6 +346,7 @@ impl VisionManager {
         let pause_on_drm_content = self.config.pause_on_drm_content;
         let languages = self.config.languages.clone();
         let power_profile_rx = self.power_profile_rx.clone();
+        let focus_controller = self.focus_controller.clone();
 
         info!(
             "Starting event-driven capture for monitor {} (device: {})",
@@ -349,6 +373,7 @@ impl VisionManager {
                 pause_on_drm_content,
                 languages,
                 power_profile_rx,
+                focus_controller,
             )
             .await
             {
