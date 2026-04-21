@@ -1054,6 +1054,33 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
   const { items: appItems } = useSqlAutocomplete("app");
   const { suggestions: autoSuggestions, refreshing: suggestionsRefreshing, forceRefresh: refreshSuggestions } = useAutoSuggestions();
   const { templatePipes, loading: pipesLoading } = usePipes();
+  // Connected integrations (gmail, google-sheets, slack, etc.) surfaced in the
+  // filter popover so users can mention them directly with @id — helps the
+  // agent pick the right connection for a query instead of having to guess.
+  const [connections, setConnections] = useState<
+    Array<{ id: string; name: string; category?: string }>
+  >([]);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await localFetch("/connections");
+        if (!res.ok) return;
+        const json = (await res.json()) as {
+          data?: Array<{ id: string; name: string; connected: boolean; category?: string }>;
+        };
+        const list = (json.data ?? [])
+          .filter((c) => c.connected)
+          .map((c) => ({ id: c.id, name: c.name, category: c.category }));
+        if (!cancelled) setConnections(list);
+      } catch {
+        // silent — filter just won't surface connections, no UI regression
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Custom summary templates (persisted in settings)
   const [customTemplates, setCustomTemplates] = useState<CustomTemplate[]>([]);
@@ -4027,6 +4054,34 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
                     </button>
                   );
                 })
+              )}
+
+              {/* Connections — lets users mention their own integrations (gmail, slack, etc.) */}
+              {connections.length > 0 && (
+                <>
+                  <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground bg-muted/30 border-b border-border/50 border-t">
+                    connections
+                  </div>
+                  {connections.map((c) => {
+                    const tag = `@${c.id}`;
+                    return (
+                      <button
+                        key={`conn-${c.id}`}
+                        type="button"
+                        onClick={() => {
+                          setInput((prev) => `${tag} ${prev.trim()}`.trim() + " ");
+                          setAppFilterOpen(false);
+                        }}
+                        className="w-full px-3 py-1.5 text-left text-xs font-mono hover:bg-muted/50 transition-colors flex items-center justify-between gap-2"
+                      >
+                        <span>{tag}</span>
+                        <span className="text-[10px] text-muted-foreground truncate">
+                          {c.name}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </>
               )}
 
               {/* Speakers */}
