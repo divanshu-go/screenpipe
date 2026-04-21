@@ -377,7 +377,11 @@ export async function trackUsage(
       dailyCount = weight;
     }
 
-    const allowed = dailyCount <= limits.dailyQueries;
+    // Free models (weight 0) are always allowed. Without this, an earlier
+    // paid-model run that pushed daily_count past the cap would make every
+    // subsequent auto/gemini-flash/kimi request look rejected here, even
+    // though weight=0 never increments the counter.
+    const allowed = weight === 0 || dailyCount <= limits.dailyQueries;
 
     return {
       used: dailyCount,

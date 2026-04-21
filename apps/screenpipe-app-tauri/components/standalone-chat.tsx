@@ -1116,6 +1116,9 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
   const [streamedCharCount, setStreamedCharCount] = useState(0);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [openMessageMenuId, setOpenMessageMenuId] = useState<string | null>(null);
+  // Cursor-style inline edit: click a sent user message to tweak and resend
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState<string>("");
   const [openConvMenuId, setOpenConvMenuId] = useState<string | null>(null);
   const [renamingConvId, setRenamingConvId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -1152,6 +1155,10 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
   const piStreamingTextRef = useRef<string>("");
   const piMessageIdRef = useRef<string | null>(null);
   const piContentBlocksRef = useRef<ContentBlock[]>([]);
+  // Last error text observed anywhere in the current Pi stream — used to surface
+  // quota / credits_exhausted errors when agent_end arrives with no content and
+  // no explicit stopReason=error on any message (some providers drop that flag).
+  const piLastErrorRef = useRef<string | null>(null);
   const piStartInFlightRef = useRef(false);
   const piFirstCallRetried = useRef(false);
   const piStoppedIntentionallyRef = useRef(false);
@@ -1487,6 +1494,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
             piStreamingTextRef.current = "";
             piMessageIdRef.current = null;
             piContentBlocksRef.current = [];
+            piLastErrorRef.current = null;
             setIsLoading(false);
             setIsStreaming(false);
             setMessages([]);
@@ -2131,6 +2139,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
           // Pi exhausted retries on a transient error (rate limit, overloaded, etc.)
           const errorStr = data.finalError || "Request failed after retries";
           console.error("[Pi] Auto-retry failed:", errorStr);
+          piLastErrorRef.current = errorStr;
 
           // Detect rate limit or daily limit from the error
           const quotaErrorType = classifyQuotaError(errorStr);
@@ -2166,6 +2175,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
           if (piMessageIdRef.current) {
             const msgId = piMessageIdRef.current;
             const fullError = `${reason} ${errorDetail}`.trim();
+            piLastErrorRef.current = fullError;
 
             const quotaErrorType = classifyQuotaError(fullError);
             if (quotaErrorType === "daily" || quotaErrorType === "rate") {
@@ -2201,6 +2211,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
           // LLM returned an error (credits_exhausted, rate limit, provider error, etc.)
           const errMsg = data.message.errorMessage || data.message.error || "Unknown error";
           console.error("[Pi] LLM error via", data.type, ":", errMsg);
+          piLastErrorRef.current = errMsg;
 
           if (piMessageIdRef.current) {
             const msgId = piMessageIdRef.current;
@@ -2226,6 +2237,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
             piStreamingTextRef.current = "";
             piMessageIdRef.current = null;
             piContentBlocksRef.current = [];
+            piLastErrorRef.current = null;
             setIsLoading(false);
             setIsStreaming(false);
           }
@@ -2305,13 +2317,29 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
               if (!content && hasNonTextBlocks) {
                 content = ""; // empty — tool/thinking blocks will render
               } else if (!content) {
-                const provider = activePreset?.provider;
-                if (provider === "native-ollama") {
-                  content = "No response — is Ollama running? Start it with `ollama serve` and make sure the model is pulled.";
+                // If any error text was observed during this stream (e.g. a 429
+                // credits_exhausted or daily_cost_limit_exceeded emitted as a
+                // message_update error or auto-retry failure) classify it
+                // before falling back to the generic "no response" string.
+                const lastErr = piLastErrorRef.current;
+                const lastErrKind = lastErr ? classifyQuotaError(lastErr) : "none";
+                if (lastErr && lastErrKind === "daily") {
+                  posthog.capture("wall_hit", { reason: "daily_limit", source: "chat" });
+                  content = buildDailyLimitMessage(lastErr);
+                } else if (lastErr && lastErrKind === "rate") {
+                  content = buildRateLimitMessage(lastErr);
+                } else if (lastErr) {
+                  content = `Error: ${lastErr}`;
+                  emptyResponseRetryPrompt = lastUserMessageRef.current || undefined;
                 } else {
-                  content = "No response from model — try again or check your AI preset in settings.";
+                  const provider = activePreset?.provider;
+                  if (provider === "native-ollama") {
+                    content = "No response — is Ollama running? Start it with `ollama serve` and make sure the model is pulled.";
+                  } else {
+                    content = "No response from model — try again or check your AI preset in settings.";
+                  }
+                  emptyResponseRetryPrompt = lastUserMessageRef.current || undefined;
                 }
-                emptyResponseRetryPrompt = lastUserMessageRef.current || undefined;
               }
               // Add text as a content block if no text block exists yet
               const hasTextBlock = contentBlocks.some((b) => b.type === "text");
@@ -2336,6 +2364,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
             piStreamingTextRef.current = "";
             piMessageIdRef.current = null;
             piContentBlocksRef.current = [];
+            piLastErrorRef.current = null;
             piThinkingStartRef.current = null;
             followUpFiredRef.current = false;
             setIsLoading(false);
@@ -2431,6 +2460,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
             piStreamingTextRef.current = "";
             piMessageIdRef.current = null;
             piContentBlocksRef.current = [];
+            piLastErrorRef.current = null;
             piThinkingStartRef.current = null;
             setActivePipeExecution(null);
             setIsLoading(false);
@@ -2679,6 +2709,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
             piStreamingTextRef.current = "";
             piMessageIdRef.current = null;
             piContentBlocksRef.current = [];
+            piLastErrorRef.current = null;
             piThinkingStartRef.current = null;
             setActivePipeExecution(null);
             setIsLoading(false);
@@ -2749,6 +2780,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
             piStreamingTextRef.current = "";
             piMessageIdRef.current = null;
             piContentBlocksRef.current = [];
+            piLastErrorRef.current = null;
             piThinkingStartRef.current = null;
             setActivePipeExecution(null);
             setIsLoading(false);
@@ -3047,11 +3079,39 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
       }
 
       // Send prompt — abort/new_session now await completion, so no retry needed
-      const result = await commands.piPrompt(
+      let result = await commands.piPrompt(
         piSessionIdRef.current,
         promptMessage,
         piImages.length > 0 ? piImages : null,
       );
+
+      // Race: user hit "+ NEW" before Pi finished registering the new session
+      // in the pool. Auto-spawn once and retry before surfacing the error.
+      if (result.status === "error" && result.error.includes("Pi not initialized")) {
+        console.log("[Pi] session not registered yet — auto-spawning and retrying");
+        try {
+          const home = await homeDir();
+          const dir = await join(home, ".screenpipe", "pi-chat");
+          const providerConfig = buildProviderConfig();
+          const startRes = await commands.piStart(
+            piSessionIdRef.current,
+            dir,
+            settings.user?.token ?? null,
+            providerConfig,
+          );
+          if (startRes.status === "ok" && startRes.data.running) {
+            setPiInfo(startRes.data);
+            piSessionSyncedRef.current = false;
+            result = await commands.piPrompt(
+              piSessionIdRef.current,
+              promptMessage,
+              piImages.length > 0 ? piImages : null,
+            );
+          }
+        } catch (e) {
+          console.error("[Pi] auto-spawn retry failed", e);
+        }
+      }
 
       if (result.status === "error") {
         if (timeoutId) clearTimeout(timeoutId);
@@ -3064,11 +3124,12 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
         if (rawError.includes("already processing")) {
           errorMsg = "The AI was mid-response when your message arrived.";
           retryPrompt = userMessage;
-        } else if (rawError.includes("Broken pipe") || rawError.includes("not running") || rawError.includes("has died")) {
+        } else if (rawError.includes("Broken pipe") || rawError.includes("not running") || rawError.includes("has died") || rawError.includes("Pi not initialized")) {
           const provider = activePreset?.provider;
           errorMsg = provider === "native-ollama"
             ? "Ollama is not running. Start it with: `ollama serve`"
             : "AI agent crashed — restarting automatically...";
+          retryPrompt = userMessage;
         } else if (rawError.includes("not found")) {
           errorMsg = `Model "${activePreset?.model}" not found. Check your AI preset in settings.`;
         } else {
@@ -3591,14 +3652,46 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
               </div>
               <div className="group/message flex-1 flex flex-col min-w-0">
               <div
+                onClick={() => {
+                  if (message.role !== "user" || isLoading || editingMessageId === message.id) return;
+                  setEditDraft(message.content);
+                  setEditingMessageId(message.id);
+                }}
                 className={cn(
                   "relative rounded-xl px-4 py-3 text-sm border overflow-hidden max-w-full",
                   message.role === "user"
                     ? "bg-foreground text-background border-foreground"
-                    : "bg-muted/30 border-border/50"
+                    : "bg-muted/30 border-border/50",
+                  message.role === "user" && !isLoading && editingMessageId !== message.id && "cursor-text"
                 )}
               >
-                <MessageContent message={message} onImageClick={(images, index) => setImageViewer({ images, index })} onRetry={(prompt) => sendMessage(prompt)} />
+                {editingMessageId === message.id ? (
+                  <textarea
+                    autoFocus
+                    value={editDraft}
+                    onChange={(e) => setEditDraft(e.target.value)}
+                    onBlur={() => {
+                      const trimmed = editDraft.trim();
+                      setEditingMessageId(null);
+                      if (!trimmed || trimmed === message.content) return;
+                      const idx = messages.findIndex((m) => m.id === message.id);
+                      if (idx === -1) return;
+                      setMessages((prev) => prev.slice(0, idx));
+                      sendMessage(trimmed);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") { e.preventDefault(); setEditingMessageId(null); }
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        (e.currentTarget as HTMLTextAreaElement).blur();
+                      }
+                    }}
+                    rows={Math.min(8, Math.max(1, editDraft.split("\n").length))}
+                    className="w-full resize-none bg-transparent text-background placeholder:text-background/40 focus:outline-none"
+                  />
+                ) : (
+                  <MessageContent message={message} onImageClick={(images, index) => setImageViewer({ images, index })} onRetry={(prompt) => sendMessage(prompt)} />
+                )}
               </div>
                 {/* Action buttons - appear on hover, outside the message box */}
                 <div className="flex items-center gap-0.5 self-end mt-1 opacity-0 group-hover/message:opacity-100 transition-all duration-200">
