@@ -73,6 +73,7 @@ mod tray;
 mod updates;
 mod voice_training;
 mod window;
+mod windows_ca_bundle;
 #[cfg(target_os = "windows")]
 mod windows_overlay;
 
@@ -315,6 +316,14 @@ async fn is_server_running(app: AppHandle) -> Result<bool, String> {
 #[tokio::main]
 async fn main() {
     let _ = fix_path_env::fix();
+
+    // Export the Windows root/CA cert stores to a PEM file and set
+    // NODE_EXTRA_CA_CERTS before any bun/node subprocess can spawn. Fixes
+    // "unable to verify the first certificate" on corporate networks where
+    // antivirus (ESET, Zscaler, etc.) injects a private root CA. No-op on
+    // macOS/Linux. Must run before Pi, PortableGit download, and pipe
+    // subprocesses are touched.
+    windows_ca_bundle::install();
 
     // Handle --check-arc-automation / --trigger-arc-automation flags early,
     // before any Tauri initialization. Used by the permission system to run
