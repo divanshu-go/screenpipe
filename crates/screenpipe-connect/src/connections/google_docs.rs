@@ -9,14 +9,11 @@ use async_trait::async_trait;
 use screenpipe_secrets::SecretStore;
 use serde_json::{Map, Value};
 
-// Same GCP project as Gmail/Sheets/Calendar — create a new OAuth 2.0 client
-// in the Google Cloud Console and replace the placeholder client_id below.
-// Enable APIs: Google Docs API, Google Drive API.
-// Register redirect URI: http://localhost:3030/connections/oauth/callback
+// Same GCP project as Gmail/Sheets/Calendar. Docs + Drive APIs enabled.
+// Redirect URI registered: http://localhost:3030/connections/oauth/callback
 static OAUTH: OAuthConfig = OAuthConfig {
     auth_url: "https://accounts.google.com/o/oauth2/v2/auth",
-    // TODO(founder): replace with the real GCP OAuth client ID for Google Docs
-    client_id: "7048263620-REPLACE_WITH_DOCS_CLIENT_ID.apps.googleusercontent.com",
+    client_id: "7048263620-v7f7ogpe9npib4f164nafl501f1lc7kr.apps.googleusercontent.com",
     extra_auth_params: &[
         (
             "scope",
