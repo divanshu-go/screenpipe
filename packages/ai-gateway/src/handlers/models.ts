@@ -104,6 +104,9 @@ const CURATED_MODELS: ModelEntry[] = [
     cost_tier: 'free',
     recommended_for: ['pipes', 'chat'],
   },
+  // minimax-m2 not yet exposed — Vertex's openapi endpoint rejects both
+  // the publisher-prefixed and bare-model-id formats. Re-add once the
+  // correct invocation shape is verified in Model Garden.
   {
     id: 'llama-4-maverick',
     object: 'model',
@@ -134,8 +137,7 @@ const CURATED_MODELS: ModelEntry[] = [
     cost_tier: 'free',
     recommended_for: ['pipes', 'chat'],
   },
-  // glm-5.1 and minimax-m2.7 hidden 2026-04-17 — Vertex returns 404 for
-  // their publisher/model IDs. Re-add once we verify the real paths.
+  // glm-5.1 still pending — released 2026-04-07 on HuggingFace, not yet on Vertex MaaS.
   {
     id: 'deepseek-r1',
     object: 'model',
@@ -237,7 +239,7 @@ const CURATED_MODELS: ModelEntry[] = [
     context_window: 1000000,
     best_for: ['high-volume', 'extraction', 'general'],
     speed: 'fast',
-    intelligence: 'medium',
+    intelligence: 'standard',
     cost_tier: 'free',
     recommended_for: ['pipes', 'chat'],
   },
