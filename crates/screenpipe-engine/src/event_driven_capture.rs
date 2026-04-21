@@ -359,6 +359,14 @@ pub async fn event_driven_capture_loop(
     // or disappears.  Only update when the sorted set actually changes.
     let mut cached_excluded_ids: Vec<u32> = Vec::new();
 
+    // Track whether this monitor is currently in Cold state so we release
+    // its OS-level capture session exactly once per Active/Warm → Cold edge.
+    // Without this, a non-focused monitor's persistent stream keeps the OS
+    // capture service busy at the stream's frame interval forever (replayd
+    // at 2fps on macOS, WGC on Windows) — measurable share of a core per
+    // idle display on multi-monitor setups.
+    let mut was_cold = false;
+
     loop {
         if stop_signal.load(Ordering::Relaxed) {
             info!("event-driven capture stopping for monitor {}", monitor_id);
@@ -379,7 +387,18 @@ pub async fn event_driven_capture_loop(
         let mut warm_trigger_override: Option<CaptureTrigger> = None;
         {
             use crate::focus_aware_controller::CaptureState;
-            match focus_controller.state(monitor_id) {
+            let capture_state = focus_controller.state(monitor_id);
+
+            // Fires exactly once per focus-away transition, not every Cold
+            // loop iteration, so the log line is meaningful and we don't
+            // churn sck-rs / WGC locks.
+            let is_cold = matches!(capture_state, CaptureState::Cold);
+            if is_cold && !was_cold {
+                monitor.release_capture_stream();
+            }
+            was_cold = is_cold;
+
+            match capture_state {
                 CaptureState::Active => { /* fall through to normal capture */ }
                 CaptureState::Warm => {
                     // Cheap visual-diff-only cadence: capture only if pixels

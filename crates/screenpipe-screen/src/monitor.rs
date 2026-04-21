@@ -643,6 +643,40 @@ impl SafeMonitor {
         self.monitor_data.y
     }
 
+    /// Release the OS-level persistent capture session for this monitor.
+    ///
+    /// Called by the capture loop when focus has been absent long enough that
+    /// we don't expect to read frames soon (Cold state). Without this, the
+    /// underlying OS service keeps capturing at the stream's frame interval
+    /// forever — on macOS that's `replayd` at 2fps per idle monitor, which is
+    /// a measurable share of a core on dual-display setups.
+    ///
+    /// The session is lazily recreated on the next `capture_image()` call
+    /// after focus returns. Session-level disable/failure counters on Windows
+    /// are NOT reset — those reflect long-term stability, not transient
+    /// focus state.
+    ///
+    /// Safe to call when no session exists. Cheap.
+    pub fn release_capture_stream(&self) {
+        #[cfg(target_os = "macos")]
+        {
+            crate::stream_invalidation::invalidate_monitor_stream(self.monitor_id);
+        }
+        #[cfg(target_os = "windows")]
+        {
+            if let Ok(mut guard) = self.persistent_capture.lock() {
+                if let Some(mut capture) = guard.take() {
+                    capture.stop();
+                    tracing::info!(
+                        "released persistent WGC session for monitor {}",
+                        self.monitor_id
+                    );
+                }
+            }
+        }
+        // Linux: xcap captures per-frame, no persistent session to release.
+    }
+
     #[cfg(target_os = "windows")]
     fn record_persistent_init_failure(
         monitor_id: u32,
