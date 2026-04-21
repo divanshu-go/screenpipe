@@ -2301,6 +2301,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
               const contentBlocks = [...blocksSnapshot];
               // If no text content but we have tool/thinking blocks, don't show "no response"
               const hasNonTextBlocks = contentBlocks.some((b) => b.type === "tool" || b.type === "thinking");
+              let emptyResponseRetryPrompt: string | undefined;
               if (!content && hasNonTextBlocks) {
                 content = ""; // empty — tool/thinking blocks will render
               } else if (!content) {
@@ -2310,13 +2311,16 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
                 } else {
                   content = "No response from model — try again or check your AI preset in settings.";
                 }
+                emptyResponseRetryPrompt = lastUserMessageRef.current || undefined;
               }
               // Add text as a content block if no text block exists yet
               const hasTextBlock = contentBlocks.some((b) => b.type === "text");
               if (!streamedText && content && !hasTextBlock) {
                 contentBlocks.push({ type: "text", text: content });
               }
-              return prev.map((m) => m.id === msgId ? { ...m, content, contentBlocks } : m);
+              return prev.map((m) => m.id === msgId
+                ? { ...m, content, contentBlocks, ...(emptyResponseRetryPrompt ? { retryPrompt: emptyResponseRetryPrompt } : {}) }
+                : m);
             });
 
             if (!isPipeWatch) {
