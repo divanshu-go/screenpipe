@@ -895,10 +895,14 @@ function WhatsAppPanel() {
     setQr(null);
     setError(null);
     try {
+      // `bun_path` is sent empty so the backend runs its full resolver
+      // (bundled sidecar → common install dirs → PATH). Advanced users can
+      // set SCREENPIPE_BUN_PATH — hardcoding "bun" here used to break
+      // fresh Macs that didn't have bun on their shell PATH.
       const res = await localFetch("/connections/whatsapp/pair", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ bun_path: "bun" }),
+        body: JSON.stringify({ bun_path: "" }),
       });
       if (!res.ok) {
         const data = await res.json();
@@ -922,7 +926,7 @@ function WhatsAppPanel() {
   return (
     <div className="space-y-3">
       <p className="text-xs text-muted-foreground">
-        Connect your personal WhatsApp by scanning a QR code, just like WhatsApp Web. Requires <a href="https://nodejs.org" target="_blank" rel="noopener noreferrer" className="underline">Node.js</a> installed.
+        Connect your personal WhatsApp by scanning a QR code, just like WhatsApp Web.
       </p>
       <p className="text-xs text-destructive">
         ⚠️ WhatsApp may ban accounts using unofficial integrations. Use at your own risk.

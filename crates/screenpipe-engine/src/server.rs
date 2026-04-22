@@ -733,14 +733,14 @@ impl SCServer {
             screenpipe_connect::whatsapp::WhatsAppGateway::new(self.screenpipe_dir.clone()),
         ));
 
-        // Auto-reconnect WhatsApp if a previous session exists on disk
+        // Auto-reconnect WhatsApp if a previous session exists on disk.
+        // We pass an empty hint so `start_pairing` runs its full resolver
+        // (bundled sidecar → install dirs → PATH).
         {
             let wa_lock = wa.lock().await;
             if wa_lock.has_session() {
                 tracing::info!("whatsapp: found existing session, auto-reconnecting...");
-                let bun_path =
-                    screenpipe_connect::whatsapp::which_bun().unwrap_or_else(|| "bun".to_string());
-                if let Err(e) = wa_lock.start_pairing(&bun_path).await {
+                if let Err(e) = wa_lock.start_pairing("").await {
                     tracing::warn!("whatsapp: auto-reconnect failed: {:?}", e);
                 }
             }
