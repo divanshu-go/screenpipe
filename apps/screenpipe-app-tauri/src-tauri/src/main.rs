@@ -598,6 +598,7 @@ async fn main() {
                 recording::stop_capture,
                 recording::get_monitors,
                 recording::get_audio_devices,
+                recording::get_boot_phase,
                 // Commands from commands.rs
                 commands::is_enterprise_build_cmd,
                 commands::get_enterprise_license_key,
@@ -859,6 +860,7 @@ async fn main() {
             recording::stop_capture,
             recording::get_monitors,
             recording::get_audio_devices,
+            recording::get_boot_phase,
             permissions::open_permission_settings,
             permissions::request_permission,
             permissions::do_permissions_check,

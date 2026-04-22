@@ -57,6 +57,7 @@ impl ServerCore {
         on_pipe_output: Option<screenpipe_core::pipes::OnPipeOutputLine>,
     ) -> Result<Self, String> {
         info!("Starting server core on port {}", config.port);
+        crate::health::set_boot_phase("starting", Some("starting server"));
 
         // --- Environment setup ---
         std::env::set_var("SCREENPIPE_FD_LIMIT", "8192");
@@ -96,10 +97,18 @@ impl ServerCore {
             .map_err(|e| format!("Failed to create data dir: {}", e))?;
 
         let db_path = format!("{}/db.sqlite", local_data_dir.to_string_lossy());
+        crate::health::set_boot_phase(
+            "migrating_database",
+            Some("updating database — this may take several minutes on large installs"),
+        );
         let db = Arc::new(
             DatabaseManager::new(&db_path, config.db_config.clone())
                 .await
-                .map_err(|e| format!("Failed to initialize database: {}", e))?,
+                .map_err(|e| {
+                    let msg = format!("Failed to initialize database: {}", e);
+                    crate::health::set_boot_error(&msg);
+                    msg
+                })?,
         );
         info!("Database initialized at {}", db_path);
 
@@ -162,10 +171,15 @@ impl ServerCore {
             audio_manager_builder = audio_manager_builder.meeting_detector(detector.clone());
         }
 
+        crate::health::set_boot_phase("building_audio", Some("starting audio pipeline"));
         let mut audio_manager = audio_manager_builder
             .build(db.clone())
             .await
-            .map_err(|e| format!("Failed to build audio manager: {}", e))?;
+            .map_err(|e| {
+                let msg = format!("Failed to build audio manager: {}", e);
+                crate::health::set_boot_error(&msg);
+                msg
+            })?;
 
         // Wire audio → hot cache
         {
@@ -273,6 +287,7 @@ impl ServerCore {
         }
 
         // --- Pipe manager ---
+        crate::health::set_boot_phase("starting_pipes", Some("loading pipes"));
         let pipes_dir = config.data_dir.join("pipes");
         std::fs::create_dir_all(&pipes_dir).ok();
 
@@ -342,7 +357,11 @@ impl ServerCore {
             config.port,
         ))
         .await
-        .map_err(|e| format!("Failed to bind port {}: {}", config.port, e))?;
+        .map_err(|e| {
+            let msg = format!("Failed to bind port {}: {}", config.port, e);
+            crate::health::set_boot_error(&msg);
+            msg
+        })?;
 
         info!("HTTP server bound to port {}", config.port);
 
@@ -354,6 +373,7 @@ impl ServerCore {
         });
 
         info!("Server core started successfully");
+        crate::health::set_boot_phase("ready", None);
 
         // mDNS
         if let Err(e) = screenpipe_connect::mdns::advertise(config.port) {
