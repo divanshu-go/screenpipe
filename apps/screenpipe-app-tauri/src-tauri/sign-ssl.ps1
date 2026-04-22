@@ -4,7 +4,8 @@
 #
 # Signs a single binary with SSL.com EV certificate via CodeSignTool.
 # Called by Tauri's signCommand for each exe/dll before NSIS packaging.
-# Usage: sign-enterprise.ps1 <file-path>
+# Used by BOTH consumer and enterprise Windows builds — same SSL.com EV cert.
+# Usage: sign-ssl.ps1 <file-path>
 
 param(
     [Parameter(Position=0, Mandatory=$true)]

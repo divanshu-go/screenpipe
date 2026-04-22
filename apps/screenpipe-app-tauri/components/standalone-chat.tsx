@@ -1119,6 +1119,54 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
   // Cursor-style inline edit: click a sent user message to tweak and resend
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<string>("");
+  // Character offset to seed the caret at when the textarea mounts. Computed
+  // from the click event so the cursor lands where the user pointed, not at
+  // the start of the text — matches Cursor / iMessage edit-in-place feel.
+  const pendingCaretRef = useRef<number | null>(null);
+  const editTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // Given a click on a rendered message bubble, compute the character offset
+  // into `content` that corresponds to where the user clicked. Falls back to
+  // end-of-text if the browser can't resolve a caret position (old Safari).
+  const caretOffsetFromClick = useCallback((e: React.MouseEvent, content: string): number => {
+    try {
+      // Firefox / WebView2: caretPositionFromPoint ; WebKit: caretRangeFromPoint.
+      const doc = document as Document & {
+        caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+        caretRangeFromPoint?: (x: number, y: number) => Range | null;
+      };
+      let clickedNode: Node | null = null;
+      let clickedOffset = 0;
+      if (doc.caretPositionFromPoint) {
+        const pos = doc.caretPositionFromPoint(e.clientX, e.clientY);
+        if (pos) { clickedNode = pos.offsetNode; clickedOffset = pos.offset; }
+      } else if (doc.caretRangeFromPoint) {
+        const range = doc.caretRangeFromPoint(e.clientX, e.clientY);
+        if (range) { clickedNode = range.startContainer; clickedOffset = range.startOffset; }
+      }
+      if (!clickedNode) return content.length;
+
+      // Walk text nodes under the clicked bubble in document order, summing
+      // their lengths until we reach the clicked node. Gives a best-effort
+      // offset into the visible text — good enough for plain messages; for
+      // markdown it'll be off by the characters of any markup consumed by
+      // the rendered HTML, but the caret still lands near the click.
+      const bubble = (e.currentTarget as HTMLElement);
+      const walker = document.createTreeWalker(bubble, NodeFilter.SHOW_TEXT);
+      let offset = 0;
+      let n: Node | null;
+      while ((n = walker.nextNode())) {
+        if (n === clickedNode) {
+          offset += clickedOffset;
+          return Math.min(offset, content.length);
+        }
+        offset += (n.textContent || "").length;
+      }
+    } catch {
+      // Fall through to end-of-text fallback.
+    }
+    return content.length;
+  }, []);
   const [openConvMenuId, setOpenConvMenuId] = useState<string | null>(null);
   const [renamingConvId, setRenamingConvId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -3652,8 +3700,12 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
               </div>
               <div className="group/message flex-1 flex flex-col min-w-0">
               <div
-                onClick={() => {
+                onMouseDown={(e) => {
                   if (message.role !== "user" || isLoading || editingMessageId === message.id) return;
+                  // Compute caret offset BEFORE React re-renders so the click
+                  // coordinates still point at live DOM; stash it for the
+                  // useLayoutEffect on the mounting textarea to apply.
+                  pendingCaretRef.current = caretOffsetFromClick(e, message.content);
                   setEditDraft(message.content);
                   setEditingMessageId(message.id);
                 }}
@@ -3667,7 +3719,19 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
               >
                 {editingMessageId === message.id ? (
                   <textarea
-                    autoFocus
+                    ref={(el) => {
+                      editTextareaRef.current = el;
+                      // Synchronous focus + caret placement BEFORE the browser
+                      // paints. Using the ref callback (instead of useEffect)
+                      // guarantees the cursor lands where the user clicked on
+                      // the very first frame — no flash-of-start-of-text.
+                      if (el && pendingCaretRef.current != null) {
+                        const pos = pendingCaretRef.current;
+                        pendingCaretRef.current = null;
+                        el.focus({ preventScroll: true });
+                        try { el.setSelectionRange(pos, pos); } catch { /* ignore */ }
+                      }
+                    }}
                     value={editDraft}
                     onChange={(e) => setEditDraft(e.target.value)}
                     onBlur={() => {
