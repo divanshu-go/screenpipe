@@ -9,6 +9,7 @@
 
 pub mod airtable;
 pub mod asana;
+pub mod bitrix24;
 pub mod brex;
 pub mod calcom;
 pub mod calendly;
@@ -183,6 +184,7 @@ pub fn all_integrations() -> Vec<Box<dyn Integration>> {
         Box::new(jira::Jira),
         Box::new(granola::Granola),
         Box::new(hubspot::HubSpot),
+        Box::new(bitrix24::Bitrix24),
         Box::new(limitless::Limitless),
         Box::new(airtable::Airtable),
         Box::new(logseq::Logseq),
