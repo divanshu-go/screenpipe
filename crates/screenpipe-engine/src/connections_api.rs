@@ -1127,8 +1127,15 @@ async fn connection_proxy(
     let creds = mgr.get_credentials(&id).await.ok().flatten();
     let oauth_json =
         screenpipe_connect::oauth::load_oauth_json(state.secret_store.as_deref(), &id, None).await;
-    let oauth_token = screenpipe_connect::oauth::read_oauth_token_instance(
+    // Use get_valid_token_instance (not read_oauth_token_instance) so expired
+    // access tokens are transparently refreshed via the stored refresh_token.
+    // Before this fix the proxy would surface "no credentials found" and 401
+    // for any connection with an expired token, even though the refresh was
+    // a single round-trip away.
+    let http_client = reqwest::Client::new();
+    let oauth_token = screenpipe_connect::oauth::get_valid_token_instance(
         state.secret_store.as_deref(),
+        &http_client,
         &id,
         None,
     );
