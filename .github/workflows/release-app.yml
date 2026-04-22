@@ -857,7 +857,12 @@ jobs:
             $keyFile = Join-Path $env:RUNNER_TEMP "tauri-key.txt"
             Set-Content -Path $keyFile -Value $env:TAURI_SIGNING_PRIVATE_KEY -NoNewline
             Push-Location apps/screenpipe-app-tauri
-            bunx tauri signer sign $exe.FullName --private-key-path $keyFile --password $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+            # Tauri v2 CLI: --private-key auto-detects path-vs-contents.
+            # The legacy --private-key-path flag was removed in 2.x — using
+            # it produces "For more information, try '--help'." (clap error)
+            # and fails the .sig regen, breaking the auto-updater.
+            bunx tauri signer sign $exe.FullName --private-key $keyFile --password $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+            if ($LASTEXITCODE -ne 0) { throw "tauri signer sign failed (exit $LASTEXITCODE) — auto-updater would be broken" }
             Pop-Location
             Write-Host "Tauri updater signature regenerated"
           }
