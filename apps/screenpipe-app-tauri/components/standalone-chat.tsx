@@ -1124,6 +1124,10 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
   // the start of the text — matches Cursor / iMessage edit-in-place feel.
   const pendingCaretRef = useRef<number | null>(null);
   const editTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  // Tracks where mousedown landed on a user message bubble so the mouseup
+  // handler can distinguish a real click (enter edit mode) from a drag-
+  // select (let the browser select text — don't swallow it).
+  const pendingEditDownXYRef = useRef<{ x: number; y: number } | null>(null);
 
   // Given a click on a rendered message bubble, compute the character offset
   // into `content` that corresponds to where the user clicked. Falls back to
@@ -3702,10 +3706,28 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
               <div
                 onMouseDown={(e) => {
                   if (message.role !== "user" || isLoading || editingMessageId === message.id) return;
-                  // Compute caret offset BEFORE React re-renders so the click
-                  // coordinates still point at live DOM; stash it for the
-                  // useLayoutEffect on the mounting textarea to apply.
+                  // Stage caret position from the click coords (still on live
+                  // DOM), but defer entering edit mode to mouseup. Letting
+                  // the user drag-select text inside their own messages
+                  // requires NOT swallowing mousedown — otherwise the
+                  // textarea replaces the rendered text mid-drag and the
+                  // selection is lost.
                   pendingCaretRef.current = caretOffsetFromClick(e, message.content);
+                  pendingEditDownXYRef.current = { x: e.clientX, y: e.clientY };
+                }}
+                onMouseUp={(e) => {
+                  if (message.role !== "user" || isLoading || editingMessageId === message.id) return;
+                  const down = pendingEditDownXYRef.current;
+                  pendingEditDownXYRef.current = null;
+                  // If the mouse moved more than ~3px between down and up,
+                  // treat it as a drag-select — don't enter edit mode.
+                  if (!down) return;
+                  const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
+                  if (moved > 3) {
+                    pendingCaretRef.current = null;
+                    return;
+                  }
+                  // Real click — enter edit mode.
                   setEditDraft(message.content);
                   setEditingMessageId(message.id);
                 }}
