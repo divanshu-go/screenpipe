@@ -271,11 +271,21 @@ fn run_workspace_observer(inner: Arc<Inner>) {
         // does a cheap CG call + a monitor list lookup.
         let inner_activate = Arc::clone(&inner);
         let activate_cb = move |_note: &ns::Notification| {
-            // Fetch the current monitor list synchronously. This call can
-            // block briefly (sck-rs query); the observer thread doesn't need
-            // to be snappy — tokio workers aren't starved by it.
-            let monitors = futures::executor::block_on(screenpipe_screen::monitor::list_monitors());
-            inner_activate.resolve_and_emit(&monitors);
+            // Wrap in autorelease pool — this callback runs on a custom
+            // std::thread driven by CFRunLoopRun, which does NOT drain the
+            // per-thread autorelease pool between iterations (unlike the
+            // main Cocoa event loop). Without this, every notification
+            // retains an NSNotification + any transient NSObjects from
+            // `list_monitors` forever.
+            cidre::objc::ar_pool(|| {
+                // Fetch the current monitor list synchronously. This call
+                // can block briefly (sck-rs query); the observer thread
+                // doesn't need to be snappy — tokio workers aren't starved
+                // by it.
+                let monitors =
+                    futures::executor::block_on(screenpipe_screen::monitor::list_monitors());
+                inner_activate.resolve_and_emit(&monitors);
+            });
         };
         let _activate_guard = nc.add_observer_guard(
             ns::workspace::notification::did_activate_app(),
@@ -286,8 +296,12 @@ fn run_workspace_observer(inner: Arc<Inner>) {
 
         let inner_space = Arc::clone(&inner);
         let space_cb = move |_note: &ns::Notification| {
-            let monitors = futures::executor::block_on(screenpipe_screen::monitor::list_monitors());
-            inner_space.resolve_and_emit(&monitors);
+            // Same autorelease-pool wrap as activate_cb above.
+            cidre::objc::ar_pool(|| {
+                let monitors =
+                    futures::executor::block_on(screenpipe_screen::monitor::list_monitors());
+                inner_space.resolve_and_emit(&monitors);
+            });
         };
         let _space_guard = nc.add_observer_guard(
             ns::workspace::notification::active_space_did_change(),
