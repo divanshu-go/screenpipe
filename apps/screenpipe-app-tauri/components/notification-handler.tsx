@@ -182,6 +182,12 @@ const NotificationHandler: React.FC = () => {
 
         if (action.type === "deeplink" && action.url) {
           if (action.url.startsWith("screenpipe://")) {
+            // Activate + show the Main window first so the DeeplinkHandler
+            // is mounted and ready before the event fires. See the matching
+            // block in app/notification-panel/page.tsx for the full rationale.
+            const { invoke } = await import("@tauri-apps/api/core");
+            await invoke("show_window_activated", { window: "Main" });
+            await new Promise((r) => setTimeout(r, 150));
             const { emit } = await import("@tauri-apps/api/event");
             await emit("deep-link-received", action.url);
           } else {
@@ -191,12 +197,15 @@ const NotificationHandler: React.FC = () => {
           return;
         }
 
-        // Legacy string actions
+        // Legacy string actions. Use `show_window_activated` rather than
+        // `show_window` — notifications can be clicked from outside the app's
+        // active space, and the NonActivating panel style prevents NSApp
+        // activation otherwise.
         const { invoke } = await import("@tauri-apps/api/core");
         if (action.action === "open_timeline") {
-          await invoke("show_window", { window: "Main" });
+          await invoke("show_window_activated", { window: "Main" });
         } else if (action.action === "open_chat") {
-          await invoke("show_window", { window: "Chat" });
+          await invoke("show_window_activated", { window: "Chat" });
         } else if (action.action === "open_pipe_suggestions") {
           await showChatWithPrefill({
             context: PIPE_SUGGESTION_PROMPT,

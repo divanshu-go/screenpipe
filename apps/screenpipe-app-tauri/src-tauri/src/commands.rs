@@ -780,6 +780,43 @@ pub async fn show_window(
     Ok(())
 }
 
+/// Like `show_window` but forces macOS app activation first, so the target
+/// window actually comes to the foreground when the caller is a
+/// `NSNonactivatingPanelMask` panel (notifications, tray, etc.).
+///
+/// Without this, clicking "Open" in the notification panel on macOS often
+/// appears to do nothing: the non-activating panel style prevents the app
+/// from becoming active, and overlay/fullscreen main modes rely on an
+/// activate-aware `show_panel_visible(activate_app=true)` path that only
+/// fires for `overlay_mode == "window"`. The window technically shows but
+/// stays behind whatever app the user was in.
+///
+/// Callers that represent explicit user intent (clicking Open on a
+/// notification) should use this variant. Passive show-surface callers
+/// should keep using `show_window` to avoid stealing focus unnecessarily.
+#[tauri::command]
+#[specta::specta]
+pub async fn show_window_activated(
+    app_handle: tauri::AppHandle,
+    window: ShowRewindWindow,
+) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        app_handle
+            .run_on_main_thread(|| {
+                use objc::{msg_send, sel, sel_impl};
+                use tauri_nspanel::cocoa::base::id;
+                unsafe {
+                    let ns_app: id =
+                        msg_send![objc::class!(NSApplication), sharedApplication];
+                    let _: () = msg_send![ns_app, activateIgnoringOtherApps: true];
+                }
+            })
+            .map_err(|e| format!("failed to activate app: {}", e))?;
+    }
+    show_window(app_handle, window).await
+}
+
 /// Re-assert the WKWebView as first responder for the current key panel.
 /// Called from JS on pointer enter / window focus to ensure trackpad pinch
 /// gestures (magnifyWithEvent:) reach the WKWebView for zoom handling.
