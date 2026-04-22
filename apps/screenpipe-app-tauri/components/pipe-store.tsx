@@ -463,6 +463,20 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
   // Available updates from store
   const [availableUpdates, setAvailableUpdates] = useState<Record<string, { latest_version: number; installed_version: number; locally_modified: boolean }>>({});
 
+  // First-visit banner — show once, dismiss permanently
+  // Initialize false to match server render, set true after mount if not dismissed
+  const [showWelcome, setShowWelcome] = useState(false);
+  useEffect(() => {
+    if (!localStorage.getItem("screenpipe:pipes-welcome-dismissed")) {
+      setShowWelcome(true);
+    }
+  }, []);
+
+  const dismissWelcome = () => {
+    setShowWelcome(false);
+    localStorage.setItem("screenpipe:pipes-welcome-dismissed", "1");
+  };
+
   // Fetch installed pipes (cached 30s, invalidated on install)
   useEffect(() => {
     const cacheKey = "pipes/installed";
@@ -744,20 +758,6 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
       </div>
     );
   }
-
-  // First-visit banner — show once, dismiss permanently
-  // Initialize false to match server render, set true after mount if not dismissed
-  const [showWelcome, setShowWelcome] = useState(false);
-  useEffect(() => {
-    if (!localStorage.getItem("screenpipe:pipes-welcome-dismissed")) {
-      setShowWelcome(true);
-    }
-  }, []);
-
-  const dismissWelcome = () => {
-    setShowWelcome(false);
-    localStorage.setItem("screenpipe:pipes-welcome-dismissed", "1");
-  };
 
   return (
     <div className="space-y-6">
