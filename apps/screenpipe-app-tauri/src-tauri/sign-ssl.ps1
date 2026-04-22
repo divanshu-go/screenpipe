@@ -23,6 +23,26 @@ if (-not $env:CODESIGNTOOL_PATH) {
     exit 1
 }
 
+# Resolve $FilePath to an absolute path BEFORE the Push-Location below.
+#
+# Tauri's bundler invokes signCommand with what's sometimes a relative
+# filename — observed concretely on Windows ARM64 for the bun sidecar:
+#   `... sign-ssl.ps1 bun-aarch64-pc-windows-msvc.exe`
+# (no directory). Once we Push-Location into $env:CODESIGNTOOL_PATH, that
+# relative path resolves against the wrong directory and CodeSignTool
+# fails with "Invalid input file path".
+#
+# x86_64 happens not to hit this because Tauri passes absolute paths
+# for the binaries that surface there (different bundler code path
+# for the per-target sidecar set), but defensively normalizing makes
+# the script correct regardless of caller cwd or path style.
+try {
+    $FilePath = (Resolve-Path -LiteralPath $FilePath -ErrorAction Stop).ProviderPath
+} catch {
+    Write-Host "ERROR: cannot resolve input path '$FilePath' (cwd=$(Get-Location)): $_"
+    exit 1
+}
+
 $jarFile = Get-ChildItem $env:CODESIGNTOOL_PATH -Recurse -Filter "code_sign_tool*.jar" | Select-Object -First 1
 $javaFile = Get-ChildItem $env:CODESIGNTOOL_PATH -Recurse -Filter "java.exe" | Select-Object -First 1
 
