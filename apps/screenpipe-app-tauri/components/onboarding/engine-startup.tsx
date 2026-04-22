@@ -517,7 +517,14 @@ export default function EngineStartup({
 
           {/* Privacy reassurance */}
           <p className="font-mono text-[10px] text-muted-foreground/50 text-center">
-            all data stays on your device. nothing leaves your machine.
+            zero retention on cloud features ·{" "}
+            <button
+              type="button"
+              onClick={() => openUrl("https://screenpi.pe/security")}
+              className="underline hover:text-muted-foreground transition-colors"
+            >
+              whitepaper ↗
+            </button>
           </p>
 
           {/* Continue button */}
