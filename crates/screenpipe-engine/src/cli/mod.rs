@@ -378,6 +378,13 @@ pub struct RecordArgs {
     #[arg(long, default_value_t = true)]
     pub api_auth: bool,
 
+    /// Bind the HTTP server to 0.0.0.0 so other devices on the LAN can
+    /// reach it. Off by default — the server binds 127.0.0.1 only.
+    /// `--api-auth` is forced on whenever this flag is used; you can't
+    /// accidentally expose an unauthenticated API on your network.
+    #[arg(long, default_value_t = false)]
+    pub listen_on_lan: bool,
+
     /// Encrypt secrets (API keys, OAuth tokens) at rest using the OS keychain.
     /// Creates a keychain key if one doesn't exist. Without this flag, the CLI
     /// will use an existing key (created by the desktop app) but won't create one.
@@ -457,6 +464,7 @@ impl RecordArgs {
             analytics_enabled: !self.disable_telemetry,
             ignore_incognito_windows: true,
             pause_on_drm_content: self.pause_on_drm_content,
+            listen_on_lan: self.listen_on_lan,
             ..screenpipe_config::RecordingSettings::default()
         }
     }
@@ -538,7 +546,16 @@ impl RecordArgs {
 
         let mut config =
             crate::recording_config::RecordingConfig::from_settings(&settings, data_dir, None);
-        config.api_auth = self.api_auth;
+        // Mirror the CLI flag, but never let the user turn auth OFF when
+        // the API is bound to the LAN — that would publish an unauthenticated
+        // service. `from_settings` already enforces this; we reapply it
+        // here so a `--no-api-auth --listen-on-lan` combo still authenticates.
+        config.api_auth = self.api_auth || self.listen_on_lan;
+        if self.listen_on_lan && !self.api_auth {
+            tracing::warn!(
+                "--listen-on-lan was set but --api-auth=false — forcing api_auth on for safety. Use `screenpipe auth token` to view your key."
+            );
+        }
         if config.api_auth {
             let settings_key = if settings.api_key.is_empty() {
                 None

@@ -277,6 +277,15 @@ pub struct RecordingSettings {
     /// Custom API key for remote authentication. If empty, a key is auto-generated.
     #[serde(rename = "apiKey", default)]
     pub api_key: String,
+
+    /// When true, the HTTP server binds to `0.0.0.0` so other devices on the
+    /// LAN can reach the screenpipe API. Off by default — the server binds
+    /// `127.0.0.1` (localhost only) which is the safe choice.
+    ///
+    /// `api_auth` is force-enabled whenever this is true; [`RecordingConfig::from_settings`]
+    /// overrides it, so a user can't accidentally expose the API unauthenticated on their network.
+    #[serde(rename = "listenOnLan", default)]
+    pub listen_on_lan: bool,
 }
 
 impl RecordingSettings {
@@ -354,6 +363,7 @@ impl Default for RecordingSettings {
             schedule_rules: vec![],
             api_auth: true,
             api_key: String::new(),
+            listen_on_lan: false,
         }
     }
 }

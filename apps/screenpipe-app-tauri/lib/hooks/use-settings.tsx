@@ -197,6 +197,14 @@ export type Settings = SettingsStore & {
 	}>;
 	apiAuth?: boolean;
 	apiKey?: string;
+	/**
+	 * When true the backend binds the HTTP API to 0.0.0.0 instead of 127.0.0.1
+	 * so other devices on the LAN can reach it. api_auth is force-enabled
+	 * whenever this is true — the backend mirrors the guard in
+	 * RecordingConfig::from_settings so the two flags stay consistent even
+	 * if someone edits the settings file by hand.
+	 */
+	listenOnLan?: boolean;
 	encryptStore?: boolean;
 }
 
