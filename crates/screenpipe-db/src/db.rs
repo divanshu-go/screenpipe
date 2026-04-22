@@ -118,6 +118,7 @@ impl Drop for ImmediateTx {
                 // If ROLLBACK fails, we detach as a last resort (better to leak one
                 // slot than poison the pool with a stuck transaction).
                 warn!("ImmediateTx dropped without commit — rolling back");
+                let permit = self._write_permit.take(); // Hold permit until rollback completes
                 tokio::spawn(async move {
                     match sqlx::query("ROLLBACK").execute(&mut *conn).await {
                         Ok(_) => {
@@ -132,8 +133,8 @@ impl Drop for ImmediateTx {
                             let _raw = conn.detach();
                         }
                     }
+                    drop(permit); // Release the write permit so other writers can proceed
                 });
-                // Release the write permit so other writers can proceed
             }
         }
     }
