@@ -769,12 +769,39 @@ jobs:
         if: matrix.os_type == 'windows'
         shell: powershell
         run: |
+          # 1. CodeSignTool: signs the inner binaries + final NSIS installer
+          #    via SSL.com eSigner (called by Tauri's signCommand wrapper).
           $cstDest = "$env:RUNNER_TEMP\CodeSignTool"
           Write-Host "Downloading CodeSignTool..."
           Invoke-WebRequest -Uri "https://github.com/SSLcom/CodeSignTool/releases/download/v1.3.2/CodeSignTool-v1.3.2-windows.zip" -OutFile "$env:RUNNER_TEMP\cst.zip"
           Expand-Archive -Path "$env:RUNNER_TEMP\cst.zip" -DestinationPath "$cstDest" -Force
           echo "CODESIGNTOOL_PATH=$cstDest" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           Write-Host "CodeSignTool installed at $cstDest"
+
+          # 2. signtool.exe (Windows SDK): NEEDED separately on the ARM64
+          #    runner image. Tauri's bundler invokes signtool first to
+          #    detect signing capability before delegating to signCommand;
+          #    on ARM64 the runner image doesn't put signtool on PATH AND
+          #    Tauri's os_bitness() detection fails on ARM64
+          #    (https://github.com/tauri-apps/tao/issues/1171), causing
+          #    "failed to bundle project SignTool not found" right after
+          #    the cargo build succeeds. Setting TAURI_WINDOWS_SIGNTOOL_PATH
+          #    bypasses Tauri's broken auto-detection.
+          $target = "${{ matrix.target }}"
+          if ($target -match "aarch64") {
+            $signtool = Get-ChildItem "C:\Program Files*\Windows Kits\10\bin" -Recurse -Filter "signtool.exe" -ErrorAction SilentlyContinue |
+              Where-Object { $_.DirectoryName -match "\\(arm64|x64)$" } |
+              Sort-Object { ($_.DirectoryName -replace '.*\\(\d+\.\d+\.\d+\.\d+)\\.*','$1') } -Descending |
+              Select-Object -First 1
+            if ($signtool) {
+              echo "TAURI_WINDOWS_SIGNTOOL_PATH=$($signtool.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+              echo "$($signtool.DirectoryName)" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+              Write-Host "Set TAURI_WINDOWS_SIGNTOOL_PATH=$($signtool.FullName)"
+            } else {
+              Write-Host "ERROR: signtool.exe not found anywhere on ARM64 runner"
+              exit 1
+            }
+          }
 
       - name: Build (Windows)
         if: matrix.os_type == 'windows'
