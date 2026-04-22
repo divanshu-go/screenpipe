@@ -6872,7 +6872,10 @@ LIMIT ? OFFSET ?
         }
 
         let display = if all_text.len() > 5000 {
-            format!("{}… (truncated)", all_text.chars().take(5000).collect::<String>())
+            format!(
+                "{}… (truncated)",
+                all_text.chars().take(5000).collect::<String>()
+            )
         } else {
             all_text
         };
