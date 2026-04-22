@@ -670,6 +670,7 @@ async fn main() {
                 pi::pi_new_session,
                 pi::pi_set_model,
                 pi::pi_update_config,
+                pi::bun_check,
                 // ChatGPT OAuth commands
                 chatgpt_oauth::chatgpt_oauth_login,
                 chatgpt_oauth::chatgpt_oauth_status,
@@ -948,6 +949,7 @@ async fn main() {
             pi::pi_new_session,
             pi::pi_set_model,
             pi::pi_update_config,
+            pi::bun_check,
             // ChatGPT OAuth commands
             chatgpt_oauth::chatgpt_oauth_login,
             chatgpt_oauth::chatgpt_oauth_status,

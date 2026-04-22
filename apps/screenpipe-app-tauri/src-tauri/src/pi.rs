@@ -1704,6 +1704,22 @@ pub async fn pi_check() -> Result<PiCheckResult, String> {
     })
 }
 
+/// Locate the bundled bun binary so the frontend can write absolute-path
+/// MCP configs (e.g. `{ command: <bun>, args: ["x", "screenpipe-mcp@latest"] }`)
+/// instead of `npx -y screenpipe-mcp`. npx requires a global Node install
+/// — many Claude Desktop users don't have it, and the silent first-run
+/// `npx` download often blows past Claude's MCP startup timeout. Using
+/// the bun we already ship sidesteps both failure modes.
+#[tauri::command]
+#[specta::specta]
+pub async fn bun_check() -> Result<PiCheckResult, String> {
+    let path = find_bun_executable();
+    Ok(PiCheckResult {
+        available: path.is_some(),
+        path,
+    })
+}
+
 /// Hot-swap Pi's active model without killing the subprocess. Preserves the
 /// full conversation state in-place — the user can switch haiku ↔ sonnet ↔ opus
 /// mid-session and the new model sees the real threaded history, not a

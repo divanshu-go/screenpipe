@@ -115,12 +115,41 @@ async function isCursorMcpInstalled(): Promise<boolean> {
   } catch { return false; }
 }
 
+type McpCommand = { command: string; args: string[] };
+
+/**
+ * MCP install config for screenpipe.
+ *
+ * Prefers the `bun` binary we ship with the desktop app over `npx`:
+ *  - no Node.js dependency (many Claude Desktop users don't have node)
+ *  - ~3× faster cold start than npx (avoids first-run download stalling
+ *    Claude's MCP startup timeout)
+ *  - absolute path → no PATH lookup races
+ *
+ * Falls back to `npx` for copy-paste configs targeting users without our
+ * desktop app installed (Claude Code CLI block, AnythingLLM, MstyStudio).
+ *
+ * Always pins `@latest` so npx/bunx don't lock onto a stale cached
+ * version forever — without `@latest`, the first install caches and
+ * never updates.
+ */
+async function buildMcpConfig(opts?: { forceNpx?: boolean }): Promise<McpCommand> {
+  if (opts?.forceNpx) return { command: "npx", args: ["-y", "screenpipe-mcp@latest"] };
+  try {
+    const res = await commands.bunCheck();
+    if (res.status === "ok" && res.data.available && res.data.path) {
+      return { command: res.data.path, args: ["x", "screenpipe-mcp@latest"] };
+    }
+  } catch { /* fall through to npx */ }
+  return { command: "npx", args: ["-y", "screenpipe-mcp@latest"] };
+}
+
 async function installCursorMcp(): Promise<void> {
   const configPath = await getCursorMcpConfigPath();
   let config: Record<string, unknown> = {};
   try { config = JSON.parse(await readTextFile(configPath)); } catch { /* fresh */ }
   if (!config.mcpServers || typeof config.mcpServers !== "object") config.mcpServers = {};
-  (config.mcpServers as Record<string, unknown>).screenpipe = { command: "npx", args: ["-y", "screenpipe-mcp"] };
+  (config.mcpServers as Record<string, unknown>).screenpipe = await buildMcpConfig();
   await writeFile(configPath, new TextEncoder().encode(JSON.stringify(config, null, 2)));
 }
 
@@ -428,7 +457,7 @@ function ClaudePanel({ onConnected, onDisconnected }: { onConnected?: () => void
       let config: Record<string, unknown> = {};
       try { config = JSON.parse(await readTextFile(configPath)); } catch { /* fresh */ }
       if (!config.mcpServers || typeof config.mcpServers !== "object") config.mcpServers = {};
-      (config.mcpServers as Record<string, unknown>).screenpipe = { command: "npx", args: ["-y", "screenpipe-mcp"] };
+      (config.mcpServers as Record<string, unknown>).screenpipe = await buildMcpConfig();
       await mkdir(await dirname(configPath), { recursive: true });
       await writeFile(configPath, new TextEncoder().encode(JSON.stringify(config, null, 2)));
       setState("connected");
@@ -503,7 +532,7 @@ function CursorPanel({ onConnected, onDisconnected }: { onConnected?: () => void
       console.error("failed to install cursor mcp:", error);
       await message(
         "Failed to write Cursor MCP config.\n\nManually add to ~/.cursor/mcp.json:\n\n" +
-        JSON.stringify({ mcpServers: { screenpipe: { command: "npx", args: ["-y", "screenpipe-mcp"] } } }, null, 2),
+        JSON.stringify({ mcpServers: { screenpipe: { command: "npx", args: ["-y", "screenpipe-mcp@latest"] } } }, null, 2),
         { title: "Cursor MCP Setup", kind: "error" }
       );
       setState("idle");
@@ -548,7 +577,7 @@ function CursorPanel({ onConnected, onDisconnected }: { onConnected?: () => void
 
 function ClaudeCodePanel() {
   const [copied, setCopied] = useState(false);
-  const cmd = "claude mcp add screenpipe -- npx -y screenpipe-mcp";
+  const cmd = "claude mcp add screenpipe -- npx -y screenpipe-mcp@latest";
   const handleCopy = useCallback(async () => {
     try {
       await navigator.clipboard.writeText(cmd);
@@ -576,7 +605,7 @@ function AnythingLLMPanel() {
     mcpServers: {
       screenpipe: {
         command: "npx",
-        args: ["-y", "screenpipe-mcp"],
+        args: ["-y", "screenpipe-mcp@latest"],
       },
     },
   }, null, 2);
@@ -616,7 +645,7 @@ function MstyPanel() {
   const [copied, setCopied] = useState(false);
   const config = JSON.stringify({
     command: "npx",
-    args: ["-y", "screenpipe-mcp"],
+    args: ["-y", "screenpipe-mcp@latest"],
   }, null, 2);
   const handleCopy = useCallback(async () => {
     try {

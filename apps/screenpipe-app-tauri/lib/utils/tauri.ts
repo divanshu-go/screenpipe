@@ -840,6 +840,22 @@ async piUpdateConfig(userToken: string | null, providerConfig: PiProviderConfig 
     else return { status: "error", error: e  as any };
 }
 },
+/**
+ * Locate the bundled bun binary so the frontend can write absolute-path
+ * MCP configs (e.g. `{ command: <bun>, args: ["x", "screenpipe-mcp@latest"] }`)
+ * instead of `npx -y screenpipe-mcp`. npx requires a global Node install
+ * — many Claude Desktop users don't have it, and the silent first-run
+ * `npx` download often blows past Claude's MCP startup timeout. Using
+ * the bun we already ship sidesteps both failure modes.
+ */
+async bunCheck() : Promise<Result<PiCheckResult, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("bun_check") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async chatgptOauthLogin() : Promise<Result<boolean, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("chatgpt_oauth_login") };
