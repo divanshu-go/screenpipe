@@ -796,7 +796,11 @@ export function PipesSection() {
       return true;
     })
     .sort((a, b) => {
-      // Running first
+      // Starred first — explicit user intent beats everything else
+      const aFav = pipeFavorites.isFavorite(a.config.name);
+      const bFav = pipeFavorites.isFavorite(b.config.name);
+      if (aFav !== bFav) return aFav ? -1 : 1;
+      // Then running
       if (a.is_running !== b.is_running) return a.is_running ? -1 : 1;
       // Then by most recent execution from DB (matches the "Xm ago" display)
       const aExecs = pipeExecutions[a.config.name] || [];
