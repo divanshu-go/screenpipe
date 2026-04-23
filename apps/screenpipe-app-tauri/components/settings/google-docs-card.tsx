@@ -6,8 +6,10 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Loader2, RefreshCw, LogOut, ExternalLink, FileText } from "lucide-react";
+import { Loader2, RefreshCw, LogOut, ExternalLink, FileText, Lock } from "lucide-react";
 import { commands } from "@/lib/utils/tauri";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { useSettings } from "@/lib/hooks/use-settings";
 import posthog from "posthog-js";
 import { localFetch } from "@/lib/api";
 
@@ -19,6 +21,8 @@ interface DriveFile {
 }
 
 export function GoogleDocsCard() {
+  const { settings } = useSettings();
+  const isPro = !!settings.user?.cloud_subscribed;
   const [connected, setConnected] = useState(false);
   const [email, setEmail] = useState<string | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -130,7 +134,19 @@ export function GoogleDocsCard() {
               Read-only access to your Google Docs. Lets AI search and read document content.
             </p>
 
-            {!connected ? (
+            {!connected && !isPro ? (
+              <div className="flex flex-col gap-1.5">
+                <Button disabled size="sm" className="gap-1.5 text-xs opacity-60">
+                  <Lock className="h-3 w-3" />pro required
+                </Button>
+                <button
+                  onClick={() => openUrl("https://screenpi.pe/onboarding")}
+                  className="text-[10px] text-muted-foreground hover:text-foreground underline"
+                >
+                  upgrade to pro to connect
+                </button>
+              </div>
+            ) : !connected ? (
               <Button
                 variant="outline"
                 size="sm"
