@@ -1195,6 +1195,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
   const [prefillContext, setPrefillContext] = useState<string | null>(null);
   const [prefillSource, setPrefillSource] = useState<string>("search");
   const [prefillFrameId, setPrefillFrameId] = useState<number | null>(null);
+  const [isPreparingPrefill, setIsPreparingPrefill] = useState(false);
   const [pastedImages, setPastedImages] = useState<string[]>([]); // Base64 data URLs
   const [imageViewer, setImageViewer] = useState<{ images: string[]; index: number } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -1431,20 +1432,26 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
   // Other windows wait for "chat-ready" before emitting "chat-prefill"
   // to avoid the event being lost when the chat webview is freshly created.
   useEffect(() => {
-    emit("chat-ready", {});
+    const windowLabel = getCurrentWindow().label;
+    emit("chat-ready", { windowLabel });
     // Also respond to "chat-ping" for when the chat is already open
-    const unlisten = listen("chat-ping", () => {
-      emit("chat-ready", {});
+    const unlisten = listen<{ targetWindow?: string }>("chat-ping", (event) => {
+      const targetWindow = event.payload?.targetWindow;
+      if (targetWindow && targetWindow !== windowLabel) return;
+      emit("chat-ready", { windowLabel });
     });
     // Check for pending prefill from same-window navigation (e.g. pipes → home)
     const pending = sessionStorage.getItem("pendingChatPrefill");
     if (pending) {
+      setIsPreparingPrefill(true);
       sessionStorage.removeItem("pendingChatPrefill");
       try {
         const data = JSON.parse(pending);
-        // Small delay to let the chat fully initialize
-        setTimeout(() => emit("chat-prefill", data), 500);
-      } catch {}
+        // Small delay to let the chat fully initialize without showing setup flashes.
+        setTimeout(() => emit("chat-prefill", data), 120);
+      } catch {
+        setIsPreparingPrefill(false);
+      }
     }
     // Clean up stale pipe-generation markers (>30 min old) so they don't
     // leak into a future unrelated chat session.
@@ -1532,13 +1539,15 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
       // Only process if this window is the intended target (or no target for backwards compat)
       if (targetWindow && getCurrentWindow().label !== targetWindow) return;
 
-      if (autoSend && prompt && context) {
+      if (autoSend && prompt) {
         // Deduplicate: skip if another listener instance is already handling this
         if (prefillInFlightRef.current) return;
         prefillInFlightRef.current = true;
+        setIsPreparingPrefill(true);
 
         // Auto-send: compose full message (context above, user text below) and send immediately
-        const fullMessage = `${context}\n\n${prompt}`;
+        const trimmedContext = context?.trim();
+        const fullMessage = trimmedContext ? `${trimmedContext}\n\n${prompt}` : prompt;
         // Start a new conversation then send
         (async () => {
           try {
@@ -1572,11 +1581,13 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
           } finally {
             autoSendBypassRef.current = false;
             prefillInFlightRef.current = false;
+            setIsPreparingPrefill(false);
           }
         })();
         return;
       }
 
+      setIsPreparingPrefill(false);
       setPrefillContext(context);
       setPrefillSource(source || "search");
       if (frameId) {
@@ -3611,7 +3622,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
           }}
         >
         <div className="max-w-4xl mx-auto w-full p-4 space-y-4">
-        {messages.length === 0 && disabledReason && (!hasPresets || !hasValidModel || needsLogin) && (
+        {messages.length === 0 && !isPreparingPrefill && disabledReason && (!hasPresets || !hasValidModel || needsLogin) && (
           <div className="relative flex flex-col items-center justify-center py-12 space-y-4">
             <div className="relative p-6 rounded-2xl border bg-muted/50 border-border/50">
               {needsLogin ? (
@@ -3652,7 +3663,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
             )}
           </div>
         )}
-        {messages.length === 0 && hasPresets && hasValidModel && !needsLogin && (
+        {messages.length === 0 && !isPreparingPrefill && hasPresets && hasValidModel && !needsLogin && (
           <SummaryCards
             onSendMessage={sendMessage}
             autoSuggestions={autoSuggestions}
