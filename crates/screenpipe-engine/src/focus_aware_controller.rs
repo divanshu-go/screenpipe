@@ -182,60 +182,87 @@ impl FocusAwareController {
 
     /// Query state for a monitor. Must be cheap — called on every capture
     /// loop iteration.
-    pub fn state(&self, monitor_id: u32) -> CaptureState {
-        // Stale-focus safety: if no focus event has landed in 30s, assume
-        // the tracker stalled (native thread blocked, notifications dropped
-        // during sleep/wake, etc.) and treat everything as Active. Matches
-        // the Null-tracker all-Active fallback so a broken focus source
-        // never silently freezes capture on non-focused monitors.
-        let last_event_elapsed = self
-            .last_event_time
-            .lock()
-            .ok()
-            .map(|t| t.elapsed())
-            .unwrap_or_else(|| Duration::from_secs(0));
-        if last_event_elapsed >= STALE_FOCUS_CUTOFF {
-            return CaptureState::Active;
-        }
+    ///
+    /// **Currently short-circuited to always return `Active`.**
+    ///
+    /// Why: on fresh macOS installs (and likely other environments) the
+    /// classifier was keeping monitor 1 permanently in `Cold`, because the
+    /// Darwin focus tracker's reported monitor ids didn't always match the
+    /// `monitor_id` VisionManager uses. Result: the event-driven capture
+    /// loop blocked on the notify forever and no frames were ever written
+    /// to the DB — the UI sat on "building your memory…" indefinitely
+    /// (observed on v2.4.37 MBA fresh install: 3 frames in ~17 min of
+    /// runtime, zero after that session's restart).
+    ///
+    /// Disabling the pause-on-unfocused behavior via an early-return here
+    /// preserves all the focus-tracker scaffolding (subscribers, Darwin
+    /// observer, autorelease-pool fix in 8f8e1e819, etc.) without the
+    /// risk of a full revert touching multiple downstream commits. Once
+    /// the monitor-id mapping is properly reconciled between the focus
+    /// tracker and VisionManager, the body below can be reinstated.
+    ///
+    /// The rest of this function is kept intact (dead code) so the fix
+    /// can be reverted to "re-enable focus-aware" with a one-line diff.
+    pub fn state(&self, _monitor_id: u32) -> CaptureState {
+        return CaptureState::Active;
 
-        // If focus is Unknown (no data yet), everything is Active — safest
-        // fallback. Preserves existing behaviour when the tracker can't
-        // resolve the cursor to a monitor.
-        let current = *self
-            .current_focus
-            .lock()
-            .expect("focus-aware current_focus mutex poisoned");
-        let Some(current_id) = current else {
-            return CaptureState::Active;
-        };
+        #[allow(unreachable_code)]
+        {
+            let monitor_id = _monitor_id;
+            // Stale-focus safety: if no focus event has landed in 30s, assume
+            // the tracker stalled (native thread blocked, notifications dropped
+            // during sleep/wake, etc.) and treat everything as Active. Matches
+            // the Null-tracker all-Active fallback so a broken focus source
+            // never silently freezes capture on non-focused monitors.
+            let last_event_elapsed = self
+                .last_event_time
+                .lock()
+                .ok()
+                .map(|t| t.elapsed())
+                .unwrap_or_else(|| Duration::from_secs(0));
+            if last_event_elapsed >= STALE_FOCUS_CUTOFF {
+                return CaptureState::Active;
+            }
 
-        if current_id == monitor_id {
-            return CaptureState::Active;
-        }
+            // If focus is Unknown (no data yet), everything is Active — safest
+            // fallback. Preserves existing behaviour when the tracker can't
+            // resolve the cursor to a monitor.
+            let current = *self
+                .current_focus
+                .lock()
+                .expect("focus-aware current_focus mutex poisoned");
+            let Some(current_id) = current else {
+                return CaptureState::Active;
+            };
 
-        let last = self
-            .last_focus_time
-            .lock()
-            .expect("focus-aware last_focus_time mutex poisoned")
-            .get(&monitor_id)
-            .copied();
+            if current_id == monitor_id {
+                return CaptureState::Active;
+            }
 
-        match last {
-            // Never focused since controller start → Cold. The loop will
-            // block on the notify; once the cursor lands on this monitor
-            // (or focus becomes Unknown), state flips back to Active.
-            None => CaptureState::Cold,
-            Some(t) => {
-                let elapsed = t.elapsed();
-                if elapsed < WARM_CUTOFF {
-                    // Hysteresis: still feels "active" for a beat after
-                    // focus change to avoid stuttering during normal
-                    // window switching.
-                    CaptureState::Active
-                } else if elapsed < COLD_CUTOFF {
-                    CaptureState::Warm
-                } else {
-                    CaptureState::Cold
+            let last = self
+                .last_focus_time
+                .lock()
+                .expect("focus-aware last_focus_time mutex poisoned")
+                .get(&monitor_id)
+                .copied();
+
+            match last {
+                // Never focused since controller start → Cold. The loop will
+                // block on the notify; once the cursor lands on this monitor
+                // (or focus becomes Unknown), state flips back to Active.
+                None => CaptureState::Cold,
+                Some(t) => {
+                    let elapsed = t.elapsed();
+                    if elapsed < WARM_CUTOFF {
+                        // Hysteresis: still feels "active" for a beat after
+                        // focus change to avoid stuttering during normal
+                        // window switching.
+                        CaptureState::Active
+                    } else if elapsed < COLD_CUTOFF {
+                        CaptureState::Warm
+                    } else {
+                        CaptureState::Cold
+                    }
                 }
             }
         }
@@ -308,6 +335,11 @@ impl Drop for FocusAwareController {
     }
 }
 
+// Tests below exercise the Active/Warm/Cold classifier via state().
+// Since state() is currently short-circuited to always return Active
+// (see the function doc-comment for why), tests that expect Warm/Cold
+// have `#[ignore = "..."]` applied. Re-enable them the moment
+// state()'s early-return is removed.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -326,6 +358,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "state() short-circuited to Active — see focus_aware_controller::state doc"]
     async fn focused_monitor_is_active_and_never_focused_is_cold() {
         let ctrl = make_ctrl();
         ctrl.set_focus_for_test(1);
@@ -346,6 +379,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "state() short-circuited to Active — see focus_aware_controller::state doc"]
     async fn transitions_to_warm_after_warm_cutoff() {
         let ctrl = make_ctrl();
         ctrl.set_focus_for_test(1);
@@ -357,6 +391,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "state() short-circuited to Active — see focus_aware_controller::state doc"]
     async fn transitions_to_cold_after_cold_cutoff() {
         let ctrl = make_ctrl();
         ctrl.set_focus_for_test(1);
@@ -368,6 +403,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "state() short-circuited to Active — intermediate Cold assertions no longer hold"]
     async fn unknown_event_forces_all_active_fallback() {
         let ctrl = make_ctrl();
         ctrl.set_focus_for_test(1);
@@ -389,6 +425,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "state() short-circuited to Active — intermediate Cold assertions no longer hold"]
     async fn stale_focus_falls_back_to_active() {
         let ctrl = make_ctrl();
         ctrl.set_focus_for_test(1);
