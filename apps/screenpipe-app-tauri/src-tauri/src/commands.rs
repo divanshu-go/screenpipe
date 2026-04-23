@@ -11,6 +11,35 @@ use crate::{
 use tauri::{Emitter, Manager};
 use tracing::{debug, error, info, warn};
 
+/// Log a `WebviewWindowBuilder::build()` failure with structured context.
+///
+/// Why: Sentry events for webview build failures currently say only
+/// "failed to create webview: WebView2 error: …". Without knowing which
+/// window was being built (pipe-store, login, notifications, etc.) we
+/// can't triage.
+///
+/// Tracing's `sentry` layer (see `main.rs`) maps structured fields to
+/// Sentry tags, so `webview_label` and `webview_url` become filterable
+/// tags in the Sentry dashboard.
+///
+/// Call at every `WebviewWindowBuilder::build()` error site instead of
+/// a bare `error!(...)`. Return the error unchanged — this function is
+/// purely observability.
+fn log_webview_build_failure(
+    label: &str,
+    url_hint: &str,
+    err: &(impl std::fmt::Display + ?Sized),
+) {
+    tracing::error!(
+        webview_label = label,
+        webview_url = url_hint,
+        "failed to create webview (label={}, url={}): {}",
+        label,
+        url_hint,
+        err
+    );
+}
+
 /// Global app handle stored so the native notification action callback can emit events.
 #[cfg(target_os = "macos")]
 static GLOBAL_APP_HANDLE: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
@@ -549,12 +578,13 @@ pub async fn open_pipe_window(
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     }
 
+    let url = format!("http://localhost:{}", port);
     let window = match tauri::WebviewWindowBuilder::new(
         &app_handle,
         &title,
-        tauri::WebviewUrl::External(format!("http://localhost:{}", port).parse().unwrap()),
+        tauri::WebviewUrl::External(url.parse().unwrap()),
     )
-    .title(title)
+    .title(title.clone())
     .inner_size(1200.0, 850.0)
     .min_inner_size(600.0, 400.0)
     .focused(true)
@@ -564,7 +594,7 @@ pub async fn open_pipe_window(
     {
         Ok(window) => window,
         Err(e) => {
-            error!("failed to create window: {}", e);
+            log_webview_build_failure(&title, &url, &e);
             return Err(format!("failed to create window: {}", e));
         }
     };
@@ -670,10 +700,11 @@ pub async fn open_login_window(app_handle: tauri::AppHandle) -> Result<(), Strin
 
         let app_for_nav = app_handle.clone();
 
+        const LOGIN_URL: &str = "https://screenpi.pe/login";
         WebviewWindowBuilder::new(
             &app_handle,
             label,
-            WebviewUrl::External("https://screenpi.pe/login".parse().unwrap()),
+            WebviewUrl::External(LOGIN_URL.parse().unwrap()),
         )
         .title("sign in to screenpipe")
         .inner_size(460.0, 700.0)
@@ -694,7 +725,10 @@ pub async fn open_login_window(app_handle: tauri::AppHandle) -> Result<(), Strin
         })
         .build()
         .map(crate::window::finalize_webview_window)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            log_webview_build_failure(label, LOGIN_URL, &e);
+            e.to_string()
+        })?;
 
         Ok(())
     }
@@ -723,10 +757,13 @@ pub async fn open_google_calendar_auth_window(
 
     let app_for_nav = app_handle.clone();
 
+    let parsed_url = auth_url
+        .parse()
+        .map_err(|e| format!("invalid url: {e}"))?;
     WebviewWindowBuilder::new(
         &app_handle,
         label,
-        WebviewUrl::External(auth_url.parse().map_err(|e| format!("invalid url: {e}"))?),
+        WebviewUrl::External(parsed_url),
     )
     .title("connect google calendar")
     .inner_size(500.0, 700.0)
@@ -745,7 +782,10 @@ pub async fn open_google_calendar_auth_window(
     })
     .build()
     .map(crate::window::finalize_webview_window)
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| {
+        log_webview_build_failure(label, &auth_url, &e);
+        e.to_string()
+    })?;
 
     Ok(())
 }
@@ -1379,7 +1419,10 @@ pub async fn show_shortcut_reminder(
     let window = builder
         .build()
         .map(crate::window::finalize_webview_window)
-        .map_err(|e| format!("Failed to create shortcut reminder window: {}", e))?;
+        .map_err(|e| {
+            log_webview_build_failure(label, "shortcut-reminder", &e);
+            format!("Failed to create shortcut reminder window: {}", e)
+        })?;
 
     info!("shortcut-reminder window created");
 
@@ -1661,7 +1704,10 @@ pub async fn show_notification_panel(
     let window = builder
         .build()
         .map(crate::window::finalize_webview_window)
-        .map_err(|e| format!("Failed to create notification panel window: {}", e))?;
+        .map_err(|e| {
+            log_webview_build_failure(label, "notification-panel", &e);
+            format!("Failed to create notification panel window: {}", e)
+        })?;
 
     info!("notification-panel window created");
 
