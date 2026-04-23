@@ -57,32 +57,92 @@ extern "C" fn native_notif_action_callback(json_ptr: *const std::os::raw::c_char
         .to_string();
     info!("native notification action: {}", json);
 
-    if let Some(app) = GLOBAL_APP_HANDLE.get() {
-        // Handle "manage" directly in Rust — opens the Home window to notifications section.
-        // This avoids relying on JS event listeners which may not be active.
-        if json.contains("\"type\":\"manage\"") {
-            let app_clone = app.clone();
-            // Spawn a thread so we don't block the Swift main thread
-            std::thread::spawn(move || {
-                // Show the home window (needs main thread on macOS)
+    let Some(app) = GLOBAL_APP_HANDLE.get() else {
+        return;
+    };
+
+    // Parse once so downstream branches can dispatch on structured fields
+    // instead of doing fragile substring matches on the JSON string.
+    let parsed: Option<serde_json::Value> = serde_json::from_str(&json).ok();
+    let action_type = parsed
+        .as_ref()
+        .and_then(|v| v.get("type"))
+        .and_then(|v| v.as_str());
+
+    // "manage" — open the Home window to notifications settings. Handled in
+    // Rust rather than via JS emit so it works even when no React window is
+    // currently mounted.
+    if action_type == Some("manage") {
+        let app_clone = app.clone();
+        std::thread::spawn(move || {
+            let app_for_show = app_clone.clone();
+            let _ = app_clone.run_on_main_thread(move || {
+                if let Err(e) = (ShowRewindWindow::Home { page: None }).show(&app_for_show) {
+                    error!("failed to show home window for manage: {}", e);
+                }
+            });
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            let _ = app_clone.emit(
+                "navigate",
+                serde_json::json!({ "url": "/home?section=notifications" }),
+            );
+        });
+        return;
+    }
+
+    // URL-opening actions. Two distinct semantics, explicit types so senders
+    // can't conflate them:
+    //   "link"      → external URL, opened in the user's default browser
+    //   "deeplink"  → screenpipe:// in-app route, dispatched to DeeplinkHandler
+    //
+    // Both are handled in Rust rather than via JS emit so clicks work even
+    // when the overlay window (which hosts the JS listener in
+    // `components/notification-handler.tsx`) isn't mounted. Previous
+    // implementation relied on that listener and silently did nothing when
+    // overlay wasn't running — which is the common case for a native
+    // notification shown over the desktop.
+    if action_type == Some("link") || action_type == Some("deeplink") {
+        let url = parsed
+            .as_ref()
+            .and_then(|v| v.get("url"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        let Some(url) = url else {
+            warn!("{} notification action has no url: {}", action_type.unwrap(), json);
+            return;
+        };
+
+        // Guard against senders putting a browser URL into "deeplink" or a
+        // screenpipe:// URL into "link". We route on actual scheme, not on
+        // the declared type, so a typo doesn't break the click.
+        let is_in_app = url.starts_with("screenpipe://");
+        let app_clone = app.clone();
+        std::thread::spawn(move || {
+            if is_in_app {
+                // Show Main first so DeeplinkHandler is mounted, then emit.
                 let app_for_show = app_clone.clone();
                 let _ = app_clone.run_on_main_thread(move || {
-                    if let Err(e) = (ShowRewindWindow::Home { page: None }).show(&app_for_show) {
-                        error!("failed to show home window for manage: {}", e);
+                    if let Err(e) = ShowRewindWindow::Main.show(&app_for_show) {
+                        error!("failed to show Main window for deeplink: {}", e);
                     }
                 });
-                // Give the window time to mount its React listener
-                std::thread::sleep(std::time::Duration::from_millis(500));
-                let _ = app_clone.emit(
-                    "navigate",
-                    serde_json::json!({ "url": "/home?section=notifications" }),
-                );
-            });
-            return;
-        }
-
-        let _ = app.emit("native-notification-action", &json);
+                std::thread::sleep(std::time::Duration::from_millis(150));
+                let _ = app_clone.emit("deep-link-received", url);
+            } else {
+                // External URL — hand off to the opener plugin.
+                use tauri_plugin_opener::OpenerExt;
+                if let Err(e) = app_clone.opener().open_url(&url, None::<&str>) {
+                    error!("failed to open url '{}' from notification: {}", url, e);
+                }
+            }
+        });
+        return;
     }
+
+    // Everything else (pipe, api, mute, dismiss, auto_dismiss, legacy string
+    // actions) still goes to the JS handler. The overlay window owns those
+    // because they need access to posthog / localforage / chat prefill.
+    let _ = app.emit("native-notification-action", &json);
 }
 
 /// Callback invoked from Swift when user clicks a shortcut reminder action.

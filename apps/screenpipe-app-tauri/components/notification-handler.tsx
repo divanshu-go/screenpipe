@@ -180,11 +180,18 @@ const NotificationHandler: React.FC = () => {
           return;
         }
 
-        if (action.type === "deeplink" && action.url) {
-          if (action.url.startsWith("screenpipe://")) {
-            // Activate + show the Main window first so the DeeplinkHandler
-            // is mounted and ready before the event fires. See the matching
-            // block in app/notification-panel/page.tsx for the full rationale.
+        // URL-opening actions. Two explicit types so senders can't conflate
+        // them:
+        //   "link"      — external URL, opens in default browser
+        //   "deeplink"  — screenpipe:// in-app route
+        //
+        // Note: these are also handled in Rust inside `native_notif_action_callback`
+        // for the native macOS panel case (where this JS listener may not be
+        // alive). This JS branch remains for the webview notification panel.
+        // Routing is on URL scheme, not the declared type, so a mislabeled
+        // payload still works.
+        if ((action.type === "link" || action.type === "deeplink") && action.url) {
+          if (typeof action.url === "string" && action.url.startsWith("screenpipe://")) {
             const { invoke } = await import("@tauri-apps/api/core");
             await invoke("show_window_activated", { window: "Main" });
             await new Promise((r) => setTimeout(r, 150));
