@@ -872,6 +872,7 @@ mod tests {
             installed_version: None,
             source_hash: None,
             subagent: false,
+            privacy_filter: false,
             trigger: None,
             config: std::collections::HashMap::new(),
         };
@@ -898,6 +899,7 @@ mod tests {
             installed_version: None,
             source_hash: None,
             subagent: false,
+            privacy_filter: false,
             trigger: None,
             config: std::collections::HashMap::new(),
         };
@@ -936,6 +938,7 @@ mod tests {
             installed_version: None,
             source_hash: None,
             subagent: false,
+            privacy_filter: false,
             trigger: None,
             config: std::collections::HashMap::new(),
         };
@@ -987,6 +990,7 @@ mod tests {
             installed_version: None,
             source_hash: None,
             subagent: false,
+            privacy_filter: false,
             trigger: None,
             config: std::collections::HashMap::new(),
         };

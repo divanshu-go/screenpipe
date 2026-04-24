@@ -28,6 +28,7 @@ pub mod pipe_permissions_middleware;
 pub mod pipe_store;
 pub mod pipes_api;
 pub mod power;
+pub mod privacy_filter;
 pub mod recording_config;
 mod resource_monitor;
 pub mod retention;

@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useSettings, ChatMessage, ChatConversation } from "@/lib/hooks/use-settings";
 import { cn } from "@/lib/utils";
-import { Loader2, Send, Square, User, Settings, ExternalLink, X, ImageIcon, History, Search, Trash2, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Plus, Copy, Check, Clock, Paperclip, Filter, RefreshCw, GitBranch, MoreHorizontal, Pencil } from "lucide-react";
+import { Loader2, Send, Square, User, Settings, ExternalLink, X, ImageIcon, History, Search, Trash2, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Plus, Copy, Check, Clock, Paperclip, Filter, RefreshCw, GitBranch, MoreHorizontal, Pencil, Shield, ShieldCheck } from "lucide-react";
 import { SchedulePromptDialog } from "@/components/chat/schedule-prompt-dialog";
 import { toast } from "@/components/ui/use-toast";
 import { motion, AnimatePresence } from "framer-motion";
@@ -4433,6 +4433,47 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
             </div>
             {/* Buttons row below textarea so scrollbar is above and full width is typeable */}
             <div className="flex items-center justify-end gap-0.5 shrink-0 px-2 pb-2 pt-1">
+              {(() => {
+                // Privacy filter: redacts PII (names/emails/phones/addresses/
+                // account-numbers) in screenpipe API responses before Pi ever
+                // sees them. Pro-only; non-pro click opens the onboarding upsell.
+                const isPro = settings.user?.cloud_subscribed === true;
+                const privacyOn = isPro && settings.piPrivacyFilter === true;
+                return (
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    onClick={() => {
+                      if (!isPro) {
+                        openUrl("https://screenpi.pe/onboarding");
+                        return;
+                      }
+                      updateSettings({ piPrivacyFilter: !privacyOn });
+                    }}
+                    disabled={isLoading}
+                    className={cn(
+                      "h-8 w-8 hover:bg-muted/50",
+                      privacyOn
+                        ? "text-foreground hover:text-foreground"
+                        : "text-muted-foreground hover:text-foreground"
+                    )}
+                    title={
+                      !isPro
+                        ? "Privacy filter — pro only (click to upgrade)"
+                        : privacyOn
+                          ? "Privacy filter ON — PII redacted before reaching the LLM (click to disable)"
+                          : "Privacy filter OFF (click to enable)"
+                    }
+                  >
+                    {privacyOn ? (
+                      <ShieldCheck className="h-4 w-4" />
+                    ) : (
+                      <Shield className="h-4 w-4" />
+                    )}
+                  </Button>
+                );
+              })()}
               <Button
                 type="button"
                 size="icon"

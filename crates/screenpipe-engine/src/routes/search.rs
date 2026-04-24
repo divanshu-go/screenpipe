@@ -88,6 +88,12 @@ pub(crate) struct SearchQuery {
     /// Filter results by machine identifier (UUID)
     #[serde(default)]
     machine_id: Option<String>,
+    /// Redact PII from text-bearing fields (ocr `text`, audio `transcription`,
+    /// ui `text`, input `text_content`, memory `content`) before returning.
+    /// Routed through the attested Tinfoil enclave; adds latency so leave it
+    /// off unless the caller will forward these results to an LLM.
+    #[serde(default)]
+    filter_pii: bool,
 }
 
 #[derive(OaSchema, Deserialize)]
@@ -155,6 +161,7 @@ pub(crate) fn compute_search_cache_key(query: &SearchQuery) -> u64 {
     query.max_content_length.hash(&mut hasher);
     query.device_name.hash(&mut hasher);
     query.machine_id.hash(&mut hasher);
+    query.filter_pii.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -404,6 +411,74 @@ pub(crate) async fn search(
         }
     }
 
+    // Redact PII on the final item set (post-dedup, pre-frame-extract) so we
+    // don't pay for Tinfoil calls on entries we're about to discard or on
+    // binary frame data. Fail closed — return 503 rather than leak raw text.
+    if query.filter_pii {
+        let filter = crate::privacy_filter::global();
+
+        // Collect the text to filter, along with (index, kind) back-pointers
+        // so we can splice the redacted strings into the right fields.
+        #[derive(Clone, Copy)]
+        enum Field {
+            Ocr,
+            Audio,
+            Ui,
+            Input,
+            Memory,
+        }
+        let mut targets: Vec<(usize, Field)> = Vec::with_capacity(content_items.len());
+        let mut texts: Vec<String> = Vec::with_capacity(content_items.len());
+        for (i, item) in content_items.iter().enumerate() {
+            match item {
+                ContentItem::OCR(c) => {
+                    targets.push((i, Field::Ocr));
+                    texts.push(c.text.clone());
+                }
+                ContentItem::Audio(c) => {
+                    targets.push((i, Field::Audio));
+                    texts.push(c.transcription.clone());
+                }
+                ContentItem::UI(c) => {
+                    targets.push((i, Field::Ui));
+                    texts.push(c.text.clone());
+                }
+                ContentItem::Input(c) => {
+                    if let Some(t) = &c.text_content {
+                        targets.push((i, Field::Input));
+                        texts.push(t.clone());
+                    }
+                }
+                ContentItem::Memory(c) => {
+                    targets.push((i, Field::Memory));
+                    texts.push(c.content.clone());
+                }
+            }
+        }
+
+        let redacted = filter.filter_batch(texts).await.map_err(|e| {
+            error!("privacy filter failed: {}", e);
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                JsonResponse(json!({
+                    "error": "privacy_filter_unavailable",
+                    "message": format!("{}", e),
+                })),
+            )
+        })?;
+
+        for ((idx, field), new_text) in targets.into_iter().zip(redacted.into_iter()) {
+            match (field, &mut content_items[idx]) {
+                (Field::Ocr, ContentItem::OCR(c)) => c.text = new_text,
+                (Field::Audio, ContentItem::Audio(c)) => c.transcription = new_text,
+                (Field::Ui, ContentItem::UI(c)) => c.text = new_text,
+                (Field::Input, ContentItem::Input(c)) => c.text_content = Some(new_text),
+                (Field::Memory, ContentItem::Memory(c)) => c.content = new_text,
+                _ => {}
+            }
+        }
+    }
+
     if query.include_frames {
         debug!("extracting frames for ocr content");
         let frame_futures: Vec<_> = content_items
@@ -649,6 +724,7 @@ mod tests {
             max_content_length: None,
             device_name: None,
             machine_id: None,
+            filter_pii: false,
         };
 
         let query2 = SearchQuery {
@@ -674,6 +750,7 @@ mod tests {
             max_content_length: None,
             device_name: None,
             machine_id: None,
+            filter_pii: false,
         };
 
         let key1 = compute_search_cache_key(&query1);
@@ -707,6 +784,7 @@ mod tests {
             max_content_length: None,
             device_name: None,
             machine_id: None,
+            filter_pii: false,
         };
 
         let query2 = SearchQuery {
@@ -732,6 +810,7 @@ mod tests {
             max_content_length: None,
             device_name: None,
             machine_id: None,
+            filter_pii: false,
         };
 
         let key1 = compute_search_cache_key(&query1);

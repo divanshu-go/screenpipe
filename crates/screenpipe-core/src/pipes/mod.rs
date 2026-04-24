@@ -152,6 +152,18 @@ pub struct PipeConfig {
     #[serde(default, skip_serializing_if = "is_false")]
     pub subagent: bool,
 
+    /// When true, the pipe's agent has `SCREENPIPE_FILTER_PII=1` in its
+    /// env so the BASH_ENV shim rewrites every `curl .../search` call to
+    /// append `filter_pii=1` — PII is redacted server-side before the
+    /// agent ever sees it. Use for pipes that forward results to third
+    /// parties (Slack, Notion, Google Docs, etc.).
+    ///
+    /// NOTE: the front-matter field parses but the pipe runner does NOT
+    /// yet read it into the spawned Pi env. Wire-up is pending — tracked
+    /// separately from the chat-side feature which is already live.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub privacy_filter: bool,
+
     /// Catches any extra fields from front-matter (backwards compat).
     #[serde(default, flatten, skip_serializing_if = "HashMap::is_empty")]
     pub config: HashMap<String, serde_json::Value>,
@@ -4673,6 +4685,7 @@ mod tests {
             installed_version: None,
             source_hash: None,
             subagent: false,
+            privacy_filter: false,
             trigger: None,
         };
         let body = "Do something useful";
@@ -4902,6 +4915,7 @@ mod tests {
             installed_version: None,
             source_hash: None,
             subagent: false,
+            privacy_filter: false,
             trigger: None,
         };
         let prompt = render_prompt_with_port(&config, "body text", 3031, None, None);
@@ -4933,6 +4947,7 @@ mod tests {
             installed_version: None,
             source_hash: None,
             subagent: false,
+            privacy_filter: false,
             trigger: None,
         };
         let sys = render_pipe_system_prompt("hello", 3030, None);
@@ -4957,6 +4972,7 @@ mod tests {
             installed_version: None,
             source_hash: None,
             subagent: false,
+            privacy_filter: false,
             trigger: None,
         };
         let sys = render_pipe_system_prompt("body text", 3030, Some("You are a helpful assistant"));
@@ -4983,6 +4999,7 @@ mod tests {
             installed_version: None,
             source_hash: None,
             subagent: false,
+            privacy_filter: false,
             trigger: None,
         };
         let sys = render_pipe_system_prompt("body text", 3030, None);
@@ -5062,6 +5079,7 @@ mod tests {
                 installed_version: None,
                 source_hash: None,
                 subagent: false,
+            privacy_filter: false,
                 trigger: None,
             },
             last_run: None,
