@@ -33,6 +33,7 @@ pub mod lexi;
 pub mod limitless;
 pub mod linear;
 pub mod logseq;
+pub mod loops;
 pub mod make;
 pub mod microsoft365;
 pub mod monday;
@@ -45,10 +46,12 @@ pub mod perplexity;
 pub mod pipedrive;
 pub mod pushover;
 pub mod quickbooks;
+pub mod resend;
 pub mod salesforce;
 pub mod sentry;
 pub mod slack;
 pub mod stripe;
+pub mod supabase;
 pub mod teams;
 pub mod telegram;
 pub mod todoist;
@@ -217,6 +220,9 @@ pub fn all_integrations() -> Vec<Box<dyn Integration>> {
         Box::new(google_docs::GoogleDocs),
         Box::new(google_sheets::GoogleSheets),
         Box::new(quickbooks::QuickBooks),
+        Box::new(loops::Loops),
+        Box::new(resend::Resend),
+        Box::new(supabase::Supabase),
     ]
 }
 
