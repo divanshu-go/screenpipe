@@ -4499,7 +4499,7 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
                           onClick={(e) => {
                             e.stopPropagation();
                             e.preventDefault();
-                            openUrl("https://screenpi.pe/privacy-filter");
+                            openUrl("https://docs.screenpi.pe/privacy-filter");
                           }}
                           className="text-[11px] underline text-muted-foreground hover:text-foreground transition-colors"
                         >
