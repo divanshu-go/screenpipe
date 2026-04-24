@@ -369,16 +369,8 @@ export function IntegrationIcon({ icon }: { icon: string }) {
     otter: <img src="/images/otter.png" alt="Otter.ai" className="w-5 h-5 rounded" />,
     lexi: <img src="/images/lexi.png" alt="Leexi" className="w-5 h-5 rounded" />,
     financialsense: <img src="/images/financialsense.png" alt="Financial Sense" className="w-5 h-5 rounded" />,
-    loops: (
-      <svg viewBox="0 0 24 24" className="w-5 h-5" fill="currentColor" aria-hidden>
-        <path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm-1.2 14.5v-9l6.3 4.5-6.3 4.5z"/>
-      </svg>
-    ),
-    resend: (
-      <svg viewBox="0 0 24 24" className="w-5 h-5" fill="currentColor" aria-hidden>
-        <path d="M3 4h18v3l-9 6-9-6V4zm0 5.2 9 6 9-6V20H3V9.2z"/>
-      </svg>
-    ),
+    loops: <img src="/images/loops.svg" alt="Loops" className="w-5 h-5" />,
+    resend: <img src="/images/resend.svg" alt="Resend" className="w-5 h-5 dark:invert" />,
     supabase: (
       <svg viewBox="0 0 24 24" className="w-5 h-5" fill="#3ECF8E" aria-hidden>
         <path d="M13.4 22.6c-.6.7-1.7.3-1.7-.6V14H6.3c-1.1 0-1.7-1.3-1-2.1L10.6 1.4c.6-.7 1.7-.3 1.7.6V10h5.4c1.1 0 1.7 1.3 1 2.1l-5.3 10.5z"/>
