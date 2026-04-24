@@ -379,7 +379,7 @@ let DEFAULT_SETTINGS: Settings = {
 			filterMusic: false,
 			ignoreIncognitoWindows: true,
 			pauseOnDrmContent: false,
-			experimentalCoreaudioSystemAudio: false,
+			experimentalCoreaudioSystemAudio: true,
 			recordWhileLocked: false,
 			appendTypedTextToMeetingNotes: true,
 			localRetentionEnabled: true,
@@ -459,6 +459,19 @@ function createSettingsStore() {
 		if (!(settings as any).restartNotificationsDefaultedOff) {
 			settings.showRestartNotifications = false;
 			(settings as any).restartNotificationsDefaultedOff = true;
+			needsUpdate = true;
+		}
+
+		// One-time migration: the CoreAudio Process Tap toggle used to default
+		// off (opt-in experimental flag). Existing installs therefore have
+		// `experimentalCoreaudioSystemAudio: false` persisted explicitly, which
+		// means just changing the static default doesn't reach them. Flip
+		// once, then record a marker so explicit opt-outs after this point
+		// are respected. Safe because stream.rs falls back to SCK if the tap
+		// can't start — see Ruark Ferreira's AirPods/HFP case (2026-04-24).
+		if (!(settings as any).coreaudioTapMigrationV1) {
+			settings.experimentalCoreaudioSystemAudio = true;
+			(settings as any).coreaudioTapMigrationV1 = true;
 			needsUpdate = true;
 		}
 

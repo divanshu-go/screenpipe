@@ -1777,7 +1777,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
         />
         )}
 
-        {/* Experimental: CoreAudio System Audio (macOS 14.4+ only) */}
+        {/* CoreAudio System Audio (macOS 14.4+ only; default on) */}
         {!settings.disableAudio && coreaudioTapAvailable && (
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5">
@@ -1786,16 +1786,16 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 <Monitor className="h-4 w-4 text-muted-foreground shrink-0" />
                 <div>
                   <h3 className="text-sm font-medium text-foreground">
-                    Experimental: CoreAudio System Audio
+                    CoreAudio system audio capture
                   </h3>
                   <p className="text-xs text-muted-foreground">
-                    Use the CoreAudio Process Tap API (macOS 14.4+) for System Audio. Avoids ScreenCaptureKit — lighter permission, no GPU wake, survives sleep/wake. Restart recording after changing.
+                    Captures system audio via the CoreAudio Process Tap API (macOS 14.4+). Survives sleep/wake, lighter permission, and captures output routed to Bluetooth headsets (AirPods) that ScreenCaptureKit can't see. Falls back to ScreenCaptureKit automatically if unavailable. Restart recording after changing.
                   </p>
                 </div>
               </div>
               <Switch
                 id="experimentalCoreaudioSystemAudio"
-                checked={Boolean(settings.experimentalCoreaudioSystemAudio ?? false)}
+                checked={Boolean(settings.experimentalCoreaudioSystemAudio ?? true)}
                 onCheckedChange={(checked) => handleSettingsChange({ experimentalCoreaudioSystemAudio: checked }, true)}
               />
             </div>
