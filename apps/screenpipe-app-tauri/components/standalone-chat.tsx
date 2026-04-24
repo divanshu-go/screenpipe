@@ -8,6 +8,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { useSettings, ChatMessage, ChatConversation } from "@/lib/hooks/use-settings";
 import { cn } from "@/lib/utils";
 import { Loader2, Send, Square, User, Settings, ExternalLink, X, ImageIcon, History, Search, Trash2, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Plus, Copy, Check, Clock, Paperclip, Filter, RefreshCw, GitBranch, MoreHorizontal, Pencil, Shield, ShieldCheck } from "lucide-react";
@@ -4434,44 +4435,79 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
             {/* Buttons row below textarea so scrollbar is above and full width is typeable */}
             <div className="flex items-center justify-end gap-0.5 shrink-0 px-2 pb-2 pt-1">
               {(() => {
-                // Privacy filter: redacts PII (names/emails/phones/addresses/
-                // account-numbers) in screenpipe API responses before Pi ever
-                // sees them. Pro-only; non-pro click opens the onboarding upsell.
+                // Privacy filter: removes personal info (names, emails, phones,
+                // addresses, account numbers) from screenpipe API responses
+                // before the AI sees them. Pro-only; non-pro click opens upsell.
                 const isPro = settings.user?.cloud_subscribed === true;
                 const privacyOn = isPro && settings.piPrivacyFilter === true;
                 return (
-                  <Button
-                    type="button"
-                    size="icon"
-                    variant="ghost"
-                    onClick={() => {
-                      if (!isPro) {
-                        openUrl("https://screenpi.pe/onboarding");
-                        return;
-                      }
-                      updateSettings({ piPrivacyFilter: !privacyOn });
-                    }}
-                    disabled={isLoading}
-                    className={cn(
-                      "h-8 w-8 hover:bg-muted/50",
-                      privacyOn
-                        ? "text-foreground hover:text-foreground"
-                        : "text-muted-foreground hover:text-foreground"
-                    )}
-                    title={
-                      !isPro
-                        ? "Privacy filter — pro only (click to upgrade)"
-                        : privacyOn
-                          ? "Privacy filter ON — PII redacted before reaching the LLM (click to disable)"
-                          : "Privacy filter OFF (click to enable)"
-                    }
-                  >
-                    {privacyOn ? (
-                      <ShieldCheck className="h-4 w-4" />
-                    ) : (
-                      <Shield className="h-4 w-4" />
-                    )}
-                  </Button>
+                  <TooltipProvider delayDuration={150}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          type="button"
+                          size="icon"
+                          variant="ghost"
+                          onClick={() => {
+                            if (!isPro) {
+                              openUrl("https://screenpi.pe/onboarding");
+                              return;
+                            }
+                            updateSettings({ piPrivacyFilter: !privacyOn });
+                          }}
+                          disabled={isLoading}
+                          className={cn(
+                            "h-8 w-8 hover:bg-muted/50",
+                            privacyOn
+                              ? "text-foreground hover:text-foreground"
+                              : "text-muted-foreground hover:text-foreground"
+                          )}
+                          aria-label={
+                            privacyOn
+                              ? "Disable privacy filter"
+                              : "Enable privacy filter"
+                          }
+                        >
+                          {privacyOn ? (
+                            <ShieldCheck className="h-4 w-4" />
+                          ) : (
+                            <Shield className="h-4 w-4" />
+                          )}
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent
+                        side="top"
+                        align="center"
+                        className="max-w-[320px] p-3 space-y-2 text-xs leading-relaxed"
+                      >
+                        <div className="font-medium text-sm">
+                          {!isPro
+                            ? "Privacy filter — Pro"
+                            : privacyOn
+                              ? "Privacy filter: ON"
+                              : "Privacy filter: OFF"}
+                        </div>
+                        <div className="text-muted-foreground">
+                          {!isPro
+                            ? "Remove names, emails, phone numbers and other personal info from your screen data before the AI sees it. Click the shield to upgrade."
+                            : privacyOn
+                              ? "Names, emails, phone numbers and other personal info are removed from your screen data before it reaches the AI. Click the shield to turn off."
+                              : "Turn this on to strip personal info (names, emails, phones, addresses, account numbers) from your screen data before the AI sees it."}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            e.preventDefault();
+                            openUrl("https://screenpi.pe/privacy-filter");
+                          }}
+                          className="text-[11px] underline text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                          How it works →
+                        </button>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                 );
               })()}
               <Button
