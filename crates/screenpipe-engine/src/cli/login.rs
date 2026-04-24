@@ -175,6 +175,74 @@ pub async fn handle_login_command() -> anyhow::Result<()> {
     }
 }
 
+/// Handle `screenpipe logout` — clear cloud auth from store.bin.
+///
+/// Removes `settings.user.token` and any legacy `state.settings.user.token` so
+/// both the CLI and the desktop app agree the user is signed out. Leaves all
+/// other settings (AI presets, recording prefs, onboarding flags, etc.) intact.
+pub async fn handle_logout_command() -> anyhow::Result<()> {
+    let store_path = screenpipe_core::paths::default_screenpipe_data_dir().join("store.bin");
+
+    if !store_path.exists() {
+        println!();
+        println!("  not logged in (no store.bin found)");
+        println!();
+        return Ok(());
+    }
+
+    let content = std::fs::read_to_string(&store_path)?;
+    let mut store: Value = serde_json::from_str(&content).unwrap_or(json!({}));
+
+    // Capture email for the goodbye line before we wipe it.
+    let email = store
+        .pointer("/settings/user/email")
+        .or_else(|| store.pointer("/state/settings/user/email"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let had_token = store
+        .pointer("/settings/user/token")
+        .or_else(|| store.pointer("/state/settings/user/token"))
+        .and_then(|v| v.as_str())
+        .map(|s| !s.is_empty())
+        .unwrap_or(false);
+
+    // Clear token + email at both canonical and legacy paths.
+    if let Some(user) = store
+        .get_mut("settings")
+        .and_then(|s| s.get_mut("user"))
+        .and_then(|u| u.as_object_mut())
+    {
+        user.remove("token");
+        user.remove("email");
+    }
+    if let Some(user) = store
+        .get_mut("state")
+        .and_then(|s| s.get_mut("settings"))
+        .and_then(|s| s.get_mut("user"))
+        .and_then(|u| u.as_object_mut())
+    {
+        user.remove("token");
+        user.remove("email");
+    }
+
+    std::fs::write(&store_path, serde_json::to_string_pretty(&store)?)?;
+
+    println!();
+    if !had_token {
+        println!("  already signed out");
+    } else if let Some(email) = email {
+        println!("  signed out of {}", email);
+    } else {
+        println!("  signed out");
+    }
+    println!();
+    println!("  run `screenpipe login` to sign back in");
+    println!();
+
+    Ok(())
+}
+
 /// Handle `screenpipe whoami` — show current auth status.
 pub async fn handle_whoami_command() -> anyhow::Result<()> {
     let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();

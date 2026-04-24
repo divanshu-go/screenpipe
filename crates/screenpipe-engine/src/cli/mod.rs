@@ -221,6 +221,9 @@ pub enum Command {
     /// Authenticate with screenpipe cloud
     Login,
 
+    /// Sign out of screenpipe cloud (clears the auth token from store.bin)
+    Logout,
+
     /// Show current auth status
     Whoami,
 
