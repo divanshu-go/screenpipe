@@ -419,6 +419,30 @@ async fn main() {
                 send_default_pii: false,
                 server_name: Some("screenpipe-app".into()),
                 before_send: Some(std::sync::Arc::new(|mut event| {
+                    // Self-expiring Sentry reports. Each build stamps the
+                    // unix epoch seconds of its build time (see build.rs) and
+                    // we refuse to emit events once it's > 90 days old. This
+                    // is the "never get an error from an older version" lever:
+                    // users who never update gradually fall silent, so the
+                    // inbox reflects what's running on current releases
+                    // instead of a 6-month tail of ancient builds. 90d is
+                    // loose enough that even slow updaters stay reporting
+                    // for a full release cycle but tight enough that truly
+                    // stale installs age out.
+                    const SENTRY_REPORT_TTL_SECS: u64 = 90 * 24 * 60 * 60;
+                    let build_time: u64 = env!("SCREENPIPE_BUILD_UNIX_TIME")
+                        .parse()
+                        .unwrap_or(0);
+                    if build_time > 0 {
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0);
+                        if now.saturating_sub(build_time) > SENTRY_REPORT_TTL_SECS {
+                            return None;
+                        }
+                    }
+
                     fn strip_user_paths(s: &str) -> String {
                         let re_unix = regex::Regex::new(r"/Users/[^/\s]+").unwrap();
                         let re_win = regex::Regex::new(r"(?i)C:\\Users\\[^\\\s]+").unwrap();
@@ -428,12 +452,48 @@ async fn main() {
                     if let Some(ref mut msg) = event.message {
                         *msg = strip_user_paths(msg);
                     }
-                    // Filter out IndexedDB disconnect errors (APP-2E)
-                    // WKWebView's IndexedDB server crashes are handled via auto-reload
-                    // in layout.tsx — no need to report to Sentry
+
+                    // Noise filter: drop events whose root cause is a user
+                    // environment problem we can't fix from code. These were
+                    // cluttering the Sentry inbox and drowning real bugs.
+                    // Patterns compiled lazily and shared across calls to
+                    // avoid per-event regex recompilation overhead.
+                    static USER_ENV_PATTERNS: std::sync::OnceLock<Vec<regex::Regex>> =
+                        std::sync::OnceLock::new();
+                    let env_patterns = USER_ENV_PATTERNS.get_or_init(|| {
+                        [
+                            // WKWebView IndexedDB crash — handled via auto-reload in layout.tsx (APP-2E)
+                            r"Indexed Database server lost",
+                            // User hasn't granted screen recording permission (CLI-49 — 706 users)
+                            r"Screen recording permission denied",
+                            // Linux system library missing — distro-local, not our bug (APP-70)
+                            r"Failed to load ayatana-appindicator3 or appindicator3 dynamic library",
+                            // Broken Homebrew install — external dylib missing (CLI-NN)
+                            r"Library not loaded.*libx265\.",
+                            // Local DB corruption — user dropped/restored part of their db.sqlite
+                            r"no such table: main\.speaker_embeddings",
+                            // Concurrent DB access / user ran CLI while app was running
+                            r"database is locked",
+                            // Transient network failures on /api/app-update — offline / DNS blip (APP-8X)
+                            r"failed to check for updates: error sending request",
+                            r"failed to lookup address information",
+                            // WebView2 runtime errors — Windows user env (APP-8T, APP-91)
+                            r"WebView2 error: WindowsError",
+                            // Deepgram DNS / connectivity blips — already logged locally, not Sentry-worthy
+                            r"deepgram transcription failed: Cannot resolve audio transcription server",
+                        ]
+                        .into_iter()
+                        .filter_map(|p| regex::Regex::new(p).ok())
+                        .collect()
+                    });
+
+                    let matches_noise = |text: &str| env_patterns.iter().any(|re| re.is_match(text));
+                    if event.message.as_deref().map(matches_noise).unwrap_or(false) {
+                        return None;
+                    }
                     for val in event.exception.values.iter() {
                         if let Some(ref v) = val.value {
-                            if v.contains("Indexed Database server lost") {
+                            if matches_noise(v) {
                                 return None;
                             }
                         }
