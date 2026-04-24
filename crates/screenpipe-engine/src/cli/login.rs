@@ -124,23 +124,33 @@ pub async fn handle_login_command() -> anyhow::Result<()> {
                     json!({})
                 };
 
-                // Navigate to state.settings.user, creating path if needed
-                if store.get("state").is_none() {
-                    store["state"] = json!({});
+                // Write to top-level `settings.user` — the canonical path the
+                // desktop app reads (see apps/screenpipe-app-tauri/src-tauri/src/store.rs
+                // where the tauri-plugin-store deserializes top-level "settings").
+                // Previously this wrote to `state.settings.user`, which CLI reads
+                // tolerated but the app never saw — leaving the menubar stuck on
+                // "Free plan" even after a successful CLI login.
+                if store.get("settings").is_none() {
+                    store["settings"] = json!({});
                 }
-                if store["state"].get("settings").is_none() {
-                    store["state"]["settings"] = json!({});
-                }
-                if store["state"]["settings"].get("user").is_none() {
-                    store["state"]["settings"]["user"] = json!({});
+                if store["settings"].get("user").is_none() {
+                    store["settings"]["user"] = json!({});
                 }
 
-                let user = &mut store["state"]["settings"]["user"];
+                let user = &mut store["settings"]["user"];
                 if !token.is_empty() {
                     user["token"] = json!(token);
                 }
                 if !email.is_empty() {
                     user["email"] = json!(email);
+                }
+
+                // Clean up the stale nested path if a previous CLI version
+                // wrote there, so the app and CLI never disagree on source of truth.
+                if let Some(state) = store.get_mut("state").and_then(|s| s.as_object_mut()) {
+                    if let Some(s) = state.get_mut("settings").and_then(|s| s.as_object_mut()) {
+                        s.remove("user");
+                    }
                 }
 
                 std::fs::write(&store_path, serde_json::to_string_pretty(&store)?)?;
