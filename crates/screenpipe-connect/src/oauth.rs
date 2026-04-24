@@ -173,7 +173,48 @@ fn unix_now() -> u64 {
 /// available, the value is migrated into the SecretStore and the plaintext
 /// file is deleted. Migration is best-effort: the loaded value is always
 /// returned to the caller even if migration fails, and a failure is logged.
+///
+/// When `instance` is `None` and the exact no-instance key is empty, we
+/// transparently fall back to the *sole* named instance if exactly one
+/// exists. This unbreaks integration `test()` methods that were written
+/// before multi-account support (they all pass `instance=None`) but now
+/// see tokens stored under auto-derived instance names like the user's
+/// email address. We do NOT fall back when multiple instances exist —
+/// that's ambiguous and the caller must pick one.
 pub async fn load_oauth_json(
+    store: Option<&SecretStore>,
+    integration_id: &str,
+    instance: Option<&str>,
+) -> Option<Value> {
+    if let Some(v) = load_oauth_json_exact(store, integration_id, instance).await {
+        return Some(v);
+    }
+
+    // Fallback: callers that don't know about instances (instance=None)
+    // should still find the token when the user has a single named
+    // instance. Skip when instance is explicitly set — the caller wants
+    // that exact one.
+    if instance.is_some() {
+        return None;
+    }
+    let instances = list_oauth_instances(store, integration_id).await;
+    let named: Vec<Option<String>> =
+        instances.into_iter().filter(|i| i.is_some()).collect();
+    if named.len() == 1 {
+        let inst = named[0].as_deref();
+        tracing::debug!(
+            "oauth: {} default lookup empty, falling back to single instance {:?}",
+            integration_id,
+            inst
+        );
+        return load_oauth_json_exact(store, integration_id, inst).await;
+    }
+    None
+}
+
+/// Exact-key variant with no instance fallback. Everything `load_oauth_json`
+/// does except the multi-instance resolution.
+async fn load_oauth_json_exact(
     store: Option<&SecretStore>,
     integration_id: &str,
     instance: Option<&str>,
@@ -508,6 +549,163 @@ const EXCHANGE_PROXY_URL: &str = "https://screenpi.pe/api/oauth/exchange";
 /// surface the upstream provider message (AADSTS, invalid_grant, …) instead
 /// of just the HTTP status. Without this, every OAuth failure logged the
 /// same opaque `400 Bad Request` and we had no way to tell the cause.
+#[cfg(test)]
+mod tests {
+    //! Covers the instance fallback added to `load_oauth_json`. The fallback
+    //! is the safety net for callers that predate multi-account support —
+    //! they pass `instance=None` but the token is stored under an auto-
+    //! derived instance name (e.g. the user's email). Before this, those
+    //! callers silently reported "not connected" even when a valid token
+    //! existed, which is the repeat bug customers hit.
+    use super::*;
+    use serde_json::json;
+    use sqlx::SqlitePool;
+
+    async fn mem_store() -> SecretStore {
+        let pool = SqlitePool::connect(":memory:").await.unwrap();
+        SecretStore::new(pool, None).await.unwrap()
+    }
+
+    // Each test uses a unique fake integration_id so the filesystem fallback
+    // in `load_oauth_json_exact` (which scans `~/.screenpipe/{id}*-oauth.json`)
+    // never matches a real stored file on the developer's machine. Without
+    // this, tests would pass/fail based on whether the tester happens to have
+    // gmail connected locally.
+
+    #[tokio::test]
+    async fn load_with_explicit_instance_hits_exact_key() {
+        let store = mem_store().await;
+        let id = "_t_exact";
+        store
+            .set_json(
+                &format!("oauth:{}:alice@example.com", id),
+                &json!({"access_token": "a"}),
+            )
+            .await
+            .unwrap();
+
+        let got = load_oauth_json(Some(&store), id, Some("alice@example.com"))
+            .await
+            .unwrap();
+        assert_eq!(got["access_token"], "a");
+    }
+
+    #[tokio::test]
+    async fn load_with_none_falls_back_to_sole_named_instance() {
+        // The repeat-bug scenario: token stored under user email, caller
+        // passes instance=None (default-instance lookup). We should find it.
+        let store = mem_store().await;
+        let id = "_t_fallback";
+        store
+            .set_json(
+                &format!("oauth:{}:louis@screenpi.pe", id),
+                &json!({"access_token": "real-token", "refresh_token": "rt"}),
+            )
+            .await
+            .unwrap();
+
+        let got = load_oauth_json(Some(&store), id, None).await.unwrap();
+        assert_eq!(got["access_token"], "real-token");
+        assert_eq!(got["refresh_token"], "rt");
+    }
+
+    #[tokio::test]
+    async fn load_with_none_prefers_exact_match_over_fallback() {
+        // When BOTH a no-instance entry and a named one exist, the exact
+        // match wins — don't accidentally prefer a random named instance.
+        let store = mem_store().await;
+        let id = "_t_prefer";
+        store
+            .set_json(&format!("oauth:{}", id), &json!({"access_token": "default"}))
+            .await
+            .unwrap();
+        store
+            .set_json(
+                &format!("oauth:{}:alt@example.com", id),
+                &json!({"access_token": "named"}),
+            )
+            .await
+            .unwrap();
+
+        let got = load_oauth_json(Some(&store), id, None).await.unwrap();
+        assert_eq!(got["access_token"], "default");
+    }
+
+    #[tokio::test]
+    async fn load_with_none_is_ambiguous_when_multiple_instances() {
+        // Two named instances, no default — we must NOT pick one arbitrarily.
+        // Caller with instance=None gets None; they're expected to enumerate
+        // via list_oauth_instances and pick explicitly.
+        let store = mem_store().await;
+        let id = "_t_ambig";
+        store
+            .set_json(
+                &format!("oauth:{}:a@example.com", id),
+                &json!({"access_token": "A"}),
+            )
+            .await
+            .unwrap();
+        store
+            .set_json(
+                &format!("oauth:{}:b@example.com", id),
+                &json!({"access_token": "B"}),
+            )
+            .await
+            .unwrap();
+
+        let got = load_oauth_json(Some(&store), id, None).await;
+        assert!(got.is_none(), "expected ambiguous None, got {got:?}");
+    }
+
+    #[tokio::test]
+    async fn load_with_wrong_explicit_instance_does_not_fall_back() {
+        // When the caller asks for a specific instance that doesn't exist,
+        // don't silently substitute another one — that's worse than "not
+        // found" (could auth-as-wrong-account).
+        let store = mem_store().await;
+        let id = "_t_wrong";
+        store
+            .set_json(
+                &format!("oauth:{}:a@example.com", id),
+                &json!({"access_token": "A"}),
+            )
+            .await
+            .unwrap();
+
+        let got = load_oauth_json(Some(&store), id, Some("other@example.com")).await;
+        assert!(got.is_none());
+    }
+
+    #[tokio::test]
+    async fn load_with_none_returns_none_when_store_empty() {
+        let store = mem_store().await;
+        let got = load_oauth_json(Some(&store), "_t_empty", None).await;
+        assert!(got.is_none());
+    }
+
+    #[tokio::test]
+    async fn is_oauth_instance_connected_sees_fallback() {
+        // End-to-end: with only a named instance stored, the no-instance
+        // status check should now report connected (via the fallback).
+        let store = mem_store().await;
+        let id = "_t_status";
+        let future_expiry = unix_now() + 3600;
+        store
+            .set_json(
+                &format!("oauth:{}:louis@screenpi.pe", id),
+                &json!({
+                    "access_token": "a",
+                    "refresh_token": "r",
+                    "expires_at": future_expiry,
+                }),
+            )
+            .await
+            .unwrap();
+
+        assert!(is_oauth_instance_connected(Some(&store), id, None).await);
+    }
+}
+
 pub async fn exchange_code(
     client: &reqwest::Client,
     integration_id: &str,

@@ -260,6 +260,34 @@ pub async fn oauth_connect(
         }
     }
 
+    // Refuse to save a token that the provider promised would be refreshable
+    // but didn't actually hand us a refresh_token for. Silently saving leaves
+    // the UI flipped to "connected" for ~1 hour until the access_token expires
+    // and every subsequent call says "not connected" — which is the exact
+    // "it keeps losing the auth" bug customers hit repeatedly.
+    //
+    // Google specifically withholds refresh_token on re-authorization when the
+    // user has a prior active grant, even with prompt=consent. The fix is to
+    // revoke at myaccount.google.com/permissions first. Error text below tells
+    // the user exactly that instead of letting them find out in an hour.
+    let requested_offline = config
+        .extra_auth_params
+        .iter()
+        .any(|(k, v)| *k == "access_type" && *v == "offline");
+    if requested_offline && token_data["refresh_token"].as_str().is_none() {
+        error!(
+            "{} OAuth returned no refresh_token despite access_type=offline",
+            integration_id
+        );
+        return Err(format!(
+            "{} didn't issue a refresh token. This usually means you previously \
+             granted access and Google is suppressing the refresh token. \
+             Revoke this app's access at https://myaccount.google.com/permissions \
+             then click Connect again.",
+            integration_id
+        ));
+    }
+
     let store = open_secret_store().await;
 
     // Auto-derive instance name from email/identity in token response

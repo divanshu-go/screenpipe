@@ -6966,6 +6966,7 @@ dependencies = [
  "screenpipe-secrets",
  "serde",
  "serde_json",
+ "sqlx",
  "tokio",
  "tracing",
  "windows 0.58.0",
