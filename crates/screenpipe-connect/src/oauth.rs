@@ -436,7 +436,7 @@ pub async fn refresh_token_instance(
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("no refresh_token stored for {}", integration_id))?;
 
-    let resp: Value = client
+    let raw = client
         .post(EXCHANGE_PROXY_URL)
         .json(&serde_json::json!({
             "integration_id": integration_id,
@@ -444,10 +444,19 @@ pub async fn refresh_token_instance(
             "refresh_token": refresh_tok,
         }))
         .send()
-        .await?
-        .error_for_status()?
-        .json()
         .await?;
+    let status = raw.status();
+    let body = raw.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(anyhow::anyhow!(
+            "oauth refresh for {} returned {}: {}",
+            integration_id,
+            status,
+            body
+        ));
+    }
+    let resp: Value = serde_json::from_str(&body)
+        .map_err(|e| anyhow::anyhow!("oauth refresh returned non-JSON body: {e}: {body}"))?;
 
     write_oauth_token_instance(store, integration_id, instance, &resp).await?;
 
@@ -494,6 +503,11 @@ const EXCHANGE_PROXY_URL: &str = "https://screenpi.pe/api/oauth/exchange";
 /// Exchange an authorization `code` for tokens via the screenpipe backend
 /// proxy at `screenpi.pe`.  The backend holds `client_secret` — the desktop
 /// app never sees it.
+///
+/// On failure, includes the raw response body in the error so callers can
+/// surface the upstream provider message (AADSTS, invalid_grant, …) instead
+/// of just the HTTP status. Without this, every OAuth failure logged the
+/// same opaque `400 Bad Request` and we had no way to tell the cause.
 pub async fn exchange_code(
     client: &reqwest::Client,
     integration_id: &str,
@@ -508,9 +522,18 @@ pub async fn exchange_code(
             "redirect_uri":   redirect_uri,
         }))
         .send()
-        .await?
-        .error_for_status()?
-        .json()
         .await?;
-    Ok(resp)
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(anyhow::anyhow!(
+            "oauth exchange for {} returned {}: {}",
+            integration_id,
+            status,
+            body
+        ));
+    }
+    let json: Value = serde_json::from_str(&body)
+        .map_err(|e| anyhow::anyhow!("oauth exchange returned non-JSON body: {e}: {body}"))?;
+    Ok(json)
 }
