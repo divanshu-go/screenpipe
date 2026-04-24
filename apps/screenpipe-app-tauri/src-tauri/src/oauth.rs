@@ -179,6 +179,36 @@ pub async fn oauth_connect(
         }
     }
 
+    // Teams: reject personal Microsoft accounts before the token gets saved.
+    //
+    // Teams is a work product. Personal MSAs don't have any teams, chats, or
+    // channels, and Microsoft silently DROPS Chat.ReadWrite / Team.* /
+    // Channel.* / ChannelMessage.* scopes on consent — leaving `scope: "openid
+    // profile"` in the token response. The OAuth flow appears to succeed, the
+    // UI shows "Connected", but every Graph call returns 403 Forbidden "No
+    // authorization information present on the request." The user then has
+    // no signal to tell them *why* their connection is broken.
+    //
+    // Diagnosed from Louis signing in with louis@screenpi.pe (a personal MSA)
+    // on 2026-04-24 — tenant id `9188040d-6c67-4c5b-b112-36a304b66dad` is
+    // Microsoft's well-known "consumers" tenant. Check the id_token's `tid`
+    // claim up-front and refuse to save a useless token.
+    if integration_id == "teams" {
+        if let Some(id_token) = token_data["id_token"].as_str() {
+            if extract_tid_from_jwt(id_token).as_deref() == Some(MSA_PERSONAL_TENANT_ID) {
+                // No token gets written — we bail out before the write below.
+                return Err(
+                    "Microsoft Teams requires a work or school account. \
+                     You're signed in with a personal Microsoft account, \
+                     which doesn't have access to Teams. Sign in with an \
+                     Azure AD (organizational) account that has a Teams \
+                     license and try again."
+                        .to_string(),
+                );
+            }
+        }
+    }
+
     // QuickBooks: fetch the company name to use as the workspace display name.
     if integration_id == "quickbooks" {
         if let (Some(realm_id), Some(access_token)) = (
@@ -368,14 +398,33 @@ pub async fn oauth_list_instances(
 
 /// Extract email from an id_token JWT by decoding the payload (no signature verification).
 fn extract_email_from_jwt(jwt: &str) -> Option<String> {
+    decode_jwt_payload(jwt)?["email"].as_str().map(String::from)
+}
+
+/// Microsoft's well-known tenant ID for **personal** Microsoft accounts
+/// (aka MSA / consumer Outlook.com / Live accounts). Work/school tenants
+/// have their own GUIDs. A token issued from this tenant can only call the
+/// subset of Microsoft Graph that personal accounts are allowed to — Teams
+/// and most org-scoped APIs are **not** in that subset, and Microsoft
+/// silently drops those scopes on consent, leaving the connection working
+/// in name but useless in practice.
+const MSA_PERSONAL_TENANT_ID: &str = "9188040d-6c67-4c5b-b112-36a304b66dad";
+
+/// Read the `tid` (tenant id) claim from an id_token JWT. Returns `None`
+/// for non-Microsoft tokens or malformed JWTs.
+fn extract_tid_from_jwt(jwt: &str) -> Option<String> {
+    decode_jwt_payload(jwt)?["tid"].as_str().map(String::from)
+}
+
+/// base64url-decode the middle segment of a JWT and parse it as JSON.
+fn decode_jwt_payload(jwt: &str) -> Option<serde_json::Value> {
     let payload = jwt.split('.').nth(1)?;
     // JWT uses base64url encoding (no padding)
     let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(payload)
         .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(payload))
         .ok()?;
-    let v: serde_json::Value = serde_json::from_slice(&decoded).ok()?;
-    v["email"].as_str().map(String::from)
+    serde_json::from_slice(&decoded).ok()
 }
 
 /// Fetch the user's identity from the provider's API for providers that
