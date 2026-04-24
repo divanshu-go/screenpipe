@@ -57,26 +57,49 @@ New-Item -ItemType Directory -Force -Path $signedDir | Out-Null
 
 Write-Host "Signing binary: $FilePath"
 
-Push-Location $env:CODESIGNTOOL_PATH
-& $javaFile.FullName -jar $jarFile.FullName sign `
-    "-username=$env:ESIGNER_USERNAME" `
-    "-password=$env:ESIGNER_PASSWORD" `
-    "-totp_secret=$env:ESIGNER_TOTP_SECRET" `
-    "-credential_id=$env:ESIGNER_CREDENTIAL_ID" `
-    "-input_file_path=$FilePath" `
-    "-output_dir_path=$signedDir"
-Pop-Location
-
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "ERROR: Code signing failed for $FilePath (exit code $LASTEXITCODE)"
-    exit 1
-}
-
+# Retry with backoff to ride out transient SSL.com / CSC API hiccups.
+# Symptom we hit on v2.4.41 (2026-04-23, build 24861271810): CodeSignTool
+# threw `Unexpected character (<) at position 0` from CscApi.isOtpTypeOnline
+# / getCredentialInfo because the SSL.com endpoint returned an HTML
+# error/challenge page instead of JSON. Same workflow had succeeded 42 min
+# earlier with no code changes — purely SSL-side. A 25-minute Windows build
+# shouldn't die because of a brief upstream blip; retry the sign call.
 $fileName = Split-Path $FilePath -Leaf
 $signedFile = Join-Path $signedDir $fileName
+$maxAttempts = 3
+$attempt = 0
+$signed = $false
 
-if (-not (Test-Path $signedFile)) {
-    Write-Host "ERROR: Signed file not found at $signedFile"
+while (-not $signed -and $attempt -lt $maxAttempts) {
+    $attempt += 1
+    if ($attempt -gt 1) {
+        $backoffSec = 30 * ($attempt - 1)
+        Write-Host "Sign attempt $attempt/$maxAttempts after ${backoffSec}s backoff..."
+        Start-Sleep -Seconds $backoffSec
+        if (Test-Path $signedDir) { Remove-Item $signedDir -Recurse -Force }
+        New-Item -ItemType Directory -Force -Path $signedDir | Out-Null
+    }
+
+    Push-Location $env:CODESIGNTOOL_PATH
+    & $javaFile.FullName -jar $jarFile.FullName sign `
+        "-username=$env:ESIGNER_USERNAME" `
+        "-password=$env:ESIGNER_PASSWORD" `
+        "-totp_secret=$env:ESIGNER_TOTP_SECRET" `
+        "-credential_id=$env:ESIGNER_CREDENTIAL_ID" `
+        "-input_file_path=$FilePath" `
+        "-output_dir_path=$signedDir"
+    $signExit = $LASTEXITCODE
+    Pop-Location
+
+    if ($signExit -eq 0 -and (Test-Path $signedFile)) {
+        $signed = $true
+        break
+    }
+    Write-Host "WARN: sign attempt $attempt failed (exit=$signExit, signed file present=$(Test-Path $signedFile))"
+}
+
+if (-not $signed) {
+    Write-Host "ERROR: Code signing failed for $FilePath after $maxAttempts attempts"
     exit 1
 }
 
