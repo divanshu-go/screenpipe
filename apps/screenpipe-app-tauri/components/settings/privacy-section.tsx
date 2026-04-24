@@ -486,7 +486,7 @@ export function PrivacySection() {
                     Require API Authentication
                   </h3>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    Remote devices must use the same account to access this API. Localhost is always allowed.
+                    All API requests require a valid token when enabled — including local ones. Copy the key below and paste it into the browser extension settings.
                   </p>
                 </div>
               </div>
@@ -497,6 +497,12 @@ export function PrivacySection() {
                 }}
               />
             </div>
+            {hasUnsavedChanges && (
+              <p className="text-xs text-amber-600 dark:text-amber-400 mt-2 flex items-center gap-1">
+                <RefreshCw className="h-3 w-3 shrink-0" />
+                click &quot;Apply &amp; Restart&quot; above for auth changes to take effect
+              </p>
+            )}
             <LockedSetting settingKey="api_key">
             {(settings.apiAuth ?? true) && (
               <div className="mt-2.5 flex items-center space-x-2.5 pl-6.5">

@@ -322,9 +322,10 @@ chrome.storage.onChanged.addListener((changes, area) => {
   }
 });
 
-/** Clicking the toolbar icon → open options. Quickest path to fix "no token". */
-chrome.action.onClicked.addListener(() => {
-  void chrome.runtime.openOptionsPage();
+/** Popup (or any other context) can send { type: "wake" } to keep the worker
+ *  alive and trigger a reconnect attempt immediately. */
+chrome.runtime.onMessage.addListener(() => {
+  void connect();
 });
 
 /** On fresh install, open options so the user can paste a token immediately. */

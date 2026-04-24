@@ -879,20 +879,16 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 		await settingsStore.set(updates);
 		// Settings will be updated via the listener
 
-		// Reconfigure API module if auth/port settings changed.
-		// `apiKey` deliberately omitted: the server is the source of truth and
-		// the frontend learns the key via IPC (`get_local_api_config`). When
-		// the user changes their api_key preference here, the server picks it
-		// up on its next restart and the frontend will re-fetch the resolved
-		// value — passing `apiKey: null` here when settings.apiKey is empty
-		// would race with that IPC and wipe the cached key.
-		if ("port" in updates || "apiKey" in updates || "apiAuth" in updates) {
+		// Only update the port in the API module immediately — auth changes
+		// (apiAuth / apiKey) must NOT be applied until after the server restarts.
+		// Calling configureApi({ authEnabled: false }) before restart clears the
+		// auth cookie, causing every frontend WebSocket to reconnect without a
+		// token and flood the logs with 403 rejections (the server still requires
+		// auth until it restarts with the new setting).
+		if ("port" in updates) {
 			const { configureApi } = await import("@/lib/api");
 			const merged = { ...settings, ...updates };
-			configureApi({
-				port: merged.port ?? 3030,
-				authEnabled: merged.apiAuth ?? true,
-			});
+			configureApi({ port: merged.port ?? 3030 });
 		}
 	};
 

@@ -224,8 +224,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
     forceReconnect();
   }
 });
-chrome.action.onClicked.addListener(() => {
-  chrome.runtime.openOptionsPage();
+chrome.runtime.onMessage.addListener(() => {
+  connect();
 });
 chrome.runtime.onInstalled.addListener(async (details) => {
   if (details.reason !== "install")

@@ -273,23 +273,44 @@ pub async fn start_capture(
 // Full lifecycle commands (backward compat)
 // ---------------------------------------------------------------------------
 
-/// Stop everything — capture only. Server stays alive.
-/// This is the command called by the tray toggle and keyboard shortcut.
+/// Stop capture AND server so the next spawn_screenpipe does a full restart.
+/// Called by "Apply & Restart", audio shortcuts, updates, and rollbacks.
+/// The tray toggle uses stop_capture / start_capture to keep the server alive.
 #[tauri::command]
 #[specta::specta]
 pub async fn stop_screenpipe(
     state: State<'_, RecordingState>,
     _app: tauri::AppHandle,
 ) -> Result<(), String> {
-    info!("stop_screenpipe: stopping capture (server stays alive)");
+    info!("stop_screenpipe: stopping capture and server");
 
-    let mut capture_guard = state.capture.lock().await;
-    if let Some(session) = capture_guard.take() {
-        session.stop().await;
-        info!("Capture stopped");
-    } else {
-        debug!("No capture session to stop");
+    // Stop capture first
+    {
+        let mut capture_guard = state.capture.lock().await;
+        if let Some(session) = capture_guard.take() {
+            session.stop().await;
+            info!("Capture stopped");
+        } else {
+            debug!("No capture session to stop");
+        }
     }
+
+    // Shut down the server so the next spawn_screenpipe does a full restart
+    // with fresh settings (auth key, port, etc.). Without this, spawn_screenpipe
+    // sees the server as healthy and skips the restart entirely.
+    {
+        let mut server_guard = state.server.lock().await;
+        if let Some(server) = server_guard.take() {
+            server.shutdown().await;
+            info!("Server stopped");
+        }
+    }
+
+    // Reset flags so the next spawn_screenpipe takes the full-start path
+    // rather than the "server already in progress" wait loop.
+    state.is_starting.store(false, Ordering::SeqCst);
+    state.last_spawn_epoch.store(0, Ordering::SeqCst);
+
     Ok(())
 }
 

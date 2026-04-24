@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use specta::Type;
 use std::path::Path;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, RwLock};
 use tauri::AppHandle;
 use tauri_plugin_store::StoreBuilder;
 use tracing::{error, warn};
@@ -13,20 +13,27 @@ use tracing::{error, warn};
 ///
 /// `to_recording_config` is a sync function called many times per second
 /// (frontend polls `local_api_context_from_app`). Resolving the key —
-/// which requires async I/O against `db.sqlite` — happens once in
-/// `recording::spawn_screenpipe` via `screenpipe_engine::auth_key::resolve_api_auth_key`,
+/// which requires async I/O against `db.sqlite` — happens once per
+/// recording start via `screenpipe_engine::auth_key::resolve_api_auth_key`,
 /// and the result is seeded here so every subsequent sync read is cheap and
 /// every caller agrees on the same value.
-static RESOLVED_API_AUTH_KEY: OnceLock<String> = OnceLock::new();
+///
+/// Uses RwLock (not OnceLock) so the key can be updated on every restart
+/// within the same process — OnceLock would silently ignore the second
+/// seed call and keep the original key forever.
+static RESOLVED_API_AUTH_KEY: RwLock<Option<String>> = RwLock::new(None);
 
-/// Seed the resolved API auth key. No-op after the first call.
+/// Seed the resolved API auth key. Overwrites any previously seeded value
+/// so that "Apply & Restart" picks up the new key on the next server start.
 pub fn seed_api_auth_key(key: String) {
-    let _ = RESOLVED_API_AUTH_KEY.set(key);
+    if let Ok(mut guard) = RESOLVED_API_AUTH_KEY.write() {
+        *guard = Some(key);
+    }
 }
 
 /// Read the resolved API auth key if it has been seeded.
 pub fn resolved_api_auth_key() -> Option<String> {
-    RESOLVED_API_AUTH_KEY.get().cloned()
+    RESOLVED_API_AUTH_KEY.read().ok()?.clone()
 }
 
 /// Magic header for encrypted store.bin files.

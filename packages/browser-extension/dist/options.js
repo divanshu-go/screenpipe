@@ -77,7 +77,7 @@ async function onSaveClick() {
   const { token, baseUrl } = getFormValues();
   await saveSettings(token, baseUrl);
   const { status, message } = await probeConnection(token, baseUrl);
-  setStatus(status, message);
+  setStatus(status, status === "ok" ? `settings saved · ${message}` : message);
 }
 async function onTestClick() {
   setStatus("saving", "testing…");

@@ -832,18 +832,11 @@ impl SCServer {
                 crate::routes::timezone::timestamp_middleware,
             ))
             .layer({
-                // API auth middleware — when api_auth is enabled,
-                // non-localhost requests must include a valid bearer token.
-                //
-                // Localhost is bypassed because the Tauri webview can't
-                // synchronously inject auth before React renders. Tauri's
-                // invoke() is async, so there's always a window where
-                // useEffect fires fetch calls before the key is available.
-                //
-                // Auth middleware: requires Bearer token for ALL requests (including
-                // localhost) when api_auth is enabled. The Tauri frontend injects the
-                // token via localFetch (loaded from get_local_api_config IPC on import).
-                // Health endpoint is exempt so status polling works before auth init.
+                // API auth middleware — when api_auth is enabled, ALL requests
+                // (including localhost) must include a valid bearer token.
+                // The Tauri frontend injects it via localFetch (key loaded once
+                // via get_local_api_config IPC). /health and a few other paths
+                // are exempt so polling works before the frontend has the key.
                 let auth_enabled = self.api_auth;
                 let auth_key = self.api_auth_key.clone();
                 axum::middleware::from_fn(
