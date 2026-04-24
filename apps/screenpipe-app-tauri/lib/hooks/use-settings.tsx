@@ -382,7 +382,7 @@ let DEFAULT_SETTINGS: Settings = {
 			filterMusic: false,
 			ignoreIncognitoWindows: true,
 			pauseOnDrmContent: false,
-			experimentalCoreaudioSystemAudio: true,
+			experimentalCoreaudioSystemAudio: false,
 			recordWhileLocked: false,
 			appendTypedTextToMeetingNotes: true,
 			localRetentionEnabled: true,
@@ -465,16 +465,19 @@ function createSettingsStore() {
 			needsUpdate = true;
 		}
 
-		// One-time migration: the CoreAudio Process Tap toggle used to default
-		// off (opt-in experimental flag). Existing installs therefore have
-		// `experimentalCoreaudioSystemAudio: false` persisted explicitly, which
-		// means just changing the static default doesn't reach them. Flip
-		// once, then record a marker so explicit opt-outs after this point
-		// are respected. Safe because stream.rs falls back to SCK if the tap
-		// can't start — see Ruark Ferreira's AirPods/HFP case (2026-04-24).
-		if (!(settings as any).coreaudioTapMigrationV1) {
-			settings.experimentalCoreaudioSystemAudio = true;
-			(settings as any).coreaudioTapMigrationV1 = true;
+		// One-time migration (V2 — supersedes V1): flip the CoreAudio Process
+		// Tap toggle OFF for every existing install, keeping SCK as the System
+		// Audio backend. V1 (run a few days earlier) had flipped it ON by
+		// default, but the Process Tap can't capture audio rendered through a
+		// VoiceProcessing AudioUnit — Zoom/Meet/Teams all use one for echo
+		// cancellation — so the tap silently captured zeroed buffers on every
+		// meeting. Users who explicitly want the tap (e.g. to dodge SCK's
+		// sleep/wake display-enumeration bug) can re-enable it in Settings.
+		// Reported by Ruark Ferreira on 2026-04-24 after his v2.4.46 calls
+		// kept dropping other participants.
+		if (!(settings as any).coreaudioTapMigrationV2) {
+			settings.experimentalCoreaudioSystemAudio = false;
+			(settings as any).coreaudioTapMigrationV2 = true;
 			needsUpdate = true;
 		}
 
