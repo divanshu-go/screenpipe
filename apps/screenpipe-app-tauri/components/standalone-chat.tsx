@@ -95,15 +95,10 @@ function buildDailyLimitMessage(errorStr: string): string {
     }
 
     if (isCostLimit) {
-      // Surface the actual spent / cap figures when the gateway returns them
-      // so the user sees "$39.50 of $35 today" and knows it's the account-wide
-      // budget (often hit by background pipes), not a per-model limit.
-      const spent = errorStr.match(/"spent_today_usd":\s*([\d.]+)/)?.[1];
-      const cap = errorStr.match(/"cost_cap_usd":\s*([\d.]+)/)?.[1];
-      if (spent && cap) {
-        return `You've spent $${spent} of your $${cap} daily AI budget (resets at midnight UTC). This is an account-wide limit — background pipes consume it too. Try a free model (gemini-3-flash, haiku) or disable noisy pipes at Settings → Pipes.`;
-      }
-      return "You've hit your daily AI budget. Try a free model (gemini-3-flash, haiku) or wait until midnight UTC.";
+      // Don't leak the raw dollar cap — that's our internal margin. Frame it
+      // as an account-wide budget so the user understands why it fired even
+      // when they "didn't use much" (background pipes consume it too).
+      return "You've hit today's AI usage limit. This is an account-wide budget — background pipes count too. Switch to a free model (gemini-3-flash, haiku) or check Settings → Pipes for chatty schedules.";
     }
 
     const tierMatch = errorStr.match(/"tier":\s*"([^"]+)"/);

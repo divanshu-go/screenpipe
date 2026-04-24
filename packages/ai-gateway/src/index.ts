@@ -48,14 +48,13 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
 		// Usage status endpoint - returns current usage without incrementing
 		if (path === '/v1/usage' && request.method === 'GET') {
 			const status = await getUsageStatus(env, authResult.deviceId, authResult.tier, authResult.userId);
-			// Enrich with cost-based limit info
+			// Enrich with cost-based limit flag (NOT the raw $ numbers — those
+			// are our internal margin and shouldn't leak to any client/user).
 			const dailyCost = await getDailyUserCost(env, authResult.deviceId);
 			const maxCost = getTierDailyCostCap(authResult.tier, env);
 			const enriched = {
 				...status,
 				cost_limit_reached: dailyCost >= maxCost,
-				spent_today_usd: Number(dailyCost.toFixed(2)),
-				cost_cap_usd: Number(maxCost.toFixed(2)),
 			};
 			return addCorsHeaders(createSuccessResponse(enriched));
 		}
@@ -110,9 +109,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
 					resetsAt.setUTCHours(24, 0, 0, 0);
 					return addCorsHeaders(createErrorResponse(429, JSON.stringify({
 						error: 'daily_cost_limit_exceeded',
-						message: `You've used $${dailyCost.toFixed(2)} of your $${maxCost.toFixed(2)} daily AI budget (resets at midnight UTC). Switch to a free model (gemini-3-flash, qwen3.5-flash) or wait until tomorrow.`,
-						spent_today_usd: Number(dailyCost.toFixed(2)),
-						cost_cap_usd: Number(maxCost.toFixed(2)),
+						message: `You've hit today's AI usage limit. This is an account-wide budget that background pipes also consume. Switch to a free model (gemini-3-flash, qwen3.5-flash, claude-haiku-4-5) or review Settings → Pipes for chatty schedules.`,
 						resets_at: resetsAt.toISOString(),
 						tier: authResult.tier,
 						free_models: ['gemini-3-flash', 'qwen3.5-flash', 'claude-haiku-4-5'],
@@ -351,9 +348,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
 					resetsAt.setUTCHours(24, 0, 0, 0);
 					return addCorsHeaders(createErrorResponse(429, JSON.stringify({
 						error: 'daily_cost_limit_exceeded',
-						message: `You've used $${dailyCost.toFixed(2)} of your $${maxCost.toFixed(2)} daily AI budget (resets at midnight UTC). Switch to a free model (gemini-3-flash, qwen3.5-flash) or wait until tomorrow.`,
-						spent_today_usd: Number(dailyCost.toFixed(2)),
-						cost_cap_usd: Number(maxCost.toFixed(2)),
+						message: `You've hit today's AI usage limit. This is an account-wide budget that background pipes also consume. Switch to a free model (gemini-3-flash, qwen3.5-flash, claude-haiku-4-5) or review Settings → Pipes for chatty schedules.`,
 						resets_at: resetsAt.toISOString(),
 						tier: authResult.tier,
 						free_models: ['gemini-3-flash', 'qwen3.5-flash', 'claude-haiku-4-5'],
@@ -456,9 +451,7 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
 					resetsAt.setUTCHours(24, 0, 0, 0);
 					return addCorsHeaders(createErrorResponse(429, JSON.stringify({
 						error: 'daily_cost_limit_exceeded',
-						message: `You've used $${dailyCost.toFixed(2)} of your $${maxCost.toFixed(2)} daily AI budget (resets at midnight UTC). Switch to a free model (gemini-3-flash, qwen3.5-flash) or wait until tomorrow.`,
-						spent_today_usd: Number(dailyCost.toFixed(2)),
-						cost_cap_usd: Number(maxCost.toFixed(2)),
+						message: `You've hit today's AI usage limit. This is an account-wide budget that background pipes also consume. Switch to a free model (gemini-3-flash, qwen3.5-flash, claude-haiku-4-5) or review Settings → Pipes for chatty schedules.`,
 						resets_at: resetsAt.toISOString(),
 						tier: authResult.tier,
 						free_models: ['gemini-3-flash', 'qwen3.5-flash', 'claude-haiku-4-5'],
