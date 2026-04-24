@@ -307,6 +307,25 @@ pub async fn oauth_connect(
         .await
         .map_err(|e| format!("failed to save token: {}", e))?;
 
+    // When we've just written to an instance-suffixed slot, proactively nuke
+    // the same integration's default slot. Why: `list_oauth_instances()` at
+    // connect time picks an instance-suffixed key for the new save whenever
+    // *any* existing entry is present. A stale default-slot entry (e.g. a
+    // pre-v2.4.52 partial save without refresh_token) would then linger and
+    // shadow every `instance=None` read path — which is exactly the zombie-
+    // token bug customers hit. Cleaning here means the read side only ever
+    // sees one entry per integration+identity.
+    if store_instance.is_some() {
+        if let Err(e) =
+            oauth::delete_oauth_token_instance(store.as_ref(), &integration_id, None).await
+        {
+            tracing::warn!(
+                "oauth: failed to clean stale default slot after instanced save for {}: {e:#}",
+                integration_id
+            );
+        }
+    }
+
     let display_name = token_data["email"]
         .as_str()
         .or_else(|| token_data["workspace_name"].as_str())

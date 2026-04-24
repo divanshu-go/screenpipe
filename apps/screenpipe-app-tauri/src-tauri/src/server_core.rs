@@ -355,6 +355,22 @@ impl ServerCore {
                         }
                         Err(e) => warn!("legacy secret migration failed: {}", e),
                     }
+
+                    // One-shot cleanup for users upgrading from pre-v2.4.53:
+                    // drop any `oauth:{id}` default-slot entry that's been
+                    // shadowed by a same-integration `oauth:{id}:{name}`
+                    // instance entry. Without this, read paths with
+                    // instance=None keep hitting the stale default and
+                    // reporting "not connected" even though a healthy
+                    // instanced entry sits right next to it.
+                    match screenpipe_connect::oauth::sweep_shadowed_default_slots(&store).await {
+                        Ok(n) if n > 0 => {
+                            info!("oauth: swept {} shadowed default-slot entry(ies)", n);
+                        }
+                        Ok(_) => {}
+                        Err(e) => warn!("oauth: sweep_shadowed_default_slots failed: {}", e),
+                    }
+
                     server.secret_store = Some(Arc::new(store));
                 }
                 Err(e) => {
