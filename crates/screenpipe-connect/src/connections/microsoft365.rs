@@ -25,7 +25,7 @@ use serde_json::{Map, Value};
 //     work with standard user consent).
 static OAUTH: OAuthConfig = OAuthConfig {
     auth_url: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
-    client_id: "0760348d-bd6f-43f8-8a33-4d7a41dca9ef",
+    client_id: "be765a6d-62fd-4abe-9703-3ffcfee711b9",
     extra_auth_params: &[
         (
             "scope",
