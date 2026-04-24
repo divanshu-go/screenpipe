@@ -691,6 +691,7 @@ async fn main() {
                 // Calendar commands
                 calendar::calendar_status,
                 calendar::calendar_authorize,
+                calendar::calendar_reset_permission,
                 calendar::calendar_get_events,
                 calendar::calendar_get_current_meeting,
                 // ICS Calendar commands
@@ -972,6 +973,7 @@ async fn main() {
             // Calendar commands
             calendar::calendar_status,
             calendar::calendar_authorize,
+            calendar::calendar_reset_permission,
             calendar::calendar_get_events,
             calendar::calendar_get_current_meeting,
             // ICS Calendar commands
