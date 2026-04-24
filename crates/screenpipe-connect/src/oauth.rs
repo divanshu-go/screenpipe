@@ -198,8 +198,7 @@ pub async fn load_oauth_json(
         return None;
     }
     let instances = list_oauth_instances(store, integration_id).await;
-    let named: Vec<Option<String>> =
-        instances.into_iter().filter(|i| i.is_some()).collect();
+    let named: Vec<Option<String>> = instances.into_iter().filter(|i| i.is_some()).collect();
     if named.len() == 1 {
         let inst = named[0].as_deref();
         tracing::debug!(
@@ -677,7 +676,10 @@ mod tests {
         let store = mem_store().await;
         let id = "_t_prefer";
         store
-            .set_json(&format!("oauth:{}", id), &json!({"access_token": "default"}))
+            .set_json(
+                &format!("oauth:{}", id),
+                &json!({"access_token": "default"}),
+            )
             .await
             .unwrap();
         store
@@ -816,11 +818,7 @@ mod tests {
         let deleted = sweep_shadowed_default_slots(&store).await.unwrap();
         assert_eq!(deleted, 0);
 
-        let kept: serde_json::Value = store
-            .get_json("oauth:_t_sweep2")
-            .await
-            .unwrap()
-            .unwrap();
+        let kept: serde_json::Value = store.get_json("oauth:_t_sweep2").await.unwrap().unwrap();
         assert_eq!(kept["access_token"], "keep");
     }
 
@@ -901,10 +899,7 @@ mod tests {
     async fn sweep_is_idempotent() {
         // Running twice is a no-op on the second call.
         let store = mem_store().await;
-        store
-            .set_json("oauth:_t_idem", &json!({}))
-            .await
-            .unwrap();
+        store.set_json("oauth:_t_idem", &json!({})).await.unwrap();
         store
             .set_json("oauth:_t_idem:e@x.com", &json!({}))
             .await

@@ -181,7 +181,10 @@ mod tests {
         hasher.update(text.as_bytes());
         let key: [u8; 32] = hasher.finalize().into();
         f.cache
-            .insert(key, Arc::new("my email is [EMAIL] and this is long enough to filter".into()))
+            .insert(
+                key,
+                Arc::new("my email is [EMAIL] and this is long enough to filter".into()),
+            )
             .await;
         let out = f.filter(text).await.unwrap();
         assert_eq!(out, "my email is [EMAIL] and this is long enough to filter");

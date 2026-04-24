@@ -5079,7 +5079,7 @@ mod tests {
                 installed_version: None,
                 source_hash: None,
                 subagent: false,
-            privacy_filter: false,
+                privacy_filter: false,
                 trigger: None,
             },
             last_run: None,

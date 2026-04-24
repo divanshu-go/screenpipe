@@ -365,8 +365,7 @@ pub fn spawn_process_tap_capture(
 
             // Watchdog: drain the peak-amp window and decide if we're silent.
             let window_callbacks = TAP_WATCHDOG_CALLBACKS.swap(0, Ordering::Relaxed);
-            let window_peak =
-                f32::from_bits(TAP_WATCHDOG_AMP_BITS.swap(0, Ordering::Relaxed));
+            let window_peak = f32::from_bits(TAP_WATCHDOG_AMP_BITS.swap(0, Ordering::Relaxed));
             let got_real_audio = window_callbacks > 0 && window_peak > SILENCE_AMP_EPS;
 
             if got_real_audio {
