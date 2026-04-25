@@ -164,3 +164,52 @@ Get accessibility text, parsed tree nodes, and extracted URLs for a specific fra
 - All timestamps are handled in UTC
 - Results are formatted for readability in Claude's interface
 - macOS automation features require accessibility permissions
+
+## Privacy Policy
+
+The Screenpipe MCP server is a local-only bridge between Claude and your
+local Screenpipe instance. It does not collect, transmit, or store any
+data on its own.
+
+### What this MCP server does
+When Claude invokes a tool (`search-content`, `activity-summary`, etc.)
+the MCP server forwards the request to `http://localhost:3030` — the
+Screenpipe daemon running on your machine — and returns the response.
+That's the entire data path.
+
+### Data collection
+**None by this MCP server.** No analytics, no telemetry, no usage tracking.
+
+### Data usage
+Tool calls are passed straight through to your local Screenpipe daemon
+and the results stream back to Claude. The MCP server doesn't keep
+anything.
+
+### Data storage
+Nothing is stored by the MCP server itself. Recordings, OCR text,
+audio transcripts, and UI events are stored by the Screenpipe app in a
+SQLite database under `~/.screenpipe/` on your device. Retention is
+whatever you configure inside the Screenpipe app — typically you
+control it via the storage settings panel.
+
+### Third-party sharing
+None. The MCP server only talks to `localhost:3030`. It does not
+contact Anthropic, Screenpipe's servers, or any other external service.
+If you choose to enable optional cloud features inside the Screenpipe
+app itself (e.g. cloud sync, cloud AI), those are governed by the
+Screenpipe app's privacy policy, not this MCP server's data flow.
+
+### Retention
+The MCP server has no persistent state. The data your Screenpipe app
+captures is retained according to your Screenpipe storage configuration
+and is deletable at any time (`rm -rf ~/.screenpipe` removes everything).
+
+### Source code
+The Screenpipe MCP server is MIT-licensed and the entire source is
+public at <https://github.com/screenpipe/screenpipe/tree/main/crates/screenpipe-connect/screenpipe-mcp>.
+Every line is auditable.
+
+### Contact
+Questions or concerns: open an issue at
+<https://github.com/screenpipe/screenpipe/issues> or reach out via
+<https://screenpi.pe>.

@@ -57,5 +57,9 @@
       "node": ">=18.0.0"
     }
   },
-  "keywords": ["screen-recording", "ocr", "audio-transcription", "automation", "memory", "search"]
+  "keywords": ["screen-recording", "ocr", "audio-transcription", "automation", "memory", "search"],
+  "privacy_policies": [
+    "https://github.com/screenpipe/screenpipe/tree/main/crates/screenpipe-connect/screenpipe-mcp#privacy-policy",
+    "https://screenpi.pe/privacy"
+  ]
 }
