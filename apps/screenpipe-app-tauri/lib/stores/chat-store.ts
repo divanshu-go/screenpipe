@@ -46,6 +46,12 @@ export interface SessionRecord {
   updatedAt: number;
   /** User pinned this conversation to the top of the sidebar. */
   pinned: boolean;
+  /** True when there's new assistant activity (delta or completion) that
+   *  the user hasn't seen yet. Set by the event router when content lands
+   *  for a session that is NOT the currently-viewed one; cleared the
+   *  instant the user makes that session current. Sidebar renders unread
+   *  rows in bold, like an email inbox. */
+  unread: boolean;
 }
 
 interface ChatStoreState {
@@ -65,10 +71,16 @@ interface ChatStoreActions {
   /** Remove a session from the store (does not stop the Pi process or
    *  delete from disk — caller does that). */
   drop: (id: string) => void;
-  /** Mark a session as currently in front. */
+  /** Mark a session as currently in front. Implicitly clears its unread
+   *  flag — viewing the chat counts as reading it. */
   setCurrent: (id: string | null) => void;
   /** Toggle the pinned state. */
   togglePinned: (id: string) => void;
+  /** Mark a session as having new unseen assistant activity. The router
+   *  calls this when content lands for a session other than the current
+   *  one. No-op if the session id is the current one (you can't be
+   *  unread for the chat you're looking at). */
+  markUnread: (id: string) => void;
 }
 
 export type ChatStore = ChatStoreState & { actions: ChatStoreActions };
@@ -124,7 +136,23 @@ export const useChatStore = create<ChatStore>((set) => ({
         };
       }),
 
-    setCurrent: (id) => set({ currentId: id }),
+    setCurrent: (id) =>
+      set((s) => {
+        // Viewing a session counts as reading it — clear the unread flag
+        // for the new current. Same atomic update so the row's unread
+        // state can't transiently flicker between the setCurrent call and
+        // a follow-up markRead call.
+        if (id && s.sessions[id]?.unread) {
+          return {
+            currentId: id,
+            sessions: {
+              ...s.sessions,
+              [id]: { ...s.sessions[id], unread: false },
+            },
+          };
+        }
+        return { currentId: id };
+      }),
 
     togglePinned: (id) =>
       set((s) => {
@@ -135,6 +163,17 @@ export const useChatStore = create<ChatStore>((set) => ({
             ...s.sessions,
             [id]: { ...existing, pinned: !existing.pinned },
           },
+        };
+      }),
+
+    markUnread: (id) =>
+      set((s) => {
+        const existing = s.sessions[id];
+        if (!existing) return {};
+        if (s.currentId === id) return {}; // can't be unread for the current view
+        if (existing.unread) return {}; // already unread, avoid re-render churn
+        return {
+          sessions: { ...s.sessions, [id]: { ...existing, unread: true } },
         };
       }),
   },

@@ -95,7 +95,9 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
     const id = crypto.randomUUID();
     // Optimistically add the row so the sidebar feels responsive even if
     // standalone-chat takes a tick to react. The router will pick up the
-    // session if/when Pi starts emitting events for it.
+    // session if/when Pi starts emitting events for it. Critically, this
+    // runs even when another session is mid-stream — multi-tab is the
+    // whole point, so + new chat must be clickable at all times.
     actions.upsert({
       id,
       title: "new chat",
@@ -104,6 +106,7 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
       messageCount: 0,
       updatedAt: Date.now(),
       pinned: false,
+      unread: false,
     });
     actions.setCurrent(id);
     // chat-load-conversation with an unknown id is treated by
@@ -134,6 +137,7 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
         messageCount: 0,
         updatedAt: Date.now(),
         pinned: false,
+        unread: false,
       });
       actions.setCurrent(fresh);
       emit("chat-load-conversation", { conversationId: fresh });
@@ -169,20 +173,6 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
       className={cn("flex flex-col h-full min-h-0 text-sm", className)}
       data-testid="chat-sidebar"
     >
-      <div className="px-2 pt-2 pb-1 shrink-0">
-        <button
-          onClick={handleNew}
-          className={cn(
-            "w-full flex items-center gap-2 px-2 py-1.5 rounded-md",
-            "text-foreground hover:bg-muted/50 transition-colors",
-            "text-sm font-medium"
-          )}
-          data-testid="chat-sidebar-new"
-        >
-          <Plus className="h-4 w-4" /> new chat
-        </button>
-      </div>
-
       <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
         {pinned.length > 0 && (
           <Section title="pinned">
@@ -199,10 +189,25 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
           </Section>
         )}
 
-        <Section title="recents">
+        <Section
+          title="recents"
+          action={
+            <button
+              onClick={handleNew}
+              className={cn(
+                "p-1 rounded hover:bg-muted/60 transition-colors",
+                "text-muted-foreground hover:text-foreground"
+              )}
+              title="new chat"
+              data-testid="chat-sidebar-new"
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </button>
+          }
+        >
           {recents.length === 0 && pinned.length === 0 ? (
             <div className="px-3 py-2 text-xs text-muted-foreground/70 italic">
-              no chats yet — start one above
+              no chats yet — click + to start
             </div>
           ) : recents.length === 0 ? (
             <div className="px-3 py-2 text-xs text-muted-foreground/70 italic">
@@ -228,15 +233,20 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
 
 function Section({
   title,
+  action,
   children,
 }: {
   title: string;
+  action?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <div className="mb-2">
-      <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-muted-foreground/60">
-        {title}
+      <div className="px-3 py-1.5 flex items-center justify-between">
+        <span className="text-[10px] uppercase tracking-wider text-muted-foreground/60">
+          {title}
+        </span>
+        {action}
       </div>
       <div className="flex flex-col">{children}</div>
     </div>
@@ -277,7 +287,20 @@ function ChatRow({
       title={isError && session.lastError ? session.lastError : undefined}
     >
       <div className="flex items-center gap-1.5 min-w-0">
-        <span className="truncate flex-1 text-sm">
+        <span
+          className={cn(
+            "truncate flex-1 text-sm",
+            // Email-style: unread rows are bold + foreground; once
+            // viewed, fade back to normal weight + muted color. The
+            // store atomically clears unread when the user makes the
+            // session current (see chat-store setCurrent).
+            session.unread && !isCurrent
+              ? "font-semibold text-foreground"
+              : isCurrent
+                ? "text-foreground"
+                : "text-foreground/80"
+          )}
+        >
           {session.title || "untitled"}
         </span>
         {isLive && (

@@ -170,6 +170,10 @@ async function handlePiEvent(payload: PiEventPayload) {
       messageCount: 0,
       updatedAt: Date.now(),
       pinned: false,
+      // First-touch session is unread unless the user is already viewing
+      // it (this is also how external triggers — chat-prefill, pipe
+      // events — surface in the sidebar).
+      unread: store.currentId !== sid,
     });
     if (snippet) previewLastEmittedAt.set(sid, Date.now());
     return;
@@ -209,6 +213,12 @@ async function handlePiEvent(payload: PiEventPayload) {
   }
 
   store.actions.patch(sid, patch);
+
+  // Mark as unread if real assistant content arrived for a session that
+  // is NOT the currently-viewed one. The store's markUnread is a no-op
+  // when sid === currentId, so this is safe to call unconditionally on
+  // any event that produced a snippet.
+  if (snippet) store.actions.markUnread(sid);
 }
 
 function handleSessionEvicted(payload: PiSessionEvictedPayload) {
@@ -255,10 +265,12 @@ async function hydrate() {
         id: m.id,
         title: m.title || "untitled",
         preview: "",
-        status: "idle",
+        status: "idle" as const,
         messageCount: m.messageCount,
         updatedAt: m.updatedAt,
         pinned: m.pinned,
+        // History reload doesn't count as new activity — start clean.
+        unread: false,
       }));
     useChatStore.getState().actions.hydrateFromDisk(records);
   } catch {

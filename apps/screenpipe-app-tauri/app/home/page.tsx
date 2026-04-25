@@ -537,33 +537,6 @@ function HomeContent() {
                 <div className="flex-1" />
               )}
 
-              {/* Team promo card — hidden when user already has a team, sidebar collapsed, or enterprise */}
-              {!teamState.team && !sidebarCollapsed && !isSectionHidden("team") && !teamPromoDismissed && (
-                <div className={cn("mx-1 mb-3 p-3 border relative group", isTranslucent ? "vibrant-card-border" : "border-border bg-card")}>
-                  <button
-                    onClick={() => {
-                      setTeamPromoDismissed(true);
-                      localStorage.setItem("team-promo-dismissed", "true");
-                    }}
-                    className={cn("absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity", isTranslucent ? "vibrant-nav-item" : "text-muted-foreground hover:text-foreground")}
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                  <h3 className={cn("text-sm font-medium", isTranslucent ? "vibrant-heading" : "text-foreground")}>
-                    Add your team to screenpipe
-                  </h3>
-                  <p className={cn("text-xs mt-1", isTranslucent ? "vibrant-sidebar-fg-muted" : "text-muted-foreground")}>
-                    Push pipe configs and content filters to all members.
-                  </p>
-                  <button
-                    onClick={() => openSettings("team")}
-                    className={cn("mt-2.5 px-3 py-1.5 text-xs font-medium border transition-colors duration-150", isTranslucent ? "vibrant-btn-border" : "border-border bg-background hover:bg-foreground hover:text-background")}
-                  >
-                    ADD YOUR TEAM
-                  </button>
-                </div>
-              )}
-
               {/* Bottom items */}
               <div className={cn("space-y-0.5 border-t pt-2", isTranslucent ? "vibrant-sidebar-border" : "border-border")}>
                 {/* Team link — hide invite promo in enterprise (unless team exists) */}
