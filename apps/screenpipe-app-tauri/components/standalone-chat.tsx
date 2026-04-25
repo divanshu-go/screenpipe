@@ -33,6 +33,7 @@ import { writeTextFile, readFile } from "@tauri-apps/plugin-fs";
 import { commands } from "@/lib/utils/tauri";
 import { emit } from "@tauri-apps/api/event";
 import { useChatConversations } from "@/components/hooks/use-chat-conversations";
+import { useChatStore } from "@/lib/stores/chat-store";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { usePlatform } from "@/lib/hooks/use-platform";
@@ -3147,6 +3148,51 @@ export function StandaloneChat({
     if (inputRef.current) inputRef.current.style.height = "auto";
     setIsLoading(true);
     setIsStreaming(true);
+
+    // Mirror the user message + assistant placeholder DIRECTLY into the
+    // chat-store, synchronously. The snapshot-on-switch path reads
+    // `messages` from the React closure, which lags behind setMessages
+    // by one render cycle (React batches). If the user clicks "+ new
+    // chat" in that gap, the snapshot writes stale messages (without
+    // the freshly-sent user message) to the store. Then the router
+    // takes over for the now-backgrounded session and only knows about
+    // assistant deltas — the user comes back and sees the assistant
+    // reply with no preceding user message. By writing both messages
+    // here, the store is at least as fresh as the panel and survives
+    // any closure staleness.
+    const sidNow = piSessionIdRef.current;
+    if (sidNow) {
+      const storeState = useChatStore.getState();
+      if (!storeState.sessions[sidNow]) {
+        storeState.actions.upsert({
+          id: sidNow,
+          title: "new chat",
+          preview: "",
+          status: "streaming",
+          messageCount: 0,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          pinned: false,
+          unread: false,
+        });
+      }
+      storeState.actions.appendMessage(sidNow, newUserMessage as any);
+      storeState.actions.appendMessage(sidNow, {
+        id: assistantMessageId,
+        role: "assistant",
+        content: "Processing...",
+        timestamp: Date.now(),
+        model: activePreset?.model,
+        provider: activePreset?.provider,
+      } as any);
+      storeState.actions.setStreaming(sidNow, {
+        streamingMessageId: assistantMessageId,
+        streamingText: "",
+        contentBlocks: [],
+        isStreaming: true,
+        isLoading: true,
+      });
+    }
 
     posthog.capture("chat_message_sent", {
       provider: activePreset?.provider,

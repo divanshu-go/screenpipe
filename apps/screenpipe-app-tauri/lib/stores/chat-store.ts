@@ -438,13 +438,25 @@ export const useChatStore = create<ChatStore>((set) => ({
       set((s) => {
         const existing = s.sessions[id];
         if (!existing) return {};
+        // Non-destructive: if the snapshot's messages array is shorter
+        // than what the store already has, keep the store's. The
+        // snapshot reads `messages` from a React closure which can be
+        // stale (one render cycle behind setMessages from sendPiMessage),
+        // so a fast switch right after send would otherwise wipe the
+        // user message we just appended to the store directly. Take
+        // whichever array is longer — both should converge to the same
+        // tail, the longer one just has fewer dropped writes.
+        const existingMsgs = (existing.messages as unknown[]) ?? [];
+        const incomingMsgs = snapshot.messages ?? [];
+        const messages =
+          incomingMsgs.length >= existingMsgs.length ? incomingMsgs : existingMsgs;
         return {
           sessions: {
             ...s.sessions,
             [id]: {
               ...existing,
-              messages: snapshot.messages,
-              messageCount: snapshot.messages.length,
+              messages,
+              messageCount: messages.length,
               streamingText: snapshot.streamingText,
               streamingMessageId: snapshot.streamingMessageId,
               contentBlocks: snapshot.contentBlocks,

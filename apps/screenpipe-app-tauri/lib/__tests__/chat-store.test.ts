@@ -74,6 +74,39 @@ describe("chat-store: snapshotSession", () => {
     expect(useChatStore.getState().sessions.unknown).toBeUndefined();
   });
 
+  it("is non-destructive when the snapshot's messages are stale (shorter than store)", () => {
+    // Bug: snapshot reads `messages` from a React closure that lags
+    // setMessages by one render. If sendPiMessage just queued
+    // [userMsg, assistant] and the user clicks "+ new chat" before
+    // React commits, the snapshot fires with the OLD closure (length 0).
+    // sendPiMessage also writes the new messages to the store directly.
+    // The snapshot must NOT regress that: take the longer array.
+    useChatStore.getState().actions.upsert(baseRecord({ id: "A" }));
+    const fresh = [
+      { id: "u1", role: "user", content: "hello", timestamp: 1 },
+      { id: "a1", role: "assistant", content: "Processing...", timestamp: 2 },
+    ];
+    useChatStore.getState().actions.snapshotSession("A", {
+      messages: fresh, // direct write (mirrors sendPiMessage)
+      streamingText: "",
+      streamingMessageId: "a1",
+      contentBlocks: [],
+      isStreaming: true,
+      isLoading: true,
+    });
+    // Now a stale snapshot arrives (closure captured pre-send messages).
+    useChatStore.getState().actions.snapshotSession("A", {
+      messages: [], // stale
+      streamingText: "",
+      streamingMessageId: "a1",
+      contentBlocks: [],
+      isStreaming: true,
+      isLoading: true,
+    });
+    // Store keeps the freshest (longer) view.
+    expect(useChatStore.getState().sessions.A.messages).toEqual(fresh);
+  });
+
   it("does NOT bump createdAt — snapshot is plumbing, not new activity", () => {
     // Bug: clicking a chat reordered the sidebar because the snapshot's
     // updatedAt bump bubbled up to the sort. Now sort is by createdAt
