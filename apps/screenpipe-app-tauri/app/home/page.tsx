@@ -421,7 +421,10 @@ function HomeContent() {
                   onClick={toggleSidebar}
                   aria-label={sidebarCollapsed ? "expand sidebar" : "collapse sidebar"}
                   className={cn(
-                    "absolute top-2 z-20 p-1 rounded-md transition-colors",
+                    // top-1 + p-1 puts the 14px icon's center at y≈15px, matching the
+// vertical center of the macOS traffic lights (which sit at y≈14).
+// top-2 sat the icons ~5px below the traffic lights — visibly off.
+"absolute top-1 z-20 p-1 rounded-md transition-colors",
                     isMac ? "left-[78px]" : "left-2",
                     isTranslucent ? "vibrant-nav-item" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
                   )}
@@ -452,7 +455,10 @@ function HomeContent() {
                   }}
                   aria-label="search"
                   className={cn(
-                    "absolute top-2 z-20 p-1 rounded-md transition-colors",
+                    // top-1 + p-1 puts the 14px icon's center at y≈15px, matching the
+// vertical center of the macOS traffic lights (which sit at y≈14).
+// top-2 sat the icons ~5px below the traffic lights — visibly off.
+"absolute top-1 z-20 p-1 rounded-md transition-colors",
                     // 28px right of the collapse icon (icon 16 + gap 8 + small breathing).
                     isMac ? "left-[110px]" : "left-9",
                     isTranslucent ? "vibrant-nav-item" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
