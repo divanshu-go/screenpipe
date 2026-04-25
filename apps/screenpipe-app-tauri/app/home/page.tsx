@@ -26,6 +26,7 @@ import { useChatStore, getOrCreateEmptyChatId } from "@/lib/stores/chat-store";
 import { useOverlayData } from "@/app/shortcut-reminder/use-overlay-data";
 import { cn } from "@/lib/utils";
 import { AppSidebar, SidebarProvider, useSidebarContext } from "@/components/app-sidebar";
+import { usePlatform } from "@/lib/hooks/use-platform";
 import { FeedbackSection } from "@/components/settings/feedback-section";
 import { PipeStoreView } from "@/components/pipe-store";
 import { MemoriesSection } from "@/components/settings/memories-section";
@@ -68,6 +69,7 @@ const SETTINGS_SECTIONS = new Set<string>([
 
 function HomeContent() {
   const router = useRouter();
+  const { isMac } = usePlatform();
   const [activeSection, setActiveSection] = useQueryState("section", {
     defaultValue: "home",
     parse: (value) => {
@@ -405,27 +407,39 @@ function HomeContent() {
           {/* Sidebar */}
           <TooltipProvider delayDuration={0}>
           <AppSidebar collapsed={sidebarCollapsed} className="pl-4">
+            {/* Sidebar collapse icon — Claude-style: pinned top-left
+                next to the macOS traffic lights. Lives in the AppSidebar's
+                pt-8 reservation area via absolute positioning so the
+                rest of the header content keeps its layout. On non-Mac
+                platforms there are no traffic lights to dodge. */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={toggleSidebar}
+                  aria-label={sidebarCollapsed ? "expand sidebar" : "collapse sidebar"}
+                  className={cn(
+                    "absolute top-2 z-20 p-1 rounded-md transition-colors",
+                    isMac ? "left-[78px]" : "left-2",
+                    isTranslucent ? "vibrant-nav-item" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                  )}
+                >
+                  {sidebarCollapsed ? (
+                    <PanelLeftOpen className="h-4 w-4" />
+                  ) : (
+                    <PanelLeftClose className="h-4 w-4" />
+                  )}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="text-xs">
+                {sidebarCollapsed ? "expand sidebar" : "collapse sidebar"} <kbd className="ml-1 px-1 py-0.5 bg-muted rounded text-[10px]">⌘B</kbd>
+              </TooltipContent>
+            </Tooltip>
+
             <div className={cn(isTranslucent ? "vibrant-sidebar-border" : "", "border-b", sidebarCollapsed ? "px-2 py-3" : "px-4 py-3")}>
-              {/* Row 1: name + phone + collapse */}
+              {/* Row 1: name (collapse moved out — pinned top-left next
+                  to the traffic lights, see above). */}
               <div className={cn("flex items-center", sidebarCollapsed ? "justify-center" : "justify-between")}>
                 {!sidebarCollapsed && <h1 className={cn("text-lg font-bold", isTranslucent ? "vibrant-heading" : "text-foreground")}>screenpipe</h1>}
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      onClick={toggleSidebar}
-                      className={cn("transition-colors", isTranslucent ? "vibrant-nav-item" : "text-muted-foreground hover:text-foreground")}
-                    >
-                      {sidebarCollapsed ? (
-                        <PanelLeftOpen className="h-4 w-4" />
-                      ) : (
-                        <PanelLeftClose className="h-4 w-4" />
-                      )}
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom" className="text-xs">
-                    {sidebarCollapsed ? "expand sidebar" : "collapse sidebar"} <kbd className="ml-1 px-1 py-0.5 bg-muted rounded text-[10px]">⌘B</kbd>
-                  </TooltipContent>
-                </Tooltip>
               </div>
               {/* Row 2: device status + action buttons */}
               {!sidebarCollapsed && (() => {
