@@ -162,7 +162,13 @@ fn setup_logging(
             .add_directive("symphonia=error".parse().unwrap())
             .add_directive("hf_hub=error".parse().unwrap())
             .add_directive("whisper_rs=error".parse().unwrap())
-            .add_directive("audiopipe=warn".parse().unwrap());
+            .add_directive("audiopipe=warn".parse().unwrap())
+            // ORT (ONNX Runtime) is extremely chatty at INFO — emits hundreds
+            // of "Reserving memory in BFCArena", "GraphTransformer modified",
+            // "Saving initialized tensors" lines per session init. Suppress
+            // unless the user asks for real issues (warn+) or overrides via
+            // SCREENPIPE_LOG=ort=info.
+            .add_directive("ort=warn".parse().unwrap());
 
         #[cfg(target_os = "windows")]
         let filter = filter
