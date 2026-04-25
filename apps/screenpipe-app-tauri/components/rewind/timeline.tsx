@@ -475,18 +475,6 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		};
 	}, [navigateToTimestamp]);
 
-	// Open the search modal in response to the AppSidebar's top-bar
-	// search button (embedded mode only — standalone window has its
-	// own button in TimelineControls).
-	useEffect(() => {
-		if (!embedded) return;
-		const unlisten = listen("open-search", () => {
-			setShowSearchModal(true);
-		});
-		return () => {
-			unlisten.then((fn) => fn());
-		};
-	}, [embedded]);
 
 	// Listen for navigate-to-frame events (deep link: screenpipe://frame/12345)
 	useEffect(() => {

@@ -39,6 +39,8 @@ import Timeline from "@/components/rewind/timeline";
 import { useQueryState } from "nuqs";
 import { listen } from "@tauri-apps/api/event";
 import { useSettings } from "@/lib/hooks/use-settings";
+import { commands } from "@/lib/utils/tauri";
+import { formatShortcutDisplay } from "@/lib/chat-utils";
 import { useTeam } from "@/lib/hooks/use-team";
 import { useEnterprisePolicy } from "@/lib/hooks/use-enterprise-policy";
 import { EnterpriseLicensePrompt } from "@/components/enterprise-license-prompt";
@@ -425,9 +427,9 @@ function HomeContent() {
                   )}
                 >
                   {sidebarCollapsed ? (
-                    <PanelLeftOpen className="h-4 w-4" />
+                    <PanelLeftOpen className="h-3.5 w-3.5" />
                   ) : (
-                    <PanelLeftClose className="h-4 w-4" />
+                    <PanelLeftClose className="h-3.5 w-3.5" />
                   )}
                 </button>
               </TooltipTrigger>
@@ -437,18 +439,16 @@ function HomeContent() {
             </Tooltip>
 
             {/* Search — sits to the right of the collapse icon, same
-                row as the macOS traffic lights. Removes the duplicate
-                search button that used to live inside the embedded
-                timeline's controls. Click → switch to Timeline (so the
-                modal has a host) and emit open-search; the standalone
-                Search window flow stays via the standalone timeline
-                button. */}
+                row as the macOS traffic lights. Click pops the overlay
+                Search window (same as the global ⌘K shortcut) instead
+                of the embedded modal — the modal-in-timeline path was
+                useless when not on the timeline view, and the overlay
+                search is what users already know from the shortcut. */}
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
                   onClick={() => {
-                    setActiveSection("timeline");
-                    void emit("open-search");
+                    void commands.showWindow({ Search: { query: null } });
                   }}
                   aria-label="search"
                   className={cn(
@@ -458,11 +458,17 @@ function HomeContent() {
                     isTranslucent ? "vibrant-nav-item" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
                   )}
                 >
-                  <Search className="h-4 w-4" />
+                  <Search className="h-3.5 w-3.5" />
                 </button>
               </TooltipTrigger>
               <TooltipContent side="bottom" className="text-xs">
-                search <kbd className="ml-1 px-1 py-0.5 bg-muted rounded text-[10px]">⌘K</kbd>
+                search
+                <kbd className="ml-1 px-1 py-0.5 bg-muted rounded text-[10px]">
+                  {formatShortcutDisplay(
+                    settings.searchShortcut || (isMac ? "Control+Super+K" : "Alt+K"),
+                    isMac,
+                  )}
+                </kbd>
               </TooltipContent>
             </Tooltip>
 
