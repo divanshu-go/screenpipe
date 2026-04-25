@@ -22,7 +22,7 @@ import {
   X,
 } from "lucide-react";
 import { emit } from "@tauri-apps/api/event";
-import { useChatStore } from "@/lib/stores/chat-store";
+import { useChatStore, getOrCreateEmptyChatId } from "@/lib/stores/chat-store";
 import { useOverlayData } from "@/app/shortcut-reminder/use-overlay-data";
 import { cn } from "@/lib/utils";
 import { AppSidebar, SidebarProvider, useSidebarContext } from "@/components/app-sidebar";
@@ -535,19 +535,25 @@ function HomeContent() {
                         // sidebar's "+ new chat" behaviour exactly so
                         // the two entry points stay in sync.
                         if (section.id === "home") {
-                          const id = crypto.randomUUID();
+                          // Reuse an existing empty chat if there is one;
+                          // otherwise create. Mirrors the sidebar's
+                          // "+ new chat" handler so spamming the nav
+                          // doesn't pile up empty rows.
+                          const { id, isNew } = getOrCreateEmptyChatId();
                           const store = useChatStore.getState();
-                          store.actions.upsert({
-                            id,
-                            title: "new chat",
-                            preview: "",
-                            status: "idle",
-                            messageCount: 0,
-                            createdAt: Date.now(),
-                            updatedAt: Date.now(),
-                            pinned: false,
-                            unread: false,
-                          });
+                          if (isNew) {
+                            store.actions.upsert({
+                              id,
+                              title: "new chat",
+                              preview: "",
+                              status: "idle",
+                              messageCount: 0,
+                              createdAt: Date.now(),
+                              updatedAt: Date.now(),
+                              pinned: false,
+                              unread: false,
+                            });
+                          }
                           store.actions.setCurrent(id);
                           void emit("chat-load-conversation", {
                             conversationId: id,

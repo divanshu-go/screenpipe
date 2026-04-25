@@ -12,6 +12,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   useChatStore,
   selectOrderedSessions,
+  getOrCreateEmptyChatId,
   type SessionRecord,
 } from "../stores/chat-store";
 
@@ -177,6 +178,62 @@ describe("chat-store: upsert preserves createdAt on re-insert", () => {
     useChatStore.getState().actions.upsert(baseRecord({ id: "A", createdAt: 100 }));
     useChatStore.getState().actions.upsert(baseRecord({ id: "A", createdAt: 999 }));
     expect(useChatStore.getState().sessions.A.createdAt).toBe(100);
+  });
+});
+
+describe("chat-store: getOrCreateEmptyChatId (no spam on +new)", () => {
+  beforeEach(reset);
+
+  it("creates a fresh id when there are no chats yet", () => {
+    const { id, isNew } = getOrCreateEmptyChatId();
+    expect(isNew).toBe(true);
+    expect(id).toMatch(/-/); // looks like a uuid
+  });
+
+  it("reuses the panel's current chat if it has no user message", () => {
+    useChatStore.setState({
+      sessions: { panelChat: baseRecord({ id: "panelChat", messages: [] }) },
+      currentId: null,
+      panelSessionId: "panelChat",
+    });
+    const { id, isNew } = getOrCreateEmptyChatId();
+    expect(id).toBe("panelChat");
+    expect(isNew).toBe(false);
+  });
+
+  it("creates a new id when the panel chat already has a user message", () => {
+    useChatStore.setState({
+      sessions: {
+        panelChat: baseRecord({
+          id: "panelChat",
+          messages: [{ id: "u1", role: "user", content: "hi", timestamp: 1 }],
+        }),
+      },
+      currentId: null,
+      panelSessionId: "panelChat",
+    });
+    const { id, isNew } = getOrCreateEmptyChatId();
+    expect(id).not.toBe("panelChat");
+    expect(isNew).toBe(true);
+  });
+
+  it("reuses any other empty chat (newest first) when the panel chat is full", () => {
+    useChatStore.setState({
+      sessions: {
+        full: baseRecord({
+          id: "full",
+          createdAt: 100,
+          messages: [{ id: "u", role: "user", content: "x", timestamp: 1 }],
+        }),
+        oldEmpty: baseRecord({ id: "oldEmpty", createdAt: 200, messages: [] }),
+        newEmpty: baseRecord({ id: "newEmpty", createdAt: 300, messages: [] }),
+      },
+      currentId: null,
+      panelSessionId: "full",
+    });
+    const { id, isNew } = getOrCreateEmptyChatId();
+    expect(id).toBe("newEmpty");
+    expect(isNew).toBe(false);
   });
 });
 

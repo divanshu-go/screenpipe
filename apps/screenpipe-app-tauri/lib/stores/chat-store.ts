@@ -497,6 +497,40 @@ export const useChatStore = create<ChatStore>((set) => ({
 export const useChatActions = () => useChatStore((s) => s.actions);
 
 /**
+ * "+ new chat" semantics. If the user already has an empty chat
+ * (no user message sent yet), return its id instead of spawning a
+ * new one — repeatedly clicking the button otherwise floods the
+ * sidebar with empty rows. Picks the panel's current session first
+ * (most likely the one the user is staring at), then falls back to
+ * any other empty session newest-first.
+ *
+ * Returns `{ id, isNew }` so callers can decide whether to upsert.
+ */
+export function getOrCreateEmptyChatId(): { id: string; isNew: boolean } {
+  const state = useChatStore.getState();
+  const isEmpty = (s: SessionRecord) => {
+    const msgs = (s.messages as Array<{ role?: string }> | undefined) ?? [];
+    if (msgs.length === 0) return true;
+    return !msgs.some((m) => m?.role === "user");
+  };
+
+  // Prefer the chat the user is already on.
+  const panelId = state.panelSessionId;
+  if (panelId) {
+    const panel = state.sessions[panelId];
+    if (panel && isEmpty(panel)) return { id: panelId, isNew: false };
+  }
+
+  // Otherwise any other empty session, newest first by createdAt.
+  const empties = Object.values(state.sessions)
+    .filter(isEmpty)
+    .sort((a, b) => b.createdAt - a.createdAt);
+  if (empties.length > 0) return { id: empties[0].id, isNew: false };
+
+  return { id: crypto.randomUUID(), isNew: true };
+}
+
+/**
  * Sorted view: pinned first (most recent), then unpinned by updatedAt desc.
  *
  * IMPORTANT: this returns a fresh array on every call. Do NOT pass it

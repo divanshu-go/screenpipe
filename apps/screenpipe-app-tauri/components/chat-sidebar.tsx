@@ -39,6 +39,7 @@ import {
   useChatStore,
   useChatActions,
   useOrderedSessions,
+  getOrCreateEmptyChatId,
   type SessionRecord,
 } from "@/lib/stores/chat-store";
 import { updateConversationFlags } from "@/lib/chat-storage";
@@ -92,23 +93,23 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
   }, [sessions]);
 
   const handleNew = () => {
-    const id = crypto.randomUUID();
-    // Optimistically add the row so the sidebar feels responsive even if
-    // standalone-chat takes a tick to react. The router will pick up the
-    // session if/when Pi starts emitting events for it. Critically, this
-    // runs even when another session is mid-stream — multi-tab is the
-    // whole point, so + new chat must be clickable at all times.
-    actions.upsert({
-      id,
-      title: "new chat",
-      preview: "",
-      status: "idle",
-      messageCount: 0,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      pinned: false,
-      unread: false,
-    });
+    // Reuse an existing empty chat instead of spawning a fresh one
+    // every time. Spamming "+ new chat" otherwise floods the sidebar
+    // with rows the user never typed in.
+    const { id, isNew } = getOrCreateEmptyChatId();
+    if (isNew) {
+      actions.upsert({
+        id,
+        title: "new chat",
+        preview: "",
+        status: "idle",
+        messageCount: 0,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        pinned: false,
+        unread: false,
+      });
+    }
     actions.setCurrent(id);
     // chat-load-conversation with an unknown id is treated by
     // standalone-chat's listener as "start a new chat with this id" —
