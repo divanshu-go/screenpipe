@@ -169,11 +169,20 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
   };
 
   return (
+    // No `h-full`. The wrapper sizes to its CONTENT (sections + rows) but
+    // the inner scroll region caps at `max-h-full` so a 500-row history
+    // doesn't blow past the available sidebar height. Without this, an
+    // earlier `h-full + flex-1` made the scroll viewport always equal to
+    // the parent's flex-1 share — even with 8 rows of content, you could
+    // drag the scrollbar through hundreds of pixels of dead space.
     <div
-      className={cn("flex flex-col h-full min-h-0 text-sm", className)}
+      className={cn("flex flex-col min-h-0 text-sm", className)}
       data-testid="chat-sidebar"
     >
-      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
+      <div
+        className="overflow-y-auto overflow-x-hidden"
+        style={{ maxHeight: "100%" }}
+      >
         {pinned.length > 0 && (
           <Section title="pinned">
             {pinned.map((s) => (

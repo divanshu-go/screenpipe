@@ -272,20 +272,26 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
   };
 
   // ---- loadConversation ----
+  // Switching conversations does NOT abort the previous session's Pi
+  // process — parallel chats are the entire point of the multi-tab
+  // sidebar, and aborting on switch would kill any chat the user
+  // navigated away from. The previous Pi process keeps running in the
+  // pool (capped at MAX_PI_SESSIONS=20) and continues writing to its
+  // own on-disk session log; the user can come back later and reload
+  // from disk to see what was produced while they were away.
+  //
+  // Panel-level streaming state IS reset though — the previous session's
+  // streaming text/refs/loading flags belong to the panel, not the Pi
+  // process, and rendering them on a different conversation would show
+  // a misleading "loading…" indicator on a paused chat (the user-
+  // reported "loading thing at the bottom despite the chat being
+  // paused" symptom from 2026-04-25).
   const loadConversation = async (conv: ChatConversation) => {
-    // Abort any ongoing Pi processing on the current session before switching
-    if (isLoading || isStreaming) {
-      try {
-        await commands.piAbort(piSessionIdRef.current);
-      } catch (e) {
-        console.warn("[Pi] Failed to abort:", e);
-      }
-      piStreamingTextRef.current = "";
-      piMessageIdRef.current = null;
-      piContentBlocksRef.current = [];
-      setIsLoading(false);
-      setIsStreaming(false);
-    }
+    piStreamingTextRef.current = "";
+    piMessageIdRef.current = null;
+    piContentBlocksRef.current = [];
+    setIsLoading(false);
+    setIsStreaming(false);
 
     // Switch to this conversation's session — each conversation is its own Pi process
     piSessionIdRef.current = conv.id;
