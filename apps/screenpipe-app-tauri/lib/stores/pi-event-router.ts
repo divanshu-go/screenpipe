@@ -157,6 +157,15 @@ async function handlePiEvent(payload: PiEventPayload) {
   const snippet = previewSnippet(payload);
   const err = errorMessage(payload);
 
+  // Phase 3: accumulate full message-content state in the store for
+  // EVERY session (current + background). This is what makes it possible
+  // for the chat panel to switch back to a previously-backgrounded
+  // session and see live tokens that arrived while it was away — the
+  // router has been writing them to the store the whole time. The chat
+  // panel either reads the store directly or syncs its local state from
+  // the store on session switch.
+  applyEventToSessionContent(sid, payload);
+
   // Lazy-create on first event from a previously-unknown session id.
   // Handles the case where Pi was started outside the chat-storage flow
   // (e.g. resumed from disk before we hydrated).
@@ -325,4 +334,160 @@ function unmountPiEventRouter(): void {
   previewLastEmittedAt.clear();
   mounted = false;
   mountPromise = null;
+}
+
+// ---------------------------------------------------------------------------
+// Per-session content accumulation
+//
+// The router doesn't try to fully reconstruct the chat panel's state
+// machine — that lives in `standalone-chat.tsx` for the active session.
+// What it DOES do here is keep the store's `messages` / `streamingText` /
+// `contentBlocks` / `streamingMessageId` fields up-to-date for every
+// session whose Pi process emits events. When the user switches to a
+// previously-backgrounded session, the chat panel can rehydrate its
+// local state from the store and see all the tokens that arrived while
+// it was looking at a different chat.
+//
+// We only handle the small set of event types that materially change
+// message content: text_delta (and its 0.70 wrapper message_update),
+// thinking_delta, tool_execution_start/end, message_start/end for
+// assistant messages, and agent_end for completion. Other events are
+// status-only and already handled by the main `handlePiEvent` block.
+// ---------------------------------------------------------------------------
+
+interface MutableMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  contentBlocks?: any[];
+  timestamp: number;
+  [k: string]: unknown;
+}
+
+function applyEventToSessionContent(sid: string, payload: PiEventPayload) {
+  const store = useChatStore.getState();
+  const existing = store.sessions[sid];
+  if (!existing) return; // upsert will fire on the next call
+
+  const t = payload.type;
+
+  // Assistant message starts — create a new in-flight message shell
+  // and remember its id as the streaming target.
+  if (t === "message_start" && payload.message?.role === "assistant") {
+    const newId = `pi-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const newMsg: MutableMessage = {
+      id: newId,
+      role: "assistant",
+      content: "",
+      contentBlocks: [],
+      timestamp: Date.now(),
+    };
+    store.actions.appendMessage(sid, newMsg);
+    store.actions.setStreaming(sid, {
+      streamingMessageId: newId,
+      streamingText: "",
+      contentBlocks: [],
+      isStreaming: true,
+      isLoading: true,
+    });
+    return;
+  }
+
+  // Per-token text delta — append to streamingText and to the in-flight
+  // message's content + last text content-block.
+  const inner = payload.assistantMessageEvent;
+  const isTextDelta =
+    (t === "text_delta" || (t === "message_update" && inner?.type === "text_delta")) &&
+    typeof (payload.delta ?? inner?.delta) === "string";
+  if (isTextDelta) {
+    const delta = (payload.delta ?? inner?.delta) as string;
+    const cur = store.sessions[sid];
+    if (!cur?.streamingMessageId) return;
+    const msgId = cur.streamingMessageId;
+    const newText = (cur.streamingText ?? "") + delta;
+    const blocks = [...((cur.contentBlocks as any[]) ?? [])];
+    const last = blocks[blocks.length - 1];
+    if (last && last.type === "text") {
+      last.text = (last.text ?? "") + delta;
+    } else {
+      blocks.push({ type: "text", text: delta });
+    }
+    store.actions.setStreaming(sid, {
+      streamingText: newText,
+      contentBlocks: blocks,
+    });
+    store.actions.patchMessage(sid, msgId, (m: any) => ({
+      ...m,
+      content: newText,
+      contentBlocks: blocks,
+    }));
+    return;
+  }
+
+  // Tool execution lifecycle — append a tool block while running, mutate
+  // it in place when the result lands. Matches standalone-chat's local
+  // logic so the rendered shape is the same whether the panel reads from
+  // store (via rehydrate) or from local state.
+  if (t === "tool_execution_start") {
+    const cur = store.sessions[sid];
+    if (!cur?.streamingMessageId) return;
+    const msgId = cur.streamingMessageId;
+    const tool = {
+      id: (payload as any).toolCallId || `${Date.now()}`,
+      toolName: (payload as any).toolName || "unknown",
+      args: (payload as any).args || {},
+      isRunning: true,
+    };
+    const blocks = [...((cur.contentBlocks as any[]) ?? []), { type: "tool", toolCall: tool }];
+    store.actions.setStreaming(sid, { contentBlocks: blocks });
+    store.actions.patchMessage(sid, msgId, (m: any) => ({
+      ...m,
+      contentBlocks: blocks,
+    }));
+    return;
+  }
+
+  if (t === "tool_execution_end") {
+    const cur = store.sessions[sid];
+    if (!cur?.streamingMessageId) return;
+    const msgId = cur.streamingMessageId;
+    const toolCallId = (payload as any).toolCallId;
+    const resultText: string =
+      (payload as any).result?.content
+        ?.map((c: any) => c.text || "")
+        .join("\n") || "";
+    const truncated =
+      resultText.length > 2000
+        ? `${resultText.slice(0, 2000)}\n... (truncated)`
+        : resultText;
+    const blocks = ((cur.contentBlocks as any[]) ?? []).map((b: any) =>
+      b.type === "tool" && b.toolCall?.id === toolCallId
+        ? {
+            ...b,
+            toolCall: {
+              ...b.toolCall,
+              isRunning: false,
+              result: truncated,
+              isError: (payload as any).isError,
+            },
+          }
+        : b
+    );
+    store.actions.setStreaming(sid, { contentBlocks: blocks });
+    store.actions.patchMessage(sid, msgId, (m: any) => ({
+      ...m,
+      contentBlocks: blocks,
+    }));
+    return;
+  }
+
+  // End of turn — flush streaming state to "settled" message + clear
+  // in-flight markers. Disk save happens in standalone-chat for the
+  // current session; for backgrounded sessions the store carries the
+  // settled message until the user comes back and the panel persists
+  // it via its existing save flow.
+  if (t === "agent_end" || t === "turn_end") {
+    store.actions.endTurn(sid);
+    return;
+  }
 }

@@ -29,6 +29,17 @@ export type SessionStatus =
   | "tool" // executing a tool call
   | "error"; // last turn ended in an error
 
+/**
+ * Streaming state captured per session — opaque blobs from the chat
+ * panel's perspective. Stored as `unknown[]` / `unknown` so the store
+ * stays free of UI-component types; the chat panel narrows them at the
+ * read site (see `useSessionView` in standalone-chat). This isolation is
+ * deliberate — the store is shared by the sidebar (which doesn't care
+ * about message internals) and the panel (which does).
+ */
+export type StoredMessage = unknown;
+export type StoredContentBlock = unknown;
+
 export interface SessionRecord {
   /** Pi `session_id` — also the uuid used by `commands.piStart`. */
   id: string;
@@ -52,6 +63,35 @@ export interface SessionRecord {
    *  instant the user makes that session current. Sidebar renders unread
    *  rows in bold, like an email inbox. */
   unread: boolean;
+
+  // ── Live session content (Phase 3) ─────────────────────────────────
+  // The chat panel reads these instead of holding its own per-render
+  // state, so background sessions accumulate messages as their Pi
+  // streams. Switching to a previously-backgrounded session shows the
+  // up-to-the-millisecond live state — no disk reload required.
+  // Hydrated on first view (from disk if not already in store) and
+  // mutated by the chat panel + the pi-event-router both keying by
+  // session id.
+  /** Full chronological message list for the session. */
+  messages?: StoredMessage[];
+  /** Content blocks of the in-flight assistant message (text / tool /
+   *  thinking) — flattened into the message at completion. */
+  contentBlocks?: StoredContentBlock[];
+  /** Streaming text accumulated so far for the in-flight message. */
+  streamingText?: string;
+  /** Id of the currently-streaming assistant message in `messages`. */
+  streamingMessageId?: string | null;
+  /** True while a Pi response is in-flight for this session. Drives the
+   *  loading indicator at the bottom of the chat panel. */
+  isStreaming?: boolean;
+  /** True between user-send and the first assistant token (no UI
+   *  content yet, but a request is in-flight). */
+  isLoading?: boolean;
+  /** True once we've populated messages/etc from disk for this session.
+   *  Prevents re-loading on every switch and lets the chat panel skip
+   *  the disk round-trip when the user comes back to a session that's
+   *  been live in the store. */
+  hydratedAt?: number;
 }
 
 interface ChatStoreState {
@@ -81,6 +121,52 @@ interface ChatStoreActions {
    *  one. No-op if the session id is the current one (you can't be
    *  unread for the chat you're looking at). */
   markUnread: (id: string) => void;
+
+  // ── Per-session live content ops ─────────────────────────────────────
+  // These mutate the in-flight `messages` / `contentBlocks` /
+  // `streamingText` / `streamingMessageId` fields of a SessionRecord.
+  // The chat panel calls them on every keystroke / pi_event / save; the
+  // pi-event router calls them for background sessions so their state
+  // accumulates while the user is looking at a different chat.
+
+  /** Replace the full message list for a session. Used by hydration from
+   *  disk and by user-side mutations (delete message, branch, etc.). */
+  setMessages: (id: string, messages: StoredMessage[]) => void;
+  /** Append a single message (user or assistant). Bumps updatedAt and
+   *  messageCount; preview is updated to the new message's prefix. */
+  appendMessage: (id: string, message: StoredMessage, preview?: string) => void;
+  /** Patch a single message in-place by message-id. No-op if either the
+   *  session or the message is unknown. Used to grow the in-flight
+   *  assistant message as deltas arrive. */
+  patchMessage: (
+    id: string,
+    messageId: string,
+    patcher: (m: StoredMessage) => StoredMessage
+  ) => void;
+  /** Replace the streaming-state triplet (text / message id / blocks).
+   *  Pass undefined for any field you don't want to overwrite. */
+  setStreaming: (
+    id: string,
+    state: Partial<{
+      streamingText: string;
+      streamingMessageId: string | null;
+      contentBlocks: StoredContentBlock[];
+      isLoading: boolean;
+      isStreaming: boolean;
+    }>
+  ) => void;
+  /** Atomic "begin a new turn" — clears streamingText / contentBlocks /
+   *  streamingMessageId and flips isLoading + isStreaming to true. The
+   *  user-message append and assistant-shell setup happen separately.
+   *  Used from sendPiMessage at the start of a turn. */
+  beginTurn: (id: string) => void;
+  /** Atomic "turn complete" — flips isLoading + isStreaming to false
+   *  and clears streamingMessageId. Caller is responsible for any final
+   *  message patch (e.g. setting `content` on the assistant message). */
+  endTurn: (id: string) => void;
+  /** Mark this session as fully hydrated from disk. Subsequent switches
+   *  to it can skip the disk round-trip and read from the store. */
+  markHydrated: (id: string) => void;
 }
 
 export type ChatStore = ChatStoreState & { actions: ChatStoreActions };
@@ -174,6 +260,131 @@ export const useChatStore = create<ChatStore>((set) => ({
         if (existing.unread) return {}; // already unread, avoid re-render churn
         return {
           sessions: { ...s.sessions, [id]: { ...existing, unread: true } },
+        };
+      }),
+
+    setMessages: (id, messages) =>
+      set((s) => {
+        const existing = s.sessions[id];
+        if (!existing) return {};
+        return {
+          sessions: {
+            ...s.sessions,
+            [id]: {
+              ...existing,
+              messages,
+              messageCount: messages.length,
+              updatedAt: Date.now(),
+            },
+          },
+        };
+      }),
+
+    appendMessage: (id, message, preview) =>
+      set((s) => {
+        const existing = s.sessions[id];
+        if (!existing) return {};
+        const messages = [...(existing.messages ?? []), message];
+        return {
+          sessions: {
+            ...s.sessions,
+            [id]: {
+              ...existing,
+              messages,
+              messageCount: messages.length,
+              preview: preview ?? existing.preview,
+              updatedAt: Date.now(),
+            },
+          },
+        };
+      }),
+
+    patchMessage: (id, messageId, patcher) =>
+      set((s) => {
+        const existing = s.sessions[id];
+        if (!existing?.messages?.length) return {};
+        let touched = false;
+        const messages = existing.messages.map((m: any) => {
+          if (m?.id === messageId) {
+            touched = true;
+            return patcher(m);
+          }
+          return m;
+        });
+        if (!touched) return {};
+        return {
+          sessions: {
+            ...s.sessions,
+            [id]: { ...existing, messages, updatedAt: Date.now() },
+          },
+        };
+      }),
+
+    setStreaming: (id, state) =>
+      set((s) => {
+        const existing = s.sessions[id];
+        if (!existing) return {};
+        return {
+          sessions: {
+            ...s.sessions,
+            [id]: { ...existing, ...state, updatedAt: Date.now() },
+          },
+        };
+      }),
+
+    beginTurn: (id) =>
+      set((s) => {
+        const existing = s.sessions[id];
+        if (!existing) return {};
+        return {
+          sessions: {
+            ...s.sessions,
+            [id]: {
+              ...existing,
+              streamingText: "",
+              contentBlocks: [],
+              streamingMessageId: null,
+              isLoading: true,
+              isStreaming: true,
+              status: "streaming",
+              lastError: undefined,
+              updatedAt: Date.now(),
+            },
+          },
+        };
+      }),
+
+    endTurn: (id) =>
+      set((s) => {
+        const existing = s.sessions[id];
+        if (!existing) return {};
+        return {
+          sessions: {
+            ...s.sessions,
+            [id]: {
+              ...existing,
+              isLoading: false,
+              isStreaming: false,
+              streamingMessageId: null,
+              streamingText: "",
+              contentBlocks: [],
+              status: existing.status === "error" ? "error" : "idle",
+              updatedAt: Date.now(),
+            },
+          },
+        };
+      }),
+
+    markHydrated: (id) =>
+      set((s) => {
+        const existing = s.sessions[id];
+        if (!existing) return {};
+        if (existing.hydratedAt) return {};
+        return {
+          sessions: {
+            ...s.sessions,
+            [id]: { ...existing, hydratedAt: Date.now() },
+          },
         };
       }),
   },

@@ -272,45 +272,104 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
   };
 
   // ---- loadConversation ----
-  // Switching conversations does NOT abort the previous session's Pi
-  // process — parallel chats are the entire point of the multi-tab
-  // sidebar, and aborting on switch would kill any chat the user
-  // navigated away from. The previous Pi process keeps running in the
-  // pool (capped at MAX_PI_SESSIONS=20) and continues writing to its
-  // own on-disk session log; the user can come back later and reload
-  // from disk to see what was produced while they were away.
+  // Phase 3 — true parallel chats. Switching does NOT abort the previous
+  // session's Pi (each chat owns its own subprocess in the pool, capped
+  // at MAX_PI_SESSIONS=20). Three steps on switch:
   //
-  // Panel-level streaming state IS reset though — the previous session's
-  // streaming text/refs/loading flags belong to the panel, not the Pi
-  // process, and rendering them on a different conversation would show
-  // a misleading "loading…" indicator on a paused chat (the user-
-  // reported "loading thing at the bottom despite the chat being
-  // paused" symptom from 2026-04-25).
+  //   1. Snapshot the local state for the OUTGOING session into the
+  //      chat-store, keyed by piSessionIdRef.current. This captures any
+  //      in-flight tokens / streaming cursor / contentBlocks that the
+  //      user accumulated locally — without this snapshot, the moment
+  //      they switch away their session loses everything that wasn't
+  //      yet on disk.
+  //
+  //   2. Reset the panel's streaming flags so the loading indicator
+  //      doesn't bleed across to the new conversation (the
+  //      "loading…-on-a-paused-chat" symptom Louis hit on 2026-04-25).
+  //
+  //   3. Hydrate from the store if the INCOMING session has live state
+  //      already (because it was viewed earlier this session OR because
+  //      the pi-event router has been accumulating its background
+  //      tokens). Fall back to disk only when the store is cold for
+  //      this id.
   const loadConversation = async (conv: ChatConversation) => {
+    const { useChatStore } = await import("@/lib/stores/chat-store");
+    const store = useChatStore.getState();
+    const outgoingSid = piSessionIdRef.current;
+
+    // (1) Snapshot OUTGOING session.
+    if (outgoingSid && store.sessions[outgoingSid]) {
+      store.actions.setStreaming(outgoingSid, {
+        streamingText: piStreamingTextRef.current,
+        streamingMessageId: piMessageIdRef.current,
+        contentBlocks: [...piContentBlocksRef.current],
+        isStreaming,
+        isLoading,
+      });
+      store.actions.setMessages(outgoingSid, messages as any);
+    }
+
+    // (2) Reset panel flags — these are panel-local, not session-local.
     piStreamingTextRef.current = "";
     piMessageIdRef.current = null;
     piContentBlocksRef.current = [];
     setIsLoading(false);
     setIsStreaming(false);
 
-    // Switch to this conversation's session — each conversation is its own Pi process
+    // Switch to this conversation's session.
     piSessionIdRef.current = conv.id;
 
-    // Load full conversation from file (conv from list may be metadata-only)
-    const { loadConversationFile } = await import("@/lib/chat-storage");
-    const full = await loadConversationFile(conv.id) || conv;
+    // (3) Prefer the store if it already has live state for this id.
+    const existing = store.sessions[conv.id];
+    let messagesForPanel: any[];
+    if (existing?.hydratedAt && existing.messages?.length) {
+      messagesForPanel = existing.messages as any[];
+      // Restore in-flight streaming markers so the panel resumes
+      // exactly where the user left it. The router has been keeping
+      // these up-to-date for any tokens that arrived while the user
+      // was elsewhere.
+      piStreamingTextRef.current = existing.streamingText ?? "";
+      piMessageIdRef.current = existing.streamingMessageId ?? null;
+      piContentBlocksRef.current = (existing.contentBlocks as any[]) ?? [];
+      if (existing.isLoading) setIsLoading(true);
+      if (existing.isStreaming) setIsStreaming(true);
+    } else {
+      // Cold session — load from disk and seed the store.
+      const { loadConversationFile } = await import("@/lib/chat-storage");
+      const full = (await loadConversationFile(conv.id)) || conv;
+      messagesForPanel = full.messages.map((m) => ({
+        id: m.id,
+        role: m.role,
+        content: m.content,
+        timestamp: m.timestamp,
+        ...(m.contentBlocks?.length ? { contentBlocks: m.contentBlocks } : {}),
+        ...((m as any).images?.length
+          ? { images: (m as any).images }
+          : (m as any).image
+            ? { images: [(m as any).image] }
+            : {}),
+        ...((m as any).model ? { model: (m as any).model } : {}),
+        ...((m as any).provider ? { provider: (m as any).provider } : {}),
+      }));
+      // Make sure a record exists, then seed messages and mark hydrated.
+      if (!store.sessions[conv.id]) {
+        store.actions.upsert({
+          id: conv.id,
+          title: full.title || "untitled",
+          preview: "",
+          status: "idle",
+          messageCount: messagesForPanel.length,
+          updatedAt: Date.now(),
+          pinned: full.pinned === true,
+          unread: false,
+        });
+      }
+      store.actions.setMessages(conv.id, messagesForPanel as any);
+      store.actions.markHydrated(conv.id);
+    }
 
-    setMessages(full.messages.map(m => ({
-      id: m.id,
-      role: m.role,
-      content: m.content,
-      timestamp: m.timestamp,
-      ...(m.contentBlocks?.length ? { contentBlocks: m.contentBlocks } : {}),
-      ...((m as any).images?.length ? { images: (m as any).images } : (m as any).image ? { images: [(m as any).image] } : {}),
-      ...((m as any).model ? { model: (m as any).model } : {}),
-      ...((m as any).provider ? { provider: (m as any).provider } : {}),
-    })));
-    setConversationId(full.id);
+    setMessages(messagesForPanel);
+    setConversationId(conv.id);
     setShowHistory(false);
     piSessionSyncedRef.current = false;
 
@@ -324,7 +383,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
           ...freshSettings,
           chatHistory: {
             ...freshSettings.chatHistory,
-            activeConversationId: full.id,
+            activeConversationId: conv.id,
           }
         });
         await store.save();
@@ -415,7 +474,26 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
   // No kill/restart needed — true multi-session means each conversation
   // has its own process that persists across conversation switches.
   const startNewConversation = async () => {
-    // Clear frontend state
+    // Snapshot OUTGOING session into the store so the previous chat's
+    // in-flight state survives the switch to "new chat". Without this,
+    // hitting "+ new chat" in the middle of a stream would silently
+    // discard everything the user couldn't yet see, even though the
+    // Pi process keeps running. Mirrors the snapshot in loadConversation.
+    const { useChatStore } = await import("@/lib/stores/chat-store");
+    const store = useChatStore.getState();
+    const outgoingSid = piSessionIdRef.current;
+    if (outgoingSid && store.sessions[outgoingSid]) {
+      store.actions.setStreaming(outgoingSid, {
+        streamingText: piStreamingTextRef.current,
+        streamingMessageId: piMessageIdRef.current,
+        contentBlocks: [...piContentBlocksRef.current],
+        isStreaming,
+        isLoading,
+      });
+      store.actions.setMessages(outgoingSid, messages as any);
+    }
+
+    // Clear panel state
     piStreamingTextRef.current = "";
     piMessageIdRef.current = null;
     piContentBlocksRef.current = [];
