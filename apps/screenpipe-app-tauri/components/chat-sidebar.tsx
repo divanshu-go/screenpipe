@@ -286,7 +286,7 @@ function ChatRow({
     <button
       onClick={() => onSelect(session.id)}
       className={cn(
-        "group relative flex flex-col items-stretch text-left px-3 py-1.5 mx-1 rounded-md",
+        "group relative flex flex-col items-stretch text-left px-3 py-1 mx-1 rounded-md",
         "transition-colors",
         isCurrent
           ? "bg-muted/70 text-foreground"
@@ -298,7 +298,7 @@ function ChatRow({
       <div className="flex items-center gap-1.5 min-w-0">
         <span
           className={cn(
-            "truncate flex-1 text-sm",
+            "truncate flex-1 text-xs",
             // Email-style: unread rows are bold + foreground; once
             // viewed, fade back to normal weight + muted color. The
             // store atomically clears unread when the user makes the
@@ -354,7 +354,7 @@ function ChatRow({
       {session.preview && (
         <div
           className={cn(
-            "text-[11px] truncate mt-0.5",
+            "text-[10px] truncate mt-0.5",
             isError
               ? "text-red-500/80"
               : isLive
