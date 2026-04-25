@@ -298,19 +298,10 @@ function HomeContent() {
     }
     switch (activeSection) {
       case "home":
-        // Chat lives next to its own sidebar (pinned + recents + live status).
-        // The sidebar is mounted ONLY in the chat view; the existing AppSidebar
-        // on the far left handles app-wide navigation. The pi-event-router
-        // (mounted in the effect below) keeps the sidebar's status dots live
-        // even when the user is on Timeline / Pipes / etc.
-        return (
-          <div className="flex h-full min-w-0">
-            <ChatSidebar />
-            <div className="flex-1 min-w-0">
-              <StandaloneChat className="h-full" />
-            </div>
-          </div>
-        );
+        // Chat is rendered separately below — always-mounted so streaming
+        // and Pi event listeners survive navigation. Returning null here
+        // means the case branch falls through to the always-mounted chat.
+        return null;
       case "timeline":
         return <Timeline embedded />;
       case "memories":
@@ -695,16 +686,47 @@ function HomeContent() {
 
           {/* Content */}
           <div className={cn("flex-1 flex flex-col h-full bg-background min-h-0 relative", isTranslucent ? "rounded-none" : "rounded-tr-lg")}>
-            {isFullHeight ? (
-              <div className="flex-1 min-h-0 overflow-hidden">
-                {renderMainSection()}
-              </div>
-            ) : (
-              <div className="flex-1 overflow-y-auto overflow-x-hidden min-h-0">
-                <div className="p-6 pb-12 max-w-4xl mx-auto">
-                  {renderMainSection()}
+            {/* ALWAYS-MOUNTED chat layer.
+                Hidden via CSS (display:none) when the user is on a non-chat
+                section, so the StandaloneChat component never unmounts. This
+                is what gives us "background streaming" — the chat's own
+                pi_event listener stays subscribed and its in-memory message
+                state survives navigation to Timeline / Pipes / Settings.
+                Without this trick, switching tabs killed any in-flight
+                Pi response and lost the partial token stream.
+                The ChatSidebar (recents + live status) is part of the same
+                layer so it's mounted with the chat. The pi-event-router (see
+                the useEffect above) updates the sidebar dots independently
+                of the chat panel, so background sessions keep pulsing in the
+                sidebar even on non-chat views — though the sidebar itself is
+                only visible when the user navigates back to the chat. */}
+            <div
+              className={cn(
+                "flex-1 min-h-0 overflow-hidden",
+                activeSection !== "home" && "hidden"
+              )}
+            >
+              <div className="flex h-full min-w-0">
+                <ChatSidebar />
+                <div className="flex-1 min-w-0">
+                  <StandaloneChat className="h-full" />
                 </div>
               </div>
+            </div>
+
+            {/* Non-chat sections render on top when active. */}
+            {activeSection !== "home" && (
+              isFullHeight ? (
+                <div className="flex-1 min-h-0 overflow-hidden">
+                  {renderMainSection()}
+                </div>
+              ) : (
+                <div className="flex-1 overflow-y-auto overflow-x-hidden min-h-0">
+                  <div className="p-6 pb-12 max-w-4xl mx-auto">
+                    {renderMainSection()}
+                  </div>
+                </div>
+              )
             )}
 
           </div>
