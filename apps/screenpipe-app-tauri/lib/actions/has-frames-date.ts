@@ -6,23 +6,34 @@ import { isSameDay } from "date-fns";
 import { localFetch } from "@/lib/api";
 
 /**
- * List the local-calendar days that have at least one frame in the DB.
+ * List the local-calendar days that have ANY captured data — screen
+ * frames OR audio chunks. Used by the timeline calendar picker to
+ * disable empty days.
  *
- * Returns a Set of "YYYY-MM-DD" local-day strings. Used by the timeline
- * calendar picker to disable empty days, and by future "skip empty days"
- * logic that wants to know the full set rather than walk one-by-one.
+ * Returns a Set of "YYYY-MM-DD" local-day strings. SQL applies SQLite's
+ * `'localtime'` modifier so days are bucketed in the user's local
+ * timezone — matches what `format(date, "yyyy-MM-dd")` produces in
+ * the UI. Without this, a UTC timestamp just past midnight could land
+ * on the wrong calendar day in the picker.
  *
- * SQL groups by `DATE(timestamp, 'localtime')` so days are returned in
- * the user's local timezone — matches what `format(date, "yyyy-MM-dd")`
- * produces in the UI. Without this conversion a UTC-stored timestamp
- * just past midnight could be reported on the wrong calendar day.
+ * Includes audio_chunks because users with audio-only recording days
+ * (mic on, screen recording paused) would otherwise see those days
+ * greyed out even though the timeline has audio to play.
  */
 export async function listDaysWithFrames(): Promise<Set<string>> {
 	try {
+		// UNION ALL is fine — duplicates collapse via the outer DISTINCT.
+		// Both branches use the timestamp index (frames + audio_transcriptions
+		// both have one), so the query is sub-millisecond on typical DBs.
+		// audio_chunks has no timestamp column itself; the recording time
+		// lives on audio_transcriptions, which is what the timeline UI also
+		// uses to render the audio track.
 		const query = `
-			SELECT DISTINCT DATE(timestamp, 'localtime') AS day
-			FROM frames
-			WHERE timestamp IS NOT NULL
+			SELECT DISTINCT DATE(timestamp, 'localtime') AS day FROM (
+				SELECT timestamp FROM frames WHERE timestamp IS NOT NULL
+				UNION ALL
+				SELECT timestamp FROM audio_transcriptions WHERE timestamp IS NOT NULL
+			)
 			ORDER BY day
 		`;
 		const response = await localFetch("/raw_sql", {
@@ -30,9 +41,15 @@ export async function listDaysWithFrames(): Promise<Set<string>> {
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ query }),
 		});
-		if (!response.ok) return new Set();
+		if (!response.ok) {
+			const text = await response.text().catch(() => "");
+			console.error("listDaysWithFrames HTTP error:", response.status, text);
+			return new Set();
+		}
 		const rows = (await response.json()) as Array<{ day: string }>;
-		return new Set(rows.map((r) => r.day).filter(Boolean));
+		const set = new Set(rows.map((r) => r.day).filter(Boolean));
+		console.log(`[timeline] listDaysWithFrames: ${set.size} days with data`);
+		return set;
 	} catch (e) {
 		console.error("listDaysWithFrames failed:", e);
 		return new Set();
