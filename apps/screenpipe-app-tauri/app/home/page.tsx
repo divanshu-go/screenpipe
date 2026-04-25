@@ -136,6 +136,21 @@ function HomeContent() {
     };
   }, [setActiveSection]);
 
+  // Clear the sidebar's "current" highlight when leaving the chat
+  // view; restore it from panelSessionId when coming back. The chat
+  // panel stays mounted (display:none) and keeps streaming, but
+  // visually the row shouldn't look "selected" while the user is
+  // looking at Pipes/Memories/etc.
+  useEffect(() => {
+    const { actions } = useChatStore.getState();
+    if (activeSection === "home") {
+      const panelId = useChatStore.getState().panelSessionId;
+      if (panelId) actions.setCurrent(panelId);
+    } else {
+      actions.setCurrent(null);
+    }
+  }, [activeSection]);
+
   // Sidebar collapse state (persisted in localStorage)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [teamPromoDismissed, setTeamPromoDismissed] = useState(false);

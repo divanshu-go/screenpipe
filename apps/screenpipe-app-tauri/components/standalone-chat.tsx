@@ -1652,6 +1652,19 @@ export function StandaloneChat({
       const { loadConversationFile } = await import("@/lib/chat-storage");
       const { useChatStore } = await import("@/lib/stores/chat-store");
 
+      // 0) Already on this conversation — skip the snapshot+swap. The
+      //    page-level listener handles navigation back to home; we
+      //    just make sure currentId reflects the panel so the sidebar
+      //    re-highlights the row. Without this short-circuit, clicking
+      //    the already-loaded chat from a non-home section would
+      //    snapshot+reset+rehydrate the same id and briefly blank the
+      //    panel.
+      if (convId === piSessionIdRef.current) {
+        useChatStore.getState().actions.setCurrent(convId);
+        emit("chat-current-session", { id: convId });
+        return;
+      }
+
       // 1) Disk first — saved conversations are the canonical source.
       const conv = await loadConversationFile(convId);
       if (conv) {
@@ -1695,9 +1708,13 @@ export function StandaloneChat({
   // assigns or resumes a session id. Without this the sidebar wouldn't
   // know about session changes initiated inside the chat (in-panel "new",
   // chat-prefill auto-send, history pick from the in-panel history view).
+  // Also mirror to chat-store.panelSessionId so the home page can restore
+  // the sidebar highlight when the user navigates back from a non-chat
+  // section without us emitting an event.
   useEffect(() => {
     if (!conversationId) return;
     emit("chat-current-session", { id: conversationId });
+    useChatStore.getState().actions.setPanelSession(conversationId);
   }, [conversationId]);
 
   // If the Pi pool evicted the session we're currently viewing, swap the

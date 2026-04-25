@@ -109,8 +109,16 @@ export interface SessionRecord {
 interface ChatStoreState {
   /** All known sessions, keyed by id. Includes both alive and on-disk-only. */
   sessions: Record<string, SessionRecord>;
-  /** Currently focused session — the chat panel renders this one. */
+  /** Currently FOCUSED session — i.e. the chat the user is actively
+   *  looking at. Cleared when the user navigates away from the chat
+   *  view (Pipes/Memories/...) so the sidebar row stops being
+   *  highlighted. Distinct from `panelSessionId` which never clears. */
   currentId: string | null;
+  /** The chat the panel is rendering right now, regardless of whether
+   *  the panel is visible. Tracks `piSessionIdRef.current`. The home
+   *  page reads this to restore the sidebar highlight when the user
+   *  navigates back from a non-chat section. */
+  panelSessionId: string | null;
 }
 
 interface ChatStoreActions {
@@ -126,6 +134,10 @@ interface ChatStoreActions {
   /** Mark a session as currently in front. Implicitly clears its unread
    *  flag — viewing the chat counts as reading it. */
   setCurrent: (id: string | null) => void;
+  /** Mirror of the panel's piSessionIdRef.current. Survives section
+   *  switches; used to re-highlight the sidebar row when the user
+   *  navigates back to home. */
+  setPanelSession: (id: string | null) => void;
   /** Toggle the pinned state. */
   togglePinned: (id: string) => void;
   /** Mark a session as having new unseen assistant activity. The router
@@ -206,6 +218,7 @@ export type ChatStore = ChatStoreState & { actions: ChatStoreActions };
 export const useChatStore = create<ChatStore>((set) => ({
   sessions: {},
   currentId: null,
+  panelSessionId: null,
   actions: {
     hydrateFromDisk: (records) =>
       set((s) => {
@@ -280,6 +293,8 @@ export const useChatStore = create<ChatStore>((set) => ({
         }
         return { currentId: id };
       }),
+
+    setPanelSession: (id) => set({ panelSessionId: id }),
 
     togglePinned: (id) =>
       set((s) => {

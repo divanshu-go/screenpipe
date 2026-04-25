@@ -31,8 +31,8 @@
  * a separate "delete forever" action would unlink the file.
  */
 
-import React, { useEffect, useMemo } from "react";
-import { Pin, X, AlertCircle } from "lucide-react";
+import React, { useEffect, useMemo, useState } from "react";
+import { Pin, X, AlertCircle, ChevronDown, ChevronRight } from "lucide-react";
 import { emit, listen } from "@tauri-apps/api/event";
 import { cn } from "@/lib/utils";
 import {
@@ -117,7 +117,14 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
   };
 
   const handleSelect = (id: string) => {
-    if (id === currentId) return; // already on it, no-op
+    // No early return for id === currentId. Two reasons:
+    //   1. The user may be on a non-home section (Pipes/Memories/...);
+    //      currentId is cleared in that case, but even if it weren't,
+    //      we want the click to navigate back to home.
+    //   2. The click is the user's "show me this chat" intent — let
+    //      the page-level chat-load-conversation listener flip the
+    //      view; standalone-chat skips the snapshot+swap when the id
+    //      already matches its piSessionIdRef so there's no flicker.
     actions.setCurrent(id);
     emit("chat-load-conversation", { conversationId: id });
   };
@@ -170,62 +177,122 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
     }
   };
 
+  // Layout contract:
+  //   - Pinned section (header + rows) sits at the top, non-scrolling.
+  //     It's typically a handful of rows so it doesn't need its own
+  //     scroll viewport.
+  //   - Recents section header is FIXED (does not scroll with the
+  //     rows). Clicking it toggles a collapse/expand of the rows.
+  //   - Only the rows under the recents header scroll. With 200 chats
+  //     the header stays glued in place while the user scrubs the
+  //     list — matches every chat client (Claude, Slack, iMessage).
+  // Persist the collapse state in localStorage so it survives reload
+  // and matches the user's expectation of "I closed it, leave it
+  // closed".
   return (
-    // No `h-full`. The wrapper sizes to its CONTENT (sections + rows) but
-    // the inner scroll region caps at `max-h-full` so a 500-row history
-    // doesn't blow past the available sidebar height. Without this, an
-    // earlier `h-full + flex-1` made the scroll viewport always equal to
-    // the parent's flex-1 share — even with 8 rows of content, you could
-    // drag the scrollbar through hundreds of pixels of dead space.
     <div
       className={cn("flex flex-col min-h-0 text-sm", className)}
       data-testid="chat-sidebar"
     >
-      <div
-        className="overflow-y-auto overflow-x-hidden"
-        style={{ maxHeight: "100%" }}
-      >
-        {pinned.length > 0 && (
-          <Section title="pinned">
-            {pinned.map((s) => (
-              <ChatRow
-                key={s.id}
-                session={s}
-                isCurrent={s.id === currentId}
-                onSelect={handleSelect}
-                onClose={handleClose}
-                onTogglePin={handleTogglePin}
-              />
-            ))}
-          </Section>
-        )}
+      {pinned.length > 0 && (
+        <Section title="pinned">
+          {pinned.map((s) => (
+            <ChatRow
+              key={s.id}
+              session={s}
+              isCurrent={s.id === currentId}
+              onSelect={handleSelect}
+              onClose={handleClose}
+              onTogglePin={handleTogglePin}
+            />
+          ))}
+        </Section>
+      )}
 
-        {/* No "+" action here — the "New chat" item in the main nav
-            (top of the sidebar) is the single new-conversation entry
-            point. Two affordances for the same thing was confusing. */}
-        <Section title="recents">
-          {recents.length === 0 && pinned.length === 0 ? (
+      {/* Recents — fixed header + collapsible scrollable body. The
+          flex-1 + min-h-0 pair is what makes the inner overflow-y-auto
+          actually work without leaking past the sidebar bottom. */}
+      <CollapsibleRecents
+        empty={recents.length === 0}
+        emptyText={
+          pinned.length === 0
+            ? "no chats yet — click + to start"
+            : "no recent chats"
+        }
+      >
+        {recents.map((s) => (
+          <ChatRow
+            key={s.id}
+            session={s}
+            isCurrent={s.id === currentId}
+            onSelect={handleSelect}
+            onClose={handleClose}
+            onTogglePin={handleTogglePin}
+          />
+        ))}
+      </CollapsibleRecents>
+    </div>
+  );
+}
+
+/** Recents container with a fixed (non-scrolling) header and a
+ *  scrollable body underneath. Click the header to collapse. */
+function CollapsibleRecents({
+  empty,
+  emptyText,
+  children,
+}: {
+  empty: boolean;
+  emptyText: string;
+  children: React.ReactNode;
+}) {
+  const [collapsed, setCollapsedRaw] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("screenpipe:recents-collapsed") === "true";
+    } catch {
+      return false;
+    }
+  });
+  const setCollapsed = (v: boolean) => {
+    setCollapsedRaw(v);
+    try {
+      localStorage.setItem("screenpipe:recents-collapsed", String(v));
+    } catch {
+      // ignore — collapse state is best-effort
+    }
+  };
+  return (
+    <div className="flex flex-col flex-1 min-h-0 mb-2">
+      <button
+        type="button"
+        onClick={() => setCollapsed(!collapsed)}
+        className="shrink-0 px-3 py-1.5 flex items-center gap-1 hover:bg-muted/30 rounded-md mx-1 text-left"
+        aria-expanded={!collapsed}
+        aria-controls="chat-sidebar-recents"
+      >
+        {collapsed ? (
+          <ChevronRight className="h-3 w-3 text-muted-foreground/60 shrink-0" />
+        ) : (
+          <ChevronDown className="h-3 w-3 text-muted-foreground/60 shrink-0" />
+        )}
+        <span className="text-[10px] uppercase tracking-wider text-muted-foreground/60">
+          recents
+        </span>
+      </button>
+      {!collapsed && (
+        <div
+          id="chat-sidebar-recents"
+          className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden"
+        >
+          {empty ? (
             <div className="px-3 py-2 text-xs text-muted-foreground/70 italic">
-              no chats yet — click + to start
-            </div>
-          ) : recents.length === 0 ? (
-            <div className="px-3 py-2 text-xs text-muted-foreground/70 italic">
-              no recent chats
+              {emptyText}
             </div>
           ) : (
-            recents.map((s) => (
-              <ChatRow
-                key={s.id}
-                session={s}
-                isCurrent={s.id === currentId}
-                onSelect={handleSelect}
-                onClose={handleClose}
-                onTogglePin={handleTogglePin}
-              />
-            ))
+            <div className="flex flex-col">{children}</div>
           )}
-        </Section>
-      </div>
+        </div>
+      )}
     </div>
   );
 }
