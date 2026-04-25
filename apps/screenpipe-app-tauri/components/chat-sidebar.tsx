@@ -32,7 +32,8 @@
  */
 
 import React, { useEffect, useMemo, useState } from "react";
-import { Pin, X, AlertCircle, ChevronDown, ChevronRight } from "lucide-react";
+import { Pin, X, AlertCircle, ChevronDown, ChevronRight, Activity } from "lucide-react";
+import { useRunningPipes } from "@/lib/hooks/use-running-pipes";
 import { emit, listen } from "@tauri-apps/api/event";
 import { cn } from "@/lib/utils";
 import {
@@ -178,23 +179,27 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
     }
   };
 
+  const runningPipes = useRunningPipes();
+
   // Layout contract:
-  //   - Pinned section (header + rows) sits at the top, non-scrolling.
-  //     It's typically a handful of rows so it doesn't need its own
-  //     scroll viewport.
-  //   - Recents section header is FIXED (does not scroll with the
-  //     rows). Clicking it toggles a collapse/expand of the rows.
-  //   - Only the rows under the recents header scroll. With 200 chats
-  //     the header stays glued in place while the user scrubs the
-  //     list — matches every chat client (Claude, Slack, iMessage).
-  // Persist the collapse state in localStorage so it survives reload
-  // and matches the user's expectation of "I closed it, leave it
-  // closed".
+  //   - Scheduled (pipe runs): only renders when something's running;
+  //     own collapsible scroll viewport capped at ~25% so it never
+  //     squeezes recents off-screen.
+  //   - Pinned (chats): non-scrolling. Few rows in practice.
+  //   - Recents: fixed collapsible header; rows fill the rest and
+  //     scroll. flex-1 + min-h-0 is what makes the inner overflow-y-auto
+  //     actually work without leaking past the sidebar bottom.
+  // Collapse state for both Scheduled and Recents persists in
+  // localStorage — "I closed it, leave it closed" across reloads.
   return (
     <div
       className={cn("flex flex-col min-h-0 text-sm", className)}
       data-testid="chat-sidebar"
     >
+      {runningPipes.length > 0 && (
+        <CollapsibleScheduled pipes={runningPipes} />
+      )}
+
       {pinned.length > 0 && (
         <Section title="pinned">
           {pinned.map((s) => (
@@ -210,9 +215,6 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
         </Section>
       )}
 
-      {/* Recents — fixed header + collapsible scrollable body. The
-          flex-1 + min-h-0 pair is what makes the inner overflow-y-auto
-          actually work without leaking past the sidebar bottom. */}
       <CollapsibleRecents
         empty={recents.length === 0}
         emptyText={
@@ -293,6 +295,124 @@ function CollapsibleRecents({
             <div className="flex flex-col">{children}</div>
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+/** Scheduled (live pipe runs) container — own collapsible scroll
+ *  viewport capped at ~25% of available height so even with many
+ *  pipes running it never squeezes recents off the screen. Header
+ *  shows the count + a tiny live dot so it's obvious at a glance
+ *  that something is running in the background. */
+function CollapsibleScheduled({
+  pipes,
+}: {
+  pipes: Array<{
+    pipeName: string;
+    title?: string;
+    executionId?: number;
+    startedAt?: string;
+  }>;
+}) {
+  const [collapsed, setCollapsedRaw] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("screenpipe:scheduled-collapsed") === "true";
+    } catch {
+      return false;
+    }
+  });
+  const setCollapsed = (v: boolean) => {
+    setCollapsedRaw(v);
+    try {
+      localStorage.setItem("screenpipe:scheduled-collapsed", String(v));
+    } catch {
+      // ignore — collapse state is best-effort
+    }
+  };
+  return (
+    <div className="flex flex-col mb-2 shrink-0">
+      <button
+        type="button"
+        onClick={() => setCollapsed(!collapsed)}
+        className="shrink-0 px-3 py-1.5 flex items-center gap-1 hover:bg-muted/30 rounded-md mx-1 text-left"
+        aria-expanded={!collapsed}
+        aria-controls="chat-sidebar-scheduled"
+      >
+        {collapsed ? (
+          <ChevronRight className="h-3 w-3 text-muted-foreground/60 shrink-0" />
+        ) : (
+          <ChevronDown className="h-3 w-3 text-muted-foreground/60 shrink-0" />
+        )}
+        <span className="text-[10px] uppercase tracking-wider text-muted-foreground/60 flex-1">
+          scheduled
+        </span>
+        {/* Live dot + count — subtle "this section is alive". */}
+        <span
+          className="relative h-2 w-2 shrink-0 flex items-center justify-center"
+          aria-hidden
+        >
+          <span className="absolute inset-0 rounded-full bg-foreground/30 animate-[sp-pulse_1.6s_ease-in-out_infinite]" />
+          <span className="relative h-1.5 w-1.5 rounded-full bg-foreground" />
+        </span>
+        <span className="text-[10px] text-muted-foreground/60 tabular-nums">
+          {pipes.length}
+        </span>
+      </button>
+      {!collapsed && (
+        <div
+          id="chat-sidebar-scheduled"
+          // Cap the scheduled scroll so a long list doesn't take the
+          // whole sidebar. ~max-h-40 ≈ 6 rows; users can scroll within
+          // it. Recents below still gets the rest of the column via
+          // its own flex-1 + min-h-0.
+          className="max-h-40 overflow-y-auto overflow-x-hidden"
+        >
+          <div className="flex flex-col">
+            {pipes.map((p) => (
+              <ScheduledRow key={p.pipeName} pipe={p} />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ScheduledRow({
+  pipe,
+}: {
+  pipe: { pipeName: string; title?: string; startedAt?: string };
+}) {
+  const elapsed = useMemo(() => {
+    if (!pipe.startedAt) return null;
+    const ms = Date.now() - Date.parse(pipe.startedAt);
+    if (Number.isNaN(ms) || ms < 0) return null;
+    if (ms < 60_000) return `${Math.floor(ms / 1000)}s`;
+    if (ms < 3600_000) return `${Math.floor(ms / 60_000)}m`;
+    return `${Math.floor(ms / 3600_000)}h`;
+  }, [pipe.startedAt]);
+  return (
+    <div
+      className="flex items-center gap-2 px-2 py-1 mx-1 rounded-md text-foreground/80 select-none"
+      title={`pipe: ${pipe.pipeName}`}
+      data-testid={`scheduled-row-${pipe.pipeName}`}
+    >
+      {/* Steady live dot — same visual language as chat rows */}
+      <span
+        className="relative h-2 w-2 shrink-0 flex items-center justify-center"
+        aria-label="running"
+      >
+        <span className="absolute inset-0 rounded-full bg-foreground/30 animate-[sp-pulse_1.6s_ease-in-out_infinite]" />
+        <span className="relative h-1.5 w-1.5 rounded-full bg-foreground" />
+      </span>
+      <span className="truncate flex-1 text-xs">
+        {pipe.title || pipe.pipeName}
+      </span>
+      {elapsed && (
+        <span className="text-[10px] text-muted-foreground/60 tabular-nums shrink-0">
+          {elapsed}
+        </span>
       )}
     </div>
   );
