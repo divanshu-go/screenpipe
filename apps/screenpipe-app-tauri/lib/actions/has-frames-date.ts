@@ -5,6 +5,40 @@
 import { isSameDay } from "date-fns";
 import { localFetch } from "@/lib/api";
 
+/**
+ * List the local-calendar days that have at least one frame in the DB.
+ *
+ * Returns a Set of "YYYY-MM-DD" local-day strings. Used by the timeline
+ * calendar picker to disable empty days, and by future "skip empty days"
+ * logic that wants to know the full set rather than walk one-by-one.
+ *
+ * SQL groups by `DATE(timestamp, 'localtime')` so days are returned in
+ * the user's local timezone — matches what `format(date, "yyyy-MM-dd")`
+ * produces in the UI. Without this conversion a UTC-stored timestamp
+ * just past midnight could be reported on the wrong calendar day.
+ */
+export async function listDaysWithFrames(): Promise<Set<string>> {
+	try {
+		const query = `
+			SELECT DISTINCT DATE(timestamp, 'localtime') AS day
+			FROM frames
+			WHERE timestamp IS NOT NULL
+			ORDER BY day
+		`;
+		const response = await localFetch("/raw_sql", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ query }),
+		});
+		if (!response.ok) return new Set();
+		const rows = (await response.json()) as Array<{ day: string }>;
+		return new Set(rows.map((r) => r.day).filter(Boolean));
+	} catch (e) {
+		console.error("listDaysWithFrames failed:", e);
+		return new Set();
+	}
+}
+
 export async function hasFramesForDate(date: Date): Promise<boolean> {
 	try {
 		// Set up start and end of the day
