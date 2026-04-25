@@ -44,12 +44,26 @@ let mountPromise: Promise<UnlistenFn> | null = null;
 let unlisteners: UnlistenFn[] = [];
 
 /**
- * Pi RPC events delivered on the `pi_event` topic. The shape is whatever
- * the Pi agent writes to stdout, augmented by `pi.rs` with a `session`
- * field identifying which Pi process produced it.
+ * Wire shape on the `pi_event` topic. Rust emits
+ *   `{ sessionId: "<uuid>", event: { type, delta, ... } }`
+ * with the inner `event` being whatever the Pi agent wrote to stdout.
+ * Earlier versions of this router treated `event.payload` AS the inner
+ * event (reading `.session` / `.type` directly off the wrapper) which
+ * was always undefined — every callback short-circuited at the
+ * `if (!sid) return;` guard and the router silently did nothing. That
+ * was the root cause of "parallel chat doesn't work": no router writes
+ * = no background-session content accumulation, no background disk
+ * persistence, no live sidebar status for backgrounded chats. The
+ * standalone-chat handler reads the same wrapper but always destructured
+ * `sessionId` / `event` correctly, which is why foreground chat seemed
+ * fine in isolation.
  */
-interface PiEventPayload {
-  session?: string;
+interface PiEventEnvelope {
+  sessionId?: string;
+  event?: PiInnerEvent;
+}
+
+interface PiInnerEvent {
   type?: string;
   delta?: string;
   // message_update is the 0.70+ event shape (text_delta lives inside)
@@ -65,10 +79,17 @@ interface PiEventPayload {
     errorMessage?: string;
     error?: string;
   };
+  // tool execution payloads (used by applyEventToSessionContent)
+  toolCallId?: string;
+  toolName?: string;
+  args?: Record<string, unknown>;
+  result?: { content?: Array<{ text?: string }> };
+  isError?: boolean;
 }
 
 interface PiTerminatedPayload {
-  session: string;
+  sessionId: string;
+  pid?: number | null;
   exitCode?: number | null;
   reason?: string;
 }
@@ -82,7 +103,7 @@ interface PiSessionEvictedPayload {
  *  doesn't carry a status signal (e.g. `tool_execution_end` is ambiguous —
  *  could go back to streaming or end the turn entirely; we wait for the
  *  next definitive event). */
-function statusForEvent(evt: PiEventPayload): SessionStatus | null {
+function statusForEvent(evt: PiInnerEvent): SessionStatus | null {
   switch (evt.type) {
     case "agent_start":
     case "turn_start":
@@ -125,7 +146,7 @@ function statusForEvent(evt: PiEventPayload): SessionStatus | null {
 }
 
 /** Pull a tiny user-facing preview snippet out of a streaming event. */
-function previewSnippet(evt: PiEventPayload): string | null {
+function previewSnippet(evt: PiInnerEvent): string | null {
   const delta = evt.delta ?? evt.assistantMessageEvent?.delta;
   if (typeof delta === "string" && delta.trim()) {
     // Truncate and normalize whitespace for the sidebar row.
@@ -136,7 +157,7 @@ function previewSnippet(evt: PiEventPayload): string | null {
 }
 
 /** Pull a human-readable error message out of an error-shaped event. */
-function errorMessage(evt: PiEventPayload): string | null {
+function errorMessage(evt: PiInnerEvent): string | null {
   const m = evt.message;
   if (m?.stopReason === "error") {
     return m.errorMessage || m.error || "unknown error";
@@ -151,16 +172,17 @@ function errorMessage(evt: PiEventPayload): string | null {
 const PREVIEW_THROTTLE_MS = 250;
 const previewLastEmittedAt = new Map<string, number>();
 
-async function handlePiEvent(payload: PiEventPayload) {
-  const sid = payload.session;
-  if (!sid) return; // events without a session id can't be routed
+async function handlePiEvent(envelope: PiEventEnvelope) {
+  const sid = envelope.sessionId;
+  const inner = envelope.event;
+  if (!sid || !inner) return; // events without a session id or body can't be routed
 
   const store = useChatStore.getState();
   const existing = store.sessions[sid];
 
-  const nextStatus = statusForEvent(payload);
-  const snippet = previewSnippet(payload);
-  const err = errorMessage(payload);
+  const nextStatus = statusForEvent(inner);
+  const snippet = previewSnippet(inner);
+  const err = errorMessage(inner);
 
   // Phase 3: accumulate full message-content state in the store for
   // EVERY session (current + background). This is what makes it possible
@@ -169,7 +191,7 @@ async function handlePiEvent(payload: PiEventPayload) {
   // router has been writing them to the store the whole time. The chat
   // panel either reads the store directly or syncs its local state from
   // the store on session switch.
-  applyEventToSessionContent(sid, payload);
+  applyEventToSessionContent(sid, inner);
 
   // Lazy-create on first event from a previously-unknown session id.
   // Handles the case where Pi was started outside the chat-storage flow
@@ -252,25 +274,27 @@ function handleTerminated(payload: PiTerminatedPayload) {
   // Clean exits (exitCode 0) are silent; non-zero gets surfaced as an
   // error so users can see "something happened" instead of a frozen
   // streaming dot.
+  const sid = payload.sessionId;
+  if (!sid) return;
   const store = useChatStore.getState();
-  if (!store.sessions[payload.session]) return;
+  if (!store.sessions[sid]) return;
   const isCleanExit = payload.exitCode === 0 || payload.exitCode == null;
-  store.actions.patch(payload.session, {
+  store.actions.patch(sid, {
     status: isCleanExit ? "idle" : "error",
     lastError: isCleanExit
       ? undefined
       : `pi process exited (code ${payload.exitCode}${payload.reason ? `: ${payload.reason}` : ""})`,
     updatedAt: Date.now(),
   });
-  store.actions.endTurn(payload.session);
-  previewLastEmittedAt.delete(payload.session);
+  store.actions.endTurn(sid);
+  previewLastEmittedAt.delete(sid);
 
   // Persist the partial transcript for backgrounded sessions whose Pi
   // crashed mid-stream — without this the user loses everything that
   // was generated after the moment they navigated away. Foreground
   // session has its own pi_terminated handler in standalone-chat.
-  if (store.currentId !== payload.session) {
-    void persistBackgroundSession(payload.session);
+  if (store.currentId !== sid) {
+    void persistBackgroundSession(sid);
   }
 }
 
@@ -316,7 +340,7 @@ export async function mountPiEventRouter(): Promise<UnlistenFn> {
   mountPromise = (async () => {
     await hydrate();
 
-    const piEventUnlisten = await listen<PiEventPayload>(
+    const piEventUnlisten = await listen<PiEventEnvelope>(
       "pi_event",
       (event) => handlePiEvent(event.payload)
     );
@@ -378,7 +402,7 @@ interface MutableMessage {
   [k: string]: unknown;
 }
 
-function applyEventToSessionContent(sid: string, payload: PiEventPayload) {
+function applyEventToSessionContent(sid: string, payload: PiInnerEvent) {
   const store = useChatStore.getState();
   const existing = store.sessions[sid];
   if (!existing) return; // upsert will fire on the next call
