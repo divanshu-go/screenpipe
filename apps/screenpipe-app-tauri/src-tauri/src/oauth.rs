@@ -39,7 +39,7 @@ async fn open_secret_store() -> Option<screenpipe_secrets::SecretStore> {
     let db_path = data_dir.join("db.sqlite");
     let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
     let pool = sqlx::SqlitePool::connect(&db_url).await.ok()?;
-    let secret_key = match crate::secrets::get_key() {
+    let secret_key = match crate::secrets::get_key_if_encryption_enabled() {
         crate::secrets::KeyResult::Found(k) => Some(k),
         _ => None,
     };

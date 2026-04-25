@@ -333,7 +333,7 @@ impl ServerCore {
         // Never create a key automatically (that triggers a macOS modal).
         // Users opt in via onboarding or Settings > Privacy.
         {
-            let secret_key = match crate::secrets::get_key() {
+            let secret_key = match crate::secrets::get_key_if_encryption_enabled() {
                 crate::secrets::KeyResult::Found(k) => Some(k),
                 _ => {
                     info!("keychain: no encryption key found — secrets stored unencrypted until user opts in");

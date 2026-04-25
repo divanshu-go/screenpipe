@@ -381,7 +381,8 @@ async fn main() {
     let store_json = std::fs::read(&store_path).ok().and_then(|data| {
         if data.len() >= 8 && &data[..8] == b"SPSTORE1" {
             // Encrypted store — try to decrypt with keychain key
-            let key = match secrets::get_key() {
+            // Only attempt if encryption is enabled (file being encrypted is the signal)
+            let key = match secrets::get_key_if_encryption_enabled() {
                 secrets::KeyResult::Found(k) => k,
                 _ => return None,
             };
