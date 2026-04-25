@@ -185,6 +185,17 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       }),
       createdAt: existing?.createdAt ?? Date.now(),
       updatedAt: Date.now(),
+      // Preserve sort key across reloads. Source of truth: the in-memory
+      // chat-store, which is bumped exactly once per user-send.
+      ...(await (async () => {
+        const { useChatStore } = await import("@/lib/stores/chat-store");
+        const sid = piSessionIdRef.current;
+        const fromStore = sid
+          ? useChatStore.getState().sessions[sid]?.lastUserMessageAt
+          : undefined;
+        const lastUserMessageAt = fromStore ?? existing?.lastUserMessageAt;
+        return lastUserMessageAt ? { lastUserMessageAt } : {};
+      })()),
     };
 
     await saveConversationFile(conversation);

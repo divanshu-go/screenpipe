@@ -80,6 +80,10 @@ export interface ConversationMeta {
    *  Conversation file is still on disk; only an explicit delete action removes
    *  it. The sidebar filters these out by default. */
   hidden: boolean;
+  /** ms since epoch of the most recent user-sent message. Drives the
+   *  sidebar sort order. Falls back to derive-from-messages on legacy
+   *  files that pre-date the field. */
+  lastUserMessageAt?: number;
 }
 
 export async function listConversations(): Promise<ConversationMeta[]> {
@@ -94,6 +98,18 @@ export async function listConversations(): Promise<ConversationMeta[]> {
     try {
       const text = await readTextFile(`${dir}/${entry.name}`);
       const conv = JSON.parse(text) as ChatConversation;
+      // Derive lastUserMessageAt from messages for files that pre-date
+      // the field on disk. Picks the latest user-role message timestamp.
+      let lastUserMessageAt = conv.lastUserMessageAt;
+      if (lastUserMessageAt == null) {
+        for (const m of conv.messages) {
+          if (m.role === "user" && typeof m.timestamp === "number") {
+            if (lastUserMessageAt == null || m.timestamp > lastUserMessageAt) {
+              lastUserMessageAt = m.timestamp;
+            }
+          }
+        }
+      }
       metas.push({
         id: conv.id,
         title: conv.title,
@@ -102,6 +118,7 @@ export async function listConversations(): Promise<ConversationMeta[]> {
         messageCount: conv.messages.length,
         pinned: conv.pinned === true,
         hidden: conv.hidden === true,
+        lastUserMessageAt,
       });
     } catch {
       // skip corrupt files

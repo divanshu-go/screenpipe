@@ -53,15 +53,20 @@ export interface SessionRecord {
   lastError?: string;
   /** Number of messages persisted to disk for this session. */
   messageCount: number;
-  /** ms since epoch when the row first appeared in the sidebar. Drives
-   *  the sort order — newer rows show at the top of "recents" and stay
-   *  put. Set once on creation; never bumped by subsequent activity.
-   *  (We tried sorting by updatedAt — every keystroke / pi_event would
-   *  reshuffle the list under the user's cursor, which felt broken.) */
+  /** ms since epoch when the row first appeared in the sidebar. Used
+   *  as the sort fallback for chats that haven't received a user
+   *  message yet. */
   createdAt: number;
   /** ms since epoch of the most recent activity. Tracked for telemetry
    *  / "last activity" UI only — DOES NOT affect sort order. */
   updatedAt: number;
+  /** ms since epoch of the most recent USER-SENT message. Drives the
+   *  sort order along with createdAt: rows with a user message bubble
+   *  to the top when the user sends, but incoming router activity
+   *  (pi_event deltas) and switching chats do NOT reshuffle the list.
+   *  This matches how email clients show inboxes — bumped on action,
+   *  stable while you're reading. */
+  lastUserMessageAt?: number;
   /** User pinned this conversation to the top of the sidebar. */
   pinned: boolean;
   /** True when there's new assistant activity (delta or completion) that
@@ -496,14 +501,21 @@ export const useChatActions = () => useChatStore((s) => s.actions);
  *     [sessionsMap]
  *   );
  */
+/** Sort key: most-recent user-send wins, with createdAt as the
+ *  fallback for chats that haven't been sent in yet. Stable under
+ *  incoming router activity (no text_delta-driven reshuffle). */
+function sortKey(s: SessionRecord): number {
+  return s.lastUserMessageAt ?? s.createdAt;
+}
+
 export function selectOrderedSessions(state: ChatStore): SessionRecord[] {
   const all = Object.values(state.sessions);
   const pinned = all
     .filter((s) => s.pinned)
-    .sort((a, b) => b.createdAt - a.createdAt);
+    .sort((a, b) => sortKey(b) - sortKey(a));
   const recents = all
     .filter((s) => !s.pinned)
-    .sort((a, b) => b.createdAt - a.createdAt);
+    .sort((a, b) => sortKey(b) - sortKey(a));
   return [...pinned, ...recents];
 }
 
@@ -520,10 +532,10 @@ export function useOrderedSessions(): SessionRecord[] {
     const all = Object.values(sessionsMap);
     const pinned = all
       .filter((s) => s.pinned)
-      .sort((a, b) => b.createdAt - a.createdAt);
+      .sort((a, b) => sortKey(b) - sortKey(a));
     const recents = all
       .filter((s) => !s.pinned)
-      .sort((a, b) => b.createdAt - a.createdAt);
+      .sort((a, b) => sortKey(b) - sortKey(a));
     return [...pinned, ...recents];
   }, [sessionsMap]);
 }

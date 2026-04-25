@@ -320,6 +320,7 @@ async function hydrate() {
         pinned: m.pinned,
         // History reload doesn't count as new activity — start clean.
         unread: false,
+        lastUserMessageAt: m.lastUserMessageAt,
       }));
     useChatStore.getState().actions.hydrateFromDisk(records);
   } catch {
@@ -600,9 +601,14 @@ async function persistBackgroundSession(sid: string): Promise<void> {
       // but only if that title isn't itself a stale derivation.
       const title = existing?.title || derivedTitle;
 
+      const lastUserMessageAt =
+        useChatStore.getState().sessions[sid]?.lastUserMessageAt ??
+        existing?.lastUserMessageAt;
+
       const conv: ChatConversation = {
         id: sid,
         title,
+        ...(lastUserMessageAt ? { lastUserMessageAt } : {}),
         messages: messages.slice(-100).map((m: any) => {
           let content: string = m.content || "";
           if (!content && m.contentBlocks?.length) {

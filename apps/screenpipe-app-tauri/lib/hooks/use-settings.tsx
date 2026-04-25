@@ -98,6 +98,10 @@ export interface ChatConversation {
 	 *  sidebar listing. Re-surface via a future "show hidden" UI; meanwhile a
 	 *  dedicated delete-forever action is the only way to actually remove. */
 	hidden?: boolean;
+	/** ms since epoch of the most recent USER-SENT message. Drives the
+	 *  sidebar sort order. Persisted so that order survives app restart;
+	 *  derived from messages on first hydration if not set on disk yet. */
+	lastUserMessageAt?: number;
 }
 
 export interface ChatHistoryStore {

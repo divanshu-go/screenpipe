@@ -145,6 +145,18 @@ describe("chat-store: stable sort by createdAt", () => {
     expect(ordered.map((s) => s.id)).toEqual(["B", "A"]);
   });
 
+  it("user-send bumps a chat to the top via lastUserMessageAt", () => {
+    // The opposite of the "stop reshuffling" rule: explicit user
+    // action SHOULD reorder. createdAt makes "older" be at the
+    // bottom; setting lastUserMessageAt > both createdAts pulls it up.
+    useChatStore.getState().actions.upsert(baseRecord({ id: "older", createdAt: 100 }));
+    useChatStore.getState().actions.upsert(baseRecord({ id: "newer", createdAt: 200 }));
+    // User sends in the older chat — should leapfrog "newer".
+    useChatStore.getState().actions.patch("older", { lastUserMessageAt: 9_000 });
+    const ordered = selectOrderedSessions(useChatStore.getState());
+    expect(ordered.map((s) => s.id)).toEqual(["older", "newer"]);
+  });
+
   it("pinned rows float above unpinned, both sorted by createdAt within group", () => {
     useChatStore.getState().actions.upsert(baseRecord({ id: "p1", createdAt: 100, pinned: true }));
     useChatStore.getState().actions.upsert(baseRecord({ id: "r1", createdAt: 200 }));

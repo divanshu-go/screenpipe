@@ -3192,6 +3192,11 @@ export function StandaloneChat({
         isStreaming: true,
         isLoading: true,
       });
+      // Bump the sort key — sending a message is the one user action
+      // that should pull a chat to the top of the sidebar. Pi-driven
+      // activity (text_delta, agent_end) does NOT bump this; the
+      // sidebar order is otherwise stable.
+      storeState.actions.patch(sidNow, { lastUserMessageAt: Date.now() });
     }
 
     posthog.capture("chat_message_sent", {
