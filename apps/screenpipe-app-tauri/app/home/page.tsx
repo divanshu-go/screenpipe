@@ -697,7 +697,7 @@ function HomeContent() {
                 activeSection !== "home" && "hidden"
               )}
             >
-              <StandaloneChat className="h-full" />
+              <StandaloneChat className="h-full" hideInlineHistory />
             </div>
 
             {/* Non-chat sections render on top when active. */}

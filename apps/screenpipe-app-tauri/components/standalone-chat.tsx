@@ -1052,7 +1052,18 @@ function CollapsibleUserMessage({ label, fullContent }: { label: string; fullCon
   );
 }
 
-export function StandaloneChat({ className }: { className?: string } = {}) {
+export function StandaloneChat({
+  className,
+  hideInlineHistory,
+}: {
+  className?: string;
+  /** When true, the in-panel History button + slide-in panel are hidden.
+   *  Set this from the home page where the chat list lives in the main
+   *  app sidebar (avoids two history UIs side-by-side). The overlay
+   *  chat at `/chat` leaves it false so users still have a history
+   *  affordance in the floating window — that window has no AppSidebar. */
+  hideInlineHistory?: boolean;
+} = {}) {
   const { settings, updateSettings, isSettingsLoaded, reloadStore } = useSettings();
   const { isMac } = usePlatform();
   const { items: appItems } = useSqlAutocomplete("app");
@@ -3474,10 +3485,27 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
         {!isMac && !className && (
           <div className="absolute top-0 left-0 w-8 h-8 border-l-2 border-t-2 border-foreground/10 rounded-tl-lg" />
         )}
-        {/* Chat history is now rendered inside the main app sidebar
-            (see ChatSidebar embedded in app-sidebar). The inline history
-            toggle here is removed to avoid duplicating the same list in
-            two places. */}
+        {/* Inline history toggle. Shown in the floating overlay chat
+            (`/chat`) where there's no app sidebar. Hidden on the home
+            page where the same list is rendered in the AppSidebar. */}
+        {!hideInlineHistory && (
+          <Button
+            variant={showHistory ? "secondary" : "ghost"}
+            size="icon"
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={async (e) => {
+              e.stopPropagation();
+              if (!showHistory) {
+                await reloadStore();
+              }
+              setShowHistory(!showHistory);
+            }}
+            className="relative z-10 h-7 w-7"
+            title="Chat history"
+          >
+            <History size={14} />
+          </Button>
+        )}
         <div className="flex-1" />
         <Button
           variant="default"
@@ -3500,16 +3528,13 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
         </kbd>
       </div>
 
-      {/* Main content area. The history sidebar previously rendered here
-          has been removed in favor of the embedded ChatSidebar in the
-          main app sidebar — single source of truth for the chat list. */}
+      {/* Main content area with optional history sidebar — only used in
+          the floating overlay window. Home page hides this entirely
+          (`hideInlineHistory`) and the same list is rendered in the
+          main AppSidebar instead. */}
       <div className="flex-1 flex overflow-hidden">
-        {/* History Sidebar — DELETED. Kept conditional below as `false`
-            so the JSX block is dead but still parses; will be removed in
-            a follow-up cleanup once we're sure nothing else references
-            showHistory state. */}
         <AnimatePresence>
-          {false && showHistory && (
+          {!hideInlineHistory && showHistory && (
             <motion.div
               initial={{ width: 0, opacity: 0 }}
               animate={{ width: 280, opacity: 1 }}
