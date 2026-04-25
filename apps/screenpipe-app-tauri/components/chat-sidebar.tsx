@@ -267,15 +267,18 @@ interface ChatRowProps {
  * (That's why "delete chat doesn't work" — the X click was eaten by the
  * outer button.)
  *
- * Left-side status indicator follows Claude's pattern but uses screenpipe
- * brand:
- *   ●  small filled dot, current/orange + slow pulse  → streaming/thinking/tool
- *   ●  small filled dot, foreground (no pulse)        → unread (new content)
- *   ⚠  alert icon, red                                → error
- *   ○  hollow ring, muted                             → idle (default)
+ * Left-side status indicator — minimalist, monochrome (no brand colors;
+ * screenpipe is black/white):
+ *   ●  filled foreground dot + slow pulse  → streaming/thinking/tool
+ *   ●  filled foreground dot               → unread (new content)
+ *   ⚠  alert icon, red (single exception)  → error
+ *   ○  hollow ring                         → idle (default)
  *
- * Animation is a custom ~1.4s ping that's slower + subtler than Tailwind's
- * default — minimal, not a distraction in your peripheral vision.
+ * Animation is a custom ~1.6s pulse — slow + soft so it sits in the
+ * peripheral vision without pulling focus.
+ *
+ * No preview line below the title. The title alone is what the user
+ * picks chats by; partial Pi tokens leaking into the row read as noise.
  */
 function ChatRow({
   session,
@@ -369,20 +372,6 @@ function ChatRow({
           </button>
         </span>
       </div>
-      {session.preview && (
-        <div
-          className={cn(
-            "text-[10px] truncate mt-0.5 ml-4",
-            isError
-              ? "text-red-500/80"
-              : isLive
-                ? "text-orange-600/80 italic"
-                : "text-muted-foreground/70"
-          )}
-        >
-          {session.preview}
-        </div>
-      )}
     </div>
   );
 }
@@ -414,10 +403,10 @@ function StatusDot({
         className="relative h-2 w-2 shrink-0 flex items-center justify-center"
         aria-label={status}
       >
-        {/* outer halo — slow gentle pulse */}
-        <span className="absolute inset-0 rounded-full bg-orange-500/40 animate-[sp-pulse_1.6s_ease-in-out_infinite]" />
-        {/* inner dot — solid */}
-        <span className="relative h-1.5 w-1.5 rounded-full bg-orange-500" />
+        {/* outer halo — slow gentle pulse, monochrome */}
+        <span className="absolute inset-0 rounded-full bg-foreground/30 animate-[sp-pulse_1.6s_ease-in-out_infinite]" />
+        {/* inner dot — solid foreground */}
+        <span className="relative h-1.5 w-1.5 rounded-full bg-foreground" />
       </span>
     );
   }

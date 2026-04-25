@@ -1635,22 +1635,45 @@ export function StandaloneChat({
     const unlisten = listen<{ conversationId: string }>("chat-load-conversation", async (event) => {
       const { conversationId: convId } = event.payload;
       const { loadConversationFile } = await import("@/lib/chat-storage");
+      const { useChatStore } = await import("@/lib/stores/chat-store");
+
+      // 1) Disk first — saved conversations are the canonical source.
       const conv = await loadConversationFile(convId);
       if (conv) {
         loadConversation(conv);
-      } else {
-        // Unknown id → start a new chat that adopts the requested id so
-        // sidebar + chat (and the chat-store's currentId) all agree from
-        // message 0. Pass the id directly into startNewConversation
-        // instead of overriding piSessionIdRef after the fact — the
-        // override pattern left store.currentId stuck on the throwaway
-        // uuid that startNewConversation had generated, which made the
-        // router treat the new id as a background session and the
-        // sidebar lose its highlight until the user typed.
-        await startNewConversation(convId);
-        // Mirror the new id back to the sidebar so its currentId matches.
-        emit("chat-current-session", { id: convId });
+        return;
       }
+
+      // 2) Store fallback — the conversation may exist only in memory
+      //    because it was started in this session and hasn't completed
+      //    a turn yet (no agent_end → no save). Without this branch,
+      //    clicking back to a chat that's been streaming in the
+      //    background would fall through to startNewConversation and
+      //    silently WIPE the in-memory state. That's the "switch to a
+      //    new chat, switch back, A is empty" repro: A had messages
+      //    only in the store (mid-stream when the user left), so the
+      //    disk lookup missed and the panel reset.
+      const session = useChatStore.getState().sessions[convId];
+      if (session?.messages && session.messages.length > 0) {
+        // Stub conversation — loadConversation prefers store messages
+        // over the conv arg whenever the store has them, so the empty
+        // messages array here is just a satisfaction of the type.
+        loadConversation({
+          id: convId,
+          title: session.title || "untitled",
+          messages: [],
+          createdAt: Date.now(),
+          updatedAt: session.updatedAt,
+        });
+        return;
+      }
+
+      // 3) Truly new id (sidebar's "+ new chat" path) — adopt the
+      //    requested id so sidebar + chat (and the chat-store's
+      //    currentId) all agree from message 0.
+      await startNewConversation(convId);
+      // Mirror the new id back to the sidebar so its currentId matches.
+      emit("chat-current-session", { id: convId });
     });
     return () => { unlisten.then((fn) => fn()); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
