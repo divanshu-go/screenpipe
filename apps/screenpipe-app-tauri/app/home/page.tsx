@@ -28,6 +28,8 @@ import { FeedbackSection } from "@/components/settings/feedback-section";
 import { PipeStoreView } from "@/components/pipe-store";
 import { MemoriesSection } from "@/components/settings/memories-section";
 import { StandaloneChat } from "@/components/standalone-chat";
+import { ChatSidebar } from "@/components/chat-sidebar";
+import { mountPiEventRouter } from "@/lib/stores/pi-event-router";
 import { NotificationBell } from "@/components/notification-bell";
 import Timeline from "@/components/rewind/timeline";
 import { useQueryState } from "nuqs";
@@ -96,6 +98,16 @@ function HomeContent() {
     const fallback = ["home", "timeline", "pipes"].find((s) => !isSectionHidden(s));
     setActiveSection(fallback ?? "home");
   }, [activeSection, isSectionHidden, setActiveSection]);
+
+  // Mount the Pi event router once, app-wide. Listens for `pi_event` /
+  // `pi_session_evicted` outside any chat-component lifecycle and mirrors
+  // per-session liveness into the chat store. This is what lets the chat
+  // sidebar show a live ● dot for sessions running in the background while
+  // the user is on Timeline / Pipes / Settings — without it, status would
+  // freeze the moment the chat unmounts. Idempotent.
+  useEffect(() => {
+    void mountPiEventRouter();
+  }, []);
 
   // Sidebar collapse state (persisted in localStorage)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -286,7 +298,19 @@ function HomeContent() {
     }
     switch (activeSection) {
       case "home":
-        return <StandaloneChat className="h-full" />;
+        // Chat lives next to its own sidebar (pinned + recents + live status).
+        // The sidebar is mounted ONLY in the chat view; the existing AppSidebar
+        // on the far left handles app-wide navigation. The pi-event-router
+        // (mounted in the effect below) keeps the sidebar's status dots live
+        // even when the user is on Timeline / Pipes / etc.
+        return (
+          <div className="flex h-full min-w-0">
+            <ChatSidebar />
+            <div className="flex-1 min-w-0">
+              <StandaloneChat className="h-full" />
+            </div>
+          </div>
+        );
       case "timeline":
         return <Timeline embedded />;
       case "memories":
