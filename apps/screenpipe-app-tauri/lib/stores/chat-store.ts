@@ -274,7 +274,13 @@ export const useChatStore = create<ChatStore>((set) => ({
               ...existing,
               messages,
               messageCount: messages.length,
-              updatedAt: Date.now(),
+              // NOTE: no updatedAt bump. setMessages is called both for
+              // genuine activity (new user message, agent_end) AND for
+              // hydration on session switch. Bumping here would re-sort
+              // the sidebar every time the user just CLICKS a row,
+              // which is wrong — clicking should not change ordering.
+              // Callers that represent real activity (appendMessage,
+              // setStreaming) bump updatedAt themselves.
             },
           },
         };
@@ -327,7 +333,11 @@ export const useChatStore = create<ChatStore>((set) => ({
         return {
           sessions: {
             ...s.sessions,
-            [id]: { ...existing, ...state, updatedAt: Date.now() },
+            // No updatedAt bump — same reasoning as setMessages.
+            // setStreaming is called for snapshot-on-switch (not new
+            // activity) AND for genuine streaming deltas. The router
+            // still bumps via patchMessage for the latter.
+            [id]: { ...existing, ...state },
           },
         };
       }),

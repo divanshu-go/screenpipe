@@ -32,7 +32,7 @@
  */
 
 import React, { useEffect, useMemo } from "react";
-import { Plus, Pin, X, AlertCircle } from "lucide-react";
+import { Pin, X, AlertCircle } from "lucide-react";
 import { emit, listen } from "@tauri-apps/api/event";
 import { cn } from "@/lib/utils";
 import {
@@ -198,22 +198,10 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
           </Section>
         )}
 
-        <Section
-          title="recents"
-          action={
-            <button
-              onClick={handleNew}
-              className={cn(
-                "p-1 rounded hover:bg-muted/60 transition-colors",
-                "text-muted-foreground hover:text-foreground"
-              )}
-              title="new chat"
-              data-testid="chat-sidebar-new"
-            >
-              <Plus className="h-3.5 w-3.5" />
-            </button>
-          }
-        >
+        {/* No "+" action here — the "New chat" item in the main nav
+            (top of the sidebar) is the single new-conversation entry
+            point. Two affordances for the same thing was confusing. */}
+        <Section title="recents">
           {recents.length === 0 && pinned.length === 0 ? (
             <div className="px-3 py-2 text-xs text-muted-foreground/70 italic">
               no chats yet — click + to start

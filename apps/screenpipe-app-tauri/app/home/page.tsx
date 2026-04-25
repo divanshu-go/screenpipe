@@ -7,7 +7,7 @@ import React, { useEffect, useState, useRef, Suspense, useCallback } from "react
 import {
   Settings as SettingsIcon,
   Workflow,
-  Home,
+  Plus,
   Clock,
   Gift,
   HelpCircle,
@@ -21,6 +21,8 @@ import {
   Phone,
   X,
 } from "lucide-react";
+import { emit } from "@tauri-apps/api/event";
+import { useChatStore } from "@/lib/stores/chat-store";
 import { useOverlayData } from "@/app/shortcut-reminder/use-overlay-data";
 import { cn } from "@/lib/utils";
 import { AppSidebar, SidebarProvider, useSidebarContext } from "@/components/app-sidebar";
@@ -108,6 +110,31 @@ function HomeContent() {
   useEffect(() => {
     void mountPiEventRouter();
   }, []);
+
+  // Selecting a chat from the sidebar (or any other source that emits
+  // chat-load-conversation) should also FLIP the active view to the chat
+  // panel. Without this, clicking a chat from the Pipes / Timeline /
+  // Memories views appears to "do nothing" — the standalone chat
+  // component receives the event and switches conversation just fine,
+  // but the user is still looking at a different view. They'd have to
+  // also click "New chat" or similar to see the result. Hooking the
+  // listener at the page level fixes the cross-view UX.
+  useEffect(() => {
+    let unlistenFn: (() => void) | undefined;
+    let cancelled = false;
+    (async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      const u = await listen("chat-load-conversation", () => {
+        if (cancelled) return;
+        setActiveSection("home");
+      });
+      unlistenFn = u;
+    })();
+    return () => {
+      cancelled = true;
+      unlistenFn?.();
+    };
+  }, [setActiveSection]);
 
   // Sidebar collapse state (persisted in localStorage)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -322,7 +349,11 @@ function HomeContent() {
 
   // Top-level nav items (filtered by enterprise policy)
   const mainSections = [
-    { id: "home", label: "Home", icon: <Home className="h-3.5 w-3.5" /> },
+    // The first nav item doubles as "go to chat view + start a fresh
+    // conversation". Replaces the old "Home" + the "+" inside the chat
+    // sidebar (single, obvious entry point). The click handler below
+    // both switches the active section AND spins up a new chat session.
+    { id: "home", label: "New chat", icon: <Plus className="h-3.5 w-3.5" /> },
     { id: "pipes", label: "Pipes", icon: <Workflow className="h-3.5 w-3.5" /> },
     { id: "timeline", label: "Timeline", icon: <Clock className="h-3.5 w-3.5" /> },
     { id: "memories", label: "Memories", icon: <Sparkles className="h-3.5 w-3.5" /> },
@@ -483,6 +514,29 @@ function HomeContent() {
                       data-testid={`nav-${section.id}`}
                       onClick={() => {
                         setActiveSection(section.id);
+                        // The "home" slot is the New Chat affordance —
+                        // clicking it (from any view) spawns a fresh
+                        // chat session and switches to it. Mirrors the
+                        // sidebar's "+ new chat" behaviour exactly so
+                        // the two entry points stay in sync.
+                        if (section.id === "home") {
+                          const id = crypto.randomUUID();
+                          const store = useChatStore.getState();
+                          store.actions.upsert({
+                            id,
+                            title: "new chat",
+                            preview: "",
+                            status: "idle",
+                            messageCount: 0,
+                            updatedAt: Date.now(),
+                            pinned: false,
+                            unread: false,
+                          });
+                          store.actions.setCurrent(id);
+                          void emit("chat-load-conversation", {
+                            conversationId: id,
+                          });
+                        }
                       }}
                       className={cn(
                         "w-full flex items-center px-2.5 py-1.5 rounded-lg transition-all duration-150 text-left group",
