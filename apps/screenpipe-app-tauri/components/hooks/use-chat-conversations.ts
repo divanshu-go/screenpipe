@@ -297,16 +297,19 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     const store = useChatStore.getState();
     const outgoingSid = piSessionIdRef.current;
 
-    // (1) Snapshot OUTGOING session.
+    // (1) Snapshot OUTGOING session — atomic so router writes that
+    //     race against this update can't land between the messages
+    //     write and the streaming-refs write (which would point the
+    //     router at a streamingMessageId not yet present in messages).
     if (outgoingSid && store.sessions[outgoingSid]) {
-      store.actions.setStreaming(outgoingSid, {
+      store.actions.snapshotSession(outgoingSid, {
+        messages: messages as any,
         streamingText: piStreamingTextRef.current,
         streamingMessageId: piMessageIdRef.current,
         contentBlocks: [...piContentBlocksRef.current],
         isStreaming,
         isLoading,
       });
-      store.actions.setMessages(outgoingSid, messages as any);
     }
 
     // (2) Reset panel flags — these are panel-local, not session-local.
@@ -316,13 +319,29 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     setIsLoading(false);
     setIsStreaming(false);
 
-    // Switch to this conversation's session.
+    // Switch to this conversation's session. Pair the panel's ref
+    // switch with `setCurrent` on the store so the router's
+    // foreground/background skip logic flips at the same instant the
+    // panel's filter does. Without this pairing, callers that reach
+    // loadConversation from a path other than the sidebar (deep-link
+    // from another window, settings-driven activeConversationId, etc.)
+    // would temporarily have the panel and the router disagree on
+    // which session is foreground — producing duplicated writes for
+    // the new session and silently dropped writes for the old one.
     piSessionIdRef.current = conv.id;
+    store.actions.setCurrent(conv.id);
 
-    // (3) Prefer the store if it already has live state for this id.
+    // (3) Prefer the store whenever it has messages for this id. Two
+    //     ways messages get there: (a) `markHydrated` was called on a
+    //     prior view (`hydratedAt` set), or (b) the router accumulated
+    //     them while the session was streaming in the background. Case
+    //     (b) is the up-to-the-millisecond truth — the disk file may
+    //     be one save behind the in-memory state, so falling through to
+    //     disk would silently drop tokens that arrived since the last
+    //     persisted agent_end.
     const existing = store.sessions[conv.id];
     let messagesForPanel: any[];
-    if (existing?.hydratedAt && existing.messages?.length) {
+    if (existing?.messages && existing.messages.length > 0) {
       messagesForPanel = existing.messages as any[];
       // Restore in-flight streaming markers so the panel resumes
       // exactly where the user left it. The router has been keeping
@@ -333,6 +352,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       piContentBlocksRef.current = (existing.contentBlocks as any[]) ?? [];
       if (existing.isLoading) setIsLoading(true);
       if (existing.isStreaming) setIsStreaming(true);
+      store.actions.markHydrated(conv.id);
     } else {
       // Cold session — load from disk and seed the store.
       const { loadConversationFile } = await import("@/lib/chat-storage");
@@ -473,7 +493,13 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
   // process. The old session stays alive (backend evicts LRU when > 4).
   // No kill/restart needed — true multi-session means each conversation
   // has its own process that persists across conversation switches.
-  const startNewConversation = async () => {
+  // Optional `explicitId` — when the caller has a specific session id it
+  // wants the panel to adopt (e.g. sidebar's "+ new chat" generates the
+  // id locally and emits chat-load-conversation with it so the row + the
+  // chat agree from message 0). Passing one avoids the
+  // generate-then-overwrite dance which left store.currentId pointing
+  // at the throwaway uuid.
+  const startNewConversation = async (explicitId?: string) => {
     // Snapshot OUTGOING session into the store so the previous chat's
     // in-flight state survives the switch to "new chat". Without this,
     // hitting "+ new chat" in the middle of a stream would silently
@@ -483,14 +509,14 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     const store = useChatStore.getState();
     const outgoingSid = piSessionIdRef.current;
     if (outgoingSid && store.sessions[outgoingSid]) {
-      store.actions.setStreaming(outgoingSid, {
+      store.actions.snapshotSession(outgoingSid, {
+        messages: messages as any,
         streamingText: piStreamingTextRef.current,
         streamingMessageId: piMessageIdRef.current,
         contentBlocks: [...piContentBlocksRef.current],
         isStreaming,
         isLoading,
       });
-      store.actions.setMessages(outgoingSid, messages as any);
     }
 
     // Clear panel state
@@ -506,9 +532,14 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     setShowHistory(false);
     setPastedImages([]);
 
-    // New session ID — Pi will be started fresh when the first message is sent
-    piSessionIdRef.current = crypto.randomUUID();
+    // New session ID — Pi will be started fresh when the first message is sent.
+    // Pair with setCurrent so the router immediately knows the new id is
+    // foreground (and won't accumulate writes for it). See the matching
+    // pairing in loadConversation for the same reasoning.
+    const newSid = explicitId ?? crypto.randomUUID();
+    piSessionIdRef.current = newSid;
     piSessionSyncedRef.current = true;
+    store.actions.setCurrent(newSid);
   };
 
   // ---- filteredConversations ----

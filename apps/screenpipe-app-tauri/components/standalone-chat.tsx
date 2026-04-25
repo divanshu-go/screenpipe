@@ -1640,11 +1640,14 @@ export function StandaloneChat({
         loadConversation(conv);
       } else {
         // Unknown id → start a new chat that adopts the requested id so
-        // sidebar + chat agree. startNewConversation generates its own
-        // uuid; we override piSessionIdRef immediately after to honor the
-        // caller's id.
-        await startNewConversation();
-        piSessionIdRef.current = convId;
+        // sidebar + chat (and the chat-store's currentId) all agree from
+        // message 0. Pass the id directly into startNewConversation
+        // instead of overriding piSessionIdRef after the fact — the
+        // override pattern left store.currentId stuck on the throwaway
+        // uuid that startNewConversation had generated, which made the
+        // router treat the new id as a background session and the
+        // sidebar lose its highlight until the user typed.
+        await startNewConversation(convId);
         // Mirror the new id back to the sidebar so its currentId matches.
         emit("chat-current-session", { id: convId });
       }

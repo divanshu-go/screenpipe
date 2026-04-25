@@ -26,7 +26,12 @@
  */
 
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { listConversations } from "@/lib/chat-storage";
+import {
+  listConversations,
+  loadConversationFile,
+  saveConversationFile,
+} from "@/lib/chat-storage";
+import type { ChatConversation } from "@/lib/hooks/use-settings";
 import {
   useChatStore,
   type SessionStatus,
@@ -257,7 +262,16 @@ function handleTerminated(payload: PiTerminatedPayload) {
       : `pi process exited (code ${payload.exitCode}${payload.reason ? `: ${payload.reason}` : ""})`,
     updatedAt: Date.now(),
   });
+  store.actions.endTurn(payload.session);
   previewLastEmittedAt.delete(payload.session);
+
+  // Persist the partial transcript for backgrounded sessions whose Pi
+  // crashed mid-stream — without this the user loses everything that
+  // was generated after the moment they navigated away. Foreground
+  // session has its own pi_terminated handler in standalone-chat.
+  if (store.currentId !== payload.session) {
+    void persistBackgroundSession(payload.session);
+  }
 }
 
 /** Hydrate the store from on-disk chat history once at boot. The router
@@ -495,12 +509,128 @@ function applyEventToSessionContent(sid: string, payload: PiEventPayload) {
   }
 
   // End of turn — flush streaming state to "settled" message + clear
-  // in-flight markers. Disk save happens in standalone-chat for the
-  // current session; for backgrounded sessions the store carries the
-  // settled message until the user comes back and the panel persists
-  // it via its existing save flow.
+  // in-flight markers. We're in the BACKGROUND-only branch (the early
+  // `currentId === sid` return above gates this), so the panel won't
+  // run its own save useEffect for this session. Persist directly so
+  // a chat that completes while the user is looking elsewhere still
+  // ends up on disk and survives a restart.
   if (t === "agent_end" || t === "turn_end") {
     store.actions.endTurn(sid);
+    void persistBackgroundSession(sid);
     return;
   }
+}
+
+// Per-session save serialization. agent_end can race with subsequent
+// background activity (rare but possible — chained turns from a tool
+// follow-up). A second save kicked off before the first finishes would
+// race on the same file; we chain them through a per-id promise queue.
+const saveQueue = new Map<string, Promise<void>>();
+
+/**
+ * Persist a backgrounded session's accumulated state to disk. Called from
+ * the router when agent_end fires for a session that isn't currently
+ * foregrounded — the panel's normal `useEffect[isLoading, messages]` save
+ * only runs for the foregrounded chat, so without this function a chat
+ * that completes while you're looking at a different tab silently loses
+ * everything generated after the moment you switched away.
+ *
+ * Mirrors the shape and edge-case handling of `saveConversation` in
+ * `use-chat-conversations.ts` so foreground/background saves produce
+ * byte-identical files. Diverging would mean the panel sees different
+ * data depending on where the save came from — confusing and a vector
+ * for hard-to-reproduce bugs.
+ */
+async function persistBackgroundSession(sid: string): Promise<void> {
+  const prev = saveQueue.get(sid) ?? Promise.resolve();
+  const next = prev
+    .catch(() => undefined)
+    .then(async () => {
+      const session = useChatStore.getState().sessions[sid];
+      if (!session) return;
+      const messages = (session.messages as MutableMessage[] | undefined) ?? [];
+      if (messages.length === 0) return;
+
+      // Skip pure pipe-watch sessions (transient, rendered live from
+      // pipe_event — never the user's "real" chat history).
+      const allPipe = messages.every((m: any) => m?.id?.startsWith("pipe-"));
+      if (allPipe) return;
+
+      // Respect the user's "history disabled" toggle.
+      try {
+        const { getStore } = await import("@/lib/hooks/use-settings");
+        const store = await getStore();
+        const settings = await store.get<any>("settings");
+        if (settings?.chatHistory?.historyEnabled === false) return;
+      } catch {
+        // settings store not ready — fall through and save anyway
+      }
+
+      const existing = await loadConversationFile(sid);
+      const firstUserMsg = messages.find((m: any) => m.role === "user") as any;
+      const derivedTitle: string =
+        firstUserMsg?.content?.slice(0, 50) || "New Chat";
+      // Prefer a previously-persisted title (user may have renamed it),
+      // but only if that title isn't itself a stale derivation.
+      const title = existing?.title || derivedTitle;
+
+      const conv: ChatConversation = {
+        id: sid,
+        title,
+        messages: messages.slice(-100).map((m: any) => {
+          let content: string = m.content || "";
+          if (!content && m.contentBlocks?.length) {
+            content =
+              m.contentBlocks
+                .filter((b: any) => b.type === "text")
+                .map((b: any) => b.text)
+                .join("\n") || "(tool result)";
+          }
+          const blocks = m.contentBlocks?.map((b: any) => {
+            if (b.type === "tool") {
+              const { isRunning: _isRunning, ...rest } = b.toolCall ?? {};
+              return {
+                type: "tool",
+                toolCall: {
+                  ...rest,
+                  isRunning: false,
+                  result: rest.result?.slice?.(0, 4000),
+                },
+              };
+            }
+            if (b.type === "thinking") {
+              return { ...b, isThinking: false };
+            }
+            return b;
+          });
+          return {
+            id: m.id,
+            role: m.role,
+            content,
+            timestamp: m.timestamp,
+            ...(blocks?.length ? { contentBlocks: blocks } : {}),
+            ...(m.images?.length ? { images: m.images } : {}),
+            ...(m.model ? { model: m.model } : {}),
+            ...(m.provider ? { provider: m.provider } : {}),
+          };
+        }),
+        createdAt: existing?.createdAt ?? Date.now(),
+        updatedAt: Date.now(),
+        pinned: existing?.pinned ?? session.pinned,
+        hidden: existing?.hidden ?? false,
+      };
+
+      try {
+        await saveConversationFile(conv);
+      } catch (e) {
+        console.warn("[router] background save failed for", sid, e);
+      }
+    })
+    .finally(() => {
+      // Drop the entry once we're the tail — keeps the map from growing
+      // unbounded over a long session lifetime.
+      if (saveQueue.get(sid) === next) saveQueue.delete(sid);
+    });
+  saveQueue.set(sid, next);
+  return next;
 }

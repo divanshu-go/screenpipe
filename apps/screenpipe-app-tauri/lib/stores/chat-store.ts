@@ -167,6 +167,26 @@ interface ChatStoreActions {
   /** Mark this session as fully hydrated from disk. Subsequent switches
    *  to it can skip the disk round-trip and read from the store. */
   markHydrated: (id: string) => void;
+  /** Atomically replace ALL panel-local state for a session (messages +
+   *  streaming refs) in one update. Used by `loadConversation` /
+   *  `startNewConversation` to publish the foreground panel's state to
+   *  the store at the moment of session switch. Doing it in one set call
+   *  prevents interleaving with router writes that target the same id —
+   *  separate `setMessages` then `setStreaming` calls would let a router
+   *  delta land between them and produce a half-snapshot half-router
+   *  state where the streamingMessageId points to a message that no
+   *  longer exists in the messages array. */
+  snapshotSession: (
+    id: string,
+    snapshot: {
+      messages: StoredMessage[];
+      streamingText: string;
+      streamingMessageId: string | null;
+      contentBlocks: StoredContentBlock[];
+      isStreaming: boolean;
+      isLoading: boolean;
+    }
+  ) => void;
 }
 
 export type ChatStore = ChatStoreState & { actions: ChatStoreActions };
@@ -394,6 +414,29 @@ export const useChatStore = create<ChatStore>((set) => ({
           sessions: {
             ...s.sessions,
             [id]: { ...existing, hydratedAt: Date.now() },
+          },
+        };
+      }),
+
+    snapshotSession: (id, snapshot) =>
+      set((s) => {
+        const existing = s.sessions[id];
+        if (!existing) return {};
+        return {
+          sessions: {
+            ...s.sessions,
+            [id]: {
+              ...existing,
+              messages: snapshot.messages,
+              messageCount: snapshot.messages.length,
+              streamingText: snapshot.streamingText,
+              streamingMessageId: snapshot.streamingMessageId,
+              contentBlocks: snapshot.contentBlocks,
+              isStreaming: snapshot.isStreaming,
+              isLoading: snapshot.isLoading,
+              hydratedAt: existing.hydratedAt ?? Date.now(),
+              // No updatedAt bump — snapshot is plumbing, not user activity.
+            },
           },
         };
       }),
