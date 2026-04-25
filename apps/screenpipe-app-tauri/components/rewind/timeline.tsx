@@ -475,6 +475,19 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		};
 	}, [navigateToTimestamp]);
 
+	// Open the search modal in response to the AppSidebar's top-bar
+	// search button (embedded mode only — standalone window has its
+	// own button in TimelineControls).
+	useEffect(() => {
+		if (!embedded) return;
+		const unlisten = listen("open-search", () => {
+			setShowSearchModal(true);
+		});
+		return () => {
+			unlisten.then((fn) => fn());
+		};
+	}, [embedded]);
+
 	// Listen for navigate-to-frame events (deep link: screenpipe://frame/12345)
 	useEffect(() => {
 		const fetchFrameMetadata = async (id: string, retries = 3): Promise<{ timestamp?: string } | null> => {
@@ -1162,13 +1175,16 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 						startAndEndDates={startAndEndDates}
 						onDateChange={handleDateChange}
 						onJumpToday={handleJumpToday}
-						onSearchClick={() => {
-							if (embedded) {
-								setShowSearchModal(true);
-							} else {
-								commands.showWindow({ Search: { query: null } });
-							}
-						}}
+						// Embedded timeline no longer renders a search button
+						// here — the AppSidebar's top bar (next to the macOS
+						// traffic lights) owns search now and emits an
+						// `open-search` event that the listener below picks
+						// up. Standalone timeline window keeps its button.
+						onSearchClick={
+							embedded
+								? undefined
+								: () => commands.showWindow({ Search: { query: null } })
+						}
 						onChatClick={embedded ? undefined : () => commands.showWindow("Chat")}
 						embedded={embedded}
 						isPlaying={isPlaying}

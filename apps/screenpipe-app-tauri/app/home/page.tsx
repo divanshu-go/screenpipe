@@ -17,6 +17,7 @@ import {
   Volume2,
   PanelLeftClose,
   PanelLeftOpen,
+  Search,
   Sparkles,
   Phone,
   X,
@@ -432,6 +433,36 @@ function HomeContent() {
               </TooltipTrigger>
               <TooltipContent side="bottom" className="text-xs">
                 {sidebarCollapsed ? "expand sidebar" : "collapse sidebar"} <kbd className="ml-1 px-1 py-0.5 bg-muted rounded text-[10px]">⌘B</kbd>
+              </TooltipContent>
+            </Tooltip>
+
+            {/* Search — sits to the right of the collapse icon, same
+                row as the macOS traffic lights. Removes the duplicate
+                search button that used to live inside the embedded
+                timeline's controls. Click → switch to Timeline (so the
+                modal has a host) and emit open-search; the standalone
+                Search window flow stays via the standalone timeline
+                button. */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={() => {
+                    setActiveSection("timeline");
+                    void emit("open-search");
+                  }}
+                  aria-label="search"
+                  className={cn(
+                    "absolute top-2 z-20 p-1 rounded-md transition-colors",
+                    // 28px right of the collapse icon (icon 16 + gap 8 + small breathing).
+                    isMac ? "left-[110px]" : "left-9",
+                    isTranslucent ? "vibrant-nav-item" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                  )}
+                >
+                  <Search className="h-4 w-4" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="text-xs">
+                search <kbd className="ml-1 px-1 py-0.5 bg-muted rounded text-[10px]">⌘K</kbd>
               </TooltipContent>
             </Tooltip>
 
