@@ -312,6 +312,10 @@ async fn main() -> anyhow::Result<()> {
             screenpipe_engine::cli::auth::handle_auth_command(subcommand).await?;
             return Ok(());
         }
+        Command::Db { ref subcommand } => {
+            screenpipe_engine::cli::db::handle_db_command(subcommand).await?;
+            return Ok(());
+        }
         Command::Backup {
             ref subcommand,
             ref data_dir,

@@ -317,6 +317,45 @@ async fn is_server_running(app: AppHandle) -> Result<bool, String> {
 async fn main() {
     let _ = fix_path_env::fix();
 
+    // Refuse to launch while a `screenpipe db recover|cleanup` operation is in
+    // progress. The CLI writes ~/.screenpipe/.db_recovery.lock before doing
+    // anything destructive; if the user double-clicks the app icon mid-recovery,
+    // we'd otherwise race the swap and corrupt the DB again. The CLI heartbeats
+    // the lock every 30 s, so a fresh mtime means the op is genuinely live.
+    //
+    // Escape hatches (in order of preference):
+    //   1. `screenpipe db unlock` — friendly path
+    //   2. SCREENPIPE_IGNORE_DB_LOCK=1 env var — bypass on this launch only
+    //   3. `rm ~/.screenpipe/.db_recovery.lock` — manual
+    //
+    // See `crates/screenpipe-engine/src/cli/db.rs`.
+    if std::env::var("SCREENPIPE_IGNORE_DB_LOCK").ok().as_deref() != Some("1") {
+        let lock_path = screenpipe_core::paths::default_screenpipe_data_dir()
+            .join(".db_recovery.lock");
+        if let Ok(metadata) = std::fs::metadata(&lock_path) {
+            let stale = metadata
+                .modified()
+                .ok()
+                .and_then(|m| m.elapsed().ok())
+                .map(|d| d.as_secs() > 3600)
+                .unwrap_or(false);
+            if stale {
+                let _ = std::fs::remove_file(&lock_path);
+            } else {
+                let body = std::fs::read_to_string(&lock_path).unwrap_or_default();
+                eprintln!(
+                    "screenpipe: a `screenpipe db ...` operation is in progress.\n\
+                     lock: {}\n\
+                     content: {}\n\
+                     options:\n  • wait for the op to finish, then re-open the app\n  • run `screenpipe db unlock` if you're sure it's stuck\n  • set SCREENPIPE_IGNORE_DB_LOCK=1 and retry to bypass this check",
+                    lock_path.display(),
+                    body.trim(),
+                );
+                std::process::exit(2);
+            }
+        }
+    }
+
     // Export the Windows root/CA cert stores to a PEM file and set
     // NODE_EXTRA_CA_CERTS before any bun/node subprocess can spawn. Fixes
     // "unable to verify the first certificate" on corporate networks where
