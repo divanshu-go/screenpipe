@@ -259,6 +259,18 @@ pub async fn get_local_api_config(app_handle: tauri::AppHandle) -> serde_json::V
     })
 }
 
+/// Wipe the persisted API auth key and write a fresh `sp-<uuid8>` to the
+/// secret store. Returns the new key. The running server keeps its old key
+/// in memory until restart — the UI should prompt the user to apply & restart.
+#[tauri::command]
+#[specta::specta]
+pub async fn regenerate_api_auth_key() -> Result<String, String> {
+    let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
+    screenpipe_engine::auth_key::regenerate_api_auth_key(&data_dir)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Read the enterprise license key from `enterprise.json`.
 /// Checks in order:
 /// 1. Next to executable (pushed via Intune/MDM to Program Files / .app bundle)
