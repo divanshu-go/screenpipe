@@ -140,10 +140,31 @@ export const useChatStore = create<ChatStore>((set) => ({
   },
 }));
 
-/** Stable selector for actions — avoids re-renders when state changes. */
+/** Stable selector for actions — avoids re-renders when state changes.
+ *  `actions` is set once in the create() call and never replaced, so this
+ *  selector returns the same reference forever. Safe to use in deps. */
 export const useChatActions = () => useChatStore((s) => s.actions);
 
-/** Sorted view: pinned first (most recent), then unpinned by updatedAt desc. */
+/**
+ * Sorted view: pinned first (most recent), then unpinned by updatedAt desc.
+ *
+ * IMPORTANT: this returns a fresh array on every call. Do NOT pass it
+ * directly to `useChatStore(selectOrderedSessions)` — useSyncExternalStore
+ * compares snapshots by Object.is, would see a new reference every render,
+ * and re-render in an infinite loop.
+ *
+ * Two safe consumption patterns:
+ *
+ *   // 1. via the dedicated hook below (memoized internally)
+ *   const sessions = useOrderedSessions();
+ *
+ *   // 2. raw: subscribe to the underlying map and memoize per-component
+ *   const sessionsMap = useChatStore((s) => s.sessions);
+ *   const sessions = useMemo(
+ *     () => selectOrderedSessions({ sessions: sessionsMap } as ChatStore),
+ *     [sessionsMap]
+ *   );
+ */
 export function selectOrderedSessions(state: ChatStore): SessionRecord[] {
   const all = Object.values(state.sessions);
   const pinned = all
@@ -153,4 +174,25 @@ export function selectOrderedSessions(state: ChatStore): SessionRecord[] {
     .filter((s) => !s.pinned)
     .sort((a, b) => b.updatedAt - a.updatedAt);
   return [...pinned, ...recents];
+}
+
+/**
+ * Stable hook returning the ordered session list. Subscribes to the raw
+ * `sessions` map (referentially stable across no-op updates) and memoizes
+ * the sort. Component only re-renders when the map's identity changes —
+ * which only happens when an entry is added / removed / mutated.
+ */
+import { useMemo } from "react";
+export function useOrderedSessions(): SessionRecord[] {
+  const sessionsMap = useChatStore((s) => s.sessions);
+  return useMemo(() => {
+    const all = Object.values(sessionsMap);
+    const pinned = all
+      .filter((s) => s.pinned)
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+    const recents = all
+      .filter((s) => !s.pinned)
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+    return [...pinned, ...recents];
+  }, [sessionsMap]);
 }

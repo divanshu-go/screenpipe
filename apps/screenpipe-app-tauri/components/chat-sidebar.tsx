@@ -38,7 +38,7 @@ import { cn } from "@/lib/utils";
 import {
   useChatStore,
   useChatActions,
-  selectOrderedSessions,
+  useOrderedSessions,
   type SessionRecord,
 } from "@/lib/stores/chat-store";
 import { updateConversationFlags } from "@/lib/chat-storage";
@@ -48,7 +48,11 @@ interface ChatSidebarProps {
 }
 
 export function ChatSidebar({ className }: ChatSidebarProps) {
-  const sessions = useChatStore(selectOrderedSessions);
+  // useOrderedSessions subscribes to the raw sessions map (stable identity
+  // across no-op updates) and memoizes the sort. Avoids the
+  // useSyncExternalStore infinite-loop trap of returning a fresh array
+  // from the selector — see comment on selectOrderedSessions.
+  const sessions = useOrderedSessions();
   const currentId = useChatStore((s) => s.currentId);
   const actions = useChatActions();
 
