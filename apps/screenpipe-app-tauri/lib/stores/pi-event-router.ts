@@ -204,6 +204,7 @@ async function handlePiEvent(envelope: PiEventEnvelope) {
       status: nextStatus ?? "streaming",
       lastError: err ?? undefined,
       messageCount: 0,
+      createdAt: Date.now(),
       updatedAt: Date.now(),
       pinned: false,
       // First-touch session is unread unless the user is already viewing
@@ -314,6 +315,7 @@ async function hydrate() {
         preview: "",
         status: "idle" as const,
         messageCount: m.messageCount,
+        createdAt: m.createdAt,
         updatedAt: m.updatedAt,
         pinned: m.pinned,
         // History reload doesn't count as new activity — start clean.

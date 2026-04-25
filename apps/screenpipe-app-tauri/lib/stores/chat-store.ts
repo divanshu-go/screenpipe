@@ -53,7 +53,14 @@ export interface SessionRecord {
   lastError?: string;
   /** Number of messages persisted to disk for this session. */
   messageCount: number;
-  /** ms since epoch of the most recent activity (for sort + LRU). */
+  /** ms since epoch when the row first appeared in the sidebar. Drives
+   *  the sort order — newer rows show at the top of "recents" and stay
+   *  put. Set once on creation; never bumped by subsequent activity.
+   *  (We tried sorting by updatedAt — every keystroke / pi_event would
+   *  reshuffle the list under the user's cursor, which felt broken.) */
+  createdAt: number;
+  /** ms since epoch of the most recent activity. Tracked for telemetry
+   *  / "last activity" UI only — DOES NOT affect sort order. */
   updatedAt: number;
   /** User pinned this conversation to the top of the sidebar. */
   pinned: boolean;
@@ -220,7 +227,16 @@ export const useChatStore = create<ChatStore>((set) => ({
       }),
 
     upsert: (record) =>
-      set((s) => ({ sessions: { ...s.sessions, [record.id]: record } })),
+      set((s) => {
+        const existing = s.sessions[record.id];
+        // Preserve original createdAt when re-upserting an existing row.
+        // Without this, a router lazy-create after a sidebar optimistic
+        // upsert would reset createdAt and visibly reshuffle the row.
+        const merged: SessionRecord = existing
+          ? { ...existing, ...record, createdAt: existing.createdAt }
+          : record;
+        return { sessions: { ...s.sessions, [record.id]: merged } };
+      }),
 
     patch: (id, partial) =>
       set((s) => {
@@ -472,10 +488,10 @@ export function selectOrderedSessions(state: ChatStore): SessionRecord[] {
   const all = Object.values(state.sessions);
   const pinned = all
     .filter((s) => s.pinned)
-    .sort((a, b) => b.updatedAt - a.updatedAt);
+    .sort((a, b) => b.createdAt - a.createdAt);
   const recents = all
     .filter((s) => !s.pinned)
-    .sort((a, b) => b.updatedAt - a.updatedAt);
+    .sort((a, b) => b.createdAt - a.createdAt);
   return [...pinned, ...recents];
 }
 
@@ -492,10 +508,10 @@ export function useOrderedSessions(): SessionRecord[] {
     const all = Object.values(sessionsMap);
     const pinned = all
       .filter((s) => s.pinned)
-      .sort((a, b) => b.updatedAt - a.updatedAt);
+      .sort((a, b) => b.createdAt - a.createdAt);
     const recents = all
       .filter((s) => !s.pinned)
-      .sort((a, b) => b.updatedAt - a.updatedAt);
+      .sort((a, b) => b.createdAt - a.createdAt);
     return [...pinned, ...recents];
   }, [sessionsMap]);
 }

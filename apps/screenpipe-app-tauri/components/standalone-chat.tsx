@@ -1631,6 +1631,20 @@ export function StandaloneChat({
   // not, treat it as "start a new chat using THIS id" — the caller (e.g.
   // the sidebar's + new chat button) generated the id and wants the chat
   // panel to adopt it so both agree on the session id from message 1.
+  // CRITICAL: the listener registers ONCE (deps: []) but the functions
+  // it calls (loadConversation, startNewConversation) close over `messages`
+  // and other state from useChatConversations. If we called the functions
+  // directly here, the listener would forever invoke the FIRST render's
+  // versions — which captured `messages = []` at mount time. Every
+  // snapshot-on-switch would then write empty messages to the store, and
+  // the chat that "should be there when you click back" would actually be
+  // wiped. Route through refs that we update on every render so the
+  // listener always invokes the freshest closure.
+  const loadConversationRef = useRef(loadConversation);
+  const startNewConversationRef = useRef(startNewConversation);
+  loadConversationRef.current = loadConversation;
+  startNewConversationRef.current = startNewConversation;
+
   useEffect(() => {
     const unlisten = listen<{ conversationId: string }>("chat-load-conversation", async (event) => {
       const { conversationId: convId } = event.payload;
@@ -1640,7 +1654,7 @@ export function StandaloneChat({
       // 1) Disk first — saved conversations are the canonical source.
       const conv = await loadConversationFile(convId);
       if (conv) {
-        loadConversation(conv);
+        loadConversationRef.current(conv);
         return;
       }
 
@@ -1649,16 +1663,13 @@ export function StandaloneChat({
       //    a turn yet (no agent_end → no save). Without this branch,
       //    clicking back to a chat that's been streaming in the
       //    background would fall through to startNewConversation and
-      //    silently WIPE the in-memory state. That's the "switch to a
-      //    new chat, switch back, A is empty" repro: A had messages
-      //    only in the store (mid-stream when the user left), so the
-      //    disk lookup missed and the panel reset.
+      //    silently WIPE the in-memory state.
       const session = useChatStore.getState().sessions[convId];
       if (session?.messages && session.messages.length > 0) {
         // Stub conversation — loadConversation prefers store messages
         // over the conv arg whenever the store has them, so the empty
         // messages array here is just a satisfaction of the type.
-        loadConversation({
+        loadConversationRef.current({
           id: convId,
           title: session.title || "untitled",
           messages: [],
@@ -1671,7 +1682,7 @@ export function StandaloneChat({
       // 3) Truly new id (sidebar's "+ new chat" path) — adopt the
       //    requested id so sidebar + chat (and the chat-store's
       //    currentId) all agree from message 0.
-      await startNewConversation(convId);
+      await startNewConversationRef.current(convId);
       // Mirror the new id back to the sidebar so its currentId matches.
       emit("chat-current-session", { id: convId });
     });
@@ -1699,7 +1710,7 @@ export function StandaloneChat({
       const u = await listen<{ session: string }>("pi_session_evicted", async (event) => {
         if (cancelled) return;
         if (event.payload.session !== piSessionIdRef.current) return;
-        await startNewConversation();
+        await startNewConversationRef.current();
         emit("chat-current-session", { id: piSessionIdRef.current });
       });
       unlistenFn = u;
@@ -1721,7 +1732,7 @@ export function StandaloneChat({
         const { loadConversationFile } = await import("@/lib/chat-storage");
         const conv = await loadConversationFile(pendingId);
         if (conv) {
-          loadConversation(conv);
+          loadConversationRef.current(conv);
         }
       })();
     }

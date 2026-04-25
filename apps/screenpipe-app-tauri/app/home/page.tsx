@@ -528,6 +528,7 @@ function HomeContent() {
                             preview: "",
                             status: "idle",
                             messageCount: 0,
+                            createdAt: Date.now(),
                             updatedAt: Date.now(),
                             pinned: false,
                             unread: false,

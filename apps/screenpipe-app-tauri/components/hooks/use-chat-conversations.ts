@@ -379,7 +379,8 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
           preview: "",
           status: "idle",
           messageCount: messagesForPanel.length,
-          updatedAt: Date.now(),
+          createdAt: full.createdAt ?? Date.now(),
+          updatedAt: full.updatedAt ?? Date.now(),
           pinned: full.pinned === true,
           unread: false,
         });
