@@ -3807,6 +3807,8 @@ export function StandaloneChat({
                 "relative flex gap-3 min-w-0",
                 message.role === "user" ? "flex-row-reverse" : "flex-row"
               )}
+              data-testid={`chat-message-${message.role}`}
+              data-message-id={message.id}
             >
               <div
                 className={cn(
