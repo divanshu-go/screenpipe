@@ -74,6 +74,12 @@ export interface ConversationMeta {
   createdAt: number;
   updatedAt: number;
   messageCount: number;
+  /** User-pinned (keeps row at the top of the sidebar). Defaults to false. */
+  pinned: boolean;
+  /** User-closed (excluded from default sidebar listing). Defaults to false.
+   *  Conversation file is still on disk; only an explicit delete action removes
+   *  it. The sidebar filters these out by default. */
+  hidden: boolean;
 }
 
 export async function listConversations(): Promise<ConversationMeta[]> {
@@ -94,6 +100,8 @@ export async function listConversations(): Promise<ConversationMeta[]> {
         createdAt: conv.createdAt,
         updatedAt: conv.updatedAt,
         messageCount: conv.messages.length,
+        pinned: conv.pinned === true,
+        hidden: conv.hidden === true,
       });
     } catch {
       // skip corrupt files
@@ -103,6 +111,25 @@ export async function listConversations(): Promise<ConversationMeta[]> {
   // Sort by updatedAt descending (most recent first)
   metas.sort((a, b) => b.updatedAt - a.updatedAt);
   return metas;
+}
+
+/**
+ * Patch a single field on a conversation file in place. Used by the chat
+ * sidebar to persist `pinned` / `hidden` toggles without rewriting messages.
+ *
+ * No-op if the file doesn't exist (caller may be acting on a session that
+ * was never sent to disk yet — sidebar's row exists in memory only). The
+ * read+write is not atomic across processes, but conflicts are functionally
+ * harmless for these flags (last writer wins, no data loss).
+ */
+export async function updateConversationFlags(
+  id: string,
+  patch: Partial<Pick<ChatConversation, "pinned" | "hidden" | "title">>
+): Promise<void> {
+  const conv = await loadConversationFile(id);
+  if (!conv) return;
+  const next: ChatConversation = { ...conv, ...patch };
+  await saveConversationFile(next);
 }
 
 export async function loadAllConversations(): Promise<ChatConversation[]> {

@@ -1609,18 +1609,68 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
     };
   }, [piInfo]);
 
-  // Listen for chat-load-conversation events from timeline
+  // Listen for chat-load-conversation events. Sources:
+  //   - timeline (clicking a previous chat in the timeline view)
+  //   - chat sidebar (selecting a row, OR clicking "+ new chat" which
+  //     sends a freshly-generated id we've never seen before)
+  //   - pi_session_evicted handler below (fresh id when the pool kills
+  //     the current session)
+  //
+  // If the id corresponds to a saved conversation on disk, load it. If
+  // not, treat it as "start a new chat using THIS id" — the caller (e.g.
+  // the sidebar's + new chat button) generated the id and wants the chat
+  // panel to adopt it so both agree on the session id from message 1.
   useEffect(() => {
     const unlisten = listen<{ conversationId: string }>("chat-load-conversation", async (event) => {
       const { conversationId: convId } = event.payload;
-      // Load from file-based storage
       const { loadConversationFile } = await import("@/lib/chat-storage");
       const conv = await loadConversationFile(convId);
       if (conv) {
         loadConversation(conv);
+      } else {
+        // Unknown id → start a new chat that adopts the requested id so
+        // sidebar + chat agree. startNewConversation generates its own
+        // uuid; we override piSessionIdRef immediately after to honor the
+        // caller's id.
+        await startNewConversation();
+        piSessionIdRef.current = convId;
+        // Mirror the new id back to the sidebar so its currentId matches.
+        emit("chat-current-session", { id: convId });
       }
     });
     return () => { unlisten.then((fn) => fn()); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Tell the sidebar which session is current whenever the chat panel
+  // assigns or resumes a session id. Without this the sidebar wouldn't
+  // know about session changes initiated inside the chat (in-panel "new",
+  // chat-prefill auto-send, history pick from the in-panel history view).
+  useEffect(() => {
+    if (!conversationId) return;
+    emit("chat-current-session", { id: conversationId });
+  }, [conversationId]);
+
+  // If the Pi pool evicted the session we're currently viewing, swap the
+  // panel to a fresh one. The pool only evicts idle sessions (see
+  // pi.rs::pi_start_inner), so this is rare — but when it does happen the
+  // user shouldn't be left with a panel pointing at a dead pid.
+  useEffect(() => {
+    let unlistenFn: (() => void) | undefined;
+    let cancelled = false;
+    (async () => {
+      const u = await listen<{ session: string }>("pi_session_evicted", async (event) => {
+        if (cancelled) return;
+        if (event.payload.session !== piSessionIdRef.current) return;
+        await startNewConversation();
+        emit("chat-current-session", { id: piSessionIdRef.current });
+      });
+      unlistenFn = u;
+    })();
+    return () => {
+      cancelled = true;
+      unlistenFn?.();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -4492,10 +4542,10 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
                         </div>
                         <div className="text-muted-foreground">
                           {!isPro
-                            ? "Remove names, emails, phone numbers and other personal info from your screen data before the AI sees it. Click the shield to upgrade."
+                            ? "Remove names, emails, phone numbers and other personal info from your screen data before the AI sees it. Adds ~1–2s per search. Click the shield to upgrade."
                             : privacyOn
-                              ? "Names, emails, phone numbers and other personal info are removed from your screen data before it reaches the AI. Click the shield to turn off."
-                              : "Turn this on to strip personal info (names, emails, phones, addresses, account numbers) from your screen data before the AI sees it."}
+                              ? "Names, emails, phone numbers and other personal info are removed from your screen data before it reaches the AI. Adds ~1–2s per search. Click the shield to turn off."
+                              : "Turn this on to strip personal info (names, emails, phones, addresses, account numbers) from your screen data before the AI sees it. Adds ~1–2s per search."}
                         </div>
                         <button
                           type="button"

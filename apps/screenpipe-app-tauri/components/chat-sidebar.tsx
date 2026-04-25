@@ -8,22 +8,32 @@
  * that have a Pi process running in the background. Renders to the left of
  * the chat panel when the user is on the Home / Chat view.
  *
- * Phase 1 scope (this commit):
- *   - List sessions from the chat store (hydrated by pi-event-router from
- *     ~/.screenpipe/chats/*.json on boot).
- *   - "+ new chat" emits the existing `chat-load-conversation` event with a
- *     fresh uuid so `standalone-chat.tsx`'s existing handler kicks in.
- *   - Click a row → emits the same event with the row's id.
- *   - Live `●` dot driven by `session.status === "streaming" | "thinking"`.
- *   - Pin / close hover actions.
+ * Data flow:
  *
- * Phase 2 will replace the cross-component event with direct store reads
- * once `standalone-chat` is migrated to the store.
+ *   ┌────────────────────────┐  emit chat-load-conversation  ┌───────────┐
+ *   │ ChatSidebar (this file)├──────────────────────────────▶│ Standalone│
+ *   │                        │                                │ Chat      │
+ *   │  reads chat-store      │  emit chat-current-session     │           │
+ *   │  emits user actions    │◀──────────────────────────────┤ (mounts   │
+ *   │                        │                                │  Pi via   │
+ *   │                        │                                │  piStart) │
+ *   └────────┬───────────────┘                                └────┬──────┘
+ *            │ writes pinned/hidden                                │ writes deltas
+ *            ▼                                                     ▼ to Pi stdout
+ *   ┌────────────────────────┐         ┌────────────────────────────────┐
+ *   │ chat-storage.ts        │         │ pi-event-router.ts             │
+ *   │ (~/.screenpipe/chats/) │         │ listens app-wide for pi_event  │
+ *   │                        │         │ writes status/preview to store │
+ *   └────────────────────────┘         └────────────────────────────────┘
+ *
+ * Pin / close persist to the conversation's JSON file on disk so the state
+ * survives app restart. Close is non-destructive (sets `hidden: true`);
+ * a separate "delete forever" action would unlink the file.
  */
 
-import React, { useMemo } from "react";
-import { Plus, Pin, X } from "lucide-react";
-import { emit } from "@tauri-apps/api/event";
+import React, { useEffect, useMemo } from "react";
+import { Plus, Pin, X, AlertCircle } from "lucide-react";
+import { emit, listen } from "@tauri-apps/api/event";
 import { cn } from "@/lib/utils";
 import {
   useChatStore,
@@ -31,7 +41,7 @@ import {
   selectOrderedSessions,
   type SessionRecord,
 } from "@/lib/stores/chat-store";
-import { deleteConversationFile } from "@/lib/chat-storage";
+import { updateConversationFlags } from "@/lib/chat-storage";
 
 interface ChatSidebarProps {
   className?: string;
@@ -42,6 +52,27 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
   const currentId = useChatStore((s) => s.currentId);
   const actions = useChatActions();
 
+  // Sync currentId from standalone-chat. Whenever the chat panel switches
+  // its piSessionIdRef (new chat, prefill auto-send, history click in the
+  // panel itself), it emits this event so the sidebar can highlight the
+  // matching row. Without this the sidebar would silently disagree with
+  // the chat about "which session is current".
+  useEffect(() => {
+    let unlistenFn: (() => void) | undefined;
+    let cancelled = false;
+    (async () => {
+      const u = await listen<{ id: string }>("chat-current-session", (e) => {
+        if (cancelled) return;
+        actions.setCurrent(e.payload.id);
+      });
+      unlistenFn = u;
+    })();
+    return () => {
+      cancelled = true;
+      unlistenFn?.();
+    };
+  }, [actions]);
+
   const { pinned, recents } = useMemo(() => {
     const p: SessionRecord[] = [];
     const r: SessionRecord[] = [];
@@ -51,7 +82,9 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
 
   const handleNew = () => {
     const id = crypto.randomUUID();
-    emit("chat-load-conversation", { conversationId: id });
+    // Optimistically add the row so the sidebar feels responsive even if
+    // standalone-chat takes a tick to react. The router will pick up the
+    // session if/when Pi starts emitting events for it.
     actions.upsert({
       id,
       title: "new chat",
@@ -62,9 +95,14 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
       pinned: false,
     });
     actions.setCurrent(id);
+    // chat-load-conversation with an unknown id is treated by
+    // standalone-chat's listener as "start a new chat with this id" —
+    // see the matching handler in components/standalone-chat.tsx.
+    emit("chat-load-conversation", { conversationId: id });
   };
 
   const handleSelect = (id: string) => {
+    if (id === currentId) return; // already on it, no-op
     actions.setCurrent(id);
     emit("chat-load-conversation", { conversationId: id });
   };
@@ -72,12 +110,47 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
   const handleClose = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
     actions.drop(id);
-    await deleteConversationFile(id).catch(() => {});
+    // If the user closed the chat they were viewing, tell standalone-chat
+    // to clear the panel. Otherwise the panel would keep showing a
+    // conversation that no longer exists in the sidebar.
+    if (id === currentId) {
+      const fresh = crypto.randomUUID();
+      actions.upsert({
+        id: fresh,
+        title: "new chat",
+        preview: "",
+        status: "idle",
+        messageCount: 0,
+        updatedAt: Date.now(),
+        pinned: false,
+      });
+      actions.setCurrent(fresh);
+      emit("chat-load-conversation", { conversationId: fresh });
+    }
+    // Persist hidden=true to disk so the close survives restart. Failures
+    // here are best-effort — if the file doesn't exist (session never
+    // saved) the in-memory drop is enough; if the disk write fails (perm,
+    // disk full) the sidebar will re-show the row on next launch which is
+    // not great but recoverable by closing again. We don't surface an
+    // error toast for this — too low-stakes.
+    try {
+      await updateConversationFlags(id, { hidden: true });
+    } catch {
+      // intentional — see comment above
+    }
   };
 
-  const handleTogglePin = (e: React.MouseEvent, id: string) => {
+  const handleTogglePin = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
+    const session = useChatStore.getState().sessions[id];
+    if (!session) return;
+    const next = !session.pinned;
     actions.togglePinned(id);
+    try {
+      await updateConversationFlags(id, { pinned: next });
+    } catch {
+      // best-effort persistence — UI already updated
+    }
   };
 
   return (
@@ -89,7 +162,6 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
       )}
       data-testid="chat-sidebar"
     >
-      {/* + new chat */}
       <div className="px-3 pt-3 pb-2">
         <button
           onClick={handleNew}
@@ -98,12 +170,12 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
             "text-foreground hover:bg-muted/50 transition-colors",
             "text-sm font-medium"
           )}
+          data-testid="chat-sidebar-new"
         >
           <Plus className="h-4 w-4" /> new chat
         </button>
       </div>
 
-      {/* scroll region */}
       <div className="flex-1 overflow-y-auto overflow-x-hidden">
         {pinned.length > 0 && (
           <Section title="pinned">
@@ -168,8 +240,8 @@ interface ChatRowProps {
   session: SessionRecord;
   isCurrent: boolean;
   onSelect: (id: string) => void;
-  onClose: (e: React.MouseEvent, id: string) => void;
-  onTogglePin: (e: React.MouseEvent, id: string) => void;
+  onClose: (e: React.MouseEvent, id: string) => Promise<void> | void;
+  onTogglePin: (e: React.MouseEvent, id: string) => Promise<void> | void;
 }
 
 function ChatRow({
@@ -183,6 +255,7 @@ function ChatRow({
     session.status === "streaming" ||
     session.status === "thinking" ||
     session.status === "tool";
+  const isError = session.status === "error";
   return (
     <button
       onClick={() => onSelect(session.id)}
@@ -194,6 +267,7 @@ function ChatRow({
           : "text-foreground/80 hover:bg-muted/40"
       )}
       data-testid={`chat-row-${session.id}`}
+      title={isError && session.lastError ? session.lastError : undefined}
     >
       <div className="flex items-center gap-1.5 min-w-0">
         <span className="truncate flex-1 text-sm">
@@ -203,6 +277,12 @@ function ChatRow({
           <span
             className="h-1.5 w-1.5 rounded-full bg-orange-500 animate-pulse shrink-0"
             title={session.status}
+          />
+        )}
+        {isError && (
+          <AlertCircle
+            className="h-3 w-3 text-red-500 shrink-0"
+            aria-label={session.lastError || "error"}
           />
         )}
         {/* hover-only actions */}
@@ -216,7 +296,9 @@ function ChatRow({
             <Pin
               className={cn(
                 "h-3 w-3",
-                session.pinned ? "text-foreground fill-current" : "text-muted-foreground"
+                session.pinned
+                  ? "text-foreground fill-current"
+                  : "text-muted-foreground"
               )}
             />
           </span>
@@ -224,7 +306,7 @@ function ChatRow({
             role="button"
             onClick={(e) => onClose(e, session.id)}
             className="p-0.5 rounded hover:bg-muted text-muted-foreground"
-            title="close + delete"
+            title="close"
           >
             <X className="h-3 w-3" />
           </span>
@@ -234,7 +316,11 @@ function ChatRow({
         <div
           className={cn(
             "text-[11px] truncate mt-0.5",
-            isLive ? "text-orange-600/80 italic" : "text-muted-foreground/70"
+            isError
+              ? "text-red-500/80"
+              : isLive
+                ? "text-orange-600/80 italic"
+                : "text-muted-foreground/70"
           )}
         >
           {session.preview}

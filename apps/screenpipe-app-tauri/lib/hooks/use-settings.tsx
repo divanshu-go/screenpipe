@@ -90,6 +90,14 @@ export interface ChatConversation {
 	messages: ChatMessage[];
 	createdAt: number;
 	updatedAt: number;
+	/** User pinned this conversation in the chat sidebar — keeps it at the top.
+	 *  Persists across app restarts via the on-disk conversation file. */
+	pinned?: boolean;
+	/** User closed this conversation from the chat sidebar — keeps the file on
+	 *  disk (so deleting via close is non-destructive) but excludes it from the
+	 *  sidebar listing. Re-surface via a future "show hidden" UI; meanwhile a
+	 *  dedicated delete-forever action is the only way to actually remove. */
+	hidden?: boolean;
 }
 
 export interface ChatHistoryStore {

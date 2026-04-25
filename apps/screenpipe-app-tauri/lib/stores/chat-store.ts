@@ -38,6 +38,8 @@ export interface SessionRecord {
   preview: string;
   /** Current liveness state (drives the sidebar dot / pulse). */
   status: SessionStatus;
+  /** Last error message — only meaningful when `status === "error"`. */
+  lastError?: string;
   /** Number of messages persisted to disk for this session. */
   messageCount: number;
   /** ms since epoch of the most recent activity (for sort + LRU). */
