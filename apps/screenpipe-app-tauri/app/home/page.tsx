@@ -603,9 +603,11 @@ function HomeContent() {
               {!sidebarCollapsed ? (
                 <div
                   className={cn(
-                    // pb-3 adds breathing room between the bottom of the
-                    // chat list and the team / settings / help row below.
-                    "flex-1 min-h-0 flex flex-col mt-2 -mx-2 border-t pt-2 pb-3",
+                    // pb-6 keeps a clear gap between the recents list
+                    // and the team / settings / help row — pb-3 was
+                    // too tight; the list ran almost flush against the
+                    // bottom nav.
+                    "flex-1 min-h-0 flex flex-col mt-2 -mx-2 border-t pt-2 pb-6",
                     isTranslucent ? "vibrant-sidebar-border" : "border-border/50"
                   )}
                 >

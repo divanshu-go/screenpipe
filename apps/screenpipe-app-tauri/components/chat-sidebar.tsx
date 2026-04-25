@@ -289,7 +289,7 @@ function CollapsibleRecents({
       {!collapsed && (
         <div
           id="chat-sidebar-recents"
-          className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden"
+          className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden scrollbar-hide"
         >
           {empty ? (
             <div className="px-2.5 py-2 text-xs text-muted-foreground/70 italic">
@@ -370,7 +370,7 @@ function CollapsibleScheduled({
           // whole sidebar. ~max-h-40 ≈ 6 rows; users can scroll within
           // it. Recents below still gets the rest of the column via
           // its own flex-1 + min-h-0.
-          className="max-h-40 overflow-y-auto overflow-x-hidden"
+          className="max-h-40 overflow-y-auto overflow-x-hidden scrollbar-hide"
         >
           <div className="flex flex-col">
             {pipes.map((p) => (
