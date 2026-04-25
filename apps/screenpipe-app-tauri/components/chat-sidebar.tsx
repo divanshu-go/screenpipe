@@ -47,6 +47,13 @@ interface ChatSidebarProps {
   className?: string;
 }
 
+/**
+ * Embeddable. Designed to live INSIDE the main app sidebar, sandwiched
+ * between the navigation items and the bottom action bar (Team / Settings
+ * / Help). Takes whatever width its parent gives it; provides its own
+ * vertical scroll for the conversation list. Does NOT add a width / border /
+ * background — those belong to the parent.
+ */
 export function ChatSidebar({ className }: ChatSidebarProps) {
   // useOrderedSessions subscribes to the raw sessions map (stable identity
   // across no-op updates) and memoizes the sort. Avoids the
@@ -158,15 +165,11 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
   };
 
   return (
-    <aside
-      className={cn(
-        "w-64 shrink-0 flex flex-col text-sm border-r border-border/50",
-        "bg-background/40 backdrop-blur-sm",
-        className
-      )}
+    <div
+      className={cn("flex flex-col h-full min-h-0 text-sm", className)}
       data-testid="chat-sidebar"
     >
-      <div className="px-3 pt-3 pb-2">
+      <div className="px-2 pt-2 pb-1 shrink-0">
         <button
           onClick={handleNew}
           className={cn(
@@ -180,7 +183,7 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto overflow-x-hidden">
+      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
         {pinned.length > 0 && (
           <Section title="pinned">
             {pinned.map((s) => (
@@ -219,7 +222,7 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
           )}
         </Section>
       </div>
-    </aside>
+    </div>
   );
 }
 

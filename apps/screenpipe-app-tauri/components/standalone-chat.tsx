@@ -3474,22 +3474,10 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
         {!isMac && !className && (
           <div className="absolute top-0 left-0 w-8 h-8 border-l-2 border-t-2 border-foreground/10 rounded-tl-lg" />
         )}
-        <Button
-          variant={showHistory ? "secondary" : "ghost"}
-          size="icon"
-          onMouseDown={(e) => e.stopPropagation()}
-          onClick={async (e) => {
-            e.stopPropagation();
-            if (!showHistory) {
-              await reloadStore();
-            }
-            setShowHistory(!showHistory);
-          }}
-          className="relative z-10 h-7 w-7"
-          title="Chat history"
-        >
-          <History size={14} />
-        </Button>
+        {/* Chat history is now rendered inside the main app sidebar
+            (see ChatSidebar embedded in app-sidebar). The inline history
+            toggle here is removed to avoid duplicating the same list in
+            two places. */}
         <div className="flex-1" />
         <Button
           variant="default"
@@ -3512,11 +3500,16 @@ export function StandaloneChat({ className }: { className?: string } = {}) {
         </kbd>
       </div>
 
-      {/* Main content area with optional history sidebar */}
+      {/* Main content area. The history sidebar previously rendered here
+          has been removed in favor of the embedded ChatSidebar in the
+          main app sidebar — single source of truth for the chat list. */}
       <div className="flex-1 flex overflow-hidden">
-        {/* History Sidebar */}
+        {/* History Sidebar — DELETED. Kept conditional below as `false`
+            so the JSX block is dead but still parses; will be removed in
+            a follow-up cleanup once we're sure nothing else references
+            showHistory state. */}
         <AnimatePresence>
-          {showHistory && (
+          {false && showHistory && (
             <motion.div
               initial={{ width: 0, opacity: 0 }}
               animate={{ width: 280, opacity: 1 }}

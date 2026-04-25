@@ -467,10 +467,14 @@ function HomeContent() {
               })()}
             </div>
 
-            {/* Navigation */}
-            <div className="p-2 flex-1 overflow-y-auto flex flex-col">
+            {/* Navigation.
+                Outer flex column has no overflow — the chat-list section
+                inside owns its own scroll, otherwise the team promo +
+                bottom items would be pushed below the fold by long
+                conversation lists. */}
+            <div className="p-2 flex-1 flex flex-col min-h-0">
               {/* Main sections */}
-              <div className="space-y-0.5">
+              <div className="space-y-0.5 shrink-0">
                 {mainSections.map((section) => {
                   const isActive = activeSection === section.id;
                   const btn = (
@@ -516,8 +520,22 @@ function HomeContent() {
               </div>
 
 
-              {/* Spacer */}
-              <div className="flex-1" />
+              {/* Embedded chat list — sits below the nav, scrolls within
+                  its own viewport so the team promo + bottom items stay
+                  pinned. Hidden when the sidebar is collapsed (no room for
+                  the conversation titles). */}
+              {!sidebarCollapsed ? (
+                <div
+                  className={cn(
+                    "flex-1 min-h-0 flex flex-col mt-2 -mx-2 border-t pt-2",
+                    isTranslucent ? "vibrant-sidebar-border" : "border-border/50"
+                  )}
+                >
+                  <ChatSidebar />
+                </div>
+              ) : (
+                <div className="flex-1" />
+              )}
 
               {/* Team promo card — hidden when user already has a team, sidebar collapsed, or enterprise */}
               {!teamState.team && !sidebarCollapsed && !isSectionHidden("team") && !teamPromoDismissed && (
@@ -706,12 +724,7 @@ function HomeContent() {
                 activeSection !== "home" && "hidden"
               )}
             >
-              <div className="flex h-full min-w-0">
-                <ChatSidebar />
-                <div className="flex-1 min-w-0">
-                  <StandaloneChat className="h-full" />
-                </div>
-              </div>
+              <StandaloneChat className="h-full" />
             </div>
 
             {/* Non-chat sections render on top when active. */}
