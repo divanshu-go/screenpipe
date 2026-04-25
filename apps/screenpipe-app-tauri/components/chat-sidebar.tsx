@@ -270,6 +270,25 @@ interface ChatRowProps {
   onTogglePin: (e: React.MouseEvent, id: string) => Promise<void> | void;
 }
 
+/**
+ * One chat row.
+ *
+ * Outer element is a div role=button (NOT a real <button>) so the inline
+ * pin/close actions can be real <button>s without nesting — nested
+ * <button>s are invalid HTML and broke click handling on the inner ones.
+ * (That's why "delete chat doesn't work" — the X click was eaten by the
+ * outer button.)
+ *
+ * Left-side status indicator follows Claude's pattern but uses screenpipe
+ * brand:
+ *   ●  small filled dot, current/orange + slow pulse  → streaming/thinking/tool
+ *   ●  small filled dot, foreground (no pulse)        → unread (new content)
+ *   ⚠  alert icon, red                                → error
+ *   ○  hollow ring, muted                             → idle (default)
+ *
+ * Animation is a custom ~1.4s ping that's slower + subtler than Tailwind's
+ * default — minimal, not a distraction in your peripheral vision.
+ */
 function ChatRow({
   session,
   isCurrent,
@@ -282,11 +301,20 @@ function ChatRow({
     session.status === "thinking" ||
     session.status === "tool";
   const isError = session.status === "error";
+  const isUnread = session.unread && !isCurrent;
   return (
-    <button
+    <div
+      role="button"
+      tabIndex={0}
       onClick={() => onSelect(session.id)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect(session.id);
+        }
+      }}
       className={cn(
-        "group relative flex flex-col items-stretch text-left px-3 py-1 mx-1 rounded-md",
+        "group relative flex flex-col items-stretch text-left px-2 py-1 mx-1 rounded-md cursor-pointer select-none",
         "transition-colors",
         isCurrent
           ? "bg-muted/70 text-foreground"
@@ -295,15 +323,19 @@ function ChatRow({
       data-testid={`chat-row-${session.id}`}
       title={isError && session.lastError ? session.lastError : undefined}
     >
-      <div className="flex items-center gap-1.5 min-w-0">
+      <div className="flex items-center gap-2 min-w-0">
+        {/* Left-side status indicator. One slot, four states, no jitter
+            between them (same outer dimensions). */}
+        <StatusDot
+          isLive={isLive}
+          isError={isError}
+          isUnread={isUnread}
+          status={session.status}
+        />
         <span
           className={cn(
             "truncate flex-1 text-xs",
-            // Email-style: unread rows are bold + foreground; once
-            // viewed, fade back to normal weight + muted color. The
-            // store atomically clears unread when the user makes the
-            // session current (see chat-store setCurrent).
-            session.unread && !isCurrent
+            isUnread
               ? "font-semibold text-foreground"
               : isCurrent
                 ? "text-foreground"
@@ -312,25 +344,19 @@ function ChatRow({
         >
           {session.title || "untitled"}
         </span>
-        {isLive && (
-          <span
-            className="h-1.5 w-1.5 rounded-full bg-orange-500 animate-pulse shrink-0"
-            title={session.status}
-          />
-        )}
-        {isError && (
-          <AlertCircle
-            className="h-3 w-3 text-red-500 shrink-0"
-            aria-label={session.lastError || "error"}
-          />
-        )}
-        {/* hover-only actions */}
-        <span className="hidden group-hover:inline-flex items-center gap-1 shrink-0">
-          <span
-            role="button"
-            onClick={(e) => onTogglePin(e, session.id)}
+        {/* hover-only actions — REAL <button>s now (was <span role=button>
+            inside the outer <button>, which is invalid nested-button HTML
+            and made the X click silently no-op on close). */}
+        <span className="hidden group-hover:inline-flex items-center gap-0.5 shrink-0">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              void onTogglePin(e, session.id);
+            }}
             className="p-0.5 rounded hover:bg-muted"
             title={session.pinned ? "unpin" : "pin"}
+            aria-label={session.pinned ? "unpin" : "pin"}
           >
             <Pin
               className={cn(
@@ -340,21 +366,25 @@ function ChatRow({
                   : "text-muted-foreground"
               )}
             />
-          </span>
-          <span
-            role="button"
-            onClick={(e) => onClose(e, session.id)}
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              void onClose(e, session.id);
+            }}
             className="p-0.5 rounded hover:bg-muted text-muted-foreground"
             title="close"
+            aria-label="close"
           >
             <X className="h-3 w-3" />
-          </span>
+          </button>
         </span>
       </div>
       {session.preview && (
         <div
           className={cn(
-            "text-[10px] truncate mt-0.5",
+            "text-[10px] truncate mt-0.5 ml-4",
             isError
               ? "text-red-500/80"
               : isLive
@@ -365,6 +395,57 @@ function ChatRow({
           {session.preview}
         </div>
       )}
-    </button>
+    </div>
+  );
+}
+
+/** Status indicator dot — 8px hit-target, 6px visual, single-slot so the
+ *  row layout doesn't shift between states. */
+function StatusDot({
+  isLive,
+  isError,
+  isUnread,
+  status,
+}: {
+  isLive: boolean;
+  isError: boolean;
+  isUnread: boolean;
+  status: string;
+}) {
+  if (isError) {
+    return (
+      <AlertCircle
+        className="h-3 w-3 text-red-500 shrink-0"
+        aria-label="error"
+      />
+    );
+  }
+  if (isLive) {
+    return (
+      <span
+        className="relative h-2 w-2 shrink-0 flex items-center justify-center"
+        aria-label={status}
+      >
+        {/* outer halo — slow gentle pulse */}
+        <span className="absolute inset-0 rounded-full bg-orange-500/40 animate-[sp-pulse_1.6s_ease-in-out_infinite]" />
+        {/* inner dot — solid */}
+        <span className="relative h-1.5 w-1.5 rounded-full bg-orange-500" />
+      </span>
+    );
+  }
+  if (isUnread) {
+    return (
+      <span
+        className="h-1.5 w-1.5 rounded-full bg-foreground shrink-0"
+        aria-label="unread"
+      />
+    );
+  }
+  // idle — hollow ring (matches Claude's pattern)
+  return (
+    <span
+      className="h-1.5 w-1.5 rounded-full border border-muted-foreground/40 shrink-0"
+      aria-hidden
+    />
   );
 }

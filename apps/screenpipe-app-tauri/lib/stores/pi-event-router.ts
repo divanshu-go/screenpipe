@@ -369,6 +369,19 @@ function applyEventToSessionContent(sid: string, payload: PiEventPayload) {
   const existing = store.sessions[sid];
   if (!existing) return; // upsert will fire on the next call
 
+  // CRITICAL: skip content writes for the session the panel is actively
+  // rendering. The chat panel's own pi_event handler in standalone-chat
+  // owns the message lifecycle for the current session (it creates the
+  // assistant placeholder, appends deltas, handles agent_end, persists
+  // to disk). If both this router AND the local handler write messages
+  // for the same session, you get DOUBLE messages — one from each
+  // writer — and the panel renders the same assistant reply twice.
+  // The router's job is exclusively to keep BACKGROUND sessions in
+  // sync; the panel handles foreground. On switch, loadConversation
+  // snapshots the panel's state to the store before the router takes
+  // over for what's now a background session.
+  if (store.currentId === sid) return;
+
   const t = payload.type;
 
   // Assistant message starts — create a new in-flight message shell

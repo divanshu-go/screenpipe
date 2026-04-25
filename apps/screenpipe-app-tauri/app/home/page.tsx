@@ -322,10 +322,10 @@ function HomeContent() {
 
   // Top-level nav items (filtered by enterprise policy)
   const mainSections = [
-    { id: "home", label: "Home", icon: <Home className="h-4 w-4" /> },
-    { id: "pipes", label: "Pipes", icon: <Workflow className="h-4 w-4" /> },
-    { id: "timeline", label: "Timeline", icon: <Clock className="h-4 w-4" /> },
-    { id: "memories", label: "Memories", icon: <Sparkles className="h-4 w-4" /> },
+    { id: "home", label: "Home", icon: <Home className="h-3.5 w-3.5" /> },
+    { id: "pipes", label: "Pipes", icon: <Workflow className="h-3.5 w-3.5" /> },
+    { id: "timeline", label: "Timeline", icon: <Clock className="h-3.5 w-3.5" /> },
+    { id: "memories", label: "Memories", icon: <Sparkles className="h-3.5 w-3.5" /> },
   ].filter((s) => !isSectionHidden(s.id));
 
   // Listen for navigation events from other windows (e.g. tray, Rust-side links)
@@ -485,7 +485,7 @@ function HomeContent() {
                         setActiveSection(section.id);
                       }}
                       className={cn(
-                        "w-full flex items-center px-3 py-2 rounded-lg transition-all duration-150 text-left group",
+                        "w-full flex items-center px-2.5 py-1.5 rounded-lg transition-all duration-150 text-left group",
                         sidebarCollapsed ? "justify-center" : "space-x-2.5",
                         isActive
                           ? isTranslucent
@@ -504,7 +504,7 @@ function HomeContent() {
                       )}>
                         {section.icon}
                       </div>
-                      {!sidebarCollapsed && <span className={cn("text-sm truncate", isActive && isTranslucent ? "font-semibold vibrant-sidebar-fg" : "font-medium")}>{section.label}</span>}
+                      {!sidebarCollapsed && <span className={cn("text-xs truncate", isActive && isTranslucent ? "font-semibold vibrant-sidebar-fg" : "font-medium")}>{section.label}</span>}
                     </button>
                   );
                   if (sidebarCollapsed) {
@@ -548,13 +548,13 @@ function HomeContent() {
                     <button
                       onClick={() => openSettings("team")}
                       className={cn(
-                        "w-full flex items-center px-3 py-2 rounded-lg transition-all duration-150 text-left group",
+                        "w-full flex items-center px-2.5 py-1.5 rounded-lg transition-all duration-150 text-left group",
                         sidebarCollapsed ? "justify-center" : "space-x-2.5",
                         isTranslucent ? "vibrant-nav-item vibrant-nav-hover" : "hover:bg-card/50 text-muted-foreground hover:text-foreground",
                       )}
                     >
-                      <UserPlus className={cn("h-4 w-4 transition-colors flex-shrink-0", isTranslucent ? "" : "text-muted-foreground group-hover:text-foreground")} />
-                      {!sidebarCollapsed && <span className="font-medium text-sm truncate">{teamLabel}</span>}
+                      <UserPlus className={cn("h-3.5 w-3.5 transition-colors flex-shrink-0", isTranslucent ? "" : "text-muted-foreground group-hover:text-foreground")} />
+                      {!sidebarCollapsed && <span className="font-medium text-xs truncate">{teamLabel}</span>}
                     </button>
                   );
                   if (sidebarCollapsed) {
@@ -574,13 +574,13 @@ function HomeContent() {
                     <button
                       onClick={() => openSettings("referral")}
                       className={cn(
-                        "w-full flex items-center px-3 py-2 rounded-lg transition-all duration-150 text-left group",
+                        "w-full flex items-center px-2.5 py-1.5 rounded-lg transition-all duration-150 text-left group",
                         sidebarCollapsed ? "justify-center" : "space-x-2.5",
                         isTranslucent ? "vibrant-nav-item vibrant-nav-hover" : "hover:bg-card/50 text-muted-foreground hover:text-foreground",
                       )}
                     >
-                      <Gift className={cn("h-4 w-4 transition-colors flex-shrink-0", isTranslucent ? "" : "text-muted-foreground group-hover:text-foreground")} />
-                      {!sidebarCollapsed && <span className="font-medium text-sm truncate">Get free month</span>}
+                      <Gift className={cn("h-3.5 w-3.5 transition-colors flex-shrink-0", isTranslucent ? "" : "text-muted-foreground group-hover:text-foreground")} />
+                      {!sidebarCollapsed && <span className="font-medium text-xs truncate">Get free month</span>}
                     </button>
                   );
                   if (sidebarCollapsed) {
@@ -601,7 +601,7 @@ function HomeContent() {
                       data-testid="nav-settings"
                       onClick={() => openSettings("general")}
                       className={cn(
-                        "w-full flex items-center px-3 py-2 rounded-lg transition-all duration-150 text-left group",
+                        "w-full flex items-center px-2.5 py-1.5 rounded-lg transition-all duration-150 text-left group",
                         sidebarCollapsed ? "justify-center" : "space-x-2.5",
                         isTranslucent
                           ? "vibrant-nav-item vibrant-nav-hover"
@@ -612,9 +612,9 @@ function HomeContent() {
                         "transition-colors flex-shrink-0",
                         isTranslucent ? "" : "text-muted-foreground group-hover:text-foreground"
                       )}>
-                        <SettingsIcon className="h-4 w-4" />
+                        <SettingsIcon className="h-3.5 w-3.5" />
                       </div>
-                      {!sidebarCollapsed && <span className="font-medium text-sm truncate">Settings</span>}
+                      {!sidebarCollapsed && <span className="font-medium text-xs truncate">Settings</span>}
                     </button>
                   );
                   if (sidebarCollapsed) {
@@ -638,7 +638,7 @@ function HomeContent() {
                         setActiveSection("help");
                       }}
                       className={cn(
-                        "w-full flex items-center px-3 py-2 rounded-lg transition-all duration-150 text-left group",
+                        "w-full flex items-center px-2.5 py-1.5 rounded-lg transition-all duration-150 text-left group",
                         sidebarCollapsed ? "justify-center" : "space-x-2.5",
                         isActive
                           ? isTranslucent
@@ -655,9 +655,9 @@ function HomeContent() {
                           ? isTranslucent ? "" : "text-primary"
                           : isTranslucent ? "" : "text-muted-foreground group-hover:text-foreground"
                       )}>
-                        <HelpCircle className="h-4 w-4" />
+                        <HelpCircle className="h-3.5 w-3.5" />
                       </div>
-                      {!sidebarCollapsed && <span className="font-medium text-sm truncate">Help</span>}
+                      {!sidebarCollapsed && <span className="font-medium text-xs truncate">Help</span>}
                     </button>
                   );
                   if (sidebarCollapsed) {
