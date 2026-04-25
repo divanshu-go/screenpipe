@@ -192,8 +192,12 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
   // Collapse state for both Scheduled and Recents persists in
   // localStorage — "I closed it, leave it closed" across reloads.
   return (
+    // px-2 cancels the parent wrapper's -mx-2 (used to make the
+    // border-t span the full sidebar width). Without this the chat
+    // rows + section headers sit 8px left of the main nav items
+    // (Timeline / Memories / ...) and look misaligned.
     <div
-      className={cn("flex flex-col min-h-0 text-sm", className)}
+      className={cn("flex flex-col min-h-0 text-sm px-2", className)}
       data-testid="chat-sidebar"
     >
       {runningPipes.length > 0 && (
@@ -269,7 +273,7 @@ function CollapsibleRecents({
       <button
         type="button"
         onClick={() => setCollapsed(!collapsed)}
-        className="shrink-0 px-3 py-1.5 flex items-center gap-1 hover:bg-muted/30 rounded-md mx-1 text-left"
+        className="shrink-0 px-2.5 py-1.5 flex items-center gap-1 hover:bg-muted/30 rounded-md text-left"
         aria-expanded={!collapsed}
         aria-controls="chat-sidebar-recents"
       >
@@ -288,7 +292,7 @@ function CollapsibleRecents({
           className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden"
         >
           {empty ? (
-            <div className="px-3 py-2 text-xs text-muted-foreground/70 italic">
+            <div className="px-2.5 py-2 text-xs text-muted-foreground/70 italic">
               {emptyText}
             </div>
           ) : (
@@ -335,7 +339,7 @@ function CollapsibleScheduled({
       <button
         type="button"
         onClick={() => setCollapsed(!collapsed)}
-        className="shrink-0 px-3 py-1.5 flex items-center gap-1 hover:bg-muted/30 rounded-md mx-1 text-left"
+        className="shrink-0 px-2.5 py-1.5 flex items-center gap-1 hover:bg-muted/30 rounded-md text-left"
         aria-expanded={!collapsed}
         aria-controls="chat-sidebar-scheduled"
       >
@@ -382,7 +386,7 @@ function CollapsibleScheduled({
 function ScheduledRow({
   pipe,
 }: {
-  pipe: { pipeName: string; title?: string; startedAt?: string };
+  pipe: { pipeName: string; title?: string; startedAt?: string; executionId?: number };
 }) {
   const elapsed = useMemo(() => {
     if (!pipe.startedAt) return null;
@@ -392,9 +396,38 @@ function ScheduledRow({
     if (ms < 3600_000) return `${Math.floor(ms / 60_000)}m`;
     return `${Math.floor(ms / 3600_000)}h`;
   }, [pipe.startedAt]);
+  // Click → emit watch_pipe so standalone-chat opens the pipe execution
+  // and starts streaming its output. The page-level listener flips the
+  // active section to home if the user is on Pipes/Memories/etc.
+  const onClick = () => {
+    if (pipe.executionId == null) return;
+    void emit("watch_pipe", {
+      pipeName: pipe.pipeName,
+      executionId: pipe.executionId,
+    });
+  };
+  const interactive = pipe.executionId != null;
   return (
     <div
-      className="flex items-center gap-2 px-2 py-1 mx-1 rounded-md text-foreground/80 select-none"
+      role={interactive ? "button" : undefined}
+      tabIndex={interactive ? 0 : undefined}
+      onClick={interactive ? onClick : undefined}
+      onKeyDown={
+        interactive
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onClick();
+              }
+            }
+          : undefined
+      }
+      className={cn(
+        "flex items-center gap-2 px-2.5 py-1 mx-0 rounded-md text-foreground/80 select-none",
+        interactive
+          ? "cursor-pointer hover:bg-muted/40"
+          : "cursor-default"
+      )}
       title={`pipe: ${pipe.pipeName}`}
       data-testid={`scheduled-row-${pipe.pipeName}`}
     >
@@ -429,7 +462,7 @@ function Section({
 }) {
   return (
     <div className="mb-2">
-      <div className="px-3 py-1.5 flex items-center justify-between">
+      <div className="px-2.5 py-1.5 flex items-center justify-between">
         <span className="text-[10px] uppercase tracking-wider text-muted-foreground/60">
           {title}
         </span>
@@ -495,7 +528,7 @@ function ChatRow({
         }
       }}
       className={cn(
-        "group relative flex flex-col items-stretch text-left px-2 py-1 mx-1 rounded-md cursor-pointer select-none",
+        "group relative flex flex-col items-stretch text-left px-2.5 py-1 rounded-md cursor-pointer select-none",
         "transition-colors",
         isCurrent
           ? "bg-muted/70 text-foreground"
