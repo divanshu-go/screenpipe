@@ -172,7 +172,7 @@ function errorMessage(evt: PiInnerEvent): string | null {
 const PREVIEW_THROTTLE_MS = 250;
 const previewLastEmittedAt = new Map<string, number>();
 
-async function handlePiEvent(envelope: PiEventEnvelope) {
+export async function handlePiEvent(envelope: PiEventEnvelope) {
   const sid = envelope.sessionId;
   const inner = envelope.event;
   if (!sid || !inner) return; // events without a session id or body can't be routed
@@ -267,7 +267,7 @@ function handleSessionEvicted(payload: PiSessionEvictedPayload) {
   useChatStore.getState().actions.drop(payload.session);
 }
 
-function handleTerminated(payload: PiTerminatedPayload) {
+export function handleTerminated(payload: PiTerminatedPayload) {
   // Pi subprocess exited (clean shutdown, crash, manual kill, or app quit).
   // Flip the session to idle so the sidebar dot stops pulsing. The
   // conversation history is still on disk; if the user sends another
