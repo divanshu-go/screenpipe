@@ -6,7 +6,9 @@ use axum::{
     extract::{Query, State},
     http::StatusCode,
     response::Json as JsonResponse,
+    Extension,
 };
+use screenpipe_core::pipes::permissions::PipePermissions;
 use oasgen::{oasgen, OaSchema};
 
 use chrono::{DateTime, Utc};
@@ -168,9 +170,20 @@ pub(crate) fn compute_search_cache_key(query: &SearchQuery) -> u64 {
 // Update the search function
 #[oasgen]
 pub(crate) async fn search(
-    Query(query): Query<SearchQuery>,
+    Query(mut query): Query<SearchQuery>,
     State(state): State<Arc<AppState>>,
+    pipe_perms: Option<Extension<Arc<PipePermissions>>>,
 ) -> Result<JsonResponse<SearchResponse>, (StatusCode, JsonResponse<serde_json::Value>)> {
+    // Server-authoritative privacy filter: if the request comes from a
+    // pipe whose manifest declares `privacy_filter: true`, force PII
+    // redaction regardless of what the request payload says. The pipe's
+    // LLM agent has no schema-level way to bypass this — the permissions
+    // are looked up from the bearer token by `pipe_permissions_middleware`.
+    if let Some(Extension(perms)) = &pipe_perms {
+        if perms.privacy_filter {
+            query.filter_pii = true;
+        }
+    }
     debug!(
         "received search request: query='{}', content_type={:?}, limit={}, offset={}, start_time={:?}, end_time={:?}, app_name={:?}, window_name={:?}, min_length={:?}, max_length={:?}, speaker_ids={:?}, frame_name={:?}, browser_url={:?}, focused={:?}",
         query.q.as_deref().unwrap_or(""),

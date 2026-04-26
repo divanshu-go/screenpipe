@@ -174,6 +174,15 @@ pub struct PipePermissions {
     /// Used for filesystem sandboxing — pipes can only write within this directory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pipe_dir: Option<String>,
+
+    /// Mirrors `PipeConfig.privacy_filter`. When true, the `/search`
+    /// handler force-sets `query.filter_pii = true` for any request
+    /// carrying this pipe's bearer token, regardless of what the
+    /// request payload says. The pipe's LLM agent has no schema-level
+    /// way to bypass this — enforcement is server-side via the same
+    /// token plumbing used for endpoint allow/deny rules.
+    #[serde(default)]
+    pub privacy_filter: bool,
 }
 
 impl PipePermissions {
@@ -195,6 +204,7 @@ impl PipePermissions {
             pipe_token: None,
             offline_mode: crate::offline::is_offline_mode(),
             pipe_dir: None,
+            privacy_filter: config.privacy_filter,
         }
     }
 
@@ -622,6 +632,7 @@ mod tests {
             pipe_token: None,
             offline_mode: false,
             pipe_dir: None,
+            privacy_filter: false,
         }
     }
 
