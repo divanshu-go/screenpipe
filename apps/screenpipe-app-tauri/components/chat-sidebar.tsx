@@ -44,6 +44,7 @@ import {
   type SessionRecord,
 } from "@/lib/stores/chat-store";
 import { updateConversationFlags } from "@/lib/chat-storage";
+import { pipeSessionId } from "@/lib/events/types";
 
 interface ChatSidebarProps {
   className?: string;
@@ -86,12 +87,30 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
     };
   }, [actions]);
 
+  const runningPipes = useRunningPipes();
+
+  // Pipe-watch / pipe-run sessions also rendered in Scheduled get filtered
+  // out here — otherwise the same pipe shows up twice (live row in
+  // Scheduled + duplicate row in Recents). Once the pipe stops running it
+  // drops out of this set and reappears in Recents naturally.
+  const liveScheduledSids = useMemo(() => {
+    const set = new Set<string>();
+    for (const p of runningPipes) {
+      if (p.executionId !== undefined) set.add(pipeSessionId(p.pipeName, p.executionId));
+    }
+    return set;
+  }, [runningPipes]);
+
   const { pinned, recents } = useMemo(() => {
     const p: SessionRecord[] = [];
     const r: SessionRecord[] = [];
-    for (const s of sessions) (s.pinned ? p : r).push(s);
+    for (const s of sessions) {
+      const isPipeKind = s.kind === "pipe-watch" || s.kind === "pipe-run";
+      if (isPipeKind && liveScheduledSids.has(s.id)) continue;
+      (s.pinned ? p : r).push(s);
+    }
     return { pinned: p, recents: r };
-  }, [sessions]);
+  }, [sessions, liveScheduledSids]);
 
   const handleNew = () => {
     // Reuse an existing empty chat instead of spawning a fresh one
@@ -178,8 +197,6 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
       // best-effort persistence — UI already updated
     }
   };
-
-  const runningPipes = useRunningPipes();
 
   // Layout contract:
   //   - Scheduled (pipe runs): only renders when something's running;
