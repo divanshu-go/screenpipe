@@ -1030,6 +1030,34 @@ async fn main() -> anyhow::Result<()> {
             analytics::capture_event_nonblocking("pipe_scheduled_run", props);
         },
     ));
+    // Gate scheduled pipe runs on connection readiness — same predicate the
+    // manual /pipes/:id/run endpoint uses (pipes_api.rs). Avoids running
+    // pipes that are still in "setup mode" (declared connections not paired).
+    {
+        let secret_store_for_check = server.secret_store.clone();
+        let screenpipe_dir_for_check = local_data_dir.clone();
+        pipe_manager.set_connection_check(std::sync::Arc::new(move |required| {
+            let ss = secret_store_for_check.clone();
+            let dir = screenpipe_dir_for_check.clone();
+            Box::pin(async move {
+                let mut missing = Vec::new();
+                for conn_id in required {
+                    let configured = screenpipe_connect::connections::load_connection(
+                        ss.as_deref(),
+                        &dir,
+                        &conn_id,
+                    )
+                    .await
+                    .map(|c| c.enabled && !c.credentials.is_empty())
+                    .unwrap_or(false);
+                    if !configured {
+                        missing.push(conn_id);
+                    }
+                }
+                missing
+            })
+        }));
+    }
     // Inject local API key so pipe subprocesses can authenticate to localhost
     if config.api_auth {
         pipe_manager.set_local_api_key(config.api_auth_key.clone());
