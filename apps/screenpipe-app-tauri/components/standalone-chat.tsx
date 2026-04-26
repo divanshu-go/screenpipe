@@ -3209,10 +3209,23 @@ export function StandaloneChat({
         });
       });
 
-      // Poll immediately in case execution already finished before we started listening
-      // Then poll every 3s as a fallback if streaming events are missed
+      // Poll the executions API as a safety net — catches the case
+      // where the pipe finished BEFORE we mounted the foreground bus
+      // registration (the events fired and went to the recorder, not
+      // here). Once the live agent_event stream has had a chance to
+      // arrive, this poll has done its job; the live stream is the
+      // authoritative source for in-progress runs.
+      //
+      // Bug fix (2026-04-26): the previous version tore down the watch
+      // after 30s "timeout" — clearing activePipeExecution, unregistering
+      // the foreground, and nulling piMessageIdRef. For pipes that take
+      // longer than 30s this would silently (a) hide the banner, (b)
+      // strand the thinking indicator at isThinking:true, and (c) drop
+      // every subsequent live event on the floor because piMessageIdRef
+      // was null. Now we just stop polling — the watch stays alive and
+      // is driven by live events to completion.
       let pollCount = 0;
-      const maxPolls = 10; // 30s max (10 * 3s)
+      const maxPolls = 10; // 30s of safety-net polling
       const doPoll = async () => {
         if (piMessageIdRef.current !== msgId) return; // no longer watching
         const done = await pollExecutionStatus(pipeName, executionId, msgId);
@@ -3222,23 +3235,9 @@ export function StandaloneChat({
         }
         pollCount++;
         if (pollCount >= maxPolls) {
-          // Timeout — give up watching, show what we have
-          if (piMessageIdRef.current === msgId) {
-            const content = piStreamingTextRef.current || "Pipe is still running — check execution history for results.";
-            setMessages((prev) =>
-              prev.map((m) => m.id === msgId ? { ...m, content } : m)
-            );
-            piStreamingTextRef.current = "";
-            piMessageIdRef.current = null;
-            piContentBlocksRef.current = [];
-            piLastErrorRef.current = null;
-            piThinkingStartRef.current = null;
-            setActivePipeExecution(null);
-            try { pipeWatchUnregisterRef.current?.(); } catch { /* ignore */ }
-            pipeWatchUnregisterRef.current = null;
-            setIsLoading(false);
-            setIsStreaming(false);
-          }
+          // Safety-net budget exhausted. The pipe is running and live
+          // events are doing their job — no teardown here. The watch
+          // ends when agent_end / pipe_done arrives via the bus.
           watchPollTimer = null;
           return;
         }
