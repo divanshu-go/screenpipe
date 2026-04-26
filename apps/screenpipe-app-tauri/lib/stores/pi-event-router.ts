@@ -304,6 +304,8 @@ async function hydrate() {
         // History reload doesn't count as new activity — start clean.
         unread: false,
         lastUserMessageAt: m.lastUserMessageAt,
+        kind: m.kind,
+        pipeContext: m.pipeContext,
       }));
     useChatStore.getState().actions.hydrateFromDisk(records);
   } catch {
@@ -628,6 +630,12 @@ async function persistBackgroundSession(sid: string): Promise<void> {
         updatedAt: Date.now(),
         pinned: existing?.pinned ?? session.pinned,
         hidden: existing?.hidden ?? false,
+        // Preserve kind / pipe metadata so a pipe-run conversation
+        // doesn't silently demote to "chat" on its first router-side
+        // save. Existing chats default to no `kind` field on disk
+        // (back-compat).
+        ...(session.kind ? { kind: session.kind } : existing?.kind ? { kind: existing.kind } : {}),
+        ...(session.pipeContext ? { pipeContext: session.pipeContext } : existing?.pipeContext ? { pipeContext: existing.pipeContext } : {}),
       };
 
       try {

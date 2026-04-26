@@ -11,7 +11,11 @@ import {
   remove,
   exists,
 } from "@tauri-apps/plugin-fs";
-import type { ChatConversation } from "@/lib/hooks/use-settings";
+import type {
+  ChatConversation,
+  ConversationKind,
+  PipeContext,
+} from "@/lib/hooks/use-settings";
 
 let _chatsDir: string | null = null;
 
@@ -84,6 +88,12 @@ export interface ConversationMeta {
    *  sidebar sort order. Falls back to derive-from-messages on legacy
    *  files that pre-date the field. */
   lastUserMessageAt?: number;
+  /** Conversation kind — `chat` for chats, `pipe-watch` / `pipe-run` for
+   *  pipe sessions. Sidebar uses this to split rows into separate
+   *  sections. Older files default to `chat`. */
+  kind: ConversationKind;
+  /** Pipe metadata for `pipe-*` kinds. Undefined for plain chats. */
+  pipeContext?: PipeContext;
 }
 
 export async function listConversations(): Promise<ConversationMeta[]> {
@@ -119,6 +129,8 @@ export async function listConversations(): Promise<ConversationMeta[]> {
         pinned: conv.pinned === true,
         hidden: conv.hidden === true,
         lastUserMessageAt,
+        kind: conv.kind ?? "chat",
+        pipeContext: conv.pipeContext,
       });
     } catch {
       // skip corrupt files

@@ -6,6 +6,13 @@
 import * as React from "react";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import {
+  mountAgentEventBus,
+  registerForeground,
+  onTerminated as onAgentTerminated,
+  onEvicted as onAgentEvicted,
+} from "@/lib/events/bus";
+import { pipeSessionId } from "@/lib/events/types";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
@@ -13,6 +20,7 @@ import { useSettings, ChatMessage, ChatConversation } from "@/lib/hooks/use-sett
 import { cn } from "@/lib/utils";
 import { Loader2, Send, Square, User, Settings, ExternalLink, X, ImageIcon, History, Search, Trash2, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Plus, Copy, Check, Clock, Paperclip, Filter, RefreshCw, GitBranch, MoreHorizontal, Pencil, Pin, Shield, ShieldCheck } from "lucide-react";
 import { SchedulePromptDialog } from "@/components/chat/schedule-prompt-dialog";
+import { PipeContextBanner } from "@/components/chat/pipe-context-banner";
 import { toast } from "@/components/ui/use-toast";
 import { motion, AnimatePresence } from "framer-motion";
 import { PipeAIIcon, PipeAIIconLarge } from "@/components/pipe-ai-icon";
@@ -1434,6 +1442,23 @@ export function StandaloneChat({
   // Bypass guard for auto-send from chat-prefill (Pi confirmed running but React state stale)
   const autoSendBypassRef = useRef(false);
 
+  // Forwarding ref for the per-event handler. Updated whenever the
+  // listener-setup useEffect runs so foreground bus registrations can
+  // dispatch through the latest closure without a re-registration on
+  // every render. The function itself is created inside that effect
+  // (it closes over local state setters and refs); routing through a
+  // ref avoids an expensive re-extraction.
+  const handleAgentEventDataRef = useRef<((data: any) => void) | null>(null);
+  // True until the component unmounts. Used by bus handlers to avoid
+  // touching React state after unmount; equivalent to the per-effect
+  // `mounted` flag but visible across all useEffect boundaries.
+  const mountedRef = useRef(true);
+  // Active pipe-watch foreground unregister fn — set when initWatch
+  // registers for a pipe sessionId, cleared on watch end. Lets the
+  // panel hold a second foreground registration for the synthetic
+  // pipe id alongside its chat registration.
+  const pipeWatchUnregisterRef = useRef<(() => void) | null>(null);
+
   // Chat history state
   const [conversationId, setConversationId] = useState<string | null>(null);
 
@@ -1885,25 +1910,61 @@ export function StandaloneChat({
     useChatStore.getState().actions.setPanelSession(conversationId);
   }, [conversationId]);
 
+  // Component-lifetime guard for bus handlers that fire across the
+  // longer-lived useEffects (terminated, foreground registrations).
+  // Useful because the panel's per-effect `mounted` flags are scoped
+  // to their own effects.
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  // Foreground registration on the agent-event bus. Switches with
+  // `conversationId` so the bus always knows exactly one panel owns
+  // events for the current chat. The router's exclusive routing means
+  // we don't have to filter by sessionId in the handler — the bus
+  // delivers only events whose envelope sessionId matches the
+  // registration key.
+  useEffect(() => {
+    if (!conversationId) return;
+    let cancelled = false;
+    let off: (() => void) | null = null;
+    (async () => {
+      await mountAgentEventBus();
+      if (cancelled) return;
+      off = registerForeground(conversationId, (envelope) => {
+        if (!mountedRef.current) return;
+        handleAgentEventDataRef.current?.(envelope.event);
+      });
+    })();
+    return () => {
+      cancelled = true;
+      try { off?.(); } catch { /* ignore */ }
+    };
+  }, [conversationId]);
+
   // If the Pi pool evicted the session we're currently viewing, swap the
   // panel to a fresh one. The pool only evicts idle sessions (see
   // pi.rs::pi_start_inner), so this is rare — but when it does happen the
   // user shouldn't be left with a panel pointing at a dead pid.
   useEffect(() => {
-    let unlistenFn: (() => void) | undefined;
     let cancelled = false;
+    let off: (() => void) | null = null;
     (async () => {
-      const u = await listen<{ session: string }>("pi_session_evicted", async (event) => {
+      await mountAgentEventBus();
+      if (cancelled) return;
+      off = onAgentEvicted(async (payload) => {
         if (cancelled) return;
-        if (event.payload.session !== piSessionIdRef.current) return;
+        if (payload.sessionId !== piSessionIdRef.current) return;
         await startNewConversationRef.current();
         emit("chat-current-session", { id: piSessionIdRef.current });
       });
-      unlistenFn = u;
     })();
     return () => {
       cancelled = true;
-      unlistenFn?.();
+      try { off?.(); } catch { /* ignore */ }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -2359,14 +2420,32 @@ export function StandaloneChat({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings.user?.token]);
 
-  // Listen for Pi events (all providers route through Pi) and pipe events
+  // Listen for Pi / pipe events.
+  //
+  // Stage 3 of the events refactor: the panel registers with the
+  // agent-event bus instead of subscribing to legacy Tauri topics
+  // directly. Foreground registration is exclusive — the bus routes
+  // events for the registered sessionId to this handler and skips the
+  // background router. See `lib/events/bus.ts`.
+  //
+  // The panel may hold up to two foreground registrations at once:
+  //   - one for the chat session (`conversationId`), bound below in a
+  //     dedicated useEffect that re-registers on every session switch
+  //   - one for a synthetic pipe id (`pipe:<name>:<execId>`) when the
+  //     user is actively watching a pipe — bound inside `initWatch`
+  //     and released on watch end
+  //
+  // The shared `handleAgentEventDataRef` lets both registrations
+  // dispatch through the same event-handling switch without forcing a
+  // costly re-extraction every time the closure changes.
   useEffect(() => {
-    let unlistenEvent: UnlistenFn | null = null;
-    let unlistenPipeEvent: UnlistenFn | null = null;
-    let unlistenTerminated: UnlistenFn | null = null;
     let unlistenLog: UnlistenFn | null = null;
     let unlistenReauth: UnlistenFn | null = null;
     let mounted = true;
+    // Bus registrations to release on cleanup. Mixed with the legacy
+    // unlisten handles below so the cleanup section drains them
+    // uniformly.
+    const busUnregistrations: Array<() => void> = [];
 
     // Shared handler for Pi event data — used by both pi_event and pipe_event
     const handlePiEventData = (data: any) => {
@@ -2794,7 +2873,11 @@ export function StandaloneChat({
             error_type: errorCategory,
           });
           piStreamingTextRef.current = "";
-          if (piMessageIdRef.current?.startsWith("pipe-")) setActivePipeExecution(null);
+          if (piMessageIdRef.current?.startsWith("pipe-")) {
+            setActivePipeExecution(null);
+            try { pipeWatchUnregisterRef.current?.(); } catch { /* ignore */ }
+            pipeWatchUnregisterRef.current = null;
+          }
           piMessageIdRef.current = null;
           piContentBlocksRef.current = [];
           setIsLoading(false);
@@ -2814,36 +2897,32 @@ export function StandaloneChat({
             piLastErrorRef.current = null;
             piThinkingStartRef.current = null;
             setActivePipeExecution(null);
+            try { pipeWatchUnregisterRef.current?.(); } catch { /* ignore */ }
+            pipeWatchUnregisterRef.current = null;
             setIsLoading(false);
             setIsStreaming(false);
           }
         }
       };
 
+    // Publish the current handler to the forwarding ref so foreground
+    // registrations (chat + pipe-watch) dispatch through the same
+    // closure without re-binding.
+    handleAgentEventDataRef.current = handlePiEventData;
+
     const setup = async () => {
-      unlistenEvent = await listen<any>("pi_event", (event) => {
-        if (!mounted) return;
-        const { sessionId, event: piEvent } = event.payload;
-        if (sessionId !== piSessionIdRef.current) return;
-        handlePiEventData(piEvent);
-      });
+      // Ensure the bus's Tauri listener is up before any consumer
+      // (router, panel, pipes hook) starts registering. Idempotent.
+      await mountAgentEventBus();
 
-      // Listen for pipe execution events (only when actively watching a pipe)
-      unlistenPipeEvent = await listen<any>("pipe_event", (event) => {
+      // Termination — broadcast event, filter by current session id.
+      // Replaces the prior `listen("pi_terminated", ...)`. The bus
+      // mirrors `agent_terminated`; legacy `pi_terminated` is a Stage 5
+      // cleanup target.
+      busUnregistrations.push(onAgentTerminated((payload) => {
         if (!mounted) return;
-        // Only process events for the pipe we're actively watching
-        if (!piMessageIdRef.current?.startsWith("pipe-")) return;
-        const payload = event.payload;
-        const piEvent = payload?.event;
-        if (!piEvent) return;
-
-        handlePiEventData(piEvent);
-      });
-
-      unlistenTerminated = await listen<any>("pi_terminated", (event) => {
-        if (!mounted) return;
-        const { sessionId, pid: terminatedPid } = event.payload;
-        if (sessionId !== piSessionIdRef.current) return;
+        if (payload.sessionId !== piSessionIdRef.current) return;
+        const terminatedPid = payload.pid;
         if (piStoppedIntentionallyRef.current) {
           piStoppedIntentionallyRef.current = false;
           return;
@@ -2935,7 +3014,7 @@ export function StandaloneChat({
             }
           }
         }, delay);
-      });
+      }));
       // Listen for Pi stderr — only surface errors when user is actively waiting for a response
       unlistenLog = await listen<string>("pi_log", (event) => {
         if (!mounted) return;
@@ -2995,9 +3074,9 @@ export function StandaloneChat({
 
     return () => {
       mounted = false;
-      unlistenEvent?.();
-      unlistenPipeEvent?.();
-      unlistenTerminated?.();
+      for (const off of busUnregistrations) {
+        try { off(); } catch { /* ignore — tearing down */ }
+      }
       unlistenLog?.();
       unlistenReauth?.();
       // Abort any in-flight Pi request when navigating away from chat.
@@ -3063,6 +3142,8 @@ export function StandaloneChat({
             piLastErrorRef.current = null;
             piThinkingStartRef.current = null;
             setActivePipeExecution(null);
+            try { pipeWatchUnregisterRef.current?.(); } catch { /* ignore */ }
+            pipeWatchUnregisterRef.current = null;
             setIsLoading(false);
             setIsStreaming(false);
           }
@@ -3088,16 +3169,16 @@ export function StandaloneChat({
       piContentBlocksRef.current = [];
       piThinkingStartRef.current = null;
       piMessageIdRef.current = msgId;
+      // Stage 3: drop the synthetic "Watching pipe: X" user-bubble
+      // sentinel that previous versions inserted to give the assistant
+      // placeholder a parent in the message list. The chat panel now
+      // renders the pipe-context banner above the conversation flow
+      // instead, driven by `activePipeExecution`. Just prime the
+      // assistant placeholder so events have a target id to grow into.
       setMessages((prev) => {
         if (prev.some((m) => m.id === msgId)) return prev;
         return [
           ...prev,
-          {
-            id: `pipe-user-${executionId}`,
-            role: "user" as const,
-            content: `Watching pipe: ${pipeName}`,
-            timestamp: Date.now(),
-          },
           {
             id: msgId,
             role: "assistant" as const,
@@ -3108,6 +3189,25 @@ export function StandaloneChat({
         ];
       });
       setIsStreaming(true);
+
+      // Register a pipe-watch foreground on the agent-event bus. The
+      // Rust side emits pipe stdout under sessionId
+      // `pipe:<name>:<execId>` (see `lib/events/types.ts::pipeSessionId`),
+      // so the bus delivers exactly those events here. Coexists with
+      // the chat session's foreground registration — pipe and chat
+      // sessionIds can never collide because the `pipe:` prefix is
+      // reserved.
+      try {
+        pipeWatchUnregisterRef.current?.();
+      } catch { /* ignore stale */ }
+      const pipeSid = pipeSessionId(pipeName, executionId);
+      void mountAgentEventBus().then(() => {
+        if (piMessageIdRef.current !== msgId) return; // watch already canceled
+        pipeWatchUnregisterRef.current = registerForeground(pipeSid, (envelope) => {
+          if (!mountedRef.current) return;
+          handleAgentEventDataRef.current?.(envelope.event);
+        });
+      });
 
       // Poll immediately in case execution already finished before we started listening
       // Then poll every 3s as a fallback if streaming events are missed
@@ -3134,6 +3234,8 @@ export function StandaloneChat({
             piLastErrorRef.current = null;
             piThinkingStartRef.current = null;
             setActivePipeExecution(null);
+            try { pipeWatchUnregisterRef.current?.(); } catch { /* ignore */ }
+            pipeWatchUnregisterRef.current = null;
             setIsLoading(false);
             setIsStreaming(false);
           }
@@ -3979,6 +4081,15 @@ export function StandaloneChat({
           }}
         >
         <div className="max-w-4xl mx-auto w-full p-4 space-y-4">
+        {/* Pipe-watch banner — shown when the user clicked through from
+            a running pipe execution. Replaces the prior synthetic
+            "Watching pipe: X" user-bubble sentinel. */}
+        {activePipeExecution && (
+          <PipeContextBanner
+            pipeName={activePipeExecution.name}
+            executionId={activePipeExecution.executionId}
+          />
+        )}
         {messages.length === 0 && !isPreparingPrefill && disabledReason && (!hasPresets || !hasValidModel || needsLogin) && (
           <div className="relative flex flex-col items-center justify-center py-12 space-y-4">
             <div className="relative p-6 rounded-2xl border bg-muted/50 border-border/50">

@@ -82,6 +82,34 @@ export interface ChatMessage {
 	contentBlocks?: any[];
 	model?: string;
 	provider?: string;
+	/** UI override — when set, the sidebar / panel header renders this
+	 *  instead of `content` for compact display (e.g. "pipe executed
+	 *  10:24 – 10:26" for synthetic prompts). Doesn't affect persistence
+	 *  or what's sent to the model. */
+	displayContent?: string;
+	images?: any[];
+}
+
+/** What kind of session a conversation represents.
+ *
+ *  - `chat`        — a normal Pi chat session. The default; assumed when
+ *                    `kind` is missing on disk.
+ *  - `pipe-watch`  — a live pipe execution the user is currently
+ *                    watching. The chat panel renders pipe events in
+ *                    real time; the conversation is volatile (not
+ *                    persisted unless the user opts to keep it).
+ *  - `pipe-run`    — a completed pipe execution kept around as
+ *                    history. Lives under "Pipe runs" in the sidebar
+ *                    rather than "Recents". */
+export type ConversationKind = "chat" | "pipe-watch" | "pipe-run";
+
+/** Pipe-specific context attached to `pipe-watch` / `pipe-run`
+ *  conversations. Drives the in-panel banner and the sidebar
+ *  grouping. */
+export interface PipeContext {
+	pipeName: string;
+	executionId: number;
+	startedAt?: string;
 }
 
 export interface ChatConversation {
@@ -102,6 +130,12 @@ export interface ChatConversation {
 	 *  sidebar sort order. Persisted so that order survives app restart;
 	 *  derived from messages on first hydration if not set on disk yet. */
 	lastUserMessageAt?: number;
+	/** Conversation type — defaults to "chat" when missing (back-compat
+	 *  with older on-disk files). See `ConversationKind`. */
+	kind?: ConversationKind;
+	/** Pipe metadata for `pipe-watch` / `pipe-run` conversations.
+	 *  Undefined for plain chats. */
+	pipeContext?: PipeContext;
 }
 
 export interface ChatHistoryStore {

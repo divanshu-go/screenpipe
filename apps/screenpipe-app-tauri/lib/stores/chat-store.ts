@@ -21,6 +21,7 @@
  */
 
 import { create } from "zustand";
+import type { ConversationKind, PipeContext } from "@/lib/hooks/use-settings";
 
 export type SessionStatus =
   | "idle" // not currently producing output
@@ -104,6 +105,18 @@ export interface SessionRecord {
    *  the disk round-trip when the user comes back to a session that's
    *  been live in the store. */
   hydratedAt?: number;
+
+  // ── Conversation kind + pipe metadata ──────────────────────────────
+  // Splits sessions into chat / pipe-watch / pipe-run so the sidebar
+  // can render them in distinct sections and the chat panel knows
+  // whether to show a pipe-context banner instead of the regular
+  // header. Defaults to "chat" when missing — older on-disk files
+  // hydrate as plain chats with no behavioral change.
+
+  /** What kind of session this is. See `ConversationKind`. */
+  kind?: ConversationKind;
+  /** Pipe metadata — only meaningful when `kind !== "chat"`. */
+  pipeContext?: PipeContext;
 }
 
 interface ChatStoreState {
