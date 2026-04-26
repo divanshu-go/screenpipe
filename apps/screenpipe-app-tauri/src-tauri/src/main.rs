@@ -1561,20 +1561,27 @@ async fn main() {
                 let app_for_pipe = app_handle.clone();
                 let on_pipe_output: Option<screenpipe_core::pipes::OnPipeOutputLine> = Some(
                     std::sync::Arc::new(move |pipe_name: &str, exec_id: i64, line: &str| {
-                        let payload = if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(line) {
-                            serde_json::json!({
-                                "pipeName": pipe_name,
-                                "executionId": exec_id,
-                                "event": parsed,
-                            })
+                        let inner = if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(line) {
+                            parsed
                         } else {
-                            serde_json::json!({
-                                "pipeName": pipe_name,
-                                "executionId": exec_id,
-                                "event": { "type": "raw_line", "text": line },
-                            })
+                            serde_json::json!({ "type": "raw_line", "text": line })
                         };
-                        let _ = app_for_pipe.emit("pipe_event", &payload);
+                        // Legacy envelope — kept until Stage 5 cleanup.
+                        let legacy = serde_json::json!({
+                            "pipeName": pipe_name,
+                            "executionId": exec_id,
+                            "event": inner,
+                        });
+                        let _ = app_for_pipe.emit("pipe_event", &legacy);
+                        // Unified envelope (Stage 1). `sessionId` follows the
+                        // `pipe:<name>:<execId>` convention defined in
+                        // `apps/screenpipe-app-tauri/lib/events/types.ts`.
+                        let unified = serde_json::json!({
+                            "source": "pipe",
+                            "sessionId": format!("pipe:{}:{}", pipe_name, exec_id),
+                            "event": inner,
+                        });
+                        let _ = app_for_pipe.emit("agent_event", &unified);
                     }),
                 );
 

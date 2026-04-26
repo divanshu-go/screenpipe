@@ -1126,6 +1126,17 @@ pub async fn pi_start_inner(
                 "pi_session_evicted",
                 serde_json::json!({ "session": key, "reason": "pool_full" }),
             );
+            // Unified envelope (Stage 1 dual-emit): consumers will move to
+            // `agent_session_evicted` over the next stages; legacy topic
+            // stays for now so nothing breaks during migration.
+            let _ = app.emit(
+                "agent_session_evicted",
+                serde_json::json!({
+                    "sessionId": key,
+                    "source": "pi",
+                    "reason": "pool_full",
+                }),
+            );
         } else {
             // Every session in the pool is busy. Refuse rather than kill a
             // streaming session — caller surfaces a "too many active chats"
@@ -1539,6 +1550,16 @@ pub async fn pi_start_inner(
                     if let Err(e) = app_handle.emit("pi_event", &tagged) {
                         error!("Failed to emit pi_event: {}", e);
                     }
+                    // Unified envelope (Stage 1 dual-emit). The shape here
+                    // is what stages 2+ migrate every consumer onto.
+                    let unified = json!({
+                        "source": "pi",
+                        "sessionId": sid_clone,
+                        "event": event,
+                    });
+                    if let Err(e) = app_handle.emit("agent_event", &unified) {
+                        error!("Failed to emit agent_event: {}", e);
+                    }
                 }
                 None => {
                     let end = line.len().min(100);
@@ -1567,6 +1588,15 @@ pub async fn pi_start_inner(
                 "pi_terminated",
                 json!({ "sessionId": sid_clone, "pid": pid }),
             );
+            // Unified envelope (Stage 1 dual-emit).
+            let _ = app_handle.emit(
+                "agent_terminated",
+                json!({
+                    "sessionId": sid_clone,
+                    "source": "pi",
+                    "pid": pid,
+                }),
+            );
         } else {
             debug!("Pi stdout reader: pi_terminated already emitted for this session, skipping");
         }
@@ -1591,6 +1621,14 @@ pub async fn pi_start_inner(
                     let tagged = json!({ "sessionId": sid_stderr, "event": event });
                     if let Err(e) = app_handle.emit("pi_event", &tagged) {
                         error!("Failed to emit pi_event from stderr: {}", e);
+                    }
+                    let unified = json!({
+                        "source": "pi",
+                        "sessionId": sid_stderr,
+                        "event": event,
+                    });
+                    if let Err(e) = app_handle.emit("agent_event", &unified) {
+                        error!("Failed to emit agent_event from stderr: {}", e);
                     }
                     if let Err(e) = app_handle.emit("pi_output", &line) {
                         error!("Failed to emit pi_output from stderr: {}", e);
