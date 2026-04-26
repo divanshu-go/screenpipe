@@ -383,19 +383,30 @@ function CollapsibleScheduled({
   );
 }
 
+function formatElapsed(startedAt?: string): string | null {
+  if (!startedAt) return null;
+  const ms = Date.now() - Date.parse(startedAt);
+  if (Number.isNaN(ms) || ms < 0) return null;
+  if (ms < 60_000) return `${Math.floor(ms / 1000)}s`;
+  if (ms < 3600_000) return `${Math.floor(ms / 60_000)}m`;
+  return `${Math.floor(ms / 3600_000)}h`;
+}
+
 function ScheduledRow({
   pipe,
 }: {
   pipe: { pipeName: string; title?: string; startedAt?: string; executionId?: number };
 }) {
-  const elapsed = useMemo(() => {
-    if (!pipe.startedAt) return null;
-    const ms = Date.now() - Date.parse(pipe.startedAt);
-    if (Number.isNaN(ms) || ms < 0) return null;
-    if (ms < 60_000) return `${Math.floor(ms / 1000)}s`;
-    if (ms < 3600_000) return `${Math.floor(ms / 60_000)}m`;
-    return `${Math.floor(ms / 3600_000)}h`;
+  // Re-render once a minute so the elapsed badge ticks while the row is
+  // mounted. Cheap — at most one timer per visible scheduled pipe and the
+  // section is collapsed by default for many users.
+  const [, force] = useState(0);
+  useEffect(() => {
+    if (!pipe.startedAt) return;
+    const id = setInterval(() => force((n) => n + 1), 60_000);
+    return () => clearInterval(id);
   }, [pipe.startedAt]);
+  const elapsed = formatElapsed(pipe.startedAt);
   // Click → emit watch_pipe so standalone-chat opens the pipe execution
   // and starts streaming its output. The page-level listener flips the
   // active section to home if the user is on Pipes/Memories/etc.

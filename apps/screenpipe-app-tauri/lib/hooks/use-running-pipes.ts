@@ -21,7 +21,7 @@
  *   (e.g. webview was hidden, ran out of memory, etc.).
  */
 
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { create } from "zustand";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { localFetch } from "@/lib/api";
@@ -58,18 +58,59 @@ const useRunningPipesStore = create<RunningPipesState & { actions: RunningPipesA
   loading: true,
   actions: {
     hydrate: (pipes) =>
-      set(() => {
+      set((s) => {
+        // Diff against current map: if the keyset is identical and every
+        // entry's executionId/startedAt/title is unchanged, only flip
+        // `loading` (preserving the existing object refs so subscribers
+        // that compare by identity don't churn every 30s).
+        const cur = s.pipes;
+        const curKeys = Object.keys(cur);
+        const sameKeys =
+          curKeys.length === pipes.length &&
+          pipes.every((p) => p.pipeName in cur);
+        if (sameKeys) {
+          const allSame = pipes.every((p) => {
+            const c = cur[p.pipeName];
+            return (
+              c.executionId === p.executionId &&
+              c.startedAt === p.startedAt &&
+              c.title === p.title
+            );
+          });
+          if (allSame) {
+            return s.loading ? { loading: false } : {};
+          }
+        }
         const next: Record<string, RunningPipe> = {};
-        for (const p of pipes) next[p.pipeName] = p;
+        for (const p of pipes) {
+          const c = cur[p.pipeName];
+          // Preserve the existing lastEventAt when nothing material changed
+          // — keeps recent pipe_event timestamps fresher than the poll's now.
+          next[p.pipeName] =
+            c &&
+            c.executionId === p.executionId &&
+            c.startedAt === p.startedAt &&
+            c.title === p.title
+              ? c
+              : p;
+        }
         return { pipes: next, loading: false };
       }),
     touch: (p) =>
       set((s) => {
         const existing = s.pipes[p.pipeName];
-        // Skip the write if the only field that changed is the
-        // timestamp and we just touched it within 500ms — keeps
-        // re-renders bounded under high event rates.
-        if (existing && p.lastEventAt - existing.lastEventAt < 500) {
+        // Throttle pure-timestamp churn under high event rates, but never
+        // skip a write that carries a new executionId — losing that means
+        // the row can't open the right execution on click.
+        const sameExec =
+          !existing ||
+          p.executionId === undefined ||
+          p.executionId === existing.executionId;
+        if (
+          existing &&
+          sameExec &&
+          p.lastEventAt - existing.lastEventAt < 500
+        ) {
           return {};
         }
         return {
@@ -164,6 +205,8 @@ export function useRunningPipes(): RunningPipe[] {
     void mountRunningPipesTracker();
   }, []);
   const pipes = useRunningPipesStore((s) => s.pipes);
-  // Sort by most recent activity desc, stable enough for a small list.
-  return Object.values(pipes).sort((a, b) => b.lastEventAt - a.lastEventAt);
+  return useMemo(
+    () => Object.values(pipes).sort((a, b) => b.lastEventAt - a.lastEventAt),
+    [pipes],
+  );
 }

@@ -19,72 +19,12 @@ import { usePlatform } from "@/lib/hooks/use-platform";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { Calendar } from "@/components/ui/calendar";
 import { listDaysWithFrames } from "@/lib/actions/has-frames-date";
+import { formatShortcutDisplay } from "@/lib/chat-utils";
 import {
 	Popover,
 	PopoverContent,
 	PopoverTrigger,
 } from "@/components/ui/popover";
-
-// Helper to format shortcut string for display
-function formatShortcutForDisplay(shortcut: string, isMac: boolean): string {
-	if (!shortcut) return "";
-
-	const parts = shortcut.split("+");
-	const modifiers: { symbol: string; order: number }[] = [];
-	let key = "";
-
-	for (const part of parts) {
-		const upper = part.toUpperCase();
-		if (isMac) {
-			switch (upper) {
-				case "SUPER":
-				case "CMD":
-				case "COMMAND":
-					modifiers.push({ symbol: "⌘", order: 0 });
-					break;
-				case "CONTROL":
-				case "CTRL":
-					modifiers.push({ symbol: "⌃", order: 1 });
-					break;
-				case "ALT":
-				case "OPTION":
-					modifiers.push({ symbol: "⌥", order: 2 });
-					break;
-				case "SHIFT":
-					modifiers.push({ symbol: "⇧", order: 3 });
-					break;
-				default:
-					key = part.toUpperCase();
-			}
-		} else {
-			switch (upper) {
-				case "SUPER":
-				case "CMD":
-				case "COMMAND":
-					modifiers.push({ symbol: "Win", order: 0 });
-					break;
-				case "CONTROL":
-				case "CTRL":
-					modifiers.push({ symbol: "Ctrl", order: 1 });
-					break;
-				case "ALT":
-				case "OPTION":
-					modifiers.push({ symbol: "Alt", order: 2 });
-					break;
-				case "SHIFT":
-					modifiers.push({ symbol: "Shift", order: 3 });
-					break;
-				default:
-					key = part;
-			}
-		}
-	}
-
-	modifiers.sort((a, b) => a.order - b.order);
-	const formatted = [...modifiers.map((m) => m.symbol), key].filter(Boolean);
-
-	return isMac ? formatted.join("") : formatted.join("+");
-}
 
 interface TimeRange {
 	start: Date;
@@ -150,12 +90,12 @@ export function TimelineControls({
 		};
 	}, [calendarOpen]);
 	const searchShortcutDisplay = useMemo(
-		() => formatShortcutForDisplay(settings.searchShortcut || (isMac ? "Control+Super+K" : "Alt+K"), isMac),
+		() => formatShortcutDisplay(settings.searchShortcut || (isMac ? "Control+Super+K" : "Alt+K"), isMac),
 		[settings.searchShortcut, isMac]
 	);
 
 	const chatShortcutDisplay = useMemo(
-		() => formatShortcutForDisplay(settings.showChatShortcut || (isMac ? "Control+Super+L" : "Alt+L"), isMac),
+		() => formatShortcutDisplay(settings.showChatShortcut || (isMac ? "Control+Super+L" : "Alt+L"), isMac),
 		[settings.showChatShortcut, isMac]
 	);
 

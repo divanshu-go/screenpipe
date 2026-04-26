@@ -19,8 +19,17 @@ import { localFetch } from "@/lib/api";
  * Includes audio_chunks because users with audio-only recording days
  * (mic on, screen recording paused) would otherwise see those days
  * greyed out even though the timeline has audio to play.
+ *
+ * Result is cached for 60s — the picker re-runs this on every popover
+ * open, and the underlying day-set rarely changes within a minute.
  */
+let daysCache: { at: number; days: Set<string> } | null = null;
+const DAYS_CACHE_TTL_MS = 60_000;
+
 export async function listDaysWithFrames(): Promise<Set<string>> {
+	if (daysCache && Date.now() - daysCache.at < DAYS_CACHE_TTL_MS) {
+		return daysCache.days;
+	}
 	try {
 		// UNION ALL is fine — duplicates collapse via the outer DISTINCT.
 		// Both branches use the timestamp index (frames + audio_transcriptions
@@ -49,6 +58,7 @@ export async function listDaysWithFrames(): Promise<Set<string>> {
 		const rows = (await response.json()) as Array<{ day: string }>;
 		const set = new Set(rows.map((r) => r.day).filter(Boolean));
 		console.log(`[timeline] listDaysWithFrames: ${set.size} days with data`);
+		daysCache = { at: Date.now(), days: set };
 		return set;
 	} catch (e) {
 		console.error("listDaysWithFrames failed:", e);
