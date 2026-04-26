@@ -8,23 +8,30 @@
  * Drives the chat sidebar's "scheduled" section. The local /pipes API
  * returns `is_running: boolean` plus `recent_executions[]` per pipe, so
  * we hydrate from there on mount, then keep the list up to date by
- * subscribing to the global `pipe_event` topic.
+ * subscribing to the unified agent-event bus and filtering for events
+ * whose `source === "pipe"`.
  *
  * Design notes:
  * - Single Zustand store, not a per-component hook. Multiple consumers
  *   (sidebar, future toolbar/badge) share one fetch + one listener.
  * - Listener mounts at most once per webview (idempotent guard).
- * - `pipe_event` arrives at ~10 Hz when a pipe is mid-NDJSON; coalesce
+ * - Pipe events arrive at ~10 Hz when a pipe is mid-NDJSON; coalesce
  *   updates for the same {pipeName, executionId} into a single store
  *   write per RAF tick to keep React re-renders bounded.
  * - Background poll every 30s so we self-heal if events were missed
  *   (e.g. webview was hidden, ran out of memory, etc.).
+ *
+ * Stage 2 of the events refactor: this hook listens on the unified
+ * `agent_event` bus instead of the legacy `pipe_event` topic. The
+ * `parsePipeSessionId` helper extracts pipe metadata from the synthetic
+ * `pipe:<name>:<execId>` session id Rust assigns to every pipe.
  */
 
 import { useEffect, useMemo } from "react";
 import { create } from "zustand";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { localFetch } from "@/lib/api";
+import { mountAgentEventBus, registerDefault, type Unregister } from "@/lib/events/bus";
+import { parsePipeSessionId } from "@/lib/events/types";
 
 export interface RunningPipe {
   /** Pipe directory name — e.g. "apple-photo-sync" */
@@ -159,7 +166,7 @@ async function fetchRunningPipes(): Promise<RunningPipe[]> {
 }
 
 let mounted = false;
-let unlisten: UnlistenFn | null = null;
+let unregister: Unregister | null = null;
 let pollHandle: ReturnType<typeof setInterval> | null = null;
 
 async function mountRunningPipesTracker(): Promise<void> {
@@ -172,13 +179,21 @@ async function mountRunningPipesTracker(): Promise<void> {
   };
 
   // Initial pull, then a 30s background heartbeat. Real-time updates
-  // come from pipe_event below; the poll is just self-healing.
+  // come from the agent-event bus below; the poll is just self-healing.
   await refresh();
   pollHandle = setInterval(() => void refresh(), 30_000);
 
-  unlisten = await listen<any>("pipe_event", (event) => {
-    const { pipeName, executionId, event: inner } = event.payload || {};
-    if (!pipeName) return;
+  // Wait for the bus's Tauri listener to come up before subscribing —
+  // otherwise events emitted between `registerDefault` and the listener
+  // mount would be silently dropped.
+  await mountAgentEventBus();
+
+  unregister = registerDefault((envelope) => {
+    if (envelope.source !== "pipe") return;
+    const parsed = parsePipeSessionId(envelope.sessionId);
+    if (!parsed) return;
+    const { pipeName, executionId } = parsed;
+    const inner = envelope.event;
     const actions = useRunningPipesStore.getState().actions;
     const t = inner?.type;
     // Terminal events drop the pipe from the running set. Conservative
@@ -190,7 +205,7 @@ async function mountRunningPipesTracker(): Promise<void> {
     }
     actions.touch({
       pipeName,
-      executionId: typeof executionId === "number" ? executionId : undefined,
+      executionId,
       lastEventAt: Date.now(),
     });
   });
