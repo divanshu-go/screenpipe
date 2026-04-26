@@ -159,6 +159,21 @@ async function finalizeBuffer(sid: string, buf: PipeRunBuffer): Promise<void> {
   // no-op rather than re-saving.
   buffers.delete(sid);
 
+  // If the chat-store already has a session record for this sid, the
+  // panel was the foreground owner at some point during the run — its
+  // persistence pipeline (chat-store → saveConversationFile via the
+  // background-router) is the authoritative writer. Skipping here
+  // avoids clobbering the panel's view with the recorder's
+  // recorder-only NDJSON replay.
+  try {
+    const { useChatStore } = await import("@/lib/stores/chat-store");
+    if (useChatStore.getState().sessions[sid]) {
+      return;
+    }
+  } catch {
+    // store not loaded yet — fall through and save
+  }
+
   // Respect the user's history toggle. Same gate as the chat router's
   // background save; pipe-runs honor the same global preference.
   try {

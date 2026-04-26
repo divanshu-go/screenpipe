@@ -150,15 +150,19 @@ const PREVIEW_THROTTLE_MS = 250;
 const previewLastEmittedAt = new Map<string, number>();
 
 export async function handlePiEvent(envelope: AgentEventEnvelope) {
-  // This stage of the refactor only routes Pi sessions through the
-  // chat-store. Pipe sessions ride the same bus but get a different
-  // surface in Stage 3 (`kind: "pipe-watch" | "pipe-run"` on
-  // `SessionRecord`). Without this filter, every running pipe would
-  // create a "new chat" entry in the sidebar via the upsert path below.
-  if (envelope.source !== "pi") return;
   const sid = envelope.sessionId;
   const inner = envelope.event;
   if (!sid || !inner) return; // events without a session id or body can't be routed
+  // Pipe sessions are only routed when chat-store already has a record
+  // for them — i.e. the user clicked into a pipe-watch view, which
+  // upserted the session. Unwatched pipes go to the pipe-run-recorder
+  // (a separate default handler) and never reach the chat-store. Without
+  // this gate, every running pipe would lazy-create a "new chat" row
+  // in the sidebar via the upsert path below.
+  if (envelope.source !== "pi") {
+    const existing = useChatStore.getState().sessions[sid];
+    if (!existing) return;
+  }
 
   const store = useChatStore.getState();
   const existing = store.sessions[sid];

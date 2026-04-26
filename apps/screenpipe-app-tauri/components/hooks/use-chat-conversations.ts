@@ -394,6 +394,17 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
           updatedAt: full.updatedAt ?? Date.now(),
           pinned: full.pinned === true,
           unread: false,
+          // Propagate kind / pipeContext from the synthetic conv when
+          // initWatch creates a pipe-watch session — the banner reads
+          // this off the session record so it persists across
+          // foreground/background swaps.
+          ...(conv.kind ? { kind: conv.kind } : full.kind ? { kind: full.kind } : {}),
+          ...(conv.pipeContext ? { pipeContext: conv.pipeContext } : full.pipeContext ? { pipeContext: full.pipeContext } : {}),
+        });
+      } else if (conv.kind || conv.pipeContext) {
+        store.actions.patch(conv.id, {
+          ...(conv.kind ? { kind: conv.kind } : {}),
+          ...(conv.pipeContext ? { pipeContext: conv.pipeContext } : {}),
         });
       }
       store.actions.setMessages(conv.id, messagesForPanel as any);

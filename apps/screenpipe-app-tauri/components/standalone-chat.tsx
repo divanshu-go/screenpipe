@@ -1453,11 +1453,6 @@ export function StandaloneChat({
   // touching React state after unmount; equivalent to the per-effect
   // `mounted` flag but visible across all useEffect boundaries.
   const mountedRef = useRef(true);
-  // Active pipe-watch foreground unregister fn — set when initWatch
-  // registers for a pipe sessionId, cleared on watch end. Lets the
-  // panel hold a second foreground registration for the synthetic
-  // pipe id alongside its chat registration.
-  const pipeWatchUnregisterRef = useRef<(() => void) | null>(null);
 
   // Chat history state
   const [conversationId, setConversationId] = useState<string | null>(null);
@@ -1927,6 +1922,14 @@ export function StandaloneChat({
   // we don't have to filter by sessionId in the handler — the bus
   // delivers only events whose envelope sessionId matches the
   // registration key.
+  //
+  // This is also where pipe-watch sessions register: initWatch swaps
+  // conversationId to a `pipe:<name>:<execId>` id, so this effect
+  // re-runs and registers the panel as the foreground owner of pipe
+  // stdout. Switching to a chat unregisters the pipe foreground (via
+  // the cleanup) and registers the chat — pipe events naturally stop
+  // reaching the panel and start hitting the pipe-run-recorder
+  // instead, which is what we want.
   useEffect(() => {
     if (!conversationId) return;
     let cancelled = false;
@@ -1944,6 +1947,29 @@ export function StandaloneChat({
       try { off?.(); } catch { /* ignore */ }
     };
   }, [conversationId]);
+
+  // Keep the pipe-context banner in sync with the current session.
+  // When the panel switches AWAY from a pipe-watch session (user
+  // clicks a chat), `activePipeExecution` would otherwise stay set
+  // and the banner would render on top of the chat. Reading the
+  // current session record's kind / pipeContext gives us a single
+  // source of truth tied to conversationId.
+  const currentSessionKind = useChatStore((s) =>
+    s.currentId ? s.sessions[s.currentId]?.kind : undefined,
+  );
+  const currentSessionPipeContext = useChatStore((s) =>
+    s.currentId ? s.sessions[s.currentId]?.pipeContext : undefined,
+  );
+  useEffect(() => {
+    if (currentSessionKind === "pipe-watch" && currentSessionPipeContext) {
+      setActivePipeExecution({
+        name: currentSessionPipeContext.pipeName,
+        executionId: currentSessionPipeContext.executionId,
+      });
+    } else {
+      setActivePipeExecution(null);
+    }
+  }, [currentSessionKind, currentSessionPipeContext?.pipeName, currentSessionPipeContext?.executionId]);
 
   // If the Pi pool evicted the session we're currently viewing, swap the
   // panel to a fresh one. The pool only evicts idle sessions (see
@@ -2875,8 +2901,6 @@ export function StandaloneChat({
           piStreamingTextRef.current = "";
           if (piMessageIdRef.current?.startsWith("pipe-")) {
             setActivePipeExecution(null);
-            try { pipeWatchUnregisterRef.current?.(); } catch { /* ignore */ }
-            pipeWatchUnregisterRef.current = null;
           }
           piMessageIdRef.current = null;
           piContentBlocksRef.current = [];
@@ -2897,8 +2921,6 @@ export function StandaloneChat({
             piLastErrorRef.current = null;
             piThinkingStartRef.current = null;
             setActivePipeExecution(null);
-            try { pipeWatchUnregisterRef.current?.(); } catch { /* ignore */ }
-            pipeWatchUnregisterRef.current = null;
             setIsLoading(false);
             setIsStreaming(false);
           }
@@ -3142,8 +3164,6 @@ export function StandaloneChat({
             piLastErrorRef.current = null;
             piThinkingStartRef.current = null;
             setActivePipeExecution(null);
-            try { pipeWatchUnregisterRef.current?.(); } catch { /* ignore */ }
-            pipeWatchUnregisterRef.current = null;
             setIsLoading(false);
             setIsStreaming(false);
           }
@@ -3155,7 +3175,7 @@ export function StandaloneChat({
       }
     };
 
-    const initWatch = (pipeName: string, executionId: number, presetId?: string | null) => {
+    const initWatch = async (pipeName: string, executionId: number, presetId?: string | null) => {
       setActivePipeExecution({ name: pipeName, executionId });
 
       // Apply the pipe's AI preset so the chat header reflects it
@@ -3164,50 +3184,55 @@ export function StandaloneChat({
         if (match) setActivePreset(match);
       }
 
+      const pipeSid = pipeSessionId(pipeName, executionId);
       const msgId = `pipe-${pipeName}-${executionId}`;
+
+      // Pipe-watch is a real session (kind: "pipe-watch"), not a
+      // shadow render on top of the current chat. Swapping
+      // conversationId via loadConversation:
+      //   - snapshots the outgoing chat so its in-flight tokens land
+      //     in the chat-store under the right sid
+      //   - sets piSessionIdRef + chat-store currentId atomically
+      //   - triggers the chat foreground useEffect to re-register the
+      //     bus for the pipe sid — pipe events for `pipe:<name>:<id>`
+      //     now flow through the same path as Pi chat events for the
+      //     foregrounded chat
+      // This replaces the prior model where initWatch held a SEPARATE
+      // pipe-foreground registration that would leak pipe events into
+      // whatever chat happened to be displayed when the user switched.
+      const placeholder: ChatMessage = {
+        id: msgId,
+        role: "assistant" as const,
+        content: "",
+        timestamp: Date.now(),
+        contentBlocks: [],
+      };
+      const pipeConv: ChatConversation = {
+        id: pipeSid,
+        title: pipeName,
+        messages: [placeholder],
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        kind: "pipe-watch",
+        pipeContext: {
+          pipeName,
+          executionId,
+          startedAt: new Date().toISOString(),
+        },
+      };
+      await loadConversationRef.current(pipeConv);
+
+      // After loadConversation has switched the panel to the pipe sid,
+      // wire up the in-flight refs so subsequent agent events grow
+      // the placeholder rather than spawning new messages. The chat
+      // foreground useEffect[conversationId] fires asynchronously
+      // after this render — pipe events that arrive in the brief
+      // interleave window get dispatched once the registration lands.
+      piMessageIdRef.current = msgId;
       piStreamingTextRef.current = "";
       piContentBlocksRef.current = [];
       piThinkingStartRef.current = null;
-      piMessageIdRef.current = msgId;
-      // Stage 3: drop the synthetic "Watching pipe: X" user-bubble
-      // sentinel that previous versions inserted to give the assistant
-      // placeholder a parent in the message list. The chat panel now
-      // renders the pipe-context banner above the conversation flow
-      // instead, driven by `activePipeExecution`. Just prime the
-      // assistant placeholder so events have a target id to grow into.
-      setMessages((prev) => {
-        if (prev.some((m) => m.id === msgId)) return prev;
-        return [
-          ...prev,
-          {
-            id: msgId,
-            role: "assistant" as const,
-            content: "",
-            timestamp: Date.now(),
-            contentBlocks: [],
-          },
-        ];
-      });
       setIsStreaming(true);
-
-      // Register a pipe-watch foreground on the agent-event bus. The
-      // Rust side emits pipe stdout under sessionId
-      // `pipe:<name>:<execId>` (see `lib/events/types.ts::pipeSessionId`),
-      // so the bus delivers exactly those events here. Coexists with
-      // the chat session's foreground registration — pipe and chat
-      // sessionIds can never collide because the `pipe:` prefix is
-      // reserved.
-      try {
-        pipeWatchUnregisterRef.current?.();
-      } catch { /* ignore stale */ }
-      const pipeSid = pipeSessionId(pipeName, executionId);
-      void mountAgentEventBus().then(() => {
-        if (piMessageIdRef.current !== msgId) return; // watch already canceled
-        pipeWatchUnregisterRef.current = registerForeground(pipeSid, (envelope) => {
-          if (!mountedRef.current) return;
-          handleAgentEventDataRef.current?.(envelope.event);
-        });
-      });
 
       // Poll the executions API as a safety net — catches the case
       // where the pipe finished BEFORE we mounted the foreground bus
