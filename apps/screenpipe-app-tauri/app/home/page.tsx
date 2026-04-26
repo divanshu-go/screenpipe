@@ -410,72 +410,66 @@ function HomeContent() {
           {/* Sidebar */}
           <TooltipProvider delayDuration={0}>
           {/* Top-left action buttons — pinned next to the macOS traffic
-              lights. Rendered as siblings of <AppSidebar> (not children)
-              so the collapse icon stays visible when the sidebar shrinks
-              to 4.5rem: AppSidebar uses overflow-x-hidden, which would
-              clip anything positioned past its right edge. Anchored to
-              the viewport via fixed positioning. */}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                onClick={toggleSidebar}
-                aria-label={sidebarCollapsed ? "expand sidebar" : "collapse sidebar"}
-                className={cn(
-                  // top-1 + p-1 puts the 14px icon's center at y≈15px, matching the
-                  // vertical center of the macOS traffic lights (which sit at y≈14).
-                  "fixed top-1 z-20 p-1 rounded-md transition-colors",
-                  isMac ? "left-[78px]" : "left-2",
-                  isTranslucent ? "vibrant-nav-item" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
-                )}
-              >
-                {sidebarCollapsed ? (
-                  <PanelLeftOpen className="h-3.5 w-3.5" />
-                ) : (
-                  <PanelLeftClose className="h-3.5 w-3.5" />
-                )}
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom" className="text-xs">
-              {sidebarCollapsed ? "expand sidebar" : "collapse sidebar"} <kbd className="ml-1 px-1 py-0.5 bg-muted rounded text-[10px]">⌘B</kbd>
-            </TooltipContent>
-          </Tooltip>
-
-          {/* Search — only shown alongside the collapse icon when the
-              sidebar is expanded. When collapsed we render search as a
-              row inside the icon column instead, so the top-left has a
-              single icon (matching the rest of the column's one-per-line
-              layout). */}
+              lights when the sidebar is EXPANDED. When collapsed these
+              live as the first two rows of the icon column instead (see
+              below), so the title bar stays clean and the column has a
+              single icon per line. Fixed positioning anchors them to the
+              viewport so they aren't clipped by AppSidebar's overflow. */}
           {!sidebarCollapsed && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  onClick={() => {
-                    void commands.showWindow({ Search: { query: null } });
-                  }}
-                  aria-label="search"
-                  className={cn(
-                    "fixed top-1 z-20 p-1 rounded-md transition-colors",
-                    // 28px right of the collapse icon (icon 16 + gap 8 + small breathing).
-                    isMac ? "left-[110px]" : "left-9",
-                    isTranslucent ? "vibrant-nav-item" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
-                  )}
-                >
-                  <Search className="h-3.5 w-3.5" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" className="text-xs">
-                search
-                <kbd className="ml-1 px-1 py-0.5 bg-muted rounded text-[10px]">
-                  {formatShortcutDisplay(
-                    settings.searchShortcut || (isMac ? "Control+Super+K" : "Alt+K"),
-                    isMac,
-                  )}
-                </kbd>
-              </TooltipContent>
-            </Tooltip>
+            <>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={toggleSidebar}
+                    aria-label="collapse sidebar"
+                    className={cn(
+                      // top-1 + p-1 puts the 14px icon's center at y≈15px, matching the
+                      // vertical center of the macOS traffic lights (which sit at y≈14).
+                      "fixed top-1 z-20 p-1 rounded-md transition-colors",
+                      isMac ? "left-[78px]" : "left-2",
+                      isTranslucent ? "vibrant-nav-item" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                    )}
+                  >
+                    <PanelLeftClose className="h-3.5 w-3.5" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="text-xs">
+                  collapse sidebar <kbd className="ml-1 px-1 py-0.5 bg-muted rounded text-[10px]">⌘B</kbd>
+                </TooltipContent>
+              </Tooltip>
+
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={() => {
+                      void commands.showWindow({ Search: { query: null } });
+                    }}
+                    aria-label="search"
+                    className={cn(
+                      "fixed top-1 z-20 p-1 rounded-md transition-colors",
+                      // 28px right of the collapse icon (icon 16 + gap 8 + small breathing).
+                      isMac ? "left-[110px]" : "left-9",
+                      isTranslucent ? "vibrant-nav-item" : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                    )}
+                  >
+                    <Search className="h-3.5 w-3.5" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="text-xs">
+                  search
+                  <kbd className="ml-1 px-1 py-0.5 bg-muted rounded text-[10px]">
+                    {formatShortcutDisplay(
+                      settings.searchShortcut || (isMac ? "Control+Super+K" : "Alt+K"),
+                      isMac,
+                    )}
+                  </kbd>
+                </TooltipContent>
+              </Tooltip>
+            </>
           )}
 
           <AppSidebar collapsed={sidebarCollapsed} className="pl-4">
+            {!sidebarCollapsed && (
             <div className={cn(isTranslucent ? "vibrant-sidebar-border" : "", "border-b", sidebarCollapsed ? "px-2 py-3" : "px-4 py-3")}>
               {/* Row 1: name (collapse moved out — pinned top-left next
                   to the traffic lights, see above). */}
@@ -567,6 +561,7 @@ function HomeContent() {
                 );
               })()}
             </div>
+            )}
 
             {/* Navigation.
                 Outer flex column has no overflow — the chat-list section
@@ -574,8 +569,69 @@ function HomeContent() {
                 bottom items would be pushed below the fold by long
                 conversation lists. */}
             <div className="p-2 flex-1 flex flex-col min-h-0">
-              {/* Main sections */}
+              {/* Main sections — when collapsed, the column is prefixed
+                  with the collapse + search icons (one-per-line, with a
+                  divider) so they sit just below the traffic lights. */}
               <div className="space-y-0.5 shrink-0">
+                {sidebarCollapsed && (
+                  <>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          onClick={toggleSidebar}
+                          aria-label="expand sidebar"
+                          className={cn(
+                            "w-full flex items-center justify-center px-2.5 py-1.5 rounded-lg transition-all duration-150 text-left group",
+                            isTranslucent
+                              ? "vibrant-nav-item vibrant-nav-hover"
+                              : "hover:bg-card/50 text-muted-foreground hover:text-foreground",
+                          )}
+                        >
+                          <PanelLeftOpen className={cn(
+                            "h-3.5 w-3.5 transition-colors flex-shrink-0",
+                            isTranslucent ? "vibrant-sidebar-fg-muted" : "text-muted-foreground group-hover:text-foreground"
+                          )} />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="right" className="text-xs">
+                        expand sidebar <kbd className="ml-1 px-1 py-0.5 bg-muted rounded text-[10px]">⌘B</kbd>
+                      </TooltipContent>
+                    </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          onClick={() => {
+                            void commands.showWindow({ Search: { query: null } });
+                          }}
+                          aria-label="search"
+                          className={cn(
+                            "w-full flex items-center justify-center px-2.5 py-1.5 rounded-lg transition-all duration-150 text-left group",
+                            isTranslucent
+                              ? "vibrant-nav-item vibrant-nav-hover"
+                              : "hover:bg-card/50 text-muted-foreground hover:text-foreground",
+                          )}
+                        >
+                          <Search className={cn(
+                            "h-3.5 w-3.5 transition-colors flex-shrink-0",
+                            isTranslucent ? "vibrant-sidebar-fg-muted" : "text-muted-foreground group-hover:text-foreground"
+                          )} />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="right" className="text-xs">
+                        search
+                        <kbd className="ml-1 px-1 py-0.5 bg-muted rounded text-[10px]">
+                          {formatShortcutDisplay(
+                            settings.searchShortcut || (isMac ? "Control+Super+K" : "Alt+K"),
+                            isMac,
+                          )}
+                        </kbd>
+                      </TooltipContent>
+                    </Tooltip>
+                    {/* Divider between the search affordance and the
+                        primary nav (+ pipes / timeline / memories). */}
+                    <div className={cn("my-1 border-t", isTranslucent ? "vibrant-sidebar-border" : "border-border/50")} />
+                  </>
+                )}
                 {mainSections.map((section) => {
                   const isActive = activeSection === section.id;
                   const btn = (
@@ -648,44 +704,6 @@ function HomeContent() {
                   }
                   return btn;
                 })}
-                {/* Search — only rendered in the icon column when the
-                    sidebar is collapsed. When expanded the search icon
-                    lives in the top-left next to the traffic lights
-                    (see <AppSidebar> siblings above). */}
-                {sidebarCollapsed && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        onClick={() => {
-                          void commands.showWindow({ Search: { query: null } });
-                        }}
-                        aria-label="search"
-                        className={cn(
-                          "w-full flex items-center justify-center px-2.5 py-1.5 rounded-lg transition-all duration-150 text-left group",
-                          isTranslucent
-                            ? "vibrant-nav-item vibrant-nav-hover"
-                            : "hover:bg-card/50 text-muted-foreground hover:text-foreground",
-                        )}
-                      >
-                        <div className={cn(
-                          "transition-colors flex-shrink-0",
-                          isTranslucent ? "vibrant-sidebar-fg-muted" : "text-muted-foreground group-hover:text-foreground"
-                        )}>
-                          <Search className="h-3.5 w-3.5" />
-                        </div>
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="right" className="text-xs">
-                      search
-                      <kbd className="ml-1 px-1 py-0.5 bg-muted rounded text-[10px]">
-                        {formatShortcutDisplay(
-                          settings.searchShortcut || (isMac ? "Control+Super+K" : "Alt+K"),
-                          isMac,
-                        )}
-                      </kbd>
-                    </TooltipContent>
-                  </Tooltip>
-                )}
               </div>
 
 
