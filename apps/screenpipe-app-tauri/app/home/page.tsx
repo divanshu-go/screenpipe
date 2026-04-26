@@ -34,6 +34,7 @@ import { MemoriesSection } from "@/components/settings/memories-section";
 import { StandaloneChat } from "@/components/standalone-chat";
 import { ChatSidebar } from "@/components/chat-sidebar";
 import { mountPiEventRouter } from "@/lib/stores/pi-event-router";
+import { mountPipeRunRecorder } from "@/lib/events/pipe-run-recorder";
 import { NotificationBell } from "@/components/notification-bell";
 import Timeline from "@/components/rewind/timeline";
 import { useQueryState } from "nuqs";
@@ -114,6 +115,11 @@ function HomeContent() {
   // freeze the moment the chat unmounts. Idempotent.
   useEffect(() => {
     void mountPiEventRouter();
+    // Pipe-run recorder — buffers pipe-source events on the agent-event
+    // bus and saves each completed run as a `kind: "pipe-run"` chat
+    // file. Pairs with the chat router; both run for the lifetime of
+    // the app process. Idempotent.
+    void mountPipeRunRecorder();
   }, []);
 
   // Selecting a chat from the sidebar (or any other source that emits
