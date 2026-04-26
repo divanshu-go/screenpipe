@@ -1930,8 +1930,15 @@ export function StandaloneChat({
   // the cleanup) and registers the chat — pipe events naturally stop
   // reaching the panel and start hitting the pipe-run-recorder
   // instead, which is what we want.
+  // Pipe-watch sessions don't register foreground — pipe-watch-writer
+  // is the sole writer for them, panel mirrors store messages below.
+  // We grab `kind` synchronously here (not via the Zustand selector) so
+  // the effect re-runs on conversationId change without an extra render
+  // cycle that could miss the foreground registration window for chats.
   useEffect(() => {
     if (!conversationId) return;
+    const kind = useChatStore.getState().sessions[conversationId]?.kind;
+    if (kind === "pipe-watch") return;
     let cancelled = false;
     let off: (() => void) | null = null;
     (async () => {
@@ -1947,6 +1954,20 @@ export function StandaloneChat({
       try { off?.(); } catch { /* ignore */ }
     };
   }, [conversationId]);
+
+  // Mirror chat-store messages into local React state when the panel is
+  // showing a pipe-watch session. The writer is the source of truth;
+  // this hook makes the existing render path (which reads `messages`)
+  // pick up writer updates without forking the rendering code.
+  const pipeWatchMessages = useChatStore((s) =>
+    conversationId && s.sessions[conversationId]?.kind === "pipe-watch"
+      ? s.sessions[conversationId]?.messages
+      : undefined,
+  );
+  useEffect(() => {
+    if (!pipeWatchMessages) return;
+    setMessages(pipeWatchMessages as any);
+  }, [pipeWatchMessages, setMessages]);
 
   // Keep the pipe-context banner in sync with the current session.
   // When the panel switches AWAY from a pipe-watch session (user
@@ -3114,7 +3135,7 @@ export function StandaloneChat({
     let watchPollTimer: ReturnType<typeof setTimeout> | null = null;
 
     // Poll execution API to check if pipe already finished (race condition fix)
-    const pollExecutionStatus = async (pipeName: string, executionId: number, msgId: string) => {
+    const pollExecutionStatus = async (pipeName: string, executionId: number, pipeSid: string) => {
       try {
         const res = await localFetch(`/pipes/${pipeName}/executions?limit=20`);
         if (!res.ok) return;
@@ -3122,52 +3143,38 @@ export function StandaloneChat({
         const exec = (data.data || []).find((e: any) => e.id === executionId);
         if (!exec) return;
 
-        // If execution is already done (completed/failed/timed_out), show the result
+        // Pipe already finished before live events could reach the writer
+        // (race between pipe completion and bus mount). Reconstruct the
+        // conversation from stdout and write it directly to chat-store —
+        // the panel mirrors store messages for pipe-watch sessions, so
+        // this surfaces the result without a separate render path.
         if (exec.status !== "running") {
-          // Parse stdout to extract assistant text (same logic as cleanPipeStdout)
-          let output = "";
-          if (exec.stdout) {
-            const parts: string[] = [];
-            for (const line of exec.stdout.split("\n")) {
-              if (!line.trim()) continue;
-              try {
-                const evt = JSON.parse(line);
-                if (evt.type === "content_block_delta" && evt.delta?.type === "text_delta") {
-                  parts.push(evt.delta.text);
-                } else if ((evt.type === "message_start" || evt.type === "message_end") &&
-                           evt.message?.role === "assistant") {
-                  for (const c of evt.message?.content || []) {
-                    if (c.type === "text" && c.text) parts.push(c.text);
-                  }
-                }
-              } catch {}
-            }
-            output = parts.join("").trim();
+          const { parsePipeNdjsonToMessages } = await import(
+            "@/lib/pipe-ndjson-to-chat"
+          );
+          let messagesFromStdout = exec.stdout
+            ? parsePipeNdjsonToMessages(exec.stdout)
+            : [];
+          if (messagesFromStdout.length === 0) {
+            const fallback =
+              exec.status === "failed"
+                ? `Pipe failed: ${exec.error_message || exec.stderr || "unknown error"}`
+                : "Pipe completed with no output.";
+            messagesFromStdout = [
+              {
+                id: `pipe-poll-${executionId}`,
+                role: "assistant",
+                content: fallback,
+                timestamp: Date.now(),
+              } as any,
+            ];
           }
-
-          if (!output && exec.status === "failed") {
-            output = `Pipe failed: ${exec.error_message || exec.stderr || "unknown error"}`;
-          } else if (!output) {
-            output = "Pipe completed with no output.";
+          const store = useChatStore.getState();
+          if (store.sessions[pipeSid]) {
+            store.actions.setMessages(pipeSid, messagesFromStdout as any);
+            store.actions.endTurn(pipeSid);
           }
-
-          // Only update if we're still watching this pipe
-          if (piMessageIdRef.current === msgId) {
-            piStreamingTextRef.current = output;
-            setMessages((prev) =>
-              prev.map((m) => m.id === msgId ? { ...m, content: output } : m)
-            );
-            // Clean up watch state
-            piStreamingTextRef.current = "";
-            piMessageIdRef.current = null;
-            piContentBlocksRef.current = [];
-            piLastErrorRef.current = null;
-            piThinkingStartRef.current = null;
-            setActivePipeExecution(null);
-            setIsLoading(false);
-            setIsStreaming(false);
-          }
-          return true; // done
+          return true;
         }
         return false; // still running
       } catch {
@@ -3185,54 +3192,57 @@ export function StandaloneChat({
       }
 
       const pipeSid = pipeSessionId(pipeName, executionId);
-      const msgId = `pipe-${pipeName}-${executionId}`;
 
-      // Pipe-watch is a real session (kind: "pipe-watch"), not a
-      // shadow render on top of the current chat. Swapping
-      // conversationId via loadConversation:
-      //   - snapshots the outgoing chat so its in-flight tokens land
-      //     in the chat-store under the right sid
-      //   - sets piSessionIdRef + chat-store currentId atomically
-      //   - triggers the chat foreground useEffect to re-register the
-      //     bus for the pipe sid — pipe events for `pipe:<name>:<id>`
-      //     now flow through the same path as Pi chat events for the
-      //     foregrounded chat
-      // This replaces the prior model where initWatch held a SEPARATE
-      // pipe-foreground registration that would leak pipe events into
-      // whatever chat happened to be displayed when the user switched.
-      const placeholder: ChatMessage = {
-        id: msgId,
-        role: "assistant" as const,
-        content: "",
-        timestamp: Date.now(),
-        contentBlocks: [],
-      };
+      // Pipe-watch is a real session (kind: "pipe-watch"). The writer
+      // (`pipe-watch-writer`) is the sole authority for its message
+      // content — it implicit-creates messages on first content event
+      // and prefers `agent_end`'s authoritative messages array on
+      // terminal events. We upsert the session record synchronously
+      // here so the writer can identify the sid as kind=pipe-watch
+      // for any events that arrive between this call and
+      // loadConversation finishing its async setup.
+      const startedAt = new Date().toISOString();
+      const storeNow = useChatStore.getState();
+      if (!storeNow.sessions[pipeSid]) {
+        storeNow.actions.upsert({
+          id: pipeSid,
+          title: pipeName,
+          preview: "",
+          status: "streaming",
+          messageCount: 0,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          pinned: false,
+          unread: false,
+          kind: "pipe-watch",
+          pipeContext: { pipeName, executionId, startedAt },
+          isLoading: true,
+          isStreaming: true,
+        });
+      }
+
       const pipeConv: ChatConversation = {
         id: pipeSid,
         title: pipeName,
-        messages: [placeholder],
+        // No placeholder — the writer creates the first message on the
+        // first real content event. Until then the panel shows a
+        // loading indicator (isLoading=true) which matches the visual
+        // we want during pipe startup.
+        messages: [],
         createdAt: Date.now(),
         updatedAt: Date.now(),
         kind: "pipe-watch",
-        pipeContext: {
-          pipeName,
-          executionId,
-          startedAt: new Date().toISOString(),
-        },
+        pipeContext: { pipeName, executionId, startedAt },
       };
       await loadConversationRef.current(pipeConv);
 
-      // After loadConversation has switched the panel to the pipe sid,
-      // wire up the in-flight refs so subsequent agent events grow
-      // the placeholder rather than spawning new messages. The chat
-      // foreground useEffect[conversationId] fires asynchronously
-      // after this render — pipe events that arrive in the brief
-      // interleave window get dispatched once the registration lands.
-      piMessageIdRef.current = msgId;
-      piStreamingTextRef.current = "";
-      piContentBlocksRef.current = [];
-      piThinkingStartRef.current = null;
+      // No piMessageIdRef setup — the writer owns message lifecycle
+      // for pipe-watch. The local refs stay null/empty so the chat
+      // panel's chat-shaped event handlers (which only fire if
+      // foreground is registered, which it isn't for pipe-watch)
+      // can't accidentally write to a stale placeholder id.
       setIsStreaming(true);
+      setIsLoading(true);
 
       // Poll the executions API as a safety net — catches the case
       // where the pipe finished BEFORE we mounted the foreground bus
@@ -3252,8 +3262,12 @@ export function StandaloneChat({
       let pollCount = 0;
       const maxPolls = 10; // 30s of safety-net polling
       const doPoll = async () => {
-        if (piMessageIdRef.current !== msgId) return; // no longer watching
-        const done = await pollExecutionStatus(pipeName, executionId, msgId);
+        // Stop polling if the user navigated to a different chat. The
+        // writer still accumulates events for this sid in the
+        // background — we just don't need the poll fallback once we're
+        // not actively viewing.
+        if (piSessionIdRef.current !== pipeSid) return;
+        const done = await pollExecutionStatus(pipeName, executionId, pipeSid);
         if (done) {
           watchPollTimer = null;
           return;

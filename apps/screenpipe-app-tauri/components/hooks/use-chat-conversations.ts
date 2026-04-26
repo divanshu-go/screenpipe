@@ -312,15 +312,22 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     //     race against this update can't land between the messages
     //     write and the streaming-refs write (which would point the
     //     router at a streamingMessageId not yet present in messages).
+    //     Pipe-watch sessions are owned by `pipe-watch-writer`, which
+    //     keeps the chat-store as the source of truth — snapshotting
+    //     the panel's mirrored copy back over the writer's accumulator
+    //     would be a regression (lossy round-trip via React state).
     if (outgoingSid && store.sessions[outgoingSid]) {
-      store.actions.snapshotSession(outgoingSid, {
-        messages: messages as any,
-        streamingText: piStreamingTextRef.current,
-        streamingMessageId: piMessageIdRef.current,
-        contentBlocks: [...piContentBlocksRef.current],
-        isStreaming,
-        isLoading,
-      });
+      const outgoingKind = store.sessions[outgoingSid].kind;
+      if (outgoingKind !== "pipe-watch") {
+        store.actions.snapshotSession(outgoingSid, {
+          messages: messages as any,
+          streamingText: piStreamingTextRef.current,
+          streamingMessageId: piMessageIdRef.current,
+          contentBlocks: [...piContentBlocksRef.current],
+          isStreaming,
+          isLoading,
+        });
+      }
     }
 
     // (2) Reset panel flags — these are panel-local, not session-local.

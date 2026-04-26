@@ -35,6 +35,7 @@ import { StandaloneChat } from "@/components/standalone-chat";
 import { ChatSidebar } from "@/components/chat-sidebar";
 import { mountPiEventRouter } from "@/lib/stores/pi-event-router";
 import { mountPipeRunRecorder } from "@/lib/events/pipe-run-recorder";
+import { mountPipeWatchWriter } from "@/lib/events/pipe-watch-writer";
 import { NotificationBell } from "@/components/notification-bell";
 import Timeline from "@/components/rewind/timeline";
 import { useQueryState } from "nuqs";
@@ -120,6 +121,11 @@ function HomeContent() {
     // file. Pairs with the chat router; both run for the lifetime of
     // the app process. Idempotent.
     void mountPipeRunRecorder();
+    // Pipe-watch writer — sole authority on chat-store messages for
+    // sessions with kind="pipe-watch". The chat panel mirrors the
+    // store; this writer is what makes "switch away and back" preserve
+    // the full live transcript. Idempotent.
+    void mountPipeWatchWriter();
   }, []);
 
   // Selecting a chat from the sidebar (or any other source that emits

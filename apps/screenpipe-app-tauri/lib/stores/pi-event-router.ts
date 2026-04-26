@@ -178,7 +178,16 @@ export async function handlePiEvent(envelope: AgentEventEnvelope) {
   // router has been writing them to the store the whole time. The chat
   // panel either reads the store directly or syncs its local state from
   // the store on session switch.
-  applyEventToSessionContent(sid, inner);
+  //
+  // Pipe-watch sessions are written by `pipe-watch-writer` instead —
+  // pipe streams don't follow chat-shaped lifecycles (missing
+  // message_start between turns, terminal `agent_end` carrying the
+  // canonical messages array), and double-writing here would race
+  // against that writer. Status mirroring (the sidebar dot / preview)
+  // still happens below for both kinds.
+  if (existing?.kind !== "pipe-watch") {
+    applyEventToSessionContent(sid, inner);
+  }
 
   // Lazy-create on first event from a previously-unknown session id.
   // Handles the case where Pi was started outside the chat-storage flow
