@@ -1969,6 +1969,32 @@ export function StandaloneChat({
     setMessages(pipeWatchMessages as any);
   }, [pipeWatchMessages, setMessages]);
 
+  // Mirror isLoading / isStreaming from the store for pipe-watch
+  // sessions. Without this the panel's "writing…" indicator strands
+  // forever once the pipe finishes — the writer flips the flags in the
+  // store on agent_end, but the panel's local React state was set to
+  // true at initWatch and never gets cleared (no foreground bus
+  // registration → no panel-side terminal handler runs).
+  // Two scalar selectors instead of one returning {isLoading,isStreaming}
+  // — Zustand's shallow-equal would re-render every store mutation if
+  // the selector built a fresh object each call.
+  const pipeWatchIsLoading = useChatStore((s) => {
+    if (!conversationId) return undefined;
+    const sess = s.sessions[conversationId];
+    if (sess?.kind !== "pipe-watch") return undefined;
+    return !!sess.isLoading;
+  });
+  const pipeWatchIsStreaming = useChatStore((s) => {
+    if (!conversationId) return undefined;
+    const sess = s.sessions[conversationId];
+    if (sess?.kind !== "pipe-watch") return undefined;
+    return !!sess.isStreaming;
+  });
+  useEffect(() => {
+    if (pipeWatchIsLoading !== undefined) setIsLoading(pipeWatchIsLoading);
+    if (pipeWatchIsStreaming !== undefined) setIsStreaming(pipeWatchIsStreaming);
+  }, [pipeWatchIsLoading, pipeWatchIsStreaming]);
+
   // Keep the pipe-context banner in sync with the current session.
   // When the panel switches AWAY from a pipe-watch session (user
   // clicks a chat), `activePipeExecution` would otherwise stay set
