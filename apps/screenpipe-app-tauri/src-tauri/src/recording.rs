@@ -601,7 +601,10 @@ pub async fn spawn_screenpipe(
     let server_arc = state.server.clone();
     let capture_arc = state.capture.clone();
 
-    // Pipe output callback
+    // Pipe output callback. Stage 5: legacy `pipe_event` topic dropped.
+    // Every pipe stdout line is emitted on the unified `agent_event`
+    // topic with sessionId `pipe:<name>:<execId>` (see the matching
+    // helper in `apps/screenpipe-app-tauri/lib/events/types.ts`).
     let app_for_pipe = app.clone();
     let on_pipe_output: Option<screenpipe_core::pipes::OnPipeOutputLine> = Some(
         std::sync::Arc::new(move |pipe_name: &str, exec_id: i64, line: &str| {
@@ -610,16 +613,6 @@ pub async fn spawn_screenpipe(
             } else {
                 serde_json::json!({ "type": "raw_line", "text": line })
             };
-            // Legacy envelope — kept until Stage 5 cleanup.
-            let legacy = serde_json::json!({
-                "pipeName": pipe_name,
-                "executionId": exec_id,
-                "event": inner,
-            });
-            let _ = app_for_pipe.emit("pipe_event", &legacy);
-            // Unified envelope (Stage 1). `sessionId` follows the
-            // `pipe:<name>:<execId>` convention defined in
-            // `apps/screenpipe-app-tauri/lib/events/types.ts`.
             let unified = serde_json::json!({
                 "source": "pipe",
                 "sessionId": format!("pipe:{}:{}", pipe_name, exec_id),
