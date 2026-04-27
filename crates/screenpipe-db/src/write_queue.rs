@@ -1913,9 +1913,9 @@ mod tests {
     fn is_connection_error_classifies_transport_variants() {
         assert!(is_connection_error(&sqlx::Error::PoolClosed));
         assert!(is_connection_error(&sqlx::Error::PoolTimedOut));
-        assert!(is_connection_error(&sqlx::Error::Io(std::io::Error::other(
-            "broken pipe"
-        ))));
+        assert!(is_connection_error(&sqlx::Error::Io(
+            std::io::Error::other("broken pipe")
+        )));
     }
 
     /// `Database` errors flow through `is_fatal_sqlite_message`: a
