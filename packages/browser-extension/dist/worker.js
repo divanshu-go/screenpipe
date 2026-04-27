@@ -278,10 +278,15 @@ chrome.runtime.onInstalled.addListener(async (details) => {
     chrome.runtime.openOptionsPage();
   }
 });
-chrome.alarms.create("screenpipe_keepalive", { periodInMinutes: 1 });
+chrome.alarms.create("screenpipe_keepalive", { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === "screenpipe_keepalive")
+  if (alarm.name !== "screenpipe_keepalive")
+    return;
+  if (socket?.readyState === WebSocket.OPEN) {
+    send({ type: "ping" });
+  } else {
     connect();
+  }
 });
 chrome.tabs.onActivated.addListener(() => void connect());
 chrome.tabs.onUpdated.addListener((_tabId, info) => {

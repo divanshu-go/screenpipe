@@ -415,10 +415,23 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   }
 });
 
-/** Keep the service worker warm so the WS doesn't drop after 30s idle. */
-chrome.alarms.create("screenpipe_keepalive", { periodInMinutes: 1 });
+/** Keep the service worker warm so the WS doesn't drop. Chrome MV3 puts
+ *  the SW to sleep after ~30s of zero events; the server's READ_IDLE_TIMEOUT
+ *  is 50s. With a 1-minute alarm the SW spends T+30..T+60 dormant — the
+ *  setInterval heartbeat pauses and the server kills the WS at T+50.
+ *  0.5 min is Chrome's tightest legal period and re-wakes us before the
+ *  server's idle timer fires. */
+chrome.alarms.create("screenpipe_keepalive", { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === "screenpipe_keepalive") void connect();
+  if (alarm.name !== "screenpipe_keepalive") return;
+  // setInterval may have been killed by SW dormancy. Send a ping directly
+  // so the server gets traffic even if the heartbeat loop is gone. If the
+  // socket is closed, kick a reconnect.
+  if (socket?.readyState === WebSocket.OPEN) {
+    send({ type: "ping" });
+  } else {
+    void connect();
+  }
 });
 
 chrome.tabs.onActivated.addListener(() => void connect());

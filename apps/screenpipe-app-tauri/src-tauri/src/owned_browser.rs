@@ -142,6 +142,35 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
 // Install — build the child webview, wire up the result listener, return handle
 // ---------------------------------------------------------------------------
 
+/// Wait for the main window to exist, then call [`install`]. The server
+/// thread can race window creation in `bun tauri dev`, so a single attempt
+/// often fails with "parent window 'main' not found"; retrying for a few
+/// seconds covers that gap without permanently giving up. After the wait
+/// budget the final error is returned and logged at the call site.
+pub async fn install_with_retry(
+    app: &AppHandle,
+    screenpipe_dir: PathBuf,
+) -> Result<Arc<dyn OwnedWebviewHandle>, String> {
+    const MAX_ATTEMPTS: u32 = 30;
+    const BACKOFF: Duration = Duration::from_millis(500);
+    let mut last_err = String::from("not attempted");
+    for attempt in 1..=MAX_ATTEMPTS {
+        match install(app, screenpipe_dir.clone()).await {
+            Ok(handle) => return Ok(handle),
+            Err(e) => {
+                last_err = e;
+                tracing::debug!(
+                    "owned-browser install attempt {attempt}/{MAX_ATTEMPTS} failed: {last_err}"
+                );
+                tokio::time::sleep(BACKOFF).await;
+            }
+        }
+    }
+    Err(format!(
+        "owned-browser install gave up after {MAX_ATTEMPTS} attempts: {last_err}"
+    ))
+}
+
 /// Create the owned-browser child webview if it doesn't exist yet, register
 /// the result-event listener, and return a ready-to-attach handle. Idempotent.
 ///

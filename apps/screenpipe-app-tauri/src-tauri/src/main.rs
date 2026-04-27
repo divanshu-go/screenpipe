@@ -1675,7 +1675,7 @@ async fn main() {
                                 let app_for_install = app_for_owned.clone();
                                 let data_dir_for_install = config.data_dir.clone();
                                 tauri::async_runtime::spawn(async move {
-                                    match crate::owned_browser::install(&app_for_install, data_dir_for_install).await {
+                                    match crate::owned_browser::install_with_retry(&app_for_install, data_dir_for_install).await {
                                         Ok(handle) => {
                                             owned_for_install.attach(handle).await;
                                             info!("owned-browser ready");

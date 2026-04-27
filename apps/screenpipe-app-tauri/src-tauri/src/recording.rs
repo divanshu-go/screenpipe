@@ -616,7 +616,9 @@ pub async fn spawn_screenpipe(
         let owned_for_install = owned_browser.clone();
         let data_dir_for_install = recording_config.data_dir.clone();
         tauri::async_runtime::spawn(async move {
-            match crate::owned_browser::install(&app_for_owned, data_dir_for_install).await {
+            match crate::owned_browser::install_with_retry(&app_for_owned, data_dir_for_install)
+                .await
+            {
                 Ok(handle) => {
                     owned_for_install.attach(handle).await;
                     info!("owned-browser ready");
