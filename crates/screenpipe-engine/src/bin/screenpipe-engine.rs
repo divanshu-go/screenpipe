@@ -921,13 +921,8 @@ async fn main() -> anyhow::Result<()> {
     server.api_auth_key = config.api_auth_key.clone();
 
     // Initialize secret store for unified credential management
-    let encryption_requested = config.encrypt_secrets
-        || std::env::var("SCREENPIPE_ENCRYPT_STORE").map_or(false, |v| v == "1")
-        || local_data_dir.join(".encrypt-store").exists()
-        || match std::fs::read(local_data_dir.join("store.bin")) {
-            Ok(data) => data.len() >= 8 && &data[..8] == b"SPSTORE1",
-            Err(_) => false,
-        };
+    let encryption_requested =
+        config.encrypt_secrets || screenpipe_secrets::is_encryption_requested(&local_data_dir);
 
     {
         // Read-only keychain access: pick up existing key without triggering modals.

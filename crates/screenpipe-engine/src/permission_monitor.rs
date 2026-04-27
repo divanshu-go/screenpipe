@@ -263,7 +263,9 @@ fn keychain_accessible() -> bool {
     // Only check the keychain when encryption is opted in.
     // This avoids showing the macOS keychain permission modal before onboarding for
     // users who haven't opted into secrets encryption yet.
-    if !is_keychain_encryption_requested() {
+    if !screenpipe_secrets::is_encryption_requested(
+        &screenpipe_core::paths::default_screenpipe_data_dir(),
+    ) {
         return true;
     }
     match get_key() {
@@ -275,24 +277,5 @@ fn keychain_accessible() -> bool {
         KeyResult::Unavailable => true,
         // AccessDenied = had access, now don't. This is the only real loss.
         KeyResult::AccessDenied => false,
-    }
-}
-
-fn is_keychain_encryption_requested() -> bool {
-    // explicit opt-in via env override
-    if std::env::var("SCREENPIPE_ENCRYPT_STORE").map_or(false, |v| v == "1") {
-        return true;
-    }
-
-    let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
-    let flag = data_dir.join(".encrypt-store");
-    if flag.exists() {
-        return true;
-    }
-
-    let store_path = data_dir.join("store.bin");
-    match std::fs::read(&store_path) {
-        Ok(data) => data.len() >= 8 && &data[..8] == b"SPSTORE1",
-        Err(_) => false,
     }
 }

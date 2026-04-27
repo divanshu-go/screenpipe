@@ -1238,7 +1238,9 @@ pub async fn enable_keychain_encryption() -> Result<KeychainStatus, String> {
     })?;
 
     let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
-    let _ = std::fs::write(data_dir.join(".encrypt-store"), b"");
+    if let Err(e) = screenpipe_secrets::mark_encryption_enabled(&data_dir) {
+        tracing::warn!("failed to write .encrypt-store flag: {}", e);
+    }
 
     let db_path = data_dir.join("db.sqlite");
     let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
@@ -1259,6 +1261,20 @@ pub async fn enable_keychain_encryption() -> Result<KeychainStatus, String> {
 
     Ok(KeychainStatus {
         state: "enabled".to_string(),
+    })
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn disable_keychain_encryption() -> Result<KeychainStatus, String> {
+    let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
+    screenpipe_secrets::mark_encryption_disabled(&data_dir)
+        .map_err(|e| format!("failed to remove .encrypt-store flag: {e}"))?;
+    if let Err(e) = crate::secrets::delete_key() {
+        tracing::warn!("failed to delete keychain key on opt-out: {}", e);
+    }
+    Ok(KeychainStatus {
+        state: "disabled".to_string(),
     })
 }
 
