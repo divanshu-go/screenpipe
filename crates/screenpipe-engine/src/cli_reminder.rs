@@ -25,23 +25,46 @@ pub fn spawn() {
         let mut ticker = tokio::time::interval(REMINDER_INTERVAL);
         // Skip the immediate tick — first reminder fires after one interval.
         ticker.tick().await;
+        let mut idx: usize = 0;
         loop {
             ticker.tick().await;
-            print_desktop_app_reminder();
+            print_tip(idx);
+            idx = idx.wrapping_add(1);
         }
     });
 }
 
-fn print_desktop_app_reminder() {
+fn print_tip(idx: usize) {
+    let tips: [fn(); 2] = [print_desktop_app_tip, print_mcp_tip];
+    tips[idx % tips.len()]();
+}
+
+fn print_desktop_app_tip() {
     eprintln!();
     eprintln!(
         "  {} get the screenpipe desktop app for the full experience",
         "tip:".cyan().bold(),
     );
     eprintln!("       {}", DESKTOP_APP_URL.green().underline());
+    eprintln!();
+}
+
+fn print_mcp_tip() {
+    eprintln!();
+    eprintln!(
+        "  {} wire screenpipe into claude with one command:",
+        "tip:".cyan().bold(),
+    );
     eprintln!(
         "       {}",
-        "(set SCREENPIPE_NO_REMINDERS=1 to silence)".dimmed(),
+        "claude mcp add screenpipe -- npx -y screenpipe-mcp"
+            .green()
+            .bold(),
+    );
+    eprintln!(
+        "       then ask claude to {} from your screen activity",
+        "build a pipe that tracks who you are, your todos, and how you spend your time"
+            .italic(),
     );
     eprintln!();
 }
