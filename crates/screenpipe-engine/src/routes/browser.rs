@@ -214,6 +214,16 @@ pub async fn browser_ws_handler(
     ws.on_upgrade(move |socket| handle_extension_socket(socket, bridge))
 }
 
+/// How often the server pings the extension. Picked to be well under typical
+/// NAT / corporate-proxy idle-WS timeouts (60s) so a silent connection never
+/// looks "alive" on one side and "dead" on the other.
+const PING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(20);
+/// If we don't receive any frame (pong, eval response, anything) for this long,
+/// declare the connection dead and force a reconnect. Two missed ping cycles
+/// plus headroom — fast enough that users see "disconnected" within a minute,
+/// not a multi-minute "looks connected but isn't" window.
+const READ_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(50);
+
 async fn handle_extension_socket(socket: WebSocket, bridge: Arc<BrowserBridge>) {
     let (sink, mut stream) = socket.split();
     let sink = Arc::new(Mutex::new(sink));
@@ -237,11 +247,42 @@ async fn handle_extension_socket(socket: WebSocket, bridge: Arc<BrowserBridge>) 
     }
     info!("browser extension connected");
 
-    while let Some(msg) = stream.next().await {
-        let text = match msg {
+    // Heartbeat: pings keep idle WS alive across NATs/proxies and let us
+    // detect half-open sockets where one side never sees the close frame.
+    // Cancelled via the JoinHandle when the read loop exits.
+    let ping_sink = sink.clone();
+    let ping_task = tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(PING_INTERVAL);
+        ticker.tick().await; // skip the immediate first tick
+        loop {
+            ticker.tick().await;
+            let mut s = ping_sink.lock().await;
+            if s.send(Message::Ping(Vec::new())).await.is_err() {
+                debug!("browser ws ping failed — peer is gone");
+                break;
+            }
+        }
+    });
+
+    loop {
+        let next = match tokio::time::timeout(READ_IDLE_TIMEOUT, stream.next()).await {
+            Ok(Some(msg)) => msg,
+            Ok(None) => break, // stream ended cleanly
+            Err(_) => {
+                warn!(
+                    "browser ws idle for {}s — assuming peer is dead",
+                    READ_IDLE_TIMEOUT.as_secs()
+                );
+                break;
+            }
+        };
+
+        let text = match next {
             Ok(Message::Text(t)) => t,
             Ok(Message::Close(_)) => break,
-            Ok(_) => continue,
+            // axum auto-pongs incoming pings; pongs / binary frames just reset
+            // the idle timer above and need no further handling.
+            Ok(Message::Ping(_)) | Ok(Message::Pong(_)) | Ok(Message::Binary(_)) => continue,
             Err(e) => {
                 debug!("browser ws error: {e}");
                 break;
@@ -272,8 +313,19 @@ async fn handle_extension_socket(socket: WebSocket, bridge: Arc<BrowserBridge>) 
         }
     }
 
-    // Disconnected — clean up
-    *bridge.extension_tx.write().await = None;
+    ping_task.abort();
+
+    // Only clear bridge state if THIS connection is still the registered one.
+    // A racy reconnect (new socket arrives while we're tearing down) replaced
+    // us already — don't stomp on the new connection's state.
+    {
+        let mut tx = bridge.extension_tx.write().await;
+        if let Some(ref current) = *tx {
+            if Arc::ptr_eq(current, &sink) {
+                *tx = None;
+            }
+        }
+    }
 
     let mut pending = bridge.pending.lock().await;
     for (_, tx) in pending.drain() {

@@ -33,6 +33,10 @@ const RECONNECT_MAX_MS = 30_000;
 const AUTH_FAIL_THRESHOLD = 3;
 /** How long to stay silent after alerting — avoids notification spam. */
 const ALERT_COOLDOWN_MS = 10 * 60_000;
+/** Heartbeat — must be < server READ_IDLE_TIMEOUT (50s). */
+const HEARTBEAT_INTERVAL_MS = 20_000;
+/** If no frame from server for this long, assume the WS is half-dead. */
+const HEARTBEAT_DEAD_MS = 50_000;
 
 // ---------------------------------------------------------------------------
 // Connection state
@@ -47,6 +51,10 @@ let closeWithoutOpen = 0;
 let lastAlertAt = 0;
 /** Whether the current attempt ever reached OPEN. */
 let openedThisAttempt = false;
+/** Last time we received a frame from the server (any frame: pong, eval, …). */
+let lastFrameAt = 0;
+/** Heartbeat interval handle — cleared on disconnect. */
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
 // ---------------------------------------------------------------------------
 // Storage helpers
@@ -98,6 +106,11 @@ function notifyOnce(title: string, message: string): void {
 // ---------------------------------------------------------------------------
 
 async function connect(): Promise<void> {
+  // Honor the backoff timer — alarms and tab events shouldn't bypass it.
+  // Without this guard, after auth failure the worker would hammer
+  // /browser/ws on every tab switch (multiple times per second on busy
+  // browsers), spamming logs and rate-limiting the user.
+  if (reconnectTimer) return;
   if (
     socket?.readyState === WebSocket.OPEN ||
     socket?.readyState === WebSocket.CONNECTING
@@ -121,7 +134,9 @@ async function connect(): Promise<void> {
     openedThisAttempt = true;
     reconnectDelay = RECONNECT_BASE_MS;
     closeWithoutOpen = 0;
+    lastFrameAt = Date.now();
     clearBadge();
+    startHeartbeat();
 
     const hello: HelloMessage = {
       type: "hello",
@@ -133,6 +148,7 @@ async function connect(): Promise<void> {
   };
 
   socket.onclose = () => {
+    stopHeartbeat();
     if (!openedThisAttempt) {
       closeWithoutOpen += 1;
       // After repeated failures-before-open, the most likely cause is auth
@@ -155,6 +171,7 @@ async function connect(): Promise<void> {
   };
 
   socket.onmessage = async (event: MessageEvent) => {
+    lastFrameAt = Date.now();
     let msg: IncomingMessage;
     try {
       msg = JSON.parse(event.data);
@@ -194,12 +211,14 @@ function scheduleReconnect(): void {
 }
 
 function forceReconnect(): void {
-  // User updated settings (or clicked reconnect) — blow away state so the
-  // next attempt starts fresh instead of cooling down.
+  // User updated settings (or clicked reconnect, or heartbeat detected a
+  // half-dead socket) — blow away state so the next attempt starts fresh
+  // instead of cooling down.
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
   }
+  stopHeartbeat();
   reconnectDelay = RECONNECT_BASE_MS;
   closeWithoutOpen = 0;
   lastAlertAt = 0;
@@ -217,6 +236,42 @@ function send(obj: unknown): void {
       socket.send(JSON.stringify(obj));
     }
   } catch {}
+}
+
+// ---------------------------------------------------------------------------
+// Heartbeat — detects half-dead WS sockets where onclose never fires.
+//
+// Service-worker WebSockets are notoriously unreliable: NATs, corporate
+// proxies, and even Chrome's own MV3 lifecycle can sever the underlying TCP
+// connection without the JS layer noticing. Without this loop, the popup
+// would show "connected" while the server saw a stale dead socket — exactly
+// the flapping symptom users have reported.
+// ---------------------------------------------------------------------------
+
+function startHeartbeat(): void {
+  stopHeartbeat();
+  heartbeatTimer = setInterval(() => {
+    if (socket?.readyState !== WebSocket.OPEN) {
+      stopHeartbeat();
+      return;
+    }
+    // App-level ping — the server replies via its own ping frame on a 20s
+    // cadence, so any traffic at all resets lastFrameAt. If we go silent for
+    // longer than HEARTBEAT_DEAD_MS, the connection is half-dead.
+    if (Date.now() - lastFrameAt > HEARTBEAT_DEAD_MS) {
+      console.warn("[screenpipe] no server traffic for 50s — reconnecting");
+      forceReconnect();
+      return;
+    }
+    send({ type: "ping" });
+  }, HEARTBEAT_INTERVAL_MS);
+}
+
+function stopHeartbeat(): void {
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -2,9 +2,10 @@
 var DEFAULT_BASE_URL = "http://127.0.0.1:3030";
 var STORAGE_KEY_TOKEN = "screenpipe_token";
 var STORAGE_KEY_BASE_URL = "screenpipe_base_url";
+var BROWSER_BASE_PATH = "/connections/browser";
 function buildWsUrl(baseHttpUrl, token) {
   const base = baseHttpUrl.replace(/^http:/, "ws:").replace(/^https:/, "wss:");
-  const path = "/browser/ws";
+  const path = `${BROWSER_BASE_PATH}/ws`;
   if (!token)
     return `${base}${path}`;
   return `${base}${path}?token=${encodeURIComponent(token)}`;
@@ -13,7 +14,7 @@ function healthUrl(baseHttpUrl) {
   return `${baseHttpUrl.replace(/\/$/, "")}/health`;
 }
 function browserStatusUrl(baseHttpUrl) {
-  return `${baseHttpUrl.replace(/\/$/, "")}/browser/status`;
+  return `${baseHttpUrl.replace(/\/$/, "")}${BROWSER_BASE_PATH}/status`;
 }
 
 // src/worker.ts
@@ -21,12 +22,16 @@ var RECONNECT_BASE_MS = 500;
 var RECONNECT_MAX_MS = 30000;
 var AUTH_FAIL_THRESHOLD = 3;
 var ALERT_COOLDOWN_MS = 10 * 60000;
+var HEARTBEAT_INTERVAL_MS = 20000;
+var HEARTBEAT_DEAD_MS = 50000;
 var socket = null;
 var reconnectDelay = RECONNECT_BASE_MS;
 var reconnectTimer = null;
 var closeWithoutOpen = 0;
 var lastAlertAt = 0;
 var openedThisAttempt = false;
+var lastFrameAt = 0;
+var heartbeatTimer = null;
 async function getConfig() {
   const s = await chrome.storage.local.get([STORAGE_KEY_TOKEN, STORAGE_KEY_BASE_URL]);
   const token = s[STORAGE_KEY_TOKEN]?.trim() || null;
@@ -58,6 +63,8 @@ function notifyOnce(title, message) {
   } catch {}
 }
 async function connect() {
+  if (reconnectTimer)
+    return;
   if (socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) {
     return;
   }
@@ -75,7 +82,9 @@ async function connect() {
     openedThisAttempt = true;
     reconnectDelay = RECONNECT_BASE_MS;
     closeWithoutOpen = 0;
+    lastFrameAt = Date.now();
     clearBadge();
+    startHeartbeat();
     const hello = {
       type: "hello",
       from: "extension",
@@ -85,6 +94,7 @@ async function connect() {
     send(hello);
   };
   socket.onclose = () => {
+    stopHeartbeat();
     if (!openedThisAttempt) {
       closeWithoutOpen += 1;
       if (closeWithoutOpen >= AUTH_FAIL_THRESHOLD) {
@@ -100,6 +110,7 @@ async function connect() {
     } catch {}
   };
   socket.onmessage = async (event) => {
+    lastFrameAt = Date.now();
     let msg;
     try {
       msg = JSON.parse(event.data);
@@ -137,6 +148,7 @@ function forceReconnect() {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
   }
+  stopHeartbeat();
   reconnectDelay = RECONNECT_BASE_MS;
   closeWithoutOpen = 0;
   lastAlertAt = 0;
@@ -153,6 +165,27 @@ function send(obj) {
       socket.send(JSON.stringify(obj));
     }
   } catch {}
+}
+function startHeartbeat() {
+  stopHeartbeat();
+  heartbeatTimer = setInterval(() => {
+    if (socket?.readyState !== WebSocket.OPEN) {
+      stopHeartbeat();
+      return;
+    }
+    if (Date.now() - lastFrameAt > HEARTBEAT_DEAD_MS) {
+      console.warn("[screenpipe] no server traffic for 50s — reconnecting");
+      forceReconnect();
+      return;
+    }
+    send({ type: "ping" });
+  }, HEARTBEAT_INTERVAL_MS);
+}
+function stopHeartbeat() {
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  }
 }
 async function findTab(urlPattern) {
   if (urlPattern) {

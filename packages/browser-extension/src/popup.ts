@@ -68,8 +68,16 @@ function setStatusUI(status: ConnStatus): void {
 async function init(): Promise<void> {
   const { token, baseUrl } = await getConfig();
 
+  // Open the options page. `chrome.runtime.openOptionsPage()` is unreliable in
+  // some Chromium variants (notably Arc): it resolves successfully but the
+  // page never surfaces because the popup closes before the new tab paints.
+  // Opening the URL directly via chrome.tabs.create + closing the popup is
+  // the only consistently-working path across Chrome / Arc / Brave / Edge.
   $<HTMLButtonElement>("settings-btn").addEventListener("click", () => {
-    void chrome.runtime.openOptionsPage();
+    const optionsUrl = chrome.runtime.getURL("options.html");
+    void chrome.tabs.create({ url: optionsUrl }).finally(() => {
+      window.close();
+    });
   });
 
   // Wake the service worker so its WebSocket has a chance to establish,

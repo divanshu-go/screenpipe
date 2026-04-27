@@ -19,6 +19,8 @@ use serde_json::{json, Map, Value};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use crate::routes::browser::BrowserBridge;
+
 pub type SharedConnectionManager = Arc<Mutex<ConnectionManager>>;
 pub type SharedWhatsAppGateway = Arc<Mutex<WhatsAppGateway>>;
 
@@ -27,6 +29,7 @@ pub struct ConnectionsState {
     pub cm: SharedConnectionManager,
     pub wa: SharedWhatsAppGateway,
     pub secret_store: Option<Arc<SecretStore>>,
+    pub browser_bridge: Arc<BrowserBridge>,
 }
 
 #[derive(Deserialize)]
@@ -103,6 +106,22 @@ async fn list_connections(State(state): State<ConnectionsState>) -> Json<Value> 
             "fields": [],
             "connected": wa_connected,
             "has_session": has_session,
+        }));
+
+        // Browser extension — Chrome/Edge bridge for in-page JS execution.
+        let browser_connected = state.browser_bridge.is_connected().await;
+        arr.push(json!({
+            "id": "browser-extension",
+            "name": "Browser Extension",
+            "icon": "browser",
+            "category": "productivity",
+            "description":
+                "Run JavaScript in the user's browser tabs via a Chrome/Edge extension. \
+                 Endpoints: GET /connections/browser/status — connection status. \
+                 POST /connections/browser/eval {\"code\":\"...\",\"url\":\"...\"} — run JS in a tab. \
+                 Install the extension from screenpi.pe/extension.",
+            "fields": [],
+            "connected": browser_connected,
         }));
     }
 
@@ -1308,10 +1327,36 @@ async fn connection_config(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Browser extension bridge wrappers — re-extract the bridge from ConnectionsState
+// so the underlying handlers in routes::browser remain state-agnostic.
+// ---------------------------------------------------------------------------
+
+async fn browser_ws(
+    ws: axum::extract::ws::WebSocketUpgrade,
+    State(state): State<ConnectionsState>,
+) -> axum::response::Response {
+    crate::routes::browser::browser_ws_handler(ws, State(state.browser_bridge)).await
+}
+
+async fn browser_eval(
+    State(state): State<ConnectionsState>,
+    body: Json<crate::routes::browser::EvalRequestBody>,
+) -> impl axum::response::IntoResponse {
+    crate::routes::browser::browser_eval_handler(State(state.browser_bridge), body).await
+}
+
+async fn browser_status(
+    State(state): State<ConnectionsState>,
+) -> impl axum::response::IntoResponse {
+    crate::routes::browser::browser_status_handler(State(state.browser_bridge)).await
+}
+
 pub fn router<S>(
     cm: SharedConnectionManager,
     wa: SharedWhatsAppGateway,
     secret_store: Option<Arc<SecretStore>>,
+    browser_bridge: Arc<BrowserBridge>,
 ) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
@@ -1320,9 +1365,14 @@ where
         cm,
         wa,
         secret_store,
+        browser_bridge,
     };
     Router::new()
         .route("/", get(list_connections))
+        // Browser extension bridge (must be before /:id to avoid conflict)
+        .route("/browser/ws", get(browser_ws))
+        .route("/browser/eval", post(browser_eval))
+        .route("/browser/status", get(browser_status))
         // OAuth callback (must be before /:id to avoid conflict)
         .route("/oauth/callback", get(oauth_callback))
         // Calendar routes (must be before /:id to avoid conflict)

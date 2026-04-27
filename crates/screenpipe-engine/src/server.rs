@@ -748,7 +748,12 @@ impl SCServer {
 
         let router = router.nest(
             "/connections",
-            crate::connections_api::router(cm, wa, self.secret_store.clone()),
+            crate::connections_api::router(
+                cm,
+                wa,
+                self.secret_store.clone(),
+                app_state.browser_bridge.clone(),
+            ),
         );
 
         // Power management routes (if power manager is available)
@@ -771,7 +776,11 @@ impl SCServer {
             .route("/ws/events", get(ws_events_handler))
             .route("/ws/health", get(ws_health_handler))
             .route("/ws/metrics", get(ws_metrics_handler))
-            // Browser extension bridge
+            // Browser extension bridge — DEPRECATED top-level paths.
+            // Canonical paths now live under /connections/browser/* (see connections_api.rs).
+            // These aliases stay in place because deployed Chrome extensions hardcode
+            // /browser/ws (packages/browser-extension/src/config.ts). Remove only after
+            // a coordinated extension update has shipped to all users.
             .route(
                 "/browser/ws",
                 get({
