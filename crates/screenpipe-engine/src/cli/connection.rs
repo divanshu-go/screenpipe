@@ -68,45 +68,64 @@ pub async fn handle_connection_command(command: &ConnectionCommand) -> anyhow::R
                     .to_string()
             };
 
+            // Merge every source into one row vector so we can sort once.
+            // Connected entries lead — pi-cli's bash tool truncates large
+            // outputs around ~50 KB, and the agent typically only needs
+            // the handful that are actually wired up.
+            struct Row {
+                id: String,
+                name: String,
+                description: String,
+                connected: bool,
+            }
+            let mut rows: Vec<Row> = list
+                .iter()
+                .map(|info| Row {
+                    id: info.def.id.to_string(),
+                    name: info.def.name.to_string(),
+                    description: info.def.description.to_string(),
+                    connected: info.connected,
+                })
+                .collect();
+            rows.push(Row {
+                id: "whatsapp".to_string(),
+                name: "WhatsApp".to_string(),
+                description: wa_desc,
+                connected: wa_connected,
+            });
+            for b in &browsers {
+                rows.push(Row {
+                    id: b.id.clone(),
+                    name: b.name.clone(),
+                    description: b.description.clone(),
+                    connected: b.ready,
+                });
+            }
+            rows.sort_by(|a, b| {
+                b.connected
+                    .cmp(&a.connected)
+                    .then_with(|| a.id.cmp(&b.id))
+            });
+
             if *use_json {
-                let mut items: Vec<Value> = list
+                let items: Vec<Value> = rows
                     .iter()
-                    .map(|info| {
+                    .map(|r| {
                         json!({
-                            "id": info.def.id,
-                            "name": info.def.name,
-                            "description": info.def.description,
-                            "connected": info.connected,
+                            "id": r.id,
+                            "name": r.name,
+                            "description": r.description,
+                            "connected": r.connected,
                         })
                     })
                     .collect();
-                items.push(json!({
-                    "id": "whatsapp",
-                    "name": "WhatsApp",
-                    "description": wa_desc,
-                    "connected": wa_connected,
-                }));
-                for b in &browsers {
-                    items.push(json!({
-                        "id": b.id,
-                        "name": b.name,
-                        "description": b.description,
-                        "connected": b.ready,
-                    }));
-                }
                 println!("{}", serde_json::to_string_pretty(&items)?);
             } else {
                 println!("{:<20} {:<12} {:<40}", "ID", "STATUS", "NAME");
                 println!("{}", "-".repeat(72));
-                for info in &list {
-                    let status = if info.connected { "connected" } else { "-" };
-                    println!("{:<20} {:<12} {:<40}", info.def.id, status, info.def.name);
-                }
-                let wa_status = if wa_connected { "connected" } else { "-" };
-                println!("{:<20} {:<12} {:<40}", "whatsapp", wa_status, "WhatsApp");
-                for b in &browsers {
-                    let status = if b.ready { "connected" } else { "-" };
-                    println!("{:<20} {:<12} {:<40}", b.id, status, b.name);
+                for r in &rows {
+                    let status = if r.connected { "connected" } else { "-" };
+                    println!("{:<20} {:<12} {:<40}", r.id, status, r.name);
                 }
             }
         }

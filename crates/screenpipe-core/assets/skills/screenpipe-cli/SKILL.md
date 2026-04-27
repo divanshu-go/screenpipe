@@ -16,6 +16,8 @@ cd "$(mktemp -d)" && bun x screenpipe@latest <command>
 
 - **All platforms** → `bash` (on Windows, the bundled git-portable bash is used automatically)
 
+> **Note:** the bash tool truncates output around ~50 KB. Long listings (`connection list`, `pipe list`, etc.) are sorted with connected/enabled rows first, but if you need a specific row, pipe through `grep` or `head` rather than scanning the full output — e.g. `bun x screenpipe@latest connection list | grep -E 'browser|connected'`.
+
 ---
 
 ## Pipe Management
