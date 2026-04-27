@@ -16,7 +16,7 @@
  * bus.
  */
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { localFetch } from "@/lib/api";
 import { useSettings } from "@/lib/hooks/use-settings";
 
@@ -51,23 +51,43 @@ function parseUpcoming(raw: any[]): UpcomingPipe[] {
   return out;
 }
 
-export function useUpcomingPipes(): UpcomingPipe[] {
+export interface UseUpcomingPipesResult {
+  pipes: UpcomingPipe[];
+  /** Force a refetch — call after a mutation (cancel/install) so the
+   *  sidebar reflects the change without waiting up to 30s for the
+   *  next poll. */
+  refetch: () => Promise<void>;
+  /** Optimistically remove a pipe from the list. Used by cancel-handlers
+   *  to make the row disappear instantly while the disable API call is
+   *  in flight; the next refetch reconciles either way. */
+  dismiss: (pipeName: string) => void;
+}
+
+export function useUpcomingPipes(): UseUpcomingPipesResult {
   const [pipes, setPipes] = useState<UpcomingPipe[]>([]);
   const { isSettingsLoaded } = useSettings();
+
+  const refetch = useCallback(async () => {
+    try {
+      const res = await localFetch("/pipes");
+      if (!res.ok) return;
+      const json = await res.json();
+      setPipes(parseUpcoming(json.data || []));
+    } catch {
+      // best-effort — silent failure, retry next tick
+    }
+  }, []);
+
+  const dismiss = useCallback((pipeName: string) => {
+    setPipes((prev) => prev.filter((p) => p.pipeName !== pipeName));
+  }, []);
 
   useEffect(() => {
     if (!isSettingsLoaded) return;
     let cancelled = false;
     const poll = async () => {
-      try {
-        const res = await localFetch("/pipes");
-        if (!res.ok) return;
-        const json = await res.json();
-        if (cancelled) return;
-        setPipes(parseUpcoming(json.data || []));
-      } catch {
-        // best-effort — silent failure, retry next tick
-      }
+      if (cancelled) return;
+      await refetch();
     };
     void poll();
     const id = setInterval(poll, 30_000);
@@ -75,7 +95,7 @@ export function useUpcomingPipes(): UpcomingPipe[] {
       cancelled = true;
       clearInterval(id);
     };
-  }, [isSettingsLoaded]);
+  }, [isSettingsLoaded, refetch]);
 
-  return pipes;
+  return { pipes, refetch, dismiss };
 }

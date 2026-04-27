@@ -35,6 +35,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Pin, X, AlertCircle, ChevronDown, ChevronRight, Activity } from "lucide-react";
 import { useRunningPipes } from "@/lib/hooks/use-running-pipes";
 import { useUpcomingPipes, type UpcomingPipe } from "@/lib/hooks/use-upcoming-pipes";
+import { localFetch } from "@/lib/api";
 import { emit, listen } from "@tauri-apps/api/event";
 import { cn } from "@/lib/utils";
 import {
@@ -90,7 +91,29 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
   }, [actions]);
 
   const runningPipes = useRunningPipes();
-  const upcomingPipes = useUpcomingPipes();
+  const {
+    pipes: upcomingPipes,
+    refetch: refetchUpcoming,
+    dismiss: dismissUpcoming,
+  } = useUpcomingPipes();
+
+  // Cancel a one-off pipe before it fires. Optimistically removes the row
+  // (so the click feels instant), then disables on the server, then refetches
+  // to reconcile — if the disable failed, the row reappears on the next
+  // poll/refetch and the user can try again.
+  const handleCancelUpcoming = async (pipeName: string) => {
+    dismissUpcoming(pipeName);
+    try {
+      await localFetch(`/pipes/${encodeURIComponent(pipeName)}/enable`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: false }),
+      });
+    } catch {
+      // best-effort — refetch reconciles either way
+    }
+    void refetchUpcoming();
+  };
 
   // Pipe-watch / pipe-run sessions also rendered in Scheduled get filtered
   // out here — otherwise the same pipe shows up twice (live row in
@@ -225,7 +248,10 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
       data-testid="chat-sidebar"
     >
       {upcomingPipes.length > 0 && (
-        <CollapsibleUpcoming pipes={upcomingPipes} />
+        <CollapsibleUpcoming
+          pipes={upcomingPipes}
+          onCancel={handleCancelUpcoming}
+        />
       )}
 
       {runningPipes.length > 0 && (
@@ -514,7 +540,13 @@ function formatCountdown(runAt: string): string | null {
  *  fired yet. Mirrors `CollapsibleScheduled` visually but shows a
  *  countdown ("in 2d 4h") instead of an elapsed badge, and uses a steady
  *  (non-pulsing) clock-style dot to differentiate from running pipes. */
-function CollapsibleUpcoming({ pipes }: { pipes: UpcomingPipe[] }) {
+function CollapsibleUpcoming({
+  pipes,
+  onCancel,
+}: {
+  pipes: UpcomingPipe[];
+  onCancel: (pipeName: string) => void | Promise<void>;
+}) {
   const [collapsed, setCollapsedRaw] = useState<boolean>(() => {
     try {
       return localStorage.getItem("screenpipe:upcoming-collapsed") === "true";
@@ -558,7 +590,7 @@ function CollapsibleUpcoming({ pipes }: { pipes: UpcomingPipe[] }) {
         >
           <div className="flex flex-col">
             {pipes.map((p) => (
-              <UpcomingRow key={p.pipeName} pipe={p} />
+              <UpcomingRow key={p.pipeName} pipe={p} onCancel={onCancel} />
             ))}
           </div>
         </div>
@@ -567,7 +599,13 @@ function CollapsibleUpcoming({ pipes }: { pipes: UpcomingPipe[] }) {
   );
 }
 
-function UpcomingRow({ pipe }: { pipe: UpcomingPipe }) {
+function UpcomingRow({
+  pipe,
+  onCancel,
+}: {
+  pipe: UpcomingPipe;
+  onCancel: (pipeName: string) => void | Promise<void>;
+}) {
   // Re-tick once a minute so the countdown stays fresh while the row is
   // mounted. Cheap: max one timer per upcoming pipe; users rarely have
   // more than a handful queued.
@@ -585,7 +623,7 @@ function UpcomingRow({ pipe }: { pipe: UpcomingPipe }) {
   const absLabel = `${fireDate.toLocaleDateString()} ${fireDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
   return (
     <div
-      className="flex items-center gap-2 px-2.5 py-1 mx-0 rounded-md text-foreground select-none cursor-default"
+      className="group flex items-center gap-2 px-2.5 py-1 mx-0 rounded-md text-foreground select-none cursor-default hover:bg-muted/40"
       title={`scheduled for ${absLabel} — pipe: ${pipe.pipeName}`}
       data-testid={`upcoming-row-${pipe.pipeName}`}
     >
@@ -600,9 +638,25 @@ function UpcomingRow({ pipe }: { pipe: UpcomingPipe }) {
       <span className="truncate flex-1 text-xs">
         {pipe.title || pipe.pipeName}
       </span>
-      <span className="text-[10px] text-muted-foreground/60 tabular-nums shrink-0">
+      {/* Countdown swaps out for the cancel button on hover — keeps the row
+          height stable (no layout shift) and avoids surfacing a destructive
+          action until the user clearly intends to interact. */}
+      <span className="text-[10px] text-muted-foreground/60 tabular-nums shrink-0 group-hover:hidden">
         {countdown}
       </span>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          void onCancel(pipe.pipeName);
+        }}
+        className="hidden group-hover:inline-flex items-center justify-center p-0.5 rounded hover:bg-muted text-muted-foreground shrink-0"
+        title="cancel"
+        aria-label={`cancel ${pipe.title || pipe.pipeName}`}
+        data-testid={`upcoming-cancel-${pipe.pipeName}`}
+      >
+        <X className="h-3 w-3" />
+      </button>
     </div>
   );
 }

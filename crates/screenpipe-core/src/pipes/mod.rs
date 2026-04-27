@@ -2616,6 +2616,12 @@ impl PipeManager {
 
         let content = std::fs::read_to_string(&pipe_md)?;
         let (mut config, body) = parse_frontmatter(&content)?;
+        // Block enabling a stale one-off — would either silently no-op
+        // (caught by the scheduler's stale guard) or fire a confusingly
+        // old reminder. User must set a new `at <iso>` first.
+        if enabled {
+            validate_one_off_freshness(&config.schedule)?;
+        }
         config.enabled = enabled;
         let new_content = serialize_pipe(&config, &body)?;
         atomic_write(&pipe_md, &new_content)?;
@@ -4110,6 +4116,39 @@ Pipe name: {}
 // Schedule parsing
 // ---------------------------------------------------------------------------
 
+/// Maximum lateness before a one-off pipe is considered stale and refused.
+/// Tolerates clock skew, brief app downtime, and crash-then-restart. Any
+/// longer than this, the user almost certainly didn't expect the task to
+/// run "now" — they expected it then. Better to no-op than surprise them.
+const ONE_OFF_STALE_THRESHOLD: chrono::Duration = chrono::Duration::hours(1);
+
+/// Validate that a `schedule: at <iso>` timestamp isn't already stale.
+/// Returns `Ok(())` for any non-one-off schedule. Called from `install_pipe`
+/// and `enable_pipe` so a stale one-off never lands on disk in the active
+/// state — the user gets a clear error instead of a silent no-op pipe.
+fn validate_one_off_freshness(schedule: &str) -> Result<()> {
+    if let Some(ParsedSchedule::Once(run_at)) = parse_schedule(schedule) {
+        let lateness = Utc::now().signed_duration_since(run_at);
+        if lateness > ONE_OFF_STALE_THRESHOLD {
+            let mins = lateness.num_minutes();
+            let pretty = if mins < 60 {
+                format!("{}m", mins)
+            } else if mins < 1440 {
+                format!("{}h", mins / 60)
+            } else {
+                format!("{}d", mins / 1440)
+            };
+            return Err(anyhow!(
+                "one-off `at <iso>` schedule is {} in the past — set a future RFC3339 \
+                 timestamp (e.g. `at {}`) or use `schedule: manual` for a non-firing template",
+                pretty,
+                (Utc::now() + chrono::Duration::hours(1)).to_rfc3339()
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Parsed schedule — fixed interval, cron, or a single fire-once timestamp.
 pub enum ParsedSchedule {
     Interval(std::time::Duration),
@@ -4338,7 +4377,20 @@ fn should_run(schedule: &str, last_run: DateTime<Utc>) -> bool {
             // Fire if we've reached the timestamp AND haven't run since
             // (cheap re-fire guard against in-memory last_run resets).
             // The auto-disable happens in the scheduler tick after queueing.
-            Utc::now() >= run_at && last_run < run_at
+            //
+            // Defense in depth against stale timestamps: if the run-at is
+            // more than ONE_OFF_STALE_THRESHOLD in the past (e.g. AI
+            // hallucinated a past time, or app was off for days and is
+            // catching up), refuse to fire — surprising the user with a
+            // "weeks-old reminder running now" is worse than missing it.
+            // Install / enable validation also rejects stale timestamps so
+            // a stale pipe never reaches the scheduler in the first place;
+            // this is the runtime backstop.
+            let now = Utc::now();
+            if now.signed_duration_since(run_at) > ONE_OFF_STALE_THRESHOLD {
+                return false;
+            }
+            now >= run_at && last_run < run_at
         }
     }
 }
@@ -4983,9 +5035,10 @@ mod tests {
 
     #[test]
     fn test_should_run_once_in_past_unfired() {
-        // Past timestamp, never fired (last_run = epoch) → fire now.
-        let an_hour_ago = Utc::now() - chrono::Duration::hours(1);
-        let schedule = format!("at {}", an_hour_ago.to_rfc3339());
+        // Past timestamp within the freshness window (30m < ONE_OFF_STALE_THRESHOLD),
+        // never fired (last_run = epoch) → fire now.
+        let thirty_min_ago = Utc::now() - chrono::Duration::minutes(30);
+        let schedule = format!("at {}", thirty_min_ago.to_rfc3339());
         assert!(should_run(&schedule, DateTime::UNIX_EPOCH));
     }
 
@@ -5004,6 +5057,56 @@ mod tests {
         let in_an_hour = Utc::now() + chrono::Duration::hours(1);
         let schedule = format!("at {}", in_an_hour.to_rfc3339());
         assert!(!should_run(&schedule, DateTime::UNIX_EPOCH));
+    }
+
+    #[test]
+    fn test_should_run_once_stale_refused() {
+        // Stale past timestamp (>1h) → runtime guard refuses to fire even
+        // if the pipe somehow got past install/enable validation.
+        let two_hours_ago = Utc::now() - chrono::Duration::hours(2);
+        let schedule = format!("at {}", two_hours_ago.to_rfc3339());
+        assert!(!should_run(&schedule, DateTime::UNIX_EPOCH));
+    }
+
+    #[test]
+    fn test_should_run_once_recent_past_fires() {
+        // Past timestamp within freshness window (e.g. 5 min ago — clock
+        // skew, brief downtime) still fires. Prevents needless misses.
+        let five_min_ago = Utc::now() - chrono::Duration::minutes(5);
+        let schedule = format!("at {}", five_min_ago.to_rfc3339());
+        assert!(should_run(&schedule, DateTime::UNIX_EPOCH));
+    }
+
+    #[test]
+    fn test_validate_one_off_freshness_future_ok() {
+        let in_an_hour = Utc::now() + chrono::Duration::hours(1);
+        let schedule = format!("at {}", in_an_hour.to_rfc3339());
+        assert!(validate_one_off_freshness(&schedule).is_ok());
+    }
+
+    #[test]
+    fn test_validate_one_off_freshness_recent_past_ok() {
+        let twenty_min_ago = Utc::now() - chrono::Duration::minutes(20);
+        let schedule = format!("at {}", twenty_min_ago.to_rfc3339());
+        assert!(validate_one_off_freshness(&schedule).is_ok());
+    }
+
+    #[test]
+    fn test_validate_one_off_freshness_stale_err() {
+        let three_days_ago = Utc::now() - chrono::Duration::days(3);
+        let schedule = format!("at {}", three_days_ago.to_rfc3339());
+        let err = validate_one_off_freshness(&schedule).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("in the past"), "msg = {}", msg);
+    }
+
+    #[test]
+    fn test_validate_one_off_freshness_non_one_off_passes_through() {
+        // Recurring / cron / manual schedules are out-of-scope for this
+        // validator — must always return Ok.
+        assert!(validate_one_off_freshness("every 1h").is_ok());
+        assert!(validate_one_off_freshness("manual").is_ok());
+        assert!(validate_one_off_freshness("0 */2 * * *").is_ok());
     }
 
     // -- should_run ---------------------------------------------------------
