@@ -1206,12 +1206,25 @@ pub struct KeychainStatus {
 #[tauri::command]
 #[specta::specta]
 pub async fn get_keychain_status() -> Result<KeychainStatus, String> {
-    let state = match crate::secrets::get_key() {
-        crate::secrets::KeyResult::Found(_) => "enabled",
-        crate::secrets::KeyResult::NotFound => "disabled",
-        crate::secrets::KeyResult::AccessDenied => "disabled",
-        crate::secrets::KeyResult::Unavailable => "unavailable",
+    // Check if encryption is enabled WITHOUT accessing keychain.
+    // We only touch keychain when the user explicitly opts in via enable_keychain_encryption().
+    // This prevents prompts during onboarding permission checks.
+    let is_enabled = crate::secrets::is_encryption_enabled();
+
+    let state = if !is_enabled {
+        // Encryption not enabled in settings — definitely disabled
+        "disabled"
+    } else {
+        // Encryption is enabled, but only check keychain key if we actually need it
+        // (e.g., when loading secrets). Don't touch keychain just to report status.
+        match crate::secrets::get_key() {
+            crate::secrets::KeyResult::Found(_) => "enabled",
+            crate::secrets::KeyResult::NotFound => "disabled",
+            crate::secrets::KeyResult::AccessDenied => "disabled",
+            crate::secrets::KeyResult::Unavailable => "unavailable",
+        }
     };
+
     Ok(KeychainStatus {
         state: state.to_string(),
     })
@@ -1225,6 +1238,8 @@ pub async fn enable_keychain_encryption() -> Result<KeychainStatus, String> {
     })?;
 
     let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
+    let _ = std::fs::write(data_dir.join(".encrypt-store"), b"");
+
     let db_path = data_dir.join("db.sqlite");
     let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
 

@@ -49,7 +49,7 @@ fn create_speech_segment(
 
     let min_length = 1600;
     let mut segment_vec;
-    
+
     let segment_samples = if end_idx.saturating_sub(start_idx) < min_length {
         let diff = min_length - end_idx.saturating_sub(start_idx);
         if end_idx + diff <= padded_samples.len() {

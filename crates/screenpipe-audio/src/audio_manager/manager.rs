@@ -1298,8 +1298,11 @@ async fn seed_speakers_from_db(db: &Arc<DatabaseManager>, seg_mgr: &Arc<Segmenta
     // Seed all speakers (named and unnamed) to prevent re-creation of existing voices.
     // Limit to 500 most recent speakers to avoid memory bloat on long-running systems.
     const MAX_SPEAKERS_TO_SEED: usize = 500;
-    
-    match db.get_all_speakers_with_centroids(MAX_SPEAKERS_TO_SEED).await {
+
+    match db
+        .get_all_speakers_with_centroids(MAX_SPEAKERS_TO_SEED)
+        .await
+    {
         Ok(speakers) if !speakers.is_empty() => {
             for (_db_id, name, centroid) in &speakers {
                 let emb = ndarray::Array1::from_vec(centroid.clone());

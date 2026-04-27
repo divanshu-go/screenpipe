@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use tauri::AppHandle;
 use tauri_plugin_store::StoreBuilder;
 use tracing::{error, warn};
+use screenpipe_secrets::keychain;
 
 /// Process-lifetime cache for the resolved API auth key.
 ///
@@ -49,7 +50,9 @@ fn decrypt_store_file(path: &Path) {
     if data.len() < 8 || &data[..8] != STORE_MAGIC {
         return; // already plain JSON (or empty)
     }
-    let key = match secrets::get_key() {
+    // File is encrypted, so user must have encryption enabled
+    // Use get_key_if_encryption_enabled to prevent prompts if encryption is somehow disabled
+    let key = match secrets::get_key_if_encryption_enabled() {
         secrets::KeyResult::Found(k) => k,
         secrets::KeyResult::AccessDenied => {
             tracing::warn!(
@@ -117,10 +120,13 @@ fn encrypt_store_file(path: &Path) {
     if data.len() >= 8 && &data[..8] == STORE_MAGIC {
         return; // already encrypted
     }
-    let key = match secrets::get_or_create_key() {
-        Some(k) => k,
-        None => {
-            // Keychain access denied or unavailable — disable encryption
+    // Use read-only get_key() instead of get_or_create_key() to avoid triggering
+    // keychain modal on every store save. The key should already exist if encryption
+    // was enabled; if not, we just skip encryption and leave the file unencrypted.
+    let key = match keychain::get_key() {
+        keychain::KeyResult::Found(k) => k,
+        keychain::KeyResult::AccessDenied => {
+            // Keychain access denied — disable encryption
             // and remove the opt-in flag so user isn't stuck in a broken state
             if let Some(parent) = path.parent() {
                 let flag = parent.join(".encrypt-store");
@@ -132,6 +138,10 @@ fn encrypt_store_file(path: &Path) {
                     );
                 }
             }
+            return;
+        }
+        keychain::KeyResult::NotFound | keychain::KeyResult::Unavailable => {
+            // Key doesn't exist or keychain unavailable — can't encrypt
             return;
         }
     };

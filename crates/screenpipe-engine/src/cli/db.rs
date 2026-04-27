@@ -154,8 +154,7 @@ will not auto-clear cross-host locks. resolve manually if needed.",
             started_at: now_unix(),
             op: op.to_string(),
         };
-        let body = serde_json::to_string(&payload)
-            .context("serializing lock payload")? + "\n";
+        let body = serde_json::to_string(&payload).context("serializing lock payload")? + "\n";
         let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -422,13 +421,25 @@ async fn recover(data_dir: &Path, force: bool) -> Result<()> {
     let snapshot = data_dir.join(format!("db.sqlite.corrupt-{ts}"));
     let recovered = data_dir.join("db.sqlite.recovered");
 
-    println!("📸  snapshotting current db.sqlite → {} …", snapshot.display());
-    fs::copy(&live, &snapshot)
-        .with_context(|| format!("failed to snapshot {} to {}", live.display(), snapshot.display()))?;
+    println!(
+        "📸  snapshotting current db.sqlite → {} …",
+        snapshot.display()
+    );
+    fs::copy(&live, &snapshot).with_context(|| {
+        format!(
+            "failed to snapshot {} to {}",
+            live.display(),
+            snapshot.display()
+        )
+    })?;
 
     let source_counts = best_effort_counts(&live);
     let source_table_count = table_count(&live).unwrap_or(0);
-    println!("  source: {} tables, rows {{{}}}", source_table_count, format_counts(&source_counts));
+    println!(
+        "  source: {} tables, rows {{{}}}",
+        source_table_count,
+        format_counts(&source_counts)
+    );
 
     println!("🛠   running .recover (page-level scan) — may take several minutes …");
     if recovered.exists() {
@@ -461,7 +472,9 @@ async fn recover(data_dir: &Path, force: bool) -> Result<()> {
 
     // Schema parity. FTS5 shadow tables can be rebuilt, but a >5% drop in
     // total table count indicates the recovered DB is materially worse.
-    if (source_table_count as i64) - (recovered_table_count as i64) > (source_table_count as i64 / 20).max(2) {
+    if (source_table_count as i64) - (recovered_table_count as i64)
+        > (source_table_count as i64 / 20).max(2)
+    {
         let _ = fs::remove_file(&recovered);
         bail!(
             "recovered db is missing too many tables ({} → {}); refusing to swap. snapshot kept at {}.",
@@ -476,16 +489,22 @@ async fn recover(data_dir: &Path, force: bool) -> Result<()> {
     let live_shm = data_dir.join("db.sqlite-shm");
 
     println!("🔄  swapping in recovered db (old → {}) …", pre.display());
-    fs::rename(&live, &pre).with_context(|| format!("failed to rename {} aside", live.display()))?;
+    fs::rename(&live, &pre)
+        .with_context(|| format!("failed to rename {} aside", live.display()))?;
     if live_wal.exists() {
-        let _ = fs::rename(&live_wal, data_dir.join(format!("db.sqlite-wal.pre-recover-{ts}")));
+        let _ = fs::rename(
+            &live_wal,
+            data_dir.join(format!("db.sqlite-wal.pre-recover-{ts}")),
+        );
     }
     if live_shm.exists() {
-        let _ = fs::rename(&live_shm, data_dir.join(format!("db.sqlite-shm.pre-recover-{ts}")));
+        let _ = fs::rename(
+            &live_shm,
+            data_dir.join(format!("db.sqlite-shm.pre-recover-{ts}")),
+        );
     }
-    fs::rename(&recovered, &live).with_context(|| {
-        format!("failed to install recovered db at {}", live.display())
-    })?;
+    fs::rename(&recovered, &live)
+        .with_context(|| format!("failed to install recovered db at {}", live.display()))?;
 
     println!();
     println!("✅  recovery complete.");
@@ -535,9 +554,10 @@ fn best_effort_counts(db_path: &Path) -> Vec<(&'static str, u64)> {
             .arg(format!("SELECT COUNT(*) FROM {t};"))
             .output();
         let n = match result {
-            Ok(o) if o.status.success() => {
-                String::from_utf8_lossy(&o.stdout).trim().parse().unwrap_or(0)
-            }
+            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .parse()
+                .unwrap_or(0),
             _ => 0,
         };
         out.push((t, n));
@@ -593,8 +613,8 @@ async fn cleanup(data_dir: &Path, apply: bool, force: bool) -> Result<()> {
     let _lock = DbLock::acquire(data_dir, "cleanup")?;
 
     let mut targets: Vec<(PathBuf, u64, bool)> = Vec::new(); // (path, size, is_dir)
-    let entries = fs::read_dir(data_dir)
-        .with_context(|| format!("failed to read {}", data_dir.display()))?;
+    let entries =
+        fs::read_dir(data_dir).with_context(|| format!("failed to read {}", data_dir.display()))?;
     for entry in entries.flatten() {
         let path = entry.path();
         let name = match path.file_name().and_then(|n| n.to_str()) {

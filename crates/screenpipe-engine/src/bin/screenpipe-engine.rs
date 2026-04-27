@@ -921,28 +921,40 @@ async fn main() -> anyhow::Result<()> {
     server.api_auth_key = config.api_auth_key.clone();
 
     // Initialize secret store for unified credential management
+    let encryption_requested = config.encrypt_secrets
+        || std::env::var("SCREENPIPE_ENCRYPT_STORE").map_or(false, |v| v == "1")
+        || local_data_dir.join(".encrypt-store").exists()
+        || match std::fs::read(local_data_dir.join("store.bin")) {
+            Ok(data) => data.len() >= 8 && &data[..8] == b"SPSTORE1",
+            Err(_) => false,
+        };
+
     {
         // Read-only keychain access: pick up existing key without triggering modals.
-        // Use --encrypt-secrets to create a key if one doesn't exist.
-        let secret_key = if config.encrypt_secrets {
-            match screenpipe_secrets::keychain::get_or_create_key() {
-                Some(k) => {
-                    info!("keychain: encryption key ready (--encrypt-secrets)");
-                    Some(k)
+        // Use --encrypt-secrets / explicit on-disk opt-in to create/use a key.
+        let secret_key = if encryption_requested {
+            if config.encrypt_secrets {
+                match screenpipe_secrets::keychain::get_or_create_key() {
+                    Some(k) => {
+                        info!("keychain: encryption key ready (--encrypt-secrets)");
+                        Some(k)
+                    }
+                    None => {
+                        warn!("keychain: failed to create encryption key — secrets will be stored unencrypted");
+                        None
+                    }
                 }
-                None => {
-                    warn!("keychain: failed to create encryption key — secrets will be stored unencrypted");
-                    None
+            } else {
+                match screenpipe_secrets::keychain::get_key() {
+                    screenpipe_secrets::keychain::KeyResult::Found(k) => {
+                        info!("keychain: using existing encryption key");
+                        Some(k)
+                    }
+                    _ => None,
                 }
             }
         } else {
-            match screenpipe_secrets::keychain::get_key() {
-                screenpipe_secrets::keychain::KeyResult::Found(k) => {
-                    info!("keychain: using existing encryption key");
-                    Some(k)
-                }
-                _ => None,
-            }
+            None
         };
         let secret_store_result =
             screenpipe_secrets::SecretStore::new(db.pool.clone(), secret_key).await;
@@ -1181,13 +1193,10 @@ async fn main() -> anyhow::Result<()> {
     );
     println!(
         "│ encrypt secrets        │ {:<34} │",
-        if record_args.encrypt_secrets {
+        if encryption_requested {
             "enabled (--encrypt-secrets)"
         } else {
-            match screenpipe_secrets::keychain::get_key() {
-                screenpipe_secrets::keychain::KeyResult::Found(_) => "enabled (existing key)",
-                _ => "disabled",
-            }
+            "disabled"
         }
     );
     println!(
