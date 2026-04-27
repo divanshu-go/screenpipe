@@ -570,6 +570,15 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     piSessionIdRef.current = newSid;
     piSessionSyncedRef.current = true;
     store.actions.setCurrent(newSid);
+    // Set conversationId to the new Pi session id immediately. The chat
+    // panel's foreground bus registration (registerForeground) is keyed by
+    // conversationId, and Pi events arrive with sessionId === piSessionId.
+    // If we leave conversationId null until first save, the panel never
+    // registers — Pi events go to the default handler, the chat-shaped
+    // handlers in the panel never fire, and isLoading stays true forever
+    // ("analyzing…" stuck). Setting conversationId here keeps the
+    // foreground key in sync with piSessionIdRef from message 0.
+    setConversationId(newSid);
   };
 
   // ---- filteredConversations ----
