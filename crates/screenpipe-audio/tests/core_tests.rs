@@ -13,6 +13,7 @@ mod tests {
     use screenpipe_audio::core::engine::AudioTranscriptionEngine;
     use screenpipe_audio::core::record_and_transcribe;
     use screenpipe_audio::core::stream::AudioStream;
+    use screenpipe_audio::metrics::AudioPipelineMetrics;
     use screenpipe_audio::speaker::embedding::EmbeddingExtractor;
     use screenpipe_audio::speaker::embedding_manager::EmbeddingManager;
     use screenpipe_audio::speaker::prepare_segments;
@@ -254,6 +255,7 @@ mod tests {
             .unwrap(),
         ));
         let embedding_manager = Arc::new(std::sync::Mutex::new(EmbeddingManager::new(usize::MAX)));
+        let metrics = Arc::new(AudioPipelineMetrics::new());
 
         let (mut segments, _, _) = prepare_segments(
             &audio_input.data,
@@ -264,6 +266,7 @@ mod tests {
             &audio_input.device.to_string(),
             false,
             false,
+            metrics,
         )
         .await
         .unwrap();
@@ -351,6 +354,7 @@ mod tests {
         // Initialize VAD engine
         let vad_engine: Box<dyn VadEngine + Send> = Box::new(SileroVad::new().await.unwrap());
         let vad_engine = Arc::new(Mutex::new(vad_engine));
+        let metrics = Arc::new(AudioPipelineMetrics::new());
 
         // Measure transcription time
         let start_time = Instant::now();
@@ -364,6 +368,7 @@ mod tests {
             &audio_input.device.to_string(),
             false,
             false,
+            metrics,
         )
         .await
         .unwrap();

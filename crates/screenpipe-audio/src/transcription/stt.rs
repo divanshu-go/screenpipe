@@ -302,6 +302,7 @@ pub async fn process_audio_input(
         &audio.device.to_string(),
         is_output_device,
         filter_music,
+        metrics.clone(),
     )
     .await?;
 

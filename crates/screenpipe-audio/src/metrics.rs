@@ -24,6 +24,8 @@ pub struct AudioPipelineMetrics {
     pub vad_passed: AtomicU64,
     /// Chunks rejected by VAD (speech_ratio <= threshold)
     pub vad_rejected: AtomicU64,
+    /// Chunks rejected because they're entirely silent (max amplitude < 0.001)
+    pub silent_chunks_rejected: AtomicU64,
     /// Cumulative speech_ratio × 1000 (for average — no AtomicF64)
     pub speech_ratio_sum_x1000: AtomicU64,
 
@@ -85,6 +87,7 @@ impl AudioPipelineMetrics {
             stream_timeouts: AtomicU64::new(0),
             vad_passed: AtomicU64::new(0),
             vad_rejected: AtomicU64::new(0),
+            silent_chunks_rejected: AtomicU64::new(0),
             speech_ratio_sum_x1000: AtomicU64::new(0),
             transcriptions_completed: AtomicU64::new(0),
             transcriptions_empty: AtomicU64::new(0),
@@ -142,6 +145,10 @@ impl AudioPipelineMetrics {
         } else {
             self.vad_rejected.fetch_add(1, Ordering::Relaxed);
         }
+    }
+
+    pub fn record_silent_chunk_rejected(&self) {
+        self.silent_chunks_rejected.fetch_add(1, Ordering::Relaxed);
     }
 
     // --- Transcription stage ---
@@ -270,6 +277,7 @@ impl AudioPipelineMetrics {
             // VAD
             vad_passed,
             vad_rejected,
+            silent_chunks_rejected: self.silent_chunks_rejected.load(Ordering::Relaxed),
             avg_speech_ratio: if vad_total > 0 {
                 (self.speech_ratio_sum_x1000.load(Ordering::Relaxed) as f64 / vad_total as f64)
                     / 1000.0
@@ -333,6 +341,7 @@ pub struct AudioMetricsSnapshot {
     // VAD stage
     pub vad_passed: u64,
     pub vad_rejected: u64,
+    pub silent_chunks_rejected: u64,
     pub avg_speech_ratio: f64,
 
     // Transcription stage

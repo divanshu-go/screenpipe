@@ -5,6 +5,7 @@
 use futures::future::join_all;
 use screenpipe_audio::core::device::default_input_device;
 use screenpipe_audio::core::engine::AudioTranscriptionEngine;
+use screenpipe_audio::metrics::AudioPipelineMetrics;
 use screenpipe_audio::speaker::embedding::EmbeddingExtractor;
 use screenpipe_audio::speaker::embedding_manager::EmbeddingManager;
 use screenpipe_audio::speaker::prepare_segments;
@@ -115,6 +116,7 @@ async fn test_transcription_accuracy() {
                 audio_input.data.as_ref().to_vec()
             };
 
+            let metrics = Arc::new(AudioPipelineMetrics::new());
             let (mut segments, _, _) = prepare_segments(
                 &audio_data,
                 vad_engine.clone(),
@@ -124,6 +126,7 @@ async fn test_transcription_accuracy() {
                 &audio_input.device.name,
                 false,
                 false,
+                metrics,
             )
             .await
             .unwrap();
