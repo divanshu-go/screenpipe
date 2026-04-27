@@ -182,6 +182,29 @@ pub async fn handle_connection_command(command: &ConnectionCommand) -> anyhow::R
                 return Ok(());
             }
 
+            // Browser registry — `connection get <browser-id>` should describe
+            // how to drive it (the engine's natural-language description
+            // already embeds the eval endpoint), not error with "unknown
+            // integration". Without this branch the Connection Manager's
+            // find() rejects browser ids because they're not in its static
+            // integration table.
+            if let Some(b) = browsers.iter().find(|b| b.id == *id) {
+                let info = json!({
+                    "id": b.id,
+                    "name": b.name,
+                    "connected": b.ready,
+                    "description": b.description,
+                });
+                if *use_json {
+                    println!("{}", serde_json::to_string_pretty(&info)?);
+                } else {
+                    let status = if b.ready { "connected" } else { "not connected" };
+                    println!("{}: {}", b.id, status);
+                    println!("\n{}", b.description);
+                }
+                return Ok(());
+            }
+
             // Check credential store first, then fall back to OAuth token
             let has_creds = cm.get_credentials(id).await?;
             let has_oauth = oauth::read_oauth_token(id).await;
@@ -282,12 +305,16 @@ struct BrowsersResponse {
 }
 
 async fn fetch_running_browsers() -> Vec<BrowserSummaryWire> {
-    // Honor the same auth knobs as the rest of the CLI: API_KEY env var,
-    // then the file fallback. If we can't read it, the engine returns 403
-    // and we silently degrade to "no browsers known" rather than spamming
-    // an error — the user's `connection list` is still useful.
+    // Honor the same auth knobs as the rest of the CLI plus the names the
+    // pi-agent's bash sandbox exports. The agent injects
+    // `SCREENPIPE_LOCAL_API_KEY` (and `SCREENPIPE_API_AUTH_KEY` historically),
+    // not `SCREENPIPE_API_KEY` — checking only the latter silently dropped
+    // the auth header for agent-driven `connection list` calls, so the
+    // engine returned 403 and we appended zero browser rows.
     let auth_token = std::env::var("SCREENPIPE_API_KEY")
         .ok()
+        .or_else(|| std::env::var("SCREENPIPE_LOCAL_API_KEY").ok())
+        .or_else(|| std::env::var("SCREENPIPE_API_AUTH_KEY").ok())
         .or_else(read_auth_key_file);
 
     let client = reqwest::Client::new();
