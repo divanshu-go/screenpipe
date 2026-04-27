@@ -240,6 +240,27 @@ pub async fn oauth_connect(
         }
     }
 
+    // Supabase: exchange the management OAuth token for project metadata used
+    // by the existing proxy model (`project_url` + `service_key`).
+    if integration_id == "supabase" {
+        if let Some(access_token) = token_data["access_token"].as_str() {
+            match fetch_supabase_project_credentials(&client, access_token).await {
+                Ok((project_url, service_key, display_name)) => {
+                    token_data["project_url"] = serde_json::Value::String(project_url);
+                    token_data["service_key"] = serde_json::Value::String(service_key);
+                    token_data["workspace_name"] = serde_json::Value::String(display_name);
+                }
+                Err(e) => {
+                    return Err(format!(
+                        "supabase connected but project bootstrap failed: {}. \
+                         Ensure your account has at least one project and retry.",
+                        e
+                    ));
+                }
+            }
+        }
+    }
+
     // Extract email from id_token JWT if not already at the root (Google puts it in the JWT)
     if token_data["email"].is_null() {
         if let Some(id_token) = token_data["id_token"].as_str() {
@@ -525,4 +546,65 @@ async fn fetch_provider_identity(
         }
         _ => None,
     }
+}
+
+/// Resolve Supabase project credentials from the OAuth management token.
+///
+/// We pick the first project in the account and fetch its `service_role` key,
+/// then persist both values in the OAuth JSON for proxy use.
+async fn fetch_supabase_project_credentials(
+    client: &reqwest::Client,
+    access_token: &str,
+) -> Result<(String, String, String), String> {
+    let projects: serde_json::Value = client
+        .get("https://api.supabase.com/v1/projects")
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .map_err(|e| format!("projects request failed: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("projects request rejected: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("invalid projects response: {e}"))?;
+
+    let first = projects
+        .as_array()
+        .and_then(|arr| arr.first())
+        .ok_or_else(|| "no Supabase projects found for this account".to_string())?;
+    let project_ref = first["ref"]
+        .as_str()
+        .ok_or_else(|| "project missing `ref`".to_string())?;
+    let project_name = first["name"].as_str().unwrap_or(project_ref);
+
+    let keys_url = format!("https://api.supabase.com/v1/projects/{}/api-keys", project_ref);
+    let api_keys: serde_json::Value = client
+        .get(&keys_url)
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .map_err(|e| format!("api-keys request failed: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("api-keys request rejected: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("invalid api-keys response: {e}"))?;
+
+    let service_key = api_keys
+        .as_array()
+        .and_then(|arr| {
+            arr.iter().find_map(|k| {
+                let name = k["name"].as_str().unwrap_or_default().to_lowercase();
+                let is_service_role = name.contains("service_role") || name.contains("service role");
+                if is_service_role {
+                    k["api_key"].as_str().map(str::to_string)
+                } else {
+                    None
+                }
+            })
+        })
+        .ok_or_else(|| "service_role api key not found".to_string())?;
+
+    let project_url = format!("{}.supabase.co", project_ref);
+    Ok((project_url, service_key, project_name.to_string()))
 }

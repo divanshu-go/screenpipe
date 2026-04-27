@@ -1050,6 +1050,7 @@ fn resolve_auth(
     proxy_auth: &screenpipe_connect::connections::ProxyAuth,
     creds: Option<&Map<String, Value>>,
     oauth_token: Option<&str>,
+    oauth_extras: Option<&Value>,
 ) -> ResolvedAuth {
     use screenpipe_connect::connections::ProxyAuth;
     match proxy_auth {
@@ -1069,13 +1070,16 @@ fn resolve_auth(
         ProxyAuth::Header {
             name,
             credential_key,
-        } => creds
-            .and_then(|c| {
-                c.get(*credential_key)
-                    .and_then(|v| v.as_str())
-                    .map(|k| ResolvedAuth::Header(name.to_string(), k.to_string()))
-            })
-            .unwrap_or(ResolvedAuth::None),
+        } => {
+            // Header-based auth can come from either stored connection creds
+            // or OAuth metadata persisted alongside the token response.
+            let from_creds = creds.and_then(|c| c.get(*credential_key).and_then(|v| v.as_str()));
+            let from_oauth = oauth_extras.and_then(|v| v[*credential_key].as_str());
+            from_creds
+                .or(from_oauth)
+                .map(|k| ResolvedAuth::Header(name.to_string(), k.to_string()))
+                .unwrap_or(ResolvedAuth::None)
+        }
         ProxyAuth::BasicAuth {
             username_key,
             password_key,
@@ -1174,6 +1178,7 @@ async fn connection_proxy(
         &proxy_cfg.auth,
         creds.as_ref(),
         oauth_token.await.as_deref(),
+        oauth_json.as_ref(),
     );
 
     // Check that auth was actually resolved (don't send unauthenticated requests)
@@ -1638,7 +1643,7 @@ mod tests {
         };
         let mut creds = Map::new();
         creds.insert("api_key".into(), json!("sk-test-123"));
-        match resolve_auth(&auth_cfg, Some(&creds), None) {
+        match resolve_auth(&auth_cfg, Some(&creds), None, None) {
             ResolvedAuth::Header(name, value) => {
                 assert_eq!(name, "Authorization");
                 assert_eq!(value, "Bearer sk-test-123");
@@ -1654,7 +1659,7 @@ mod tests {
         };
         let mut creds = Map::new();
         creds.insert("api_key".into(), json!("should-not-use-this"));
-        match resolve_auth(&auth_cfg, Some(&creds), Some("oauth-token-xyz")) {
+        match resolve_auth(&auth_cfg, Some(&creds), Some("oauth-token-xyz"), None) {
             ResolvedAuth::Header(name, value) => {
                 assert_eq!(name, "Authorization");
                 assert_eq!(value, "Bearer oauth-token-xyz");
@@ -1669,7 +1674,7 @@ mod tests {
             credential_key: "api_key",
         };
         assert!(matches!(
-            resolve_auth(&auth_cfg, None, None),
+            resolve_auth(&auth_cfg, None, None, None),
             ResolvedAuth::None
         ));
     }
@@ -1682,7 +1687,7 @@ mod tests {
         };
         let mut creds = Map::new();
         creds.insert("api_key".into(), json!("my-key"));
-        match resolve_auth(&auth_cfg, Some(&creds), None) {
+        match resolve_auth(&auth_cfg, Some(&creds), None, None) {
             ResolvedAuth::Header(name, value) => {
                 assert_eq!(name, "X-API-Key");
                 assert_eq!(value, "my-key");
@@ -1700,7 +1705,7 @@ mod tests {
         let mut creds = Map::new();
         creds.insert("email".into(), json!("user@example.com"));
         creds.insert("api_token".into(), json!("secret123"));
-        match resolve_auth(&auth_cfg, Some(&creds), None) {
+        match resolve_auth(&auth_cfg, Some(&creds), None, None) {
             ResolvedAuth::Basic(user, pass) => {
                 assert_eq!(user, "user@example.com");
                 assert_eq!(pass, "secret123");
@@ -1717,7 +1722,7 @@ mod tests {
         };
         let creds = Map::new(); // no email or api_token
         assert!(matches!(
-            resolve_auth(&auth_cfg, Some(&creds), None),
+            resolve_auth(&auth_cfg, Some(&creds), None, None),
             ResolvedAuth::None
         ));
     }
@@ -1726,7 +1731,7 @@ mod tests {
     fn test_resolve_auth_none() {
         let auth_cfg = ProxyAuth::None;
         assert!(matches!(
-            resolve_auth(&auth_cfg, None, None),
+            resolve_auth(&auth_cfg, None, None, None),
             ResolvedAuth::None
         ));
     }
