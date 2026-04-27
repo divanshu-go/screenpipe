@@ -45,6 +45,7 @@ import {
 } from "@/lib/stores/chat-store";
 import { updateConversationFlags } from "@/lib/chat-storage";
 import { pipeSessionId } from "@/lib/events/types";
+import { commands } from "@/lib/utils/tauri";
 
 interface ChatSidebarProps {
   className?: string;
@@ -152,6 +153,10 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
 
   const handleClose = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
+    // Abort the Pi process first. Otherwise a still-streaming Pi keeps
+    // emitting events for `id`, and pi-event-router's lazy-create branch
+    // resurrects the row in the sidebar a beat after the user closed it.
+    commands.piAbort(id).catch(() => {});
     actions.drop(id);
     // If the user closed the chat they were viewing, tell standalone-chat
     // to clear the panel. Otherwise the panel would keep showing a
