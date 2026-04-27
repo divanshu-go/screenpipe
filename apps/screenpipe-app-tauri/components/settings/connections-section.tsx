@@ -31,6 +31,8 @@ import { GmailCard } from "./gmail-card";
 import { IcsCalendarCard } from "./ics-calendar-card";
 import { OpenClawCard } from "./openclaw-card";
 import { BrowserUrlCard } from "./browser-url-card";
+import { OwnedBrowserCard } from "./owned-browser-card";
+import { UserBrowserCard } from "./user-browser-card";
 import { VoiceMemosCard } from "./voice-memos-card";
 import posthog from "posthog-js";
 
@@ -1723,6 +1725,8 @@ export function ConnectionsSection() {
       case "claude-code": return <ClaudeCodePanel />;
       case "chatgpt": return <ChatGptPanel />;
       case "browser-extension": return <BrowserExtensionPanel connected={browserExtConnected} onRefresh={refreshStatus} />;
+      case "user-browser": return <UserBrowserCard />;
+      case "owned-default": return <OwnedBrowserCard />;
       case "browser-url": return <BrowserUrlCard />;
       case "voice-memos": return <VoiceMemosCard />;
       case "apple-intelligence": return <AppleIntelligenceCard />;
