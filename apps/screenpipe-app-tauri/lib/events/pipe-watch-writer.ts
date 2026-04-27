@@ -288,9 +288,27 @@ function apply(sid: string, payload: AgentInnerEvent): void {
     return;
   }
 
+  // ── turn_end: an LLM turn just finished but the agent loop is still
+  //    running (next turn will start with message_start, typically across
+  //    a tool-call boundary). Settle this turn's accumulator so the next
+  //    content event creates a fresh message — but do NOT call endTurn,
+  //    which would flip isStreaming/isLoading false and make the chat
+  //    input briefly switch from "stop" to "send" between tool calls.
+  if (t === "turn_end") {
+    const cur = useChatStore.getState().sessions[sid];
+    if (cur?.streamingMessageId) {
+      store.actions.setStreaming(sid, {
+        streamingMessageId: null,
+        streamingText: "",
+        contentBlocks: [],
+      });
+    }
+    return;
+  }
+
   // ── terminal events: prefer agent_end's authoritative messages array
   //    if present; otherwise just settle streaming state.
-  if (t === "agent_end" || t === "turn_end" || t === "pipe_done") {
+  if (t === "agent_end" || t === "pipe_done") {
     const messages = (payload as any).messages;
     if (Array.isArray(messages) && messages.length > 0) {
       const reconstructed = reconstructFromAgentEnd(messages);

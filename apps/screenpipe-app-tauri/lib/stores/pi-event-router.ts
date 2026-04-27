@@ -528,13 +528,31 @@ function applyEventToSessionContent(sid: string, payload: PiInnerEvent) {
     return;
   }
 
+  // turn_end fires between LLM turns within a single agent run (typically
+  // across a tool-call boundary). The agent is still streaming — only the
+  // current message's accumulator should be cleared so the next
+  // message_start gets a fresh slate. Calling endTurn here would briefly
+  // flip isStreaming/isLoading false and falsely settle the session
+  // mid-run.
+  if (t === "turn_end") {
+    const cur = store.sessions[sid];
+    if (cur?.streamingMessageId) {
+      store.actions.setStreaming(sid, {
+        streamingMessageId: null,
+        streamingText: "",
+        contentBlocks: [],
+      });
+    }
+    return;
+  }
+
   // End of turn — flush streaming state to "settled" message + clear
   // in-flight markers. We're in the BACKGROUND-only branch (the early
   // `currentId === sid` return above gates this), so the panel won't
   // run its own save useEffect for this session. Persist directly so
   // a chat that completes while the user is looking elsewhere still
   // ends up on disk and survives a restart.
-  if (t === "agent_end" || t === "turn_end") {
+  if (t === "agent_end") {
     store.actions.endTurn(sid);
     void persistBackgroundSession(sid);
     return;
