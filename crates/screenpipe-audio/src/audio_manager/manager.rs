@@ -282,6 +282,20 @@ impl AudioManager {
             });
         }
 
+        // Periodic re-seeding of speakers from DB (every 60 seconds)
+        // This ensures new speakers created during a long session are added to EmbeddingManager
+        // faster, preventing in-session fragmentation (same speaker getting 2 local IDs)
+        {
+            let seg_mgr = self.segmentation_manager.clone();
+            let db = self.db.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                    seed_speakers_from_db(&db, &seg_mgr).await;
+                }
+            });
+        }
+
         info!("audio manager started");
 
         Ok(())
@@ -1304,10 +1318,10 @@ async fn seed_speakers_from_db(db: &Arc<DatabaseManager>, seg_mgr: &Arc<Segmenta
         .await
     {
         Ok(speakers) if !speakers.is_empty() => {
-            for (_db_id, name, centroid) in &speakers {
+            for (db_id, name, centroid) in &speakers {
                 let emb = ndarray::Array1::from_vec(centroid.clone());
-                seg_mgr.seed_speaker(emb);
-                debug!("seeded speaker '{}' into embedding manager", name);
+                seg_mgr.seed_speaker_with_db_id(emb, Some(*db_id));
+                debug!("seeded speaker '{}' (db_id={}) into embedding manager", name, db_id);
             }
             info!(
                 "seeded {} speakers (named + unnamed) from DB into embedding manager",

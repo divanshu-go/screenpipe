@@ -10,14 +10,20 @@ use std::collections::HashMap;
 pub struct EmbeddingManager {
     max_speakers: usize,
     speakers: HashMap<usize, Array1<f32>>,
+    db_ids: HashMap<usize, i64>, // Maps local speaker ID → database speaker ID for persistence
+    sample_counts: HashMap<usize, usize>, // Track samples per speaker to reject noise clusters
     next_speaker_id: usize,
 }
+
+const MIN_CLUSTER_SIZE: usize = 3; // Reject clusters with <3 samples (silence, noise)
 
 impl EmbeddingManager {
     pub fn new(max_speakers: usize) -> Self {
         Self {
             max_speakers,
             speakers: HashMap::new(),
+            db_ids: HashMap::new(),
+            sample_counts: HashMap::new(),
             next_speaker_id: 1,
         }
     }
@@ -32,6 +38,7 @@ impl EmbeddingManager {
     /// Search or create speaker.
     /// When at max_speakers capacity and no match exceeds threshold,
     /// force-merges to the closest existing speaker instead of returning None.
+    /// Tracks sample counts per speaker to reject noise/silence clusters.
     pub fn search_speaker(&mut self, embedding: Vec<f32>, threshold: f32) -> Option<usize> {
         let embedding_array = Array1::from_vec(embedding);
         let mut best_speaker_id = None;
@@ -46,13 +53,22 @@ impl EmbeddingManager {
         }
 
         match best_speaker_id {
-            Some(id) => Some(id),
+            Some(id) => {
+                // Increment sample count for matched speaker
+                *self.sample_counts.entry(id).or_insert(0) += 1;
+                Some(id)
+            }
             None if self.speakers.len() < self.max_speakers => {
-                Some(self.add_speaker(embedding_array))
+                let new_id = self.add_speaker(embedding_array);
+                // Initialize sample count for new speaker
+                self.sample_counts.insert(new_id, 1);
+                Some(new_id)
             }
             None if !self.speakers.is_empty() => {
                 // At capacity: force-merge to closest existing speaker
-                Some(self.find_closest_speaker(&embedding_array))
+                let closest_id = self.find_closest_speaker(&embedding_array);
+                *self.sample_counts.entry(closest_id).or_insert(0) += 1;
+                Some(closest_id)
             }
             None => None,
         }
@@ -81,6 +97,8 @@ impl EmbeddingManager {
     /// Used between meetings to prevent cross-meeting speaker contamination.
     pub fn clear_speakers(&mut self) {
         self.speakers.clear();
+        self.db_ids.clear();
+        self.sample_counts.clear();
         self.next_speaker_id = 1;
     }
 
@@ -88,10 +106,24 @@ impl EmbeddingManager {
     /// The speaker is inserted with the next available ID.
     /// Seeded speakers count against the max_speakers limit.
     pub fn seed_speaker(&mut self, embedding: Array1<f32>) -> usize {
+        self.seed_speaker_with_db_id(embedding, None)
+    }
+
+    /// Seed a known speaker and link to its database speaker ID.
+    /// This allows mapping in-memory speaker IDs back to persistent DB records.
+    pub fn seed_speaker_with_db_id(&mut self, embedding: Array1<f32>, db_id: Option<i64>) -> usize {
         let id = self.next_speaker_id;
         self.speakers.insert(id, embedding);
+        if let Some(db_speaker_id) = db_id {
+            self.db_ids.insert(id, db_speaker_id);
+        }
         self.next_speaker_id += 1;
         id
+    }
+
+    /// Get the database speaker ID for a local speaker ID, if known.
+    pub fn get_db_id(&self, local_id: usize) -> Option<i64> {
+        self.db_ids.get(&local_id).copied()
     }
 
     fn add_speaker(&mut self, embedding: Array1<f32>) -> usize {

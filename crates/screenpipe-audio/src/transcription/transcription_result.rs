@@ -18,6 +18,7 @@ pub struct TranscriptionResult {
     pub path: String,
     pub input: AudioInput,
     pub speaker_embedding: Vec<f32>,
+    pub speaker_id: Option<i64>, // Pre-resolved speaker ID from EmbeddingManager (avoids redundant DB lookup)
     pub transcription: Option<String>,
     pub timestamp: u64,
     pub error: Option<String>,
@@ -77,12 +78,17 @@ pub async fn process_transcription_result(
         return Ok(None);
     }
 
-    let speaker_id = if result.speaker_embedding.is_empty() {
+    let speaker_id = if let Some(pre_resolved_id) = result.speaker_id {
+        // Short-circuit: use pre-resolved speaker ID from EmbeddingManager (avoids DB lookup)
+        debug!("using pre-resolved speaker id={} from embedding manager", pre_resolved_id);
+        Some(pre_resolved_id)
+    } else if result.speaker_embedding.is_empty() {
         debug!("empty speaker embedding; storing transcript without speaker");
         None
     } else {
+        // Fallback: look up by embedding (for segments without pre-resolution or reconciliation)
         let speaker = get_or_create_speaker_from_embedding(db, &result.speaker_embedding).await?;
-        debug!("detected speaker id={}", speaker.id);
+        debug!("detected speaker id={} via embedding lookup", speaker.id);
         Some(speaker.id)
     };
 

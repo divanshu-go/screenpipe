@@ -110,6 +110,7 @@ pub async fn prepare_segments(
                     end: fallback_segment.len() as f64 / 16000.0,
                     samples: fallback_segment,
                     speaker: "unknown".to_string(),
+                    speaker_db_id: None,
                     embedding: Vec::new(),
                     sample_rate: 16000,
                 })

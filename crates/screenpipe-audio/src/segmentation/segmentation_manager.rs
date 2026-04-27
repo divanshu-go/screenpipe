@@ -167,8 +167,22 @@ impl SegmentationManager {
     /// Seed a known speaker embedding (e.g. from DB centroid).
     /// Returns the assigned local speaker ID.
     pub fn seed_speaker(&self, embedding: Array1<f32>) -> Option<usize> {
+        self.seed_speaker_with_db_id(embedding, None)
+    }
+
+    /// Seed a known speaker with optional database speaker ID link.
+    pub fn seed_speaker_with_db_id(&self, embedding: Array1<f32>, db_id: Option<i64>) -> Option<usize> {
         if let Ok(mut mgr) = self.embedding_manager.lock() {
-            Some(mgr.seed_speaker(embedding))
+            Some(mgr.seed_speaker_with_db_id(embedding, db_id))
+        } else {
+            None
+        }
+    }
+
+    /// Get the database speaker ID for a local speaker ID.
+    pub fn get_db_speaker_id(&self, local_id: usize) -> Option<i64> {
+        if let Ok(mgr) = self.embedding_manager.lock() {
+            mgr.get_db_id(local_id)
         } else {
             None
         }

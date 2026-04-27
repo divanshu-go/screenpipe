@@ -12,6 +12,7 @@ pub struct SpeechSegment {
     pub end: f64,
     pub samples: Vec<f32>,
     pub speaker: String,
+    pub speaker_db_id: Option<i64>, // Pre-resolved database speaker ID (avoids redundant DB lookup)
     pub embedding: Vec<f32>,
     pub sample_rate: u32,
 }
@@ -80,9 +81,16 @@ fn create_speech_segment(
             ));
         }
     };
-    let speaker = {
+    let (speaker, speaker_db_id) = {
         let mut manager = embedding_manager.lock().unwrap();
-        get_speaker_from_embedding(&mut manager, embedding.clone())
+        let speaker_str = get_speaker_from_embedding(&mut manager, embedding.clone());
+        // Try to look up the database speaker ID for this local speaker ID
+        let db_id = if let Ok(local_id) = speaker_str.parse::<usize>() {
+            manager.get_db_id(local_id)
+        } else {
+            None
+        };
+        (speaker_str, db_id)
     };
 
     Ok(SpeechSegment {
@@ -90,6 +98,7 @@ fn create_speech_segment(
         end,
         samples: segment_samples.to_vec(),
         speaker,
+        speaker_db_id,
         embedding,
         sample_rate,
     })
@@ -308,7 +317,7 @@ pub fn get_speaker_from_embedding(
     embedding_manager: &mut EmbeddingManager,
     embedding: Vec<f32>,
 ) -> String {
-    let search_threshold = 0.45; // cosine similarity threshold (1 - distance), aligned with DB threshold of 0.55 distance
+    let search_threshold = 0.35; // cosine similarity threshold (1 - distance), aligned with DB threshold of 0.65 distance
 
     embedding_manager
         .search_speaker(embedding.clone(), search_threshold)

@@ -25,6 +25,49 @@ use std::collections::BTreeMap;
 
 use zerocopy::AsBytes;
 
+/// Validate speaker embedding to prevent centroid poisoning from corrupted samples.
+/// Rejects: NaN/Inf, all-zeros (failed extraction), extreme norms.
+fn is_valid_embedding(embedding: &[f32]) -> bool {
+    // Must be exactly 512-dimensional (WeSpeaker/CAM++ standard)
+    if embedding.len() != 512 {
+        return false;
+    }
+
+    // Reject if any NaN or Inf (indicates corruption)
+    if !embedding.iter().all(|x| x.is_finite()) {
+        return false;
+    }
+
+    // Reject if all zeros (failed extraction or silent audio)
+    if embedding.iter().all(|&x| x == 0.0) {
+        return false;
+    }
+
+    // Reject if too many zeros (likely silence or noise)
+    let zero_count = embedding.iter().filter(|&&x| x == 0.0).count();
+    if zero_count > 128 {
+        // >25% zeros is suspicious
+        return false;
+    }
+
+    // Compute L2 norm for sanity checking
+    let norm: f32 = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+
+    // Reject extreme norms (too quiet → norm ~0, too loud → norm >>1)
+    // WeSpeaker embeddings typically normalize to ~1.0
+    if norm < 0.1 || norm > 10.0 {
+        return false;
+    }
+
+    // Check for extreme outlier values (might indicate corruption)
+    let max_abs = embedding.iter().map(|x| x.abs()).max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)).unwrap_or(0.0);
+    if max_abs > 100.0 {
+        return false;
+    }
+
+    true
+}
+
 use futures::future::try_join_all;
 
 use crate::{
@@ -1334,6 +1377,11 @@ impl DatabaseManager {
     }
 
     pub async fn insert_speaker(&self, embedding: &[f32]) -> Result<Speaker, SqlxError> {
+        // Validate embedding before creating speaker (prevent centroid poisoning)
+        if !is_valid_embedding(embedding) {
+            return Err(SqlxError::PoolClosed);
+        }
+
         let mut tx = self.begin_immediate_with_retry().await?;
 
         let bytes: &[u8] = embedding.as_bytes();
@@ -1393,7 +1441,9 @@ impl DatabaseManager {
         &self,
         embedding: &[f32],
     ) -> Result<Option<Speaker>, SqlxError> {
-        let speaker_threshold = 0.55;
+        // Threshold tuned from Pyannote (0.7154) and FluidAudio (0.7)
+        // Provides better cross-session matching with acceptable false positive rate
+        let speaker_threshold = 0.70;
         let bytes: &[u8] = embedding.as_bytes();
 
         // First try matching against stored embeddings (up to 10 per speaker)
@@ -1536,6 +1586,12 @@ impl DatabaseManager {
         speaker_id: i64,
         embedding: &[f32],
     ) -> Result<(), SqlxError> {
+        // Validate embedding before updating centroid (prevent poisoning)
+        if !is_valid_embedding(embedding) {
+            debug!("rejected invalid embedding for speaker_id={}", speaker_id);
+            return Ok(()); // Skip update, don't error
+        }
+
         // Cap for the running average denominator. After this many samples,
         // each new embedding contributes ~1/MAX_EFFECTIVE_COUNT to the centroid,
         // keeping it responsive to voice drift over time.
@@ -1632,11 +1688,16 @@ impl DatabaseManager {
         Ok(rows
             .into_iter()
             .filter_map(|(id, name, blob)| {
-                if blob.len() == 512 * 4 {
-                    let floats: Vec<f32> = blob
-                        .chunks_exact(4)
-                        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-                        .collect();
+                // Parse blob as float32 chunks, handling any sqlite-vec header format.
+                // Accumulate complete 4-byte chunks only; skip incomplete final chunk.
+                let mut floats = Vec::new();
+                for chunk in blob.chunks(4) {
+                    if chunk.len() == 4 {
+                        floats.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+                    }
+                }
+                // Only accept centroids with exactly 512 dimensions (speaker embedding size).
+                if floats.len() == 512 {
                     let name_str = name.unwrap_or_else(|| format!("speaker_{}", id));
                     Some((id, name_str, floats))
                 } else {

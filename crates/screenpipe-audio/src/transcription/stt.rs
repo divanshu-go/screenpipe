@@ -370,6 +370,7 @@ pub async fn run_stt(
             timestamp,
             error: None,
             speaker_embedding: segment.embedding.clone(),
+            speaker_id: segment.speaker_db_id,
             start_time: segment.start,
             end_time: segment.end,
         }),
@@ -388,6 +389,7 @@ pub async fn run_stt(
                 timestamp,
                 error: Some(e.to_string()),
                 speaker_embedding: Vec::new(),
+                speaker_id: None,
                 start_time: segment.start,
                 end_time: segment.end,
             })
