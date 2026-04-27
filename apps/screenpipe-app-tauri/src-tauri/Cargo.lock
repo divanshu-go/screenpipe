@@ -9726,10 +9726,11 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.4.94"
+version = "2.4.95"
 dependencies = [
  "anyhow",
  "arboard",
+ "async-trait",
  "axum 0.6.20",
  "base64 0.22.1",
  "block",
@@ -9811,6 +9812,7 @@ dependencies = [
  "tracing-appender",
  "tracing-oslog",
  "tracing-subscriber",
+ "url",
  "urlencoding",
  "uuid",
  "windows 0.58.0",
@@ -9921,8 +9923,10 @@ dependencies = [
  "screenpipe-secrets",
  "serde",
  "serde_json",
+ "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "uuid",
  "windows 0.58.0",
 ]
 

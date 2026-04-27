@@ -53,6 +53,7 @@ mod livetext;
 #[cfg(target_os = "macos")]
 mod livetext_ffi;
 mod oauth;
+mod owned_browser;
 mod permission_events;
 mod permissions;
 mod pi;
@@ -330,8 +331,8 @@ async fn main() {
     //
     // See `crates/screenpipe-engine/src/cli/db.rs`.
     if std::env::var("SCREENPIPE_IGNORE_DB_LOCK").ok().as_deref() != Some("1") {
-        let lock_path = screenpipe_core::paths::default_screenpipe_data_dir()
-            .join(".db_recovery.lock");
+        let lock_path =
+            screenpipe_core::paths::default_screenpipe_data_dir().join(".db_recovery.lock");
         if let Ok(metadata) = std::fs::metadata(&lock_path) {
             let stale = metadata
                 .modified()
@@ -970,6 +971,9 @@ async fn main() {
             permissions::check_microphone_permission,
             permissions::check_screen_recording_permission,
             permissions::check_accessibility_permission_cmd,
+            owned_browser::owned_browser_show,
+            owned_browser::owned_browser_hide,
+            owned_browser::owned_browser_navigate,
             permissions::reset_and_request_permission,
             permissions::get_missing_permissions,
             permissions::check_arc_installed,
@@ -1564,6 +1568,11 @@ async fn main() {
                 // topic dropped — every pipe stdout line goes out on
                 // `agent_event` with sessionId `pipe:<name>:<execId>`.
                 let app_for_pipe = app_handle.clone();
+                // Separate clone for the owned-browser install path — the
+                // on_pipe_output closure below captures app_for_pipe by
+                // move, so we need a distinct handle that survives into
+                // the server thread.
+                let app_for_owned = app_handle.clone();
                 let on_pipe_output: Option<screenpipe_core::pipes::OnPipeOutputLine> = Some(
                     std::sync::Arc::new(move |pipe_name: &str, exec_id: i64, line: &str| {
                         let inner = if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(line) {
@@ -1654,8 +1663,38 @@ async fn main() {
 
                             info!("Starting server core + capture on dedicated runtime...");
 
+                            // Owned-browser: create the connect-side instance now so the
+                            // engine can register it in the BrowserRegistry on startup.
+                            // Webview build is async — kick it off in the background and
+                            // attach the handle once the WebviewWindow is ready. Until
+                            // then, /connections/browsers/owned-default/eval returns 503.
+                            let owned_browser =
+                                screenpipe_connect::connections::browser::OwnedBrowser::default_instance();
+                            {
+                                let owned_for_install = owned_browser.clone();
+                                let app_for_install = app_for_owned.clone();
+                                let data_dir_for_install = config.data_dir.clone();
+                                tauri::async_runtime::spawn(async move {
+                                    match crate::owned_browser::install(&app_for_install, data_dir_for_install).await {
+                                        Ok(handle) => {
+                                            owned_for_install.attach(handle).await;
+                                            info!("owned-browser ready");
+                                        }
+                                        Err(e) => {
+                                            warn!("owned-browser install failed: {e} — agent will see ready=false");
+                                        }
+                                    }
+                                });
+                            }
+
                             // Phase 1: Start server core
-                            let server = match server_core::ServerCore::start(&config, on_pipe_output).await {
+                            let server = match server_core::ServerCore::start(
+                                &config,
+                                on_pipe_output,
+                                Some(owned_browser),
+                            )
+                            .await
+                            {
                                 Ok(s) => s,
                                 Err(e) => {
                                     error!("Failed to start server core: {}", e);

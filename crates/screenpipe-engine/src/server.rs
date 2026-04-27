@@ -210,6 +210,11 @@ pub struct SCServer {
         Arc<DashMap<String, Arc<screenpipe_core::pipes::permissions::PipePermissions>>>,
     /// Shared manual meeting lock — pass in from binary so persister and server share the same state.
     pub manual_meeting: Option<Arc<tokio::sync::RwLock<Option<i64>>>>,
+    /// Owned browser instance — set by the desktop shell so it can attach an
+    /// OwnedWebviewHandle once the Tauri WebviewWindow is created. If unset,
+    /// the engine creates a default unattached instance and owned-browser
+    /// requests return 503 until a handle is wired up.
+    pub owned_browser: Option<Arc<screenpipe_connect::connections::browser::OwnedBrowser>>,
     /// Require auth for remote API access
     pub api_auth: bool,
     /// API key for remote auth validation
@@ -248,6 +253,7 @@ impl SCServer {
             power_manager: None,
             pipe_permissions: Arc::new(DashMap::new()),
             manual_meeting: None,
+            owned_browser: None,
             api_auth: false,
             api_auth_key: None,
             secret_store: None,
@@ -493,7 +499,12 @@ impl SCServer {
                 .unwrap_or_else(|| Arc::new(tokio::sync::RwLock::new(None))),
             browser_bridge: crate::routes::browser::BrowserBridge::new(),
             browser_registry: screenpipe_connect::connections::browser::BrowserRegistry::new(),
-            owned_browser: screenpipe_connect::connections::browser::OwnedBrowser::default_instance(
+            // Reuse the desktop-shell-supplied owned browser if present so its
+            // already-attached OwnedWebviewHandle survives. Otherwise fall back
+            // to a default unattached instance — useful for CLI / tests /
+            // headless deployments.
+            owned_browser: self.owned_browser.clone().unwrap_or_else(
+                screenpipe_connect::connections::browser::OwnedBrowser::default_instance,
             ),
             api_auth: self.api_auth,
             api_auth_key: self.api_auth_key.clone(),
