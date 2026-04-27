@@ -11,6 +11,7 @@ pub mod airtable;
 pub mod asana;
 pub mod bitrix24;
 pub mod brex;
+pub mod browser;
 pub mod calcom;
 pub mod calendly;
 pub mod clickup;

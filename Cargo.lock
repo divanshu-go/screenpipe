@@ -6967,8 +6967,10 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
+ "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "uuid",
  "windows 0.58.0",
 ]
 
