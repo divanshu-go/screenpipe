@@ -1043,7 +1043,8 @@ pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
             // Fallback to defaults when deserialization fails (e.g., corrupted store)
             // DON'T save - preserve original store in case it can be manually recovered
             // This prevents crashes from invalid values like negative integers in u32 fields
-            error!(
+            // Non-fatal — logged as warn (not error) so Sentry doesn't pick it up.
+            warn!(
                 "Failed to deserialize settings, using defaults (store not overwritten): {}",
                 e
             );
@@ -1113,7 +1114,8 @@ pub fn init_onboarding_store(app: &AppHandle) -> Result<OnboardingStore, String>
         Err(e) => {
             // Fallback to defaults when deserialization fails
             // DON'T save - preserve original store
-            error!(
+            // Non-fatal — logged as warn (not error) so Sentry doesn't pick it up.
+            warn!(
                 "Failed to deserialize onboarding, using defaults (store not overwritten): {}",
                 e
             );
