@@ -1533,6 +1533,7 @@ export function ConnectionsSection() {
   const [chatgptConnected, setChatgptConnected] = useState(false);
   const [browserExtConnected, setBrowserExtConnected] = useState(false);
   const [calendarUserDisconnected, setCalendarUserDisconnected] = useState(false);
+  const [googleCalendarConnected, setGoogleCalendarConnected] = useState(false);
 
   const refreshCalendarTile = useCallback(() => {
     getStore()
@@ -1559,6 +1560,9 @@ export function ConnectionsSection() {
       .then(r => r.json())
       .then(d => setBrowserExtConnected(d.connected === true))
       .catch(() => setBrowserExtConnected(false));
+    commands.oauthStatus("google-calendar", null).then(res => {
+      setGoogleCalendarConnected(res.status === "ok" && res.data.connected);
+    }).catch(() => {});
   }, []);
 
   useEffect(() => { refreshStatus(); }, [selected, refreshStatus]);
@@ -1642,8 +1646,12 @@ export function ConnectionsSection() {
     // If user explicitly disconnected calendar, suppress the dot regardless of OS state
     const calTile = hardcoded.find(h => h.id === "apple-calendar");
     if (calTile && calendarUserDisconnected) calTile.connected = false;
+    // Google Calendar dot is driven by direct oauthStatus (not the cached API), so it stays
+    // in sync immediately after connect/disconnect without waiting for cache expiry.
+    const googleCalTile = hardcoded.find(h => h.id === "google-calendar");
+    if (googleCalTile) googleCalTile.connected = googleCalendarConnected;
     return [...hardcoded, ...apiTiles];
-  }, [os, claudeInstalled, cursorInstalled, chatgptConnected, browserExtConnected, integrations, calendarUserDisconnected]);
+  }, [os, claudeInstalled, cursorInstalled, chatgptConnected, browserExtConnected, integrations, calendarUserDisconnected, googleCalendarConnected]);
 
   const filtered = useMemo(() => {
     if (!search.trim()) return allTiles;
@@ -1671,7 +1679,10 @@ export function ConnectionsSection() {
       case "voice-memos": return <VoiceMemosCard />;
       case "apple-intelligence": return <AppleIntelligenceCard />;
       case "apple-calendar": return <CalendarCard onConnectionChange={refreshCalendarTile} />;
-      case "google-calendar": return <GoogleCalendarCard />;
+      case "google-calendar": return <GoogleCalendarCard
+        onConnected={() => setGoogleCalendarConnected(true)}
+        onDisconnected={() => { setGoogleCalendarConnected(false); apiCache.invalidate("connections/list"); }}
+      />;
       case "google-docs": return <GoogleDocsCard />;
       case "gmail": return <GmailCard />;
       case "ics-calendar": return <IcsCalendarCard />;
