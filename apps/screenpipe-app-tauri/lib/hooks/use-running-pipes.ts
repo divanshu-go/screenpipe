@@ -213,7 +213,9 @@ async function mountRunningPipesTracker(): Promise<void> {
 
 /**
  * Subscribe a component to the running-pipes set. Mounts the tracker
- * lazily on first use. Returns the array sorted by most-recent activity.
+ * lazily on first use. Returns the array in a stable order — pipe that
+ * started first stays at the top until it stops. Sorting by lastEventAt
+ * caused rows to swap on every NDJSON tick when two pipes ran concurrently.
  */
 export function useRunningPipes(): RunningPipe[] {
   useEffect(() => {
@@ -221,7 +223,13 @@ export function useRunningPipes(): RunningPipe[] {
   }, []);
   const pipes = useRunningPipesStore((s) => s.pipes);
   return useMemo(
-    () => Object.values(pipes).sort((a, b) => b.lastEventAt - a.lastEventAt),
+    () =>
+      Object.values(pipes).sort((a, b) => {
+        const sa = a.startedAt ?? "";
+        const sb = b.startedAt ?? "";
+        if (sa !== sb) return sa < sb ? -1 : 1;
+        return a.pipeName.localeCompare(b.pipeName);
+      }),
     [pipes],
   );
 }
