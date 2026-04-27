@@ -451,7 +451,7 @@ function ScheduledRow({
           : undefined
       }
       className={cn(
-        "flex items-center gap-2 px-2.5 py-1 mx-0 rounded-md text-foreground/80 select-none",
+        "flex items-center gap-2 px-2.5 py-1 mx-0 rounded-md text-foreground select-none",
         interactive
           ? "cursor-pointer hover:bg-muted/40"
           : "cursor-default"
@@ -560,7 +560,7 @@ function ChatRow({
         "transition-colors",
         isCurrent
           ? "bg-muted/70 text-foreground"
-          : "text-foreground/80 hover:bg-muted/40"
+          : "text-foreground hover:bg-muted/40"
       )}
       data-testid={`chat-row-${session.id}`}
       title={isError && session.lastError ? session.lastError : undefined}
@@ -579,9 +579,7 @@ function ChatRow({
             "truncate flex-1 text-xs",
             isUnread
               ? "font-semibold text-foreground"
-              : isCurrent
-                ? "text-foreground"
-                : "text-foreground/80"
+              : "text-foreground"
           )}
         >
           {session.title || "untitled"}
