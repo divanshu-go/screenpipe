@@ -207,7 +207,7 @@ export function IntegrationIcon({ icon }: { icon: string }) {
     claude: <ClaudeLogo />,
     cursor: <CursorLogo className="w-5 h-5 rounded" />,
     "claude-code": <Terminal className="h-5 w-5" />,
-    warp: <Terminal className="h-5 w-5" />,
+    warp: <img src="/images/warp.png" alt="Warp" className="w-5 h-5 rounded" />,
     chatgpt: <img src="/images/openai.png" alt="ChatGPT" className="w-5 h-5 rounded" />,
     telegram: (
       <svg viewBox="0 0 24 24" className="w-5 h-5" fill="#2AABEE">
