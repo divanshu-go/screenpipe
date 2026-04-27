@@ -37,6 +37,12 @@ pub async fn handle_connection_command(command: &ConnectionCommand) -> anyhow::R
 
     let cm = ConnectionManager::new(screenpipe_dir.clone(), secret_store);
 
+    // Fetch browsers from the running engine — they live in the in-memory
+    // BrowserRegistry, not on disk, so the CLI must ask the server. Empty
+    // when no server is running, which is fine: a CLI-only invocation
+    // without a daemon has no real "browsers" to report.
+    let browsers = fetch_running_browsers().await;
+
     match command {
         ConnectionCommand::List { json: use_json } => {
             let list = cm.list().await;
@@ -80,6 +86,14 @@ pub async fn handle_connection_command(command: &ConnectionCommand) -> anyhow::R
                     "description": wa_desc,
                     "connected": wa_connected,
                 }));
+                for b in &browsers {
+                    items.push(json!({
+                        "id": b.id,
+                        "name": b.name,
+                        "description": b.description,
+                        "connected": b.ready,
+                    }));
+                }
                 println!("{}", serde_json::to_string_pretty(&items)?);
             } else {
                 println!("{:<20} {:<12} {:<40}", "ID", "STATUS", "NAME");
@@ -90,6 +104,10 @@ pub async fn handle_connection_command(command: &ConnectionCommand) -> anyhow::R
                 }
                 let wa_status = if wa_connected { "connected" } else { "-" };
                 println!("{:<20} {:<12} {:<40}", "whatsapp", wa_status, "WhatsApp");
+                for b in &browsers {
+                    let status = if b.ready { "connected" } else { "-" };
+                    println!("{:<20} {:<12} {:<40}", b.id, status, b.name);
+                }
             }
         }
 
@@ -222,4 +240,59 @@ pub async fn handle_connection_command(command: &ConnectionCommand) -> anyhow::R
     }
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Browser registry — the engine's in-memory browser list. Lives only in the
+// running server, so the CLI must ask over HTTP. Empty result is fine: it
+// just means no engine is reachable, in which case "browsers" wouldn't have
+// real status anyway.
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize, Debug)]
+struct BrowserSummaryWire {
+    id: String,
+    name: String,
+    description: String,
+    ready: bool,
+}
+
+#[derive(serde::Deserialize)]
+struct BrowsersResponse {
+    data: Vec<BrowserSummaryWire>,
+}
+
+async fn fetch_running_browsers() -> Vec<BrowserSummaryWire> {
+    // Honor the same auth knobs as the rest of the CLI: API_KEY env var,
+    // then the file fallback. If we can't read it, the engine returns 403
+    // and we silently degrade to "no browsers known" rather than spamming
+    // an error — the user's `connection list` is still useful.
+    let auth_token = std::env::var("SCREENPIPE_API_KEY")
+        .ok()
+        .or_else(read_auth_key_file);
+
+    let client = reqwest::Client::new();
+    let mut req = client
+        .get("http://localhost:3030/connections/browsers")
+        .timeout(std::time::Duration::from_secs(2));
+    if let Some(t) = auth_token {
+        req = req.header("Authorization", format!("Bearer {t}"));
+    }
+
+    match req.send().await {
+        Ok(resp) if resp.status().is_success() => match resp.json::<BrowsersResponse>().await {
+            Ok(body) => body.data,
+            Err(_) => Vec::new(),
+        },
+        _ => Vec::new(),
+    }
+}
+
+fn read_auth_key_file() -> Option<String> {
+    let path = screenpipe_core::paths::default_screenpipe_data_dir().join("auth.json");
+    let body = std::fs::read_to_string(path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&body).ok()?;
+    v.get("api_key")
+        .and_then(|s| s.as_str())
+        .map(|s| s.to_string())
 }
