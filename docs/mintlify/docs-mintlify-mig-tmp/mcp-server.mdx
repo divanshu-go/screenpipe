@@ -67,6 +67,28 @@ verify with `claude mcp list` or `/mcp` inside Claude Code.
 
 or manually: open **cursor settings** → **mcp** → **add new global mcp server** → set command to `npx` with args `["-y", "screenpipe-mcp"]`.
 
+## warp
+
+Warp's Agent Mode supports MCP. Open **Settings** → **AI** → **Manage MCP servers** → **+ Add**, choose **CLI Server (Command)**, then paste:
+
+```json
+{
+  "screenpipe": {
+    "command": "npx",
+    "args": ["-y", "screenpipe-mcp@latest"],
+    "start_on_launch": true
+  }
+}
+```
+
+Save — the server should show **Running**. Then ask Warp's agent: *"what did I do in the last 5 minutes?"*
+
+<Tip>
+Warp's MCP schema is per-server (no wrapping `mcpServers` object). Don't paste the Claude/Cursor JSON shape — it won't validate.
+</Tip>
+
+You can also reach this screen via the Command Palette → *Open MCP Servers*. Or just open the screenpipe app → **settings** → **connections** → **Warp** to copy the config.
+
 ## other editors (cline, continue, windsurf, etc.)
 
 any editor that supports MCP works with screenpipe. the server command is:

@@ -207,6 +207,7 @@ export function IntegrationIcon({ icon }: { icon: string }) {
     claude: <ClaudeLogo />,
     cursor: <CursorLogo className="w-5 h-5 rounded" />,
     "claude-code": <Terminal className="h-5 w-5" />,
+    warp: <Terminal className="h-5 w-5" />,
     chatgpt: <img src="/images/openai.png" alt="ChatGPT" className="w-5 h-5 rounded" />,
     telegram: (
       <svg viewBox="0 0 24 24" className="w-5 h-5" fill="#2AABEE">
@@ -685,6 +686,52 @@ function MstyPanel() {
       </p>
       <Button variant="outline" onClick={() => openUrl("https://msty.app")} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
         <ExternalLink className="h-3 w-3" />open msty
+      </Button>
+    </div>
+  );
+}
+
+function WarpPanel() {
+  const [copied, setCopied] = useState(false);
+  // Warp's MCP schema is per-server: no wrapping `mcpServers` object,
+  // just one `{ name: { command, args, ... } }` block pasted in the UI.
+  const config = JSON.stringify({
+    screenpipe: {
+      command: "npx",
+      args: ["-y", "screenpipe-mcp@latest"],
+      start_on_launch: true,
+    },
+  }, null, 2);
+  const handleCopy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(config);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {}
+  }, [config]);
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-muted-foreground">
+        Give Warp&apos;s Agent Mode access to your screen &amp; audio history via MCP.
+      </p>
+      <p className="text-xs text-muted-foreground">
+        1. In Warp, open <strong>Settings</strong> &gt; <strong>AI</strong> &gt; <strong>Manage MCP servers</strong> &gt; <strong>+ Add</strong> (or run <code className="bg-muted px-1 rounded">Open MCP Servers</code> from the Command Palette)
+      </p>
+      <p className="text-xs text-muted-foreground">
+        2. Choose <strong>CLI Server (Command)</strong> and paste this config:
+      </p>
+      <div className="relative group">
+        <pre className="bg-muted border border-border rounded-lg p-3 pr-10 text-xs font-mono text-foreground overflow-x-auto whitespace-pre-wrap">{config}</pre>
+        <Button variant="ghost" size="sm" onClick={handleCopy} className="absolute top-2 right-2 h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity">
+          {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3 text-muted-foreground" />}
+        </Button>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        3. Click <strong>Save</strong>. The server should show <strong>Running</strong>. Then ask Warp&apos;s agent: <em>&quot;what did I do in the last 5 minutes?&quot;</em>
+      </p>
+      <Button variant="outline" onClick={() => openUrl("https://www.warp.dev")} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
+        <ExternalLink className="h-3 w-3" />open warp
       </Button>
     </div>
   );
@@ -1610,6 +1657,7 @@ export function ConnectionsSection() {
       { id: "claude", name: "Claude Desktop", icon: "claude", connected: claudeInstalled },
       { id: "cursor", name: "Cursor", icon: "cursor", connected: cursorInstalled },
       { id: "claude-code", name: "Claude Code", icon: "claude-code", connected: false },
+      { id: "warp", name: "Warp", icon: "warp", connected: false },
       { id: "chatgpt", name: "ChatGPT", icon: "chatgpt", connected: chatgptConnected },
       { id: "browser-extension", name: "Browser Extension", icon: "browser-extension", connected: browserExtConnected },
       ...(os === "macos" ? [
@@ -1692,6 +1740,7 @@ export function ConnectionsSection() {
       case "ollama": return <OllamaPanel />;
       case "lmstudio": return <LMStudioPanel />;
       case "msty": return <MstyPanel />;
+      case "warp": return <WarpPanel />;
       default:
         if (selectedIntegration) {
           if (selectedIntegration.is_oauth) {
