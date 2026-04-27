@@ -1411,7 +1411,15 @@ export function StandaloneChat({
   const piLastCrashRef = useRef(0);
   const piThinkingStartRef = useRef<number | null>(null);
   const piSessionSyncedRef = useRef(false);
-  const piSessionIdRef = useRef<string>(crypto.randomUUID());
+  // Initial Pi session id. The chat panel's foreground bus registration
+  // is keyed by `conversationId`, and Pi emits events with
+  // `sessionId === piSessionIdRef.current`. Keep them in lockstep from
+  // mount so the panel's foreground handler receives events even on the
+  // very first message of a fresh app launch (no chat selected, no
+  // history loaded). Same invariant as `startNewConversation` /
+  // `loadConversation` — see use-chat-conversations.ts.
+  const initialSessionIdRef = useRef<string>(crypto.randomUUID());
+  const piSessionIdRef = useRef<string>(initialSessionIdRef.current);
   // Tracks the config Pi is currently running with so `handlePiRestart` can
   // decide between a hot-swap (`pi_set_model`) and a full respawn. Update
   // this ref on every Pi start/restart/swap.
@@ -1454,8 +1462,12 @@ export function StandaloneChat({
   // `mounted` flag but visible across all useEffect boundaries.
   const mountedRef = useRef(true);
 
-  // Chat history state
-  const [conversationId, setConversationId] = useState<string | null>(null);
+  // Chat history state. Initialised to the same uuid as
+  // `piSessionIdRef` so the foreground bus key matches Pi's emitted
+  // sessionId from message 0 — see comment above piSessionIdRef.
+  const [conversationId, setConversationId] = useState<string | null>(
+    initialSessionIdRef.current,
+  );
 
   // Process an image file to base64
   // Resize image to max 1024px and compress as JPEG to keep base64 payload small
@@ -1763,15 +1775,21 @@ export function StandaloneChat({
             setIsLoading(false);
             setIsStreaming(false);
             setMessages([]);
-            setConversationId(null);
             setPrefillContext(null);
             setPrefillFrameId(null);
             // Set input as fallback in case auto-send fails
             setInput(fullMessage);
             // Assign a fresh session ID — this is a brand-new conversation.
             // Without this, the prefill would send to the previous conversation's
-            // Pi process which still has old context baked in.
-            piSessionIdRef.current = crypto.randomUUID();
+            // Pi process which still has old context baked in. Set
+            // conversationId to the same value so the foreground bus key
+            // tracks Pi's emitted sessionId — see comment on
+            // initialSessionIdRef. Skipping setConversationId(null) here so
+            // there's no transient null-key window where Pi events could miss
+            // the panel's foreground handler.
+            const newSid = crypto.randomUUID();
+            piSessionIdRef.current = newSid;
+            setConversationId(newSid);
             piSessionSyncedRef.current = true; // fresh session, no history to inject
             // With multi-session, Pi starts fresh per conversation — sendPiMessage
             // handles auto-starting it. Just bypass the canChat guard and send.
