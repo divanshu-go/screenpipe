@@ -153,7 +153,7 @@ export async function listConversations(): Promise<ConversationMeta[]> {
  */
 export async function updateConversationFlags(
   id: string,
-  patch: Partial<Pick<ChatConversation, "pinned" | "hidden" | "title">>
+  patch: Partial<Pick<ChatConversation, "pinned" | "hidden" | "title" | "browserState">>
 ): Promise<void> {
   const conv = await loadConversationFile(id);
   if (!conv) return;

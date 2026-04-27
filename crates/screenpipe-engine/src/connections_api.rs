@@ -120,7 +120,7 @@ async fn list_connections(State(state): State<ConnectionsState>) -> Json<Value> 
             arr.push(json!({
                 "id": b.id(),
                 "name": b.name(),
-                "icon": "browser",
+                "icon": b.id(),
                 "category": "browser",
                 "description": format!(
                     "{}\n\nControl: GET /connections/browsers/{}/status, \

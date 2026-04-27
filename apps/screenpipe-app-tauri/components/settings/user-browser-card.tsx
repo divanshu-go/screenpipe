@@ -6,16 +6,19 @@
 /**
  * User-browser (Chrome extension) status card.
  *
- * Pairs with `owned-browser-card.tsx` — both surfaces of the same
- * `BrowserRegistry` in the engine. Status comes from
- * `/connections/browsers/user-browser/status`; "ready" means the
- * extension's WebSocket is currently connected.
+ * Surfaces the `user-browser` entry from the engine's `BrowserRegistry`.
+ * Status comes from `/connections/browsers/user-browser/status`; "ready"
+ * means the extension's WebSocket is currently connected.
+ *
+ * The other registered browser (`owned-default`) has no settings card —
+ * the agent drives it directly via the embedded sidebar in the chat
+ * layout (`<BrowserSidebar />`).
  */
 
 import React, { useCallback, useEffect, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Chrome, ExternalLink, Loader2 } from "lucide-react";
+import { ExternalLink, Loader2 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { localFetch } from "@/lib/api";
 
@@ -91,7 +94,21 @@ export function UserBrowserCard() {
       <CardContent className="p-0">
         <div className="flex items-start p-4 gap-4">
           <div className="flex-shrink-0 h-10 w-10 rounded-xl bg-muted flex items-center justify-center">
-            <Chrome className="h-5 w-5 text-foreground" />
+            {/* Same globe glyph used in the connections tile grid — keeps
+                identity consistent across the settings surface. */}
+            <svg
+              viewBox="0 0 24 24"
+              className="h-5 w-5 text-foreground"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <circle cx="12" cy="12" r="9" />
+              <path d="M3 12h18" />
+              <path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18z" />
+            </svg>
           </div>
 
           <div className="flex-1 min-w-0">

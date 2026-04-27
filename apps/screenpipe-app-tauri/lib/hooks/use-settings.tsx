@@ -136,6 +136,11 @@ export interface ChatConversation {
 	/** Pipe metadata for `pipe-watch` / `pipe-run` conversations.
 	 *  Undefined for plain chats. */
 	pipeContext?: PipeContext;
+	/** Last URL the agent navigated the embedded browser sidebar to.
+	 *  Drives the right-side `<BrowserSidebar />` panel: when the user
+	 *  re-opens this conversation the panel restores to this URL.
+	 *  Cleared (set to undefined) when the user closes the sidebar. */
+	browserState?: { url: string; updatedAt: number };
 }
 
 export interface ChatHistoryStore {

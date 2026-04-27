@@ -21,6 +21,7 @@ import { cn } from "@/lib/utils";
 import { Loader2, Send, Square, User, Settings, ExternalLink, X, ImageIcon, History, Search, Trash2, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Plus, Copy, Check, Clock, Paperclip, Filter, RefreshCw, GitBranch, MoreHorizontal, Pencil, Pin, Shield, ShieldCheck } from "lucide-react";
 import { SchedulePromptDialog } from "@/components/chat/schedule-prompt-dialog";
 import { PipeContextBanner } from "@/components/chat/pipe-context-banner";
+import { BrowserSidebar } from "@/components/browser-sidebar";
 import { toast } from "@/components/ui/use-toast";
 import { motion, AnimatePresence } from "framer-motion";
 import { PipeAIIcon, PipeAIIconLarge } from "@/components/pipe-ai-icon";
@@ -4496,6 +4497,12 @@ export function StandaloneChat({
         </button>
       )}
       </div>
+
+      {/* Agent-controlled embedded browser. Slides in from the right when the
+          agent navigates (or when restoring a chat that has saved state).
+          The actual page is rendered by a Tauri child Webview positioned
+          on top of the placeholder div. */}
+      <BrowserSidebar conversationId={conversationId} />
       </div> {/* End of main content area with history sidebar */}
 
       {/* Input */}

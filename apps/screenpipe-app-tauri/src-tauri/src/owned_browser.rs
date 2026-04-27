@@ -4,16 +4,15 @@
 
 //! Tauri-side glue for the owned-browser instance.
 //!
-//! Builds a hidden persistent `WebviewWindow` named `owned-browser`,
-//! implements [`OwnedWebviewHandle`] by translating `eval` requests into
-//! `webview.eval()` + a Tauri-event round-trip, and exposes a small
-//! command surface (show/hide/navigate) for the UI.
+//! The owned browser is a child `Webview` embedded inside the main window.
+//! The frontend positions it (via `owned_browser_set_bounds`) so it visually
+//! lives as a right-side panel within the chat layout — no separate window.
 //!
-//! The Tauri shell creates an [`OwnedBrowser`] at startup, kicks off
-//! [`install`] in the background, and once the webview is ready the
-//! returned handle is attached so `eval()` resolves immediately.
-//! Calls that arrive before the webview boots return
-//! `EvalError::NotConnected` — the agent retries.
+//! [`OwnedWebviewHandle`] is implemented by translating the agent's `eval`
+//! requests into `webview.eval()` + a Tauri-event round-trip. The webview is
+//! created lazily on first install and persists for the app's lifetime; the
+//! sidebar UI hides it by collapsing its size to 0×0 when no chat is using
+//! it. Cookies/localStorage live in `~/.screenpipe/browsers/default`.
 
 use async_trait::async_trait;
 use screenpipe_connect::connections::browser::{EvalResult, OwnedWebviewHandle};
@@ -22,16 +21,27 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Listener, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{
+    webview::WebviewBuilder, AppHandle, Emitter, Listener, LogicalPosition, LogicalSize, Manager,
+    WebviewUrl,
+};
 use tokio::sync::{oneshot, Mutex};
 use tracing::{info, warn};
 use uuid::Uuid;
 
-/// Window label — also used by show/hide commands and the status pane.
-pub const WINDOW_LABEL: &str = "owned-browser";
+/// Webview label — the same string is used by the frontend Tauri commands.
+pub const WEBVIEW_LABEL: &str = "owned-browser";
+
+/// The window the child webview attaches to.
+const PARENT_WINDOW_LABEL: &str = "main";
 
 /// Event the injected JS emits when an eval finishes (or throws).
 const RESULT_EVENT: &str = "owned-browser:result";
+
+/// Event the Rust handle emits when the agent navigates the browser. The
+/// frontend's `<BrowserSidebar />` listens for this so it can slide in,
+/// position the webview, and persist the URL to the active chat.
+const NAVIGATE_EVENT: &str = "owned-browser:navigate";
 
 // ---------------------------------------------------------------------------
 // Handle implementation
@@ -60,18 +70,19 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
         url: Option<&str>,
         timeout: Duration,
     ) -> Result<EvalResult, String> {
-        let window = self
+        let webview = self
             .app
-            .get_webview_window(WINDOW_LABEL)
-            .ok_or_else(|| "owned-browser window not found".to_string())?;
+            .get_webview(WEBVIEW_LABEL)
+            .ok_or_else(|| "owned-browser webview not found".to_string())?;
 
         // If a target URL was supplied and the current location isn't on it,
         // navigate first. Tauri's `eval` is fire-and-forget so we just wait
-        // a beat for the page to start loading; the bridge_script's
-        // DOMContentLoaded handler will run our user code.
+        // a beat for the page to start loading. The frontend listens to
+        // NAVIGATE_EVENT so it can mount the sidebar before the page paints.
         if let Some(target) = url {
+            let _ = self.app.emit(NAVIGATE_EVENT, target);
             let target_lit = serde_json::to_string(target).unwrap_or_default();
-            let _ = window.eval(&format!(
+            let _ = webview.eval(format!(
                 "if (!location.href.includes({lit})) location.href = {lit};",
                 lit = target_lit
             ));
@@ -108,7 +119,7 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
             id = id_lit
         );
 
-        if let Err(e) = window.eval(&wrapped) {
+        if let Err(e) = webview.eval(wrapped) {
             self.pending.lock().await.remove(&id);
             return Err(format!("webview.eval failed: {e}"));
         }
@@ -128,12 +139,14 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
 }
 
 // ---------------------------------------------------------------------------
-// Install — build the webview, wire up the result listener, return handle
+// Install — build the child webview, wire up the result listener, return handle
 // ---------------------------------------------------------------------------
 
-/// Create the owned-browser webview if it doesn't exist yet, register the
-/// result-event listener, and return a ready-to-attach handle. Idempotent —
-/// safe to call after a hot-reload or settings restart.
+/// Create the owned-browser child webview if it doesn't exist yet, register
+/// the result-event listener, and return a ready-to-attach handle. Idempotent.
+///
+/// The webview starts at 0×0 (visually hidden); the frontend sidebar calls
+/// `owned_browser_set_bounds` to position it once a chat needs it.
 pub async fn install(
     app: &AppHandle,
     screenpipe_dir: PathBuf,
@@ -143,23 +156,24 @@ pub async fn install(
     // WKWebView (macOS) and webkit2gtk (Linux) don't expose per-window
     // profiles via Tauri's public API yet — they share the app's webview
     // store regardless. WebView2 (Windows) supports it via
-    // `additional_browser_args`. Future work: use platform-specific APIs to
-    // fully isolate on all three.
+    // `additional_browser_args`.
     let data_dir = screenpipe_dir.join("browsers").join("default");
     if let Err(e) = std::fs::create_dir_all(&data_dir) {
         warn!("owned-browser: failed to create data dir {data_dir:?}: {e}");
     }
 
-    if app.get_webview_window(WINDOW_LABEL).is_none() {
+    if app.get_webview(WEBVIEW_LABEL).is_none() {
+        let main_ww = app
+            .get_webview_window(PARENT_WINDOW_LABEL)
+            .ok_or_else(|| format!("parent window '{PARENT_WINDOW_LABEL}' not found"))?;
+        // `add_child` lives on `Window`, not `WebviewWindow` — drop down to it.
+        let main_window = main_ww.as_ref().window();
+
         let blank: url::Url = "about:blank"
             .parse()
             .map_err(|e: url::ParseError| e.to_string())?;
         #[allow(unused_mut)]
-        let mut builder = WebviewWindowBuilder::new(app, WINDOW_LABEL, WebviewUrl::External(blank))
-            .title("Screenpipe — Owned Browser")
-            .visible(false)
-            .resizable(true)
-            .inner_size(1024.0, 768.0);
+        let mut builder = WebviewBuilder::new(WEBVIEW_LABEL, WebviewUrl::External(blank));
 
         #[cfg(target_os = "windows")]
         {
@@ -170,10 +184,23 @@ pub async fn install(
         // data_dir is informational only.
         let _ = &data_dir;
 
-        builder
-            .build()
-            .map_err(|e| format!("WebviewWindowBuilder.build failed: {e}"))?;
-        info!("owned-browser: window created");
+        // 1×1 placeholder; some platforms reject 0×0. The frontend will
+        // resize as soon as the sidebar mounts.
+        main_window
+            .add_child(
+                builder,
+                LogicalPosition::new(0.0, 0.0),
+                LogicalSize::new(1.0, 1.0),
+            )
+            .map_err(|e| format!("add_child failed: {e}"))?;
+
+        // Hide until the sidebar mounts and positions us — avoids a brief
+        // flash of about:blank in the corner of the main window.
+        if let Some(wv) = app.get_webview(WEBVIEW_LABEL) {
+            let _ = wv.hide();
+        }
+
+        info!("owned-browser: child webview created");
     }
 
     let handle = Arc::new(TauriOwnedHandle {
@@ -209,35 +236,59 @@ pub async fn install(
 }
 
 // ---------------------------------------------------------------------------
-// Tauri commands — UI controls
+// Tauri commands — sidebar controls (frontend → child webview)
 // ---------------------------------------------------------------------------
 
+/// Position and size the embedded webview in the main window's coordinate
+/// space (logical pixels, origin = top-left of the parent window's content
+/// area). Call with width/height = 0 to hide.
 #[tauri::command]
-pub async fn owned_browser_show(app: AppHandle) -> Result<(), String> {
-    let window = app
-        .get_webview_window(WINDOW_LABEL)
+pub async fn owned_browser_set_bounds(
+    app: AppHandle,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    let webview = app
+        .get_webview(WEBVIEW_LABEL)
         .ok_or_else(|| "owned-browser not initialized".to_string())?;
-    window.show().map_err(|e| e.to_string())?;
-    window.set_focus().map_err(|e| e.to_string())
+
+    if width <= 0.0 || height <= 0.0 {
+        webview.hide().map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    webview
+        .set_position(LogicalPosition::new(x, y))
+        .map_err(|e| e.to_string())?;
+    webview
+        .set_size(LogicalSize::new(width, height))
+        .map_err(|e| e.to_string())?;
+    webview.show().map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-pub async fn owned_browser_hide(app: AppHandle) -> Result<(), String> {
-    let window = app
-        .get_webview_window(WINDOW_LABEL)
-        .ok_or_else(|| "owned-browser not initialized".to_string())?;
-    window.hide().map_err(|e| e.to_string())
-}
-
+/// Navigate the embedded webview to `url`. Used by the agent (via
+/// `POST /connections/browsers/owned-default/eval`) and by the sidebar
+/// when restoring per-chat state.
 #[tauri::command]
 pub async fn owned_browser_navigate(app: AppHandle, url: String) -> Result<(), String> {
-    let window = app
-        .get_webview_window(WINDOW_LABEL)
+    let webview = app
+        .get_webview(WEBVIEW_LABEL)
         .ok_or_else(|| "owned-browser not initialized".to_string())?;
-    window
-        .eval(&format!(
-            "location.href = {};",
-            serde_json::to_string(&url).unwrap_or_else(|_| "\"about:blank\"".into())
-        ))
-        .map_err(|e| e.to_string())
+    let parsed: url::Url = url
+        .parse()
+        .map_err(|e: url::ParseError| format!("invalid url: {e}"))?;
+    let _ = app.emit(NAVIGATE_EVENT, parsed.as_str());
+    webview.navigate(parsed).map_err(|e| e.to_string())
+}
+
+/// Hide the embedded webview without destroying it. Equivalent to calling
+/// `set_bounds` with zero dimensions, but more explicit at the call site.
+#[tauri::command]
+pub async fn owned_browser_hide(app: AppHandle) -> Result<(), String> {
+    let webview = app
+        .get_webview(WEBVIEW_LABEL)
+        .ok_or_else(|| "owned-browser not initialized".to_string())?;
+    webview.hide().map_err(|e| e.to_string())
 }

@@ -1,6 +1,6 @@
 [package]
 name = "screenpipe-app"
-version = "2.4.96"
+version = "2.4.97"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""
@@ -22,6 +22,9 @@ tauri = { version = "=2.10.1", features = [
   "devtools",
   "image-png",
   "image-ico",
+  # Embedded child webview (the agent-controlled browser sidebar) requires
+  # WindowBuilder::add_child, which is currently behind the unstable feature.
+  "unstable",
 ] }
 tauri-utils = { version = "=2.8.2", features = [] }
 # plugins
