@@ -3321,6 +3321,20 @@ impl PipeManager {
                     );
                     last_run.insert(name.clone(), Utc::now());
 
+                    // One-off (`schedule: at <iso>`) auto-disables on fire so
+                    // it never runs twice — even across crashes/restarts. The
+                    // pipe.md stays on disk; only the local-override flag flips.
+                    if matches!(parse_schedule(&config.schedule), Some(ParsedSchedule::Once(_))) {
+                        if let Err(e) = set_local_override(&pipes_dir, name, false) {
+                            warn!(
+                                "scheduler: failed to auto-disable one-off pipe '{}': {}",
+                                name, e
+                            );
+                        } else {
+                            info!("scheduler: one-off pipe '{}' fired, auto-disabled", name);
+                        }
+                    }
+
                     // Mark as queued so the next tick doesn't double-queue
                     {
                         let mut qr = queued_or_running.lock().await;
@@ -4096,20 +4110,32 @@ Pipe name: {}
 // Schedule parsing
 // ---------------------------------------------------------------------------
 
-/// Parsed schedule — either a fixed interval or a cron expression.
+/// Parsed schedule — fixed interval, cron, or a single fire-once timestamp.
 pub enum ParsedSchedule {
     Interval(std::time::Duration),
     Cron(Box<CronSchedule>),
+    /// One-off: fire once at this UTC instant, then never again. Used for
+    /// AI-scheduled "remind me in 2 days" tasks. After firing, the pipe
+    /// is disabled via local-override so it stays on disk as history.
+    Once(DateTime<Utc>),
 }
 
-/// Parse a schedule string into an interval or cron expression.
+/// Parse a schedule string into an interval, cron expression, or one-off.
 /// Returns `None` for `"manual"`.
 ///
-/// Supports: `"every 30m"`, `"every 2h"`, `"daily"`, cron (`"0 */2 * * *"`).
+/// Supports: `"every 30m"`, `"every 2h"`, `"daily"`, cron (`"0 */2 * * *"`),
+/// and `"at 2026-04-29T17:00:00-07:00"` (RFC3339 timestamp; fires once).
 pub fn parse_schedule(schedule: &str) -> Option<ParsedSchedule> {
     let s = schedule.trim();
     if s.eq_ignore_ascii_case("manual") {
         return None;
+    }
+    // One-off: "at <RFC3339 timestamp>" — fires once, never again.
+    if let Some(rest) = s.strip_prefix("at ").or_else(|| s.strip_prefix("AT ")) {
+        if let Ok(t) = DateTime::parse_from_rfc3339(rest.trim()) {
+            return Some(ParsedSchedule::Once(t.with_timezone(&Utc)));
+        }
+        // Malformed `at <whatever>` — fall through to other parsers, then None.
     }
     if s.eq_ignore_ascii_case("daily") {
         return Some(ParsedSchedule::Interval(std::time::Duration::from_secs(
@@ -4307,6 +4333,12 @@ fn should_run(schedule: &str, last_run: DateTime<Utc>) -> bool {
                 Some(next) => now >= next,
                 None => false,
             }
+        }
+        Some(ParsedSchedule::Once(run_at)) => {
+            // Fire if we've reached the timestamp AND haven't run since
+            // (cheap re-fire guard against in-memory last_run resets).
+            // The auto-disable happens in the scheduler tick after queueing.
+            Utc::now() >= run_at && last_run < run_at
         }
     }
 }
@@ -4918,6 +4950,60 @@ mod tests {
     #[test]
     fn test_parse_schedule_garbage() {
         assert!(parse_schedule("not a schedule").is_none());
+    }
+
+    // -- one-off `at <iso>` --------------------------------------------------
+
+    #[test]
+    fn test_parse_schedule_at_rfc3339() {
+        match parse_schedule("at 2099-01-01T12:00:00Z") {
+            Some(ParsedSchedule::Once(t)) => {
+                assert_eq!(t.to_rfc3339(), "2099-01-01T12:00:00+00:00");
+            }
+            other => panic!("expected Once, got {:?}", other.is_some()),
+        }
+    }
+
+    #[test]
+    fn test_parse_schedule_at_with_offset() {
+        match parse_schedule("at 2099-01-01T05:00:00-07:00") {
+            Some(ParsedSchedule::Once(t)) => {
+                // -07:00 05:00 == UTC 12:00
+                assert_eq!(t.to_rfc3339(), "2099-01-01T12:00:00+00:00");
+            }
+            other => panic!("expected Once, got {:?}", other.is_some()),
+        }
+    }
+
+    #[test]
+    fn test_parse_schedule_at_malformed_returns_none() {
+        assert!(parse_schedule("at not-a-date").is_none());
+        assert!(parse_schedule("at ").is_none());
+    }
+
+    #[test]
+    fn test_should_run_once_in_past_unfired() {
+        // Past timestamp, never fired (last_run = epoch) → fire now.
+        let an_hour_ago = Utc::now() - chrono::Duration::hours(1);
+        let schedule = format!("at {}", an_hour_ago.to_rfc3339());
+        assert!(should_run(&schedule, DateTime::UNIX_EPOCH));
+    }
+
+    #[test]
+    fn test_should_run_once_already_fired() {
+        // Past timestamp, already fired (last_run after run_at) → don't fire.
+        let two_hours_ago = Utc::now() - chrono::Duration::hours(2);
+        let an_hour_ago = Utc::now() - chrono::Duration::hours(1);
+        let schedule = format!("at {}", two_hours_ago.to_rfc3339());
+        assert!(!should_run(&schedule, an_hour_ago));
+    }
+
+    #[test]
+    fn test_should_run_once_in_future() {
+        // Future timestamp → don't fire yet.
+        let in_an_hour = Utc::now() + chrono::Duration::hours(1);
+        let schedule = format!("at {}", in_an_hour.to_rfc3339());
+        assert!(!should_run(&schedule, DateTime::UNIX_EPOCH));
     }
 
     // -- should_run ---------------------------------------------------------

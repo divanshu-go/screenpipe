@@ -34,6 +34,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Pin, X, AlertCircle, ChevronDown, ChevronRight, Activity } from "lucide-react";
 import { useRunningPipes } from "@/lib/hooks/use-running-pipes";
+import { useUpcomingPipes, type UpcomingPipe } from "@/lib/hooks/use-upcoming-pipes";
 import { emit, listen } from "@tauri-apps/api/event";
 import { cn } from "@/lib/utils";
 import {
@@ -89,6 +90,7 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
   }, [actions]);
 
   const runningPipes = useRunningPipes();
+  const upcomingPipes = useUpcomingPipes();
 
   // Pipe-watch / pipe-run sessions also rendered in Scheduled get filtered
   // out here — otherwise the same pipe shows up twice (live row in
@@ -222,6 +224,10 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
       className={cn("flex flex-col min-h-0 text-sm px-2", className)}
       data-testid="chat-sidebar"
     >
+      {upcomingPipes.length > 0 && (
+        <CollapsibleUpcoming pipes={upcomingPipes} />
+      )}
+
       {runningPipes.length > 0 && (
         <CollapsibleScheduled pipes={runningPipes} />
       )}
@@ -480,6 +486,123 @@ function ScheduledRow({
           {elapsed}
         </span>
       )}
+    </div>
+  );
+}
+
+/** Format the gap until a future ISO timestamp as a compact "in 2d 4h"
+ *  / "in 18h" / "in 12m" / "in 30s" string. Returns null if the time has
+ *  already passed (caller should drop the row). */
+function formatCountdown(runAt: string): string | null {
+  const ms = Date.parse(runAt) - Date.now();
+  if (Number.isNaN(ms) || ms <= 0) return null;
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `in ${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `in ${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) {
+    const remM = m - h * 60;
+    return remM > 0 ? `in ${h}h ${remM}m` : `in ${h}h`;
+  }
+  const d = Math.floor(h / 24);
+  const remH = h - d * 24;
+  return remH > 0 ? `in ${d}d ${remH}h` : `in ${d}d`;
+}
+
+/** Sidebar section for one-off pipes (`schedule: at <iso>`) that haven't
+ *  fired yet. Mirrors `CollapsibleScheduled` visually but shows a
+ *  countdown ("in 2d 4h") instead of an elapsed badge, and uses a steady
+ *  (non-pulsing) clock-style dot to differentiate from running pipes. */
+function CollapsibleUpcoming({ pipes }: { pipes: UpcomingPipe[] }) {
+  const [collapsed, setCollapsedRaw] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("screenpipe:upcoming-collapsed") === "true";
+    } catch {
+      return false;
+    }
+  });
+  const setCollapsed = (v: boolean) => {
+    setCollapsedRaw(v);
+    try {
+      localStorage.setItem("screenpipe:upcoming-collapsed", String(v));
+    } catch {
+      // ignore
+    }
+  };
+  return (
+    <div className="flex flex-col mb-2 shrink-0">
+      <button
+        type="button"
+        onClick={() => setCollapsed(!collapsed)}
+        className="shrink-0 px-2.5 py-1.5 flex items-center gap-1 hover:bg-muted/30 rounded-md text-left"
+        aria-expanded={!collapsed}
+        aria-controls="chat-sidebar-upcoming"
+      >
+        {collapsed ? (
+          <ChevronRight className="h-3 w-3 text-muted-foreground/60 shrink-0" />
+        ) : (
+          <ChevronDown className="h-3 w-3 text-muted-foreground/60 shrink-0" />
+        )}
+        <span className="text-[10px] uppercase tracking-wider text-muted-foreground/60 flex-1">
+          upcoming
+        </span>
+        <span className="text-[10px] text-muted-foreground/60 tabular-nums">
+          {pipes.length}
+        </span>
+      </button>
+      {!collapsed && (
+        <div
+          id="chat-sidebar-upcoming"
+          className="max-h-40 overflow-y-auto overflow-x-hidden scrollbar-hide"
+        >
+          <div className="flex flex-col">
+            {pipes.map((p) => (
+              <UpcomingRow key={p.pipeName} pipe={p} />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function UpcomingRow({ pipe }: { pipe: UpcomingPipe }) {
+  // Re-tick once a minute so the countdown stays fresh while the row is
+  // mounted. Cheap: max one timer per upcoming pipe; users rarely have
+  // more than a handful queued.
+  const [, force] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => force((n) => n + 1), 60_000);
+    return () => clearInterval(id);
+  }, []);
+  const countdown = formatCountdown(pipe.runAt);
+  // Auto-hide rows whose run-time has just passed (next poll will drop
+  // the pipe from the list once the auto-disable kicks in server-side,
+  // but we don't want a visible row showing "in 0s" stuck on screen).
+  if (!countdown) return null;
+  const fireDate = new Date(pipe.runAt);
+  const absLabel = `${fireDate.toLocaleDateString()} ${fireDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+  return (
+    <div
+      className="flex items-center gap-2 px-2.5 py-1 mx-0 rounded-md text-foreground select-none cursor-default"
+      title={`scheduled for ${absLabel} — pipe: ${pipe.pipeName}`}
+      data-testid={`upcoming-row-${pipe.pipeName}`}
+    >
+      {/* Hollow dot — distinguishes "queued for the future" from
+          "running now" (which uses a filled, pulsing dot). */}
+      <span
+        className="relative h-2 w-2 shrink-0 flex items-center justify-center"
+        aria-label="upcoming"
+      >
+        <span className="relative h-1.5 w-1.5 rounded-full border border-foreground/60" />
+      </span>
+      <span className="truncate flex-1 text-xs">
+        {pipe.title || pipe.pipeName}
+      </span>
+      <span className="text-[10px] text-muted-foreground/60 tabular-nums shrink-0">
+        {countdown}
+      </span>
     </div>
   );
 }
