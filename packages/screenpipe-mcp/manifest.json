@@ -14,7 +14,7 @@
     "url": "https://github.com/screenpipe/screenpipe"
   },
   "homepage": "https://screenpi.pe",
-  "documentation": "https://github.com/screenpipe/screenpipe/tree/main/crates/screenpipe-integrations/screenpipe-mcp",
+  "documentation": "https://github.com/screenpipe/screenpipe/tree/main/packages/screenpipe-mcp",
   "support": "https://github.com/screenpipe/screenpipe/issues",
   "license": "MIT",
   "server": {
@@ -59,7 +59,7 @@
   },
   "keywords": ["screen-recording", "ocr", "audio-transcription", "automation", "memory", "search"],
   "privacy_policies": [
-    "https://github.com/screenpipe/screenpipe/tree/main/crates/screenpipe-connect/screenpipe-mcp#privacy-policy",
+    "https://github.com/screenpipe/screenpipe/tree/main/packages/screenpipe-mcp#privacy-policy",
     "https://screenpi.pe/privacy"
   ]
 }

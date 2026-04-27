@@ -74,9 +74,9 @@ Clone and build from source:
 
 ```bash
 git clone https://github.com/screenpipe/screenpipe
-cd screenpipe/crates/screenpipe-integrations/screenpipe-mcp
-npm install
-npm run build
+cd screenpipe/packages/screenpipe-mcp
+bun install
+bun run build
 ```
 
 Then configure Claude Desktop:
@@ -206,7 +206,7 @@ and is deletable at any time (`rm -rf ~/.screenpipe` removes everything).
 
 ### Source code
 The Screenpipe MCP server is MIT-licensed and the entire source is
-public at <https://github.com/screenpipe/screenpipe/tree/main/crates/screenpipe-connect/screenpipe-mcp>.
+public at <https://github.com/screenpipe/screenpipe/tree/main/packages/screenpipe-mcp>.
 Every line is auditable.
 
 ### Contact
