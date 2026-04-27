@@ -20,6 +20,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::routes::browser::BrowserBridge;
+use screenpipe_connect::connections::browser::{BrowserRegistry, BrowserSummary, EvalError};
 
 pub type SharedConnectionManager = Arc<Mutex<ConnectionManager>>;
 pub type SharedWhatsAppGateway = Arc<Mutex<WhatsAppGateway>>;
@@ -30,6 +31,7 @@ pub struct ConnectionsState {
     pub wa: SharedWhatsAppGateway,
     pub secret_store: Option<Arc<SecretStore>>,
     pub browser_bridge: Arc<BrowserBridge>,
+    pub browser_registry: Arc<BrowserRegistry>,
 }
 
 #[derive(Deserialize)]
@@ -108,21 +110,29 @@ async fn list_connections(State(state): State<ConnectionsState>) -> Json<Value> 
             "has_session": has_session,
         }));
 
-        // Browser extension — Chrome/Edge bridge for in-page JS execution.
-        let browser_connected = state.browser_bridge.is_connected().await;
-        arr.push(json!({
-            "id": "browser-extension",
-            "name": "Browser Extension",
-            "icon": "browser",
-            "category": "productivity",
-            "description":
-                "Run JavaScript in the user's browser tabs via a Chrome/Edge extension. \
-                 Endpoints: GET /connections/browser/status — connection status. \
-                 POST /connections/browser/eval {\"code\":\"...\",\"url\":\"...\"} — run JS in a tab. \
-                 Install the extension from screenpi.pe/extension.",
-            "fields": [],
-            "connected": browser_connected,
-        }));
+        // Browsers — every kind of browser the agent can drive (user's
+        // real browser via the extension, app-managed owned webview, etc.)
+        // is registered into the BrowserRegistry. Surface each one as its
+        // own entry so the AI sees the natural-language description and
+        // picks by id. Canonical control surface lives at
+        // GET /connections/browsers and POST /connections/browsers/:id/eval.
+        for b in state.browser_registry.list().await {
+            arr.push(json!({
+                "id": b.id(),
+                "name": b.name(),
+                "icon": "browser",
+                "category": "browser",
+                "description": format!(
+                    "{}\n\nControl: GET /connections/browsers/{}/status, \
+                     POST /connections/browsers/{}/eval {{\"code\":\"...\",\"url\":\"...\"}}.",
+                    b.description(),
+                    b.id(),
+                    b.id(),
+                ),
+                "fields": [],
+                "connected": b.is_ready().await,
+            }));
+        }
     }
 
     Json(json!({ "data": data }))
@@ -1352,11 +1362,114 @@ async fn browser_status(
     crate::routes::browser::browser_status_handler(State(state.browser_bridge)).await
 }
 
+// ---------------------------------------------------------------------------
+// Browser registry — uniform API for every kind of browser the agent can
+// drive. The agent reads `GET /connections/browsers`, picks one by id, and
+// calls `POST /connections/browsers/:id/eval`. Same shape regardless of
+// whether the underlying browser is the user's real Chrome (via the
+// extension) or an app-managed owned webview.
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct BrowserEvalBody {
+    code: String,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    timeout_secs: Option<u64>,
+}
+
+/// GET /connections/browsers — list every registered browser with its
+/// natural-language description and ready flag. The LLM uses the
+/// description field to decide which browser to call.
+async fn list_browsers(State(state): State<ConnectionsState>) -> Json<Value> {
+    let browsers = state.browser_registry.list().await;
+    let mut summaries = Vec::with_capacity(browsers.len());
+    for b in &browsers {
+        summaries.push(BrowserSummary::from_browser(b).await);
+    }
+    // Stable ordering — browsers should appear in the same order across
+    // calls so the agent's prompt doesn't shuffle.
+    summaries.sort_by(|a, b| a.id.cmp(&b.id));
+    Json(json!({ "data": summaries }))
+}
+
+/// GET /connections/browsers/:id/status — single-browser readiness probe.
+async fn browser_get_status(
+    State(state): State<ConnectionsState>,
+    Path(id): Path<String>,
+) -> (StatusCode, Json<Value>) {
+    match state.browser_registry.get(&id).await {
+        Some(b) => (
+            StatusCode::OK,
+            Json(json!({
+                "id": b.id(),
+                "name": b.name(),
+                "description": b.description(),
+                "ready": b.is_ready().await,
+            })),
+        ),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": format!("no browser registered with id '{id}'") })),
+        ),
+    }
+}
+
+/// POST /connections/browsers/:id/eval — run JS in the named browser.
+async fn browser_run_eval(
+    State(state): State<ConnectionsState>,
+    Path(id): Path<String>,
+    Json(body): Json<BrowserEvalBody>,
+) -> (StatusCode, Json<Value>) {
+    let browser = match state.browser_registry.get(&id).await {
+        Some(b) => b,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": format!("no browser registered with id '{id}'") })),
+            );
+        }
+    };
+
+    let timeout = std::time::Duration::from_secs(body.timeout_secs.unwrap_or(30).min(120));
+    match browser.eval(&body.code, body.url.as_deref(), timeout).await {
+        Ok(r) => {
+            let status = if r.ok {
+                StatusCode::OK
+            } else {
+                StatusCode::UNPROCESSABLE_ENTITY
+            };
+            (
+                status,
+                Json(json!({
+                    "success": r.ok,
+                    "result": r.result,
+                    "error": r.error,
+                })),
+            )
+        }
+        Err(EvalError::NotConnected) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "success": false, "error": EvalError::NotConnected.to_string() })),
+        ),
+        Err(e @ EvalError::SendFailed(_)) | Err(e @ EvalError::Disconnected) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({ "success": false, "error": e.to_string() })),
+        ),
+        Err(e @ EvalError::Timeout(_)) => (
+            StatusCode::GATEWAY_TIMEOUT,
+            Json(json!({ "success": false, "error": e.to_string() })),
+        ),
+    }
+}
+
 pub fn router<S>(
     cm: SharedConnectionManager,
     wa: SharedWhatsAppGateway,
     secret_store: Option<Arc<SecretStore>>,
     browser_bridge: Arc<BrowserBridge>,
+    browser_registry: Arc<BrowserRegistry>,
 ) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
@@ -1366,10 +1479,17 @@ where
         wa,
         secret_store,
         browser_bridge,
+        browser_registry,
     };
     Router::new()
         .route("/", get(list_connections))
-        // Browser extension bridge (must be before /:id to avoid conflict)
+        // Browser registry — canonical multi-instance API.
+        // (Must be before /:id to avoid conflict with generic integration routes.)
+        .route("/browsers", get(list_browsers))
+        .route("/browsers/:id/status", get(browser_get_status))
+        .route("/browsers/:id/eval", post(browser_run_eval))
+        // Legacy single-instance browser routes — deployed extensions
+        // (Chrome v0.2.x and v0.3.0) hardcode these. Keep until usage drops.
         .route("/browser/ws", get(browser_ws))
         .route("/browser/eval", post(browser_eval))
         .route("/browser/status", get(browser_status))
