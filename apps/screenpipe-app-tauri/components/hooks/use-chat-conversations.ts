@@ -201,6 +201,26 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     await saveConversationFile(conversation);
     await refreshFileConversations();
 
+    // Sync the persisted title back into the in-memory chat-store so the
+    // sidebar (which reads `sessions[id].title` directly) updates immediately.
+    // Without this the row stays labelled "new chat" until the next app
+    // launch — that's the rename-doesn't-stick bug users reported.
+    try {
+      const { useChatStore } = await import("@/lib/stores/chat-store");
+      const sessions = useChatStore.getState().sessions;
+      if (sessions[convId]) {
+        useChatStore.getState().actions.patch(convId, {
+          title: conversation.title,
+          messageCount: conversation.messages.length,
+          ...(conversation.lastUserMessageAt
+            ? { lastUserMessageAt: conversation.lastUserMessageAt }
+            : {}),
+        });
+      }
+    } catch (e) {
+      console.warn("[chat] failed to sync title to store:", e);
+    }
+
     // Update activeConversationId in store (lightweight — no conversation data)
     try {
       const { getStore } = await import("@/lib/hooks/use-settings");
@@ -252,6 +272,18 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     if (!conv) return;
     await saveConversationFile({ ...conv, title: trimmed, updatedAt: Date.now() });
     await refreshFileConversations();
+    // Mirror to the in-memory store so the chat sidebar reflects the new
+    // title without waiting for app restart. Some call sites already patch
+    // the store themselves; this is idempotent — patch is a no-op for
+    // non-existent ids.
+    try {
+      const { useChatStore } = await import("@/lib/stores/chat-store");
+      if (useChatStore.getState().sessions[convId]) {
+        useChatStore.getState().actions.patch(convId, { title: trimmed });
+      }
+    } catch (e) {
+      console.warn("[chat] failed to sync rename to store:", e);
+    }
   };
 
   // ---- deleteConversation ----
