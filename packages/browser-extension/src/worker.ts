@@ -278,17 +278,47 @@ function stopHeartbeat(): void {
 // Tab finding
 // ---------------------------------------------------------------------------
 
+/**
+ * Tabs we cannot drive: Chrome's privileged scheme pages and the extension's
+ * own pages. `chrome.debugger.attach` is rejected on these by the browser, so
+ * picking one would surface as an opaque "cannot execute scripts on …" error.
+ */
+function isRestrictedUrl(url: string | undefined): boolean {
+  if (!url) return true;
+  return (
+    url.startsWith("chrome://") ||
+    url.startsWith("chrome-extension://") ||
+    url.startsWith("edge://") ||
+    url.startsWith("about:") ||
+    url.includes("chromewebstore.google.com")
+  );
+}
+
 async function findTab(urlPattern?: string): Promise<number> {
   if (urlPattern) {
     const tabs = await chrome.tabs.query({});
-    const match = tabs.find((t) => t.url?.includes(urlPattern));
+    const match = tabs.find(
+      (t) => t.url?.includes(urlPattern) && !isRestrictedUrl(t.url),
+    );
     if (match?.id != null) return match.id;
   }
 
+  // Prefer the focused active tab when it's eligible — that's almost always
+  // what the user means. Otherwise scan every window for the first regular
+  // web tab we can drive. This avoids the "test connection failed because
+  // your active tab happened to be the extension's options page" trap.
   const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  if (active?.id != null) return active.id;
+  if (active?.id != null && !isRestrictedUrl(active.url)) {
+    return active.id;
+  }
 
-  throw new Error("no matching tab found");
+  const all = await chrome.tabs.query({});
+  const eligible = all.find((t) => t.id != null && !isRestrictedUrl(t.url));
+  if (eligible?.id != null) return eligible.id;
+
+  throw new Error(
+    "no eligible tab found — open a regular web page (not chrome://, chrome-extension://, or the chrome web store)",
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -297,14 +327,7 @@ async function findTab(urlPattern?: string): Promise<number> {
 
 async function evalInTab(tabId: number, code: string): Promise<unknown> {
   const tab = await chrome.tabs.get(tabId);
-  if (
-    !tab.url ||
-    tab.url.startsWith("chrome://") ||
-    tab.url.startsWith("chrome-extension://") ||
-    tab.url.startsWith("edge://") ||
-    tab.url.startsWith("about:") ||
-    tab.url.includes("chromewebstore.google.com")
-  ) {
+  if (isRestrictedUrl(tab.url)) {
     throw new Error(`cannot execute scripts on ${tab.url}`);
   }
 
