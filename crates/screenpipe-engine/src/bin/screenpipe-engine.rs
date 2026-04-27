@@ -370,6 +370,9 @@ async fn main() -> anyhow::Result<()> {
         check_for_updates().await;
     });
 
+    // Periodic terminal nudge to install the desktop app (CLI-only).
+    screenpipe_engine::cli_reminder::spawn();
+
     // Initialize Sentry only if telemetry is enabled
     let _sentry_guard = if !record_args.disable_telemetry {
         let sentry_release_name_append = env::var("SENTRY_RELEASE_NAME_APPEND").unwrap_or_default();
