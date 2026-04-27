@@ -12,8 +12,8 @@
 //! On Windows/Linux: uses the `keyring` crate.
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
-use std::sync::OnceLock;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 use tracing::{debug, info, warn};
 
 const SERVICE: &str = "com.screenpipe.app";

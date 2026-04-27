@@ -224,7 +224,10 @@ async fn handle_remote_sync_command(command: &RemoteSyncCommand) -> anyhow::Resu
     match command {
         RemoteSyncCommand::Test { cfg } => {
             let config = build_sync_config(cfg);
-            println!("testing ssh connection to {}@{}:{}…", config.user, config.host, config.port);
+            println!(
+                "testing ssh connection to {}@{}:{}…",
+                config.user, config.host, config.port
+            );
             match remote_sync::test_connection(&config).await {
                 Ok(()) => println!("  ✓ ok"),
                 Err(e) => {
@@ -243,7 +246,11 @@ async fn handle_remote_sync_command(command: &RemoteSyncCommand) -> anyhow::Resu
                 "pushing {} to {}:{}{} …",
                 dir.display(),
                 config.host,
-                if config.port == 22 { String::new() } else { format!(":{}", config.port) },
+                if config.port == 22 {
+                    String::new()
+                } else {
+                    format!(":{}", config.port)
+                },
                 config.remote_path,
             );
             let result = remote_sync::sync_to_remote(&config, &dir).await;
@@ -271,7 +278,11 @@ async fn handle_remote_sync_command(command: &RemoteSyncCommand) -> anyhow::Resu
             } else {
                 println!("candidate ssh hosts:");
                 for h in hosts {
-                    let alias = h.alias.as_deref().map(|a| format!(" ({a})")).unwrap_or_default();
+                    let alias = h
+                        .alias
+                        .as_deref()
+                        .map(|a| format!(" ({a})"))
+                        .unwrap_or_default();
                     let user = h.user.as_deref().unwrap_or("<unset>");
                     let key = h.key_path.as_deref().unwrap_or("<unset>");
                     println!(

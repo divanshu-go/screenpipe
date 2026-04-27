@@ -949,6 +949,8 @@ async fn main() -> anyhow::Result<()> {
                     _ => None,
                 }
             }
+        } else {
+            None
         };
         let secret_store_result =
             screenpipe_secrets::SecretStore::new(db.pool.clone(), secret_key).await;

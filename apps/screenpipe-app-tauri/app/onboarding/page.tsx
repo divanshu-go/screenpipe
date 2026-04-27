@@ -14,7 +14,6 @@ import ConnectApps from "@/components/onboarding/connect-apps";
 import PickPipe from "@/components/onboarding/pick-pipe";
 import { useOnboarding } from "@/lib/hooks/use-onboarding";
 import { useIsEnterpriseBuild } from "@/lib/hooks/use-is-enterprise-build";
-import { usePlatform } from "@/lib/hooks/use-platform";
 import posthog from "posthog-js";
 import { commands } from "@/lib/utils/tauri";
 
@@ -46,7 +45,6 @@ export default function OnboardingPage() {
   const [isTransitioning, setIsTransitioning] = useState(false);
   const { onboardingData, isLoading } = useOnboarding();
   const isEnterprise = useIsEnterpriseBuild();
-  const { isMac } = usePlatform();
 
   // Enterprise builds skip the login slide
   useEffect(() => {
@@ -173,7 +171,7 @@ export default function OnboardingPage() {
           {currentSlide === "permissions" && (
             <PermissionsStep handleNextSlide={handleNextSlide} />
           )}
-          {currentSlide === "encrypt" && isMac && (
+          {currentSlide === "encrypt" && (
             <EncryptionChoice handleNextSlide={handleNextSlide} />
           )}
           {currentSlide === "engine" && (

@@ -280,9 +280,7 @@ fn keychain_accessible() -> bool {
 
 fn is_keychain_encryption_requested() -> bool {
     // explicit opt-in via env override
-    if std::env::var("SCREENPIPE_ENCRYPT_STORE")
-        .map_or(false, |v| v == "1")
-    {
+    if std::env::var("SCREENPIPE_ENCRYPT_STORE").map_or(false, |v| v == "1") {
         return true;
     }
 
