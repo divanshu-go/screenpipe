@@ -7,6 +7,7 @@ pub mod auth;
 pub mod backup;
 pub mod connection;
 pub mod db;
+pub mod install;
 pub mod login;
 pub mod mcp;
 pub mod pipe;
@@ -217,6 +218,16 @@ pub enum Command {
     Vault {
         #[command(subcommand)]
         subcommand: VaultCommand,
+    },
+
+    /// Install a bundle of pipes from a manifest URL
+    Install {
+        /// Manifest URL (HTTPS, JSON). Defaults to the screenpipe starter bundle.
+        #[arg(default_value = "https://screenpi.pe/start.json")]
+        url: String,
+        /// Allow manifests hosted outside the trusted host list
+        #[arg(long, default_value_t = false)]
+        allow_untrusted: bool,
     },
 
     /// Authenticate with screenpipe cloud

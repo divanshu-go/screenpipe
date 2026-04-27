@@ -296,6 +296,13 @@ async fn main() -> anyhow::Result<()> {
             screenpipe_engine::cli::vault::handle_vault_command(subcommand).await?;
             return Ok(());
         }
+        Command::Install {
+            ref url,
+            allow_untrusted,
+        } => {
+            screenpipe_engine::cli::install::handle_install(url, allow_untrusted).await?;
+            return Ok(());
+        }
         Command::Login => {
             screenpipe_engine::cli::login::handle_login_command().await?;
             return Ok(());

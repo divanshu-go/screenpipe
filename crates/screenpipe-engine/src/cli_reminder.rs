@@ -35,7 +35,12 @@ pub fn spawn() {
 }
 
 fn print_tip(idx: usize) {
-    let tips: [fn(); 2] = [print_desktop_app_tip, print_mcp_tip];
+    let tips: [fn(); 4] = [
+        print_desktop_app_tip,
+        print_mcp_tip,
+        print_install_bundle_tip,
+        print_login_tip,
+    ];
     tips[idx % tips.len()]();
 }
 
@@ -63,8 +68,32 @@ fn print_mcp_tip() {
     );
     eprintln!(
         "       then ask claude to {} from your screen activity",
-        "build a pipe that tracks who you are, your todos, and how you spend your time"
-            .italic(),
+        "build a pipe that tracks who you are, your todos, and how you spend your time".italic(),
     );
+    eprintln!();
+}
+
+fn print_install_bundle_tip() {
+    eprintln!();
+    eprintln!(
+        "  {} install a starter bundle of pipes:",
+        "tip:".cyan().bold(),
+    );
+    eprintln!(
+        "       {}",
+        "screenpipe install https://screenpi.pe/start.json"
+            .green()
+            .bold(),
+    );
+    eprintln!();
+}
+
+fn print_login_tip() {
+    eprintln!();
+    eprintln!(
+        "  {} sign in for higher AI quotas + cloud sync:",
+        "tip:".cyan().bold(),
+    );
+    eprintln!("       {}", "screenpipe login".green().bold());
     eprintln!();
 }
