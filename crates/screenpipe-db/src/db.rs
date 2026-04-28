@@ -1379,7 +1379,10 @@ impl DatabaseManager {
     pub async fn insert_speaker(&self, embedding: &[f32]) -> Result<Speaker, SqlxError> {
         // Validate embedding before creating speaker (prevent centroid poisoning)
         if !is_valid_embedding(embedding) {
-            return Err(SqlxError::PoolClosed);
+            return Err(SqlxError::Configuration(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "invalid embedding: contains NaN/Inf, all-zeros, or extreme norm",
+            ))));
         }
 
         let mut tx = self.begin_immediate_with_retry().await?;

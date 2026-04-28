@@ -78,18 +78,30 @@ pub async fn process_transcription_result(
         return Ok(None);
     }
 
+    let segment_duration_secs = result.end_time - result.start_time;
     let speaker_id = if let Some(pre_resolved_id) = result.speaker_id {
         // Short-circuit: use pre-resolved speaker ID from EmbeddingManager (avoids DB lookup)
-        debug!("using pre-resolved speaker id={} from embedding manager", pre_resolved_id);
-        Some(pre_resolved_id)
+        if pre_resolved_id >= 0 {
+            debug!("using pre-resolved speaker id={} from embedding manager", pre_resolved_id);
+            Some(pre_resolved_id)
+        } else {
+            // Special ID -1 means "pending enrollment" (segment too short)
+            debug!("speaker pending enrollment (segment {:.2}s too short)", segment_duration_secs);
+            None
+        }
     } else if result.speaker_embedding.is_empty() {
         debug!("empty speaker embedding; storing transcript without speaker");
         None
     } else {
         // Fallback: look up by embedding (for segments without pre-resolution or reconciliation)
-        let speaker = get_or_create_speaker_from_embedding(db, &result.speaker_embedding).await?;
-        debug!("detected speaker id={} via embedding lookup", speaker.id);
-        Some(speaker.id)
+        let speaker = get_or_create_speaker_from_embedding(db, &result.speaker_embedding, segment_duration_secs).await?;
+        if speaker.id >= 0 {
+            debug!("detected speaker id={} via embedding lookup", speaker.id);
+            Some(speaker.id)
+        } else {
+            debug!("speaker pending enrollment (segment {:.2}s too short)", segment_duration_secs);
+            None
+        }
     };
 
     let raw_transcription = result.transcription.unwrap();
@@ -192,6 +204,7 @@ pub async fn process_transcription_result(
 pub async fn get_or_create_speaker_from_embedding(
     db: &DatabaseManager,
     embedding: &[f32],
+    segment_duration_secs: f64,
 ) -> Result<Speaker, anyhow::Error> {
     let speaker = db.get_speaker_from_embedding(embedding).await?;
     if let Some(speaker) = speaker {
@@ -213,8 +226,26 @@ pub async fn get_or_create_speaker_from_embedding(
         }
         Ok(speaker)
     } else {
+        // Only create new speaker if segment is long enough (prevents coughs/laughs)
+        const MIN_UTTERANCE_DURATION_SECS: f64 = 2.0; // Matches Pyannote/FluidAudio standard
+
+        if segment_duration_secs < MIN_UTTERANCE_DURATION_SECS {
+            // Too short: don't create speaker yet, return temporary "unconfirmed" speaker
+            debug!(
+                "segment too short ({:.2}s < {:.2}s) to enroll new speaker, deferring",
+                segment_duration_secs, MIN_UTTERANCE_DURATION_SECS
+            );
+            // Return a temporary speaker to track without creating DB record
+            return Ok(Speaker {
+                id: -1, // Special ID for "pending enrollment"
+                name: format!("pending_{:.0}", segment_duration_secs),
+                metadata: String::new(),
+            });
+        }
+
         // insert_speaker logs the creation at info level
         let speaker = db.insert_speaker(embedding).await?;
+        debug!("created new speaker id={} (enrollment duration met: {:.2}s)", speaker.id, segment_duration_secs);
         Ok(speaker)
     }
 }
@@ -385,6 +416,7 @@ mod tests {
                 capture_timestamp: timestamp as u64,
             },
             speaker_embedding: vec![],
+            speaker_id: None,
             transcription: Some("hello world".to_string()),
             timestamp: timestamp as u64,
             error: None,

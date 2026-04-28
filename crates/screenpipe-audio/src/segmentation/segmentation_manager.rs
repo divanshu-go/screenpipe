@@ -187,4 +187,22 @@ impl SegmentationManager {
             None
         }
     }
+
+    /// Check if a speaker has met minimum enrollment duration (2 seconds).
+    pub fn has_sufficient_enrollment_duration(&self, speaker_id: usize) -> bool {
+        if let Ok(mgr) = self.embedding_manager.lock() {
+            mgr.has_sufficient_enrollment_duration(speaker_id)
+        } else {
+            false
+        }
+    }
+
+    /// Get accumulated duration for a speaker.
+    pub fn get_speaker_duration(&self, speaker_id: usize) -> f64 {
+        if let Ok(mgr) = self.embedding_manager.lock() {
+            mgr.get_speaker_duration(speaker_id)
+        } else {
+            0.0
+        }
+    }
 }
