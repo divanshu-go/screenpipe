@@ -42,7 +42,6 @@ import {
   useChatStore,
   useChatActions,
   useOrderedSessions,
-  getOrCreateEmptyChatId,
   type SessionRecord,
 } from "@/lib/stores/chat-store";
 import { updateConversationFlags } from "@/lib/chat-storage";
@@ -133,35 +132,12 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
     for (const s of sessions) {
       const isPipeKind = s.kind === "pipe-watch" || s.kind === "pipe-run";
       if (isPipeKind && liveScheduledSids.has(s.id)) continue;
+      // Hide draft sessions — they haven't received an assistant reply yet.
+      if (s.draft) continue;
       (s.pinned ? p : r).push(s);
     }
     return { pinned: p, recents: r };
   }, [sessions, liveScheduledSids]);
-
-  const handleNew = () => {
-    // Reuse an existing empty chat instead of spawning a fresh one
-    // every time. Spamming "+ new chat" otherwise floods the sidebar
-    // with rows the user never typed in.
-    const { id, isNew } = getOrCreateEmptyChatId();
-    if (isNew) {
-      actions.upsert({
-        id,
-        title: "new chat",
-        preview: "",
-        status: "idle",
-        messageCount: 0,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-        pinned: false,
-        unread: false,
-      });
-    }
-    actions.setCurrent(id);
-    // chat-load-conversation with an unknown id is treated by
-    // standalone-chat's listener as "start a new chat with this id" —
-    // see the matching handler in components/standalone-chat.tsx.
-    emit("chat-load-conversation", { conversationId: id });
-  };
 
   const handleSelect = (id: string) => {
     // No early return for id === currentId. Two reasons:
@@ -198,6 +174,7 @@ export function ChatSidebar({ className }: ChatSidebarProps) {
         updatedAt: Date.now(),
         pinned: false,
         unread: false,
+        draft: true,
       });
       actions.setCurrent(fresh);
       emit("chat-load-conversation", { conversationId: fresh });
