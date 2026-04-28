@@ -148,6 +148,30 @@ async fn get_connection(
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
 
+    // Browsers live in the registry, not in the integration table — so a
+    // generic `GET /connections/user-browser` would otherwise fall into
+    // ConnectionManager::find() and 400 with "unknown integration". Return
+    // the registry entry's natural-language description instead, which
+    // already embeds the eval/status endpoints the agent needs to drive it.
+    for b in state.browser_registry.list().await {
+        if b.id() == id {
+            let body = json!({
+                "id": b.id(),
+                "name": b.name(),
+                "category": "browser",
+                "connected": b.is_ready().await,
+                "description": format!(
+                    "{}\n\nControl: GET /connections/browsers/{}/status, \
+                     POST /connections/browsers/{}/eval {{\"code\":\"...\",\"url\":\"...\"}}.",
+                    b.description(),
+                    b.id(),
+                    b.id(),
+                ),
+            });
+            return (StatusCode::OK, Json(body)).into_response();
+        }
+    }
+
     let mgr = state.cm.lock().await;
     let has_proxy = mgr.find_proxy_config(&id).is_some();
 
