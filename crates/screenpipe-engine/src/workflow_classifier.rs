@@ -27,9 +27,11 @@ const DEDUP_COOLDOWN: Duration = Duration::from_secs(300);
 const CLASSIFIER_SYSTEM_PROMPT: &str = r#"You are a desktop activity classifier for screenpipe. Given a sequence of app activities (timestamps, app names, window titles), identify the high-level workflow event happening. Respond with a JSON object: {"event": "event_name", "confidence": 0.0-1.0, "description": "brief explanation"}. If no specific workflow is detected, respond with {"event": "no_event", "confidence": 1.0, "description": "normal activity"}."#;
 
 /// Closed set of workflow event labels — must mirror the taxonomy the
-/// classifier was fine-tuned on. Sent to vLLM as `guided_json` so the
-/// `event` field in the model's response is constrained to this enum,
-/// eliminating hallucinated paraphrases like "post_meeting_writeup".
+/// classifier was fine-tuned on. Sent to vLLM via OpenAI-style
+/// `response_format.json_schema` so the `event` field is constrained to this
+/// enum at decode time, eliminating hallucinated paraphrases like
+/// "post_meeting_writeup". Note: vLLM's older `guided_json` field is silently
+/// ignored on 0.19+; only `response_format` works.
 const EVENT_LABELS: &[&str] = &[
     "prospect_research",
     "crm_update_from_social",
@@ -268,14 +270,20 @@ async fn classify(
         "max_tokens": 80,
         "temperature": 0.0,
         "chat_template_kwargs": {"enable_thinking": false},
-        "guided_json": {
-            "type": "object",
-            "properties": {
-                "event": {"type": "string", "enum": EVENT_LABELS},
-                "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
-                "description": {"type": "string"}
-            },
-            "required": ["event", "confidence", "description"]
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "workflow_event",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "event": {"type": "string", "enum": EVENT_LABELS},
+                        "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                        "description": {"type": "string"}
+                    },
+                    "required": ["event", "confidence", "description"]
+                }
+            }
         }
     });
 
