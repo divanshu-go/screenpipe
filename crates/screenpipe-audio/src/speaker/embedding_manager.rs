@@ -17,7 +17,6 @@ pub struct EmbeddingManager {
     next_speaker_id: usize,
 }
 
-const MIN_CLUSTER_SIZE: usize = 3; // Reject clusters with <3 samples (silence, noise)
 const MIN_ENROLLMENT_DURATION_SECS: f64 = 2.0; // Minimum speech duration before creating speaker (Pyannote/FluidAudio standard)
 
 impl EmbeddingManager {
