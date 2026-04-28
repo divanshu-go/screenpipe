@@ -33,7 +33,7 @@ regex = "1.10"
 arboard = "3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-cidre = { version = "0.13", features = ["ax", "cg", "blocks", "ns", "app"] }
+cidre = { version = "0.13", features = ["ax", "cg", "blocks", "ns", "app", "dispatch"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Native Windows APIs - no rdev dependency
