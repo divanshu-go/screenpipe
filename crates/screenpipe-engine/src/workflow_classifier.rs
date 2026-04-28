@@ -26,6 +26,36 @@ const DEDUP_COOLDOWN: Duration = Duration::from_secs(300);
 /// System prompt for the cloud classifier.
 const CLASSIFIER_SYSTEM_PROMPT: &str = r#"You are a desktop activity classifier for screenpipe. Given a sequence of app activities (timestamps, app names, window titles), identify the high-level workflow event happening. Respond with a JSON object: {"event": "event_name", "confidence": 0.0-1.0, "description": "brief explanation"}. If no specific workflow is detected, respond with {"event": "no_event", "confidence": 1.0, "description": "normal activity"}."#;
 
+/// Closed set of workflow event labels — must mirror the taxonomy the
+/// classifier was fine-tuned on. Sent to vLLM as `guided_json` so the
+/// `event` field in the model's response is constrained to this enum,
+/// eliminating hallucinated paraphrases like "post_meeting_writeup".
+const EVENT_LABELS: &[&str] = &[
+    "prospect_research",
+    "crm_update_from_social",
+    "post_meeting_followup",
+    "email_to_crm",
+    "outreach_drafting",
+    "debugging_session",
+    "code_review",
+    "deploy_and_monitor",
+    "documentation_session",
+    "incident_response",
+    "research_session",
+    "meeting_prep",
+    "content_creation",
+    "data_analysis",
+    "email_triage",
+    "work_day_start",
+    "work_day_end",
+    "context_switch",
+    "distraction_detected",
+    "deep_work_session",
+    "learning_session",
+    "collaboration_session",
+    "no_event",
+];
+
 /// Default endpoint for the event classifier — routes through the screenpipe
 /// AI gateway, which forwards the `screenpipe-event-classifier` model to the
 /// self-hosted vLLM. Going through the gateway means infra moves only need a
@@ -235,9 +265,18 @@ async fn classify(
             {"role": "system", "content": CLASSIFIER_SYSTEM_PROMPT},
             {"role": "user", "content": format!("What workflow event is happening?\n\n{}", activity_text)}
         ],
-        "max_tokens": 60,
-        "temperature": 0.1,
-        "chat_template_kwargs": {"enable_thinking": false}
+        "max_tokens": 80,
+        "temperature": 0.0,
+        "chat_template_kwargs": {"enable_thinking": false},
+        "guided_json": {
+            "type": "object",
+            "properties": {
+                "event": {"type": "string", "enum": EVENT_LABELS},
+                "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                "description": {"type": "string"}
+            },
+            "required": ["event", "confidence", "description"]
+        }
     });
 
     let mut request = client.post(format!("{}/v1/chat/completions", classifier_url));
