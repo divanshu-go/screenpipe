@@ -3569,6 +3569,16 @@ export function StandaloneChat({
       storeState.actions.patch(sidNow, { lastUserMessageAt: Date.now() });
     }
 
+    // Persist user message to disk immediately so it survives a
+    // navigate-away-mid-stream or a Pi crash before agent_end. The
+    // existing save-on-isLoading-transition only fires when the stream
+    // completes cleanly — if anything kills the turn before then, the
+    // user's message would otherwise live only in the in-memory store
+    // and vanish on the next cold reload. Fire-and-forget: the next
+    // save (on agent_end) will overwrite the same file with the full
+    // conversation including the assistant reply.
+    void saveConversation([...messages, newUserMessage]);
+
     posthog.capture("chat_message_sent", {
       provider: activePreset?.provider,
       model: activePreset?.model,

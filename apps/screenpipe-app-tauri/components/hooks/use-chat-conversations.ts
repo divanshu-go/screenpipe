@@ -400,8 +400,24 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       piStreamingTextRef.current = existing.streamingText ?? "";
       piMessageIdRef.current = existing.streamingMessageId ?? null;
       piContentBlocksRef.current = (existing.contentBlocks as any[]) ?? [];
-      if (existing.isLoading) setIsLoading(true);
-      if (existing.isStreaming) setIsStreaming(true);
+      // Self-heal a stuck `isStreaming` flag. The router bumps
+      // `updatedAt` on every token via patchMessage, so silence past
+      // STALE_MS means the stream is dead (Pi process died without
+      // firing agent_end, network cut mid-stream, etc.) — not just
+      // slow. Without this guard, returning to such a session shows
+      // the typing-cursor / loading dots forever.
+      const STALE_MS = 30_000;
+      const isStale =
+        !!existing.isStreaming && Date.now() - existing.updatedAt > STALE_MS;
+      if (isStale) {
+        store.actions.endTurn(conv.id);
+        piStreamingTextRef.current = "";
+        piMessageIdRef.current = null;
+        piContentBlocksRef.current = [];
+      } else {
+        if (existing.isLoading) setIsLoading(true);
+        if (existing.isStreaming) setIsStreaming(true);
+      }
       store.actions.markHydrated(conv.id);
     } else {
       // Cold session — load from disk and seed the store.
