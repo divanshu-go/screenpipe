@@ -2277,17 +2277,16 @@ pub async fn open_note_path(path: String) -> Result<(), String> {
     }
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
         use std::process::Command;
         let obsidian_uri = format!("obsidian://open?path={}", urlencoding::encode(&path));
-        if Command::new("cmd")
-            .args(["/C", "start", "", &obsidian_uri])
-            .spawn()
-            .is_ok()
-            || Command::new("cmd")
-                .args(["/C", "start", "", &path])
-                .spawn()
-                .is_ok()
-        {
+        let mut a = Command::new("cmd");
+        a.args(["/C", "start", "", &obsidian_uri]);
+        a.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        let mut b = Command::new("cmd");
+        b.args(["/C", "start", "", &path]);
+        b.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        if a.spawn().is_ok() || b.spawn().is_ok() {
             Ok(())
         } else {
             Err(format!("failed to open note path: {}", path))

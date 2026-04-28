@@ -55,12 +55,18 @@ fn get_ffprobe_path(ffmpeg_path: &Path) -> PathBuf {
         }
     }
     #[cfg(windows)]
-    if let Ok(output) = std::process::Command::new("where").arg("ffprobe").output() {
-        if output.status.success() {
-            let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if let Some(first_line) = path_str.lines().next() {
-                if !first_line.is_empty() {
-                    return PathBuf::from(first_line);
+    {
+        use std::os::windows::process::CommandExt;
+        let mut cmd = std::process::Command::new("where");
+        cmd.arg("ffprobe");
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        if let Ok(output) = cmd.output() {
+            if output.status.success() {
+                let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if let Some(first_line) = path_str.lines().next() {
+                    if !first_line.is_empty() {
+                        return PathBuf::from(first_line);
+                    }
                 }
             }
         }
