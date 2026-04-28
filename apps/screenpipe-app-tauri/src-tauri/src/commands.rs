@@ -777,15 +777,24 @@ pub async fn open_login_window(app_handle: tauri::AppHandle) -> Result<(), Strin
         let app_for_nav = app_handle.clone();
 
         const LOGIN_URL: &str = "https://screenpi.pe/login";
-        WebviewWindowBuilder::new(
+        let mut builder = WebviewWindowBuilder::new(
             &app_handle,
             label,
             WebviewUrl::External(LOGIN_URL.parse().unwrap()),
         )
         .title("sign in to screenpipe")
         .inner_size(460.0, 700.0)
-        .focused(true)
-        .on_navigation(move |url| {
+        .focused(true);
+
+        // Hide the title text on macOS — traffic lights stay, title bar
+        // stays opaque (no Overlay style), so the remote login page isn't
+        // covered by the bar. Same pattern used elsewhere in window/show.rs.
+        #[cfg(target_os = "macos")]
+        {
+            builder = builder.hidden_title(true);
+        }
+
+        builder = builder.on_navigation(move |url| {
             if url.scheme() == "screenpipe" {
                 info!("login window intercepted deep link: {}", url);
                 let _ = app_for_nav.emit("deep-link-received", url.to_string());
@@ -798,13 +807,14 @@ pub async fn open_login_window(app_handle: tauri::AppHandle) -> Result<(), Strin
             } else {
                 true // allow all https navigations (Clerk, OAuth providers, etc.)
             }
-        })
-        .build()
-        .map(crate::window::finalize_webview_window)
-        .map_err(|e| {
-            log_webview_build_failure(label, LOGIN_URL, &e);
-            e.to_string()
-        })?;
+        });
+        builder
+            .build()
+            .map(crate::window::finalize_webview_window)
+            .map_err(|e| {
+                log_webview_build_failure(label, LOGIN_URL, &e);
+                e.to_string()
+            })?;
 
         Ok(())
     }
@@ -836,15 +846,21 @@ pub async fn open_google_calendar_auth_window(
     let parsed_url = auth_url
         .parse()
         .map_err(|e| format!("invalid url: {e}"))?;
-    WebviewWindowBuilder::new(
+    let mut builder = WebviewWindowBuilder::new(
         &app_handle,
         label,
         WebviewUrl::External(parsed_url),
     )
     .title("connect google calendar")
     .inner_size(500.0, 700.0)
-    .focused(true)
-    .on_navigation(move |url| {
+    .focused(true);
+
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.hidden_title(true);
+    }
+
+    builder = builder.on_navigation(move |url| {
         if url.scheme() == "screenpipe" {
             info!("google calendar auth window intercepted deep link: {}", url);
             let _ = app_for_nav.emit("deep-link-received", url.to_string());
@@ -855,9 +871,10 @@ pub async fn open_google_calendar_auth_window(
         } else {
             true // allow all https navigations (Google OAuth, etc.)
         }
-    })
-    .build()
-    .map(crate::window::finalize_webview_window)
+    });
+    builder
+        .build()
+        .map(crate::window::finalize_webview_window)
     .map_err(|e| {
         log_webview_build_failure(label, &auth_url, &e);
         e.to_string()
