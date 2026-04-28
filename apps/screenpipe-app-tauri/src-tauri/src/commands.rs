@@ -655,7 +655,8 @@ pub async fn open_pipe_window(
     }
 
     let url = format!("http://localhost:{}", port);
-    let window = match tauri::WebviewWindowBuilder::new(
+    #[allow(unused_mut)]
+    let mut builder = tauri::WebviewWindowBuilder::new(
         &app_handle,
         &title,
         tauri::WebviewUrl::External(url.parse().unwrap()),
@@ -664,9 +665,16 @@ pub async fn open_pipe_window(
     .inner_size(1200.0, 850.0)
     .min_inner_size(600.0, 400.0)
     .focused(true)
-    .fullscreen(false)
-    .build()
-    .map(crate::window::finalize_webview_window)
+    .fullscreen(false);
+
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.hidden_title(true);
+    }
+
+    let window = match builder
+        .build()
+        .map(crate::window::finalize_webview_window)
     {
         Ok(window) => window,
         Err(e) => {

@@ -143,6 +143,15 @@ impl ShowRewindWindow {
                 .min_inner_size(min.0, min.1);
         }
 
+        // Hide title text on macOS for every window built through this helper.
+        // Title bar stays opaque (no Overlay style) so content doesn't bleed
+        // under the traffic lights — sibling helper window_builder() opts into
+        // Overlay where it's wanted.
+        #[cfg(target_os = "macos")]
+        {
+            builder = builder.hidden_title(true);
+        }
+
         builder
     }
 
