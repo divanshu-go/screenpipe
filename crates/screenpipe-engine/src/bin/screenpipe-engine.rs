@@ -1017,8 +1017,8 @@ async fn main() -> anyhow::Result<()> {
     // frontmatter can run. Routed through the gateway by default; self-host
     // can override with SCREENPIPE_EVENT_CLASSIFIER_URL.
     if config.enable_workflow_events {
-        let classifier_url = std::env::var("SCREENPIPE_EVENT_CLASSIFIER_URL")
-            .unwrap_or_else(|_| {
+        let classifier_url =
+            std::env::var("SCREENPIPE_EVENT_CLASSIFIER_URL").unwrap_or_else(|_| {
                 screenpipe_engine::workflow_classifier::DEFAULT_CLASSIFIER_URL.to_string()
             });
         let token = user_token.clone().unwrap_or_default();

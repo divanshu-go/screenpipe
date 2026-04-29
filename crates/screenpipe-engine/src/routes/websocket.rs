@@ -224,7 +224,9 @@ pub(crate) async fn ws_meeting_status_handler(
     State(state): State<Arc<AppState>>,
 ) -> Response {
     match try_acquire_ws_connection(&state.ws_connection_count) {
-        Some(guard) => ws.on_upgrade(move |socket| handle_meeting_status_socket(socket, state, guard)),
+        Some(guard) => {
+            ws.on_upgrade(move |socket| handle_meeting_status_socket(socket, state, guard))
+        }
         None => Response::builder()
             .status(StatusCode::SERVICE_UNAVAILABLE)
             .body(Body::from("Too many WebSocket connections"))
@@ -237,7 +239,9 @@ async fn handle_meeting_status_socket(
     state: Arc<AppState>,
     _guard: WsConnectionGuard,
 ) {
-    if let Ok(status) = resolve_meeting_status_from(state.db.as_ref(), state.manual_meeting.as_ref()).await {
+    if let Ok(status) =
+        resolve_meeting_status_from(state.db.as_ref(), state.manual_meeting.as_ref()).await
+    {
         if let Ok(json) = serde_json::to_string(&status) {
             if socket.send(Message::Text(json)).await.is_err() {
                 return;
@@ -245,7 +249,8 @@ async fn handle_meeting_status_socket(
         }
     }
 
-    let mut stream = screenpipe_events::subscribe_to_event::<MeetingStatusResponse>("meeting_status_changed");
+    let mut stream =
+        screenpipe_events::subscribe_to_event::<MeetingStatusResponse>("meeting_status_changed");
     loop {
         tokio::select! {
             event = stream.next() => {

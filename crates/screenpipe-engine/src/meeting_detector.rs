@@ -23,9 +23,9 @@
 //! and non-meeting contexts (Slack chat, etc.). A mute button counts only when
 //! accompanied by a leave/hangup signal (see `min_signals_required`).
 
+use crate::routes::meetings::{emit_meeting_status_changed, resolve_meeting_status_from};
 use chrono::{DateTime, Utc};
 use futures::{FutureExt, StreamExt};
-use crate::routes::meetings::{emit_meeting_status_changed, resolve_meeting_status_from};
 use screenpipe_db::DatabaseManager;
 use screenpipe_events::subscribe_to_event;
 use serde::{Deserialize, Serialize};
@@ -2232,10 +2232,11 @@ pub async fn run_meeting_detection_loop(
         // Handle explicit stop signals from the API layer
         if let Some(event) = stop_sub.next().now_or_never().flatten() {
             let stop_signal = event.data;
-            if let MeetingState::Active { meeting_id, app, .. } | MeetingState::Ending {
-                meeting_id,
-                app,
-                ..
+            if let MeetingState::Active {
+                meeting_id, app, ..
+            }
+            | MeetingState::Ending {
+                meeting_id, app, ..
             } = &state
             {
                 if *meeting_id == stop_signal.meeting_id && app == &stop_signal.app {
@@ -2518,8 +2519,11 @@ pub async fn run_meeting_detection_loop(
                                 ) {
                                     warn!("meeting v2: failed to emit meeting_ended event: {}", e);
                                 }
-                                if let Ok(status) =
-                                    resolve_meeting_status_from(db.as_ref(), manual_meeting.as_ref()).await
+                                if let Ok(status) = resolve_meeting_status_from(
+                                    db.as_ref(),
+                                    manual_meeting.as_ref(),
+                                )
+                                .await
                                 {
                                     emit_meeting_status_changed(&status);
                                 }

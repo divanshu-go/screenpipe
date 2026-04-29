@@ -54,7 +54,9 @@ use crate::{
             search_speakers_handler, undo_speaker_reassign_handler, update_speaker_handler,
         },
         streaming::{handle_video_export_post, handle_video_export_ws, stream_frames_handler},
-        websocket::{ws_events_handler, ws_health_handler, ws_meeting_status_handler, ws_metrics_handler},
+        websocket::{
+            ws_events_handler, ws_health_handler, ws_meeting_status_handler, ws_metrics_handler,
+        },
     },
     sync_api::{self, SyncState},
     video_cache::FrameCache,
