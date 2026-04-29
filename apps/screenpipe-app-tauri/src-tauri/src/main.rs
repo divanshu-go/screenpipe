@@ -112,6 +112,7 @@ mod notifications;
 mod safe_icon;
 mod shortcuts;
 mod vault;
+mod viewer;
 use base64::Engine;
 use health::start_health_check;
 use log_files::{get_log_files, get_screenpipe_data_dir};
@@ -736,6 +737,10 @@ async fn main() {
                 // Notification panel commands
                 commands::show_notification_panel,
                 commands::hide_notification_panel,
+                // In-app file viewer
+                viewer::open_viewer_window,
+                viewer::read_viewer_file,
+                viewer::reveal_in_default_browser,
                 // Window-specific shortcut commands (dynamic registration)
                 commands::register_window_shortcuts,
                 commands::unregister_window_shortcuts,
@@ -1026,6 +1031,10 @@ async fn main() {
             commands::copy_deeplink_to_clipboard,
             commands::copy_text_to_clipboard,
             commands::open_note_path,
+            // In-app file viewer
+            viewer::open_viewer_window,
+            viewer::read_viewer_file,
+            viewer::reveal_in_default_browser,
             // Overlay commands (Windows)
             commands::enable_overlay_click_through,
             commands::disable_overlay_click_through,
