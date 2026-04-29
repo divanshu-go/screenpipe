@@ -1672,24 +1672,17 @@ async fn main() {
                             // Webview build is async — kick it off in the background and
                             // attach the handle once the WebviewWindow is ready. Until
                             // then, /connections/browsers/owned-default/eval returns 503.
+                            //
+                            // `spawn_install_when_ready` survives tray-only mode by
+                            // listening for `window-focused` events instead of giving
+                            // up after a fixed budget.
                             let owned_browser =
                                 screenpipe_connect::connections::browser::OwnedBrowser::default_instance();
-                            {
-                                let owned_for_install = owned_browser.clone();
-                                let app_for_install = app_for_owned.clone();
-                                let data_dir_for_install = config.data_dir.clone();
-                                tauri::async_runtime::spawn(async move {
-                                    match crate::owned_browser::install_with_retry(&app_for_install, data_dir_for_install).await {
-                                        Ok(handle) => {
-                                            owned_for_install.attach(handle).await;
-                                            info!("owned-browser ready");
-                                        }
-                                        Err(e) => {
-                                            warn!("owned-browser install failed: {e} — agent will see ready=false");
-                                        }
-                                    }
-                                });
-                            }
+                            crate::owned_browser::spawn_install_when_ready(
+                                app_for_owned.clone(),
+                                config.data_dir.clone(),
+                                owned_browser.clone(),
+                            );
 
                             // Phase 1: Start server core
                             let server = match server_core::ServerCore::start(
