@@ -39,8 +39,27 @@ interface ActivityItem {
 
 const TAKING_LONGER_MS = 8000;
 const STUCK_TIMEOUT_MS = 15000;
-const LIVE_FEED_MIN_MS = 8000; // minimum time to show live feed before enabling continue
-const LIVE_FEED_POLL_MS = 3000; // poll search every 3s
+// Fallback timer — if the streaming summary never completes (no token, network
+// fails, model errors), we still let the user continue after this delay.
+const LIVE_FEED_FALLBACK_MS = 12000;
+const LIVE_FEED_POLL_MS = 3000;
+// Once we have at least this many distinct signals, we have enough to write a
+// summary worth showing. More items = richer prose, but waiting forever on a
+// quiet machine just blocks the user.
+const SUMMARY_MIN_ITEMS = 2;
+const SUMMARY_MAX_ITEMS = 8;
+const MAX_THUMBNAILS = 3;
+
+// Words that smell like plumbing. The system prompt forbids them, but models
+// leak. If any show up in the stream we drop the chunk on the floor and let
+// the next one through — we'd rather have a slightly choppy paragraph than
+// "i extracted accessibility data from your frame buffer".
+const BANNED_WORDS = [
+  "ocr", "accessibility", "a11y", "frame", "capture", "snapshot",
+  "extract", "scrape", "parse", "buffer", "queue", "thread",
+  "metadata", "schema", "keystroke", "transcription", "transcript",
+  "pixel", "ax api", "ui tree", "dom",
+];
 
 // Boot phases emitted by the Rust backend — see src-tauri/src/health.rs.
 // We use these to show actionable copy during long migrations (Mike Cloke
@@ -76,9 +95,17 @@ export default function EngineStartup({
 
   // Live feed state
   const [activityItems, setActivityItems] = useState<ActivityItem[]>([]);
+  const [thumbnails, setThumbnails] = useState<string[]>([]);
   const [feedSeconds, setFeedSeconds] = useState(0);
   const [canContinue, setCanContinue] = useState(false);
   const [showSkip, setShowSkip] = useState(false);
+
+  // Streaming summary state
+  const [summaryText, setSummaryText] = useState("");
+  const [summaryStreaming, setSummaryStreaming] = useState(false);
+  const [summaryComplete, setSummaryComplete] = useState(false);
+  const summaryStartedRef = useRef(false);
+  const summaryAbortRef = useRef<AbortController | null>(null);
 
   // Boot phase — polled via Tauri IPC, available before HTTP server binds
   const [bootPhase, setBootPhase] = useState<BootPhaseSnapshot | null>(null);
@@ -205,7 +232,7 @@ export default function EngineStartup({
     return () => clearTimeout(timer);
   }, [state]);
 
-  // Live feed: poll search for recent activity
+  // Live feed: poll search for recent activity + thumbnails
   const emptyPollCountRef = useRef(0);
 
   useEffect(() => {
@@ -214,25 +241,33 @@ export default function EngineStartup({
 
     const poll = async () => {
       try {
-        // After 2 empty polls (~6s), fall back to content_type=all (includes OCR)
         const useFallback = emptyPollCountRef.current >= 2;
         const contentType = useFallback ? "all" : "accessibility";
 
-        const [mainRes, audioRes] = await Promise.all([
+        // We pull OCR with include_frames=true purely for the visual proof
+        // tiles below the prose. filter_pii=true is on every search — these
+        // results are about to be summarized by an LLM, and we don't want the
+        // user's password manager text or 2FA codes round-tripping through it.
+        const [mainRes, audioRes, ocrFramesRes] = await Promise.all([
           localFetch(
-            `/search?content_type=${contentType}&start_time=${encodeURIComponent("3m ago")}&limit=5&max_content_length=80`,
+            `/search?content_type=${contentType}&start_time=${encodeURIComponent("3m ago")}&limit=8&max_content_length=120&filter_pii=true`,
             { signal: AbortSignal.timeout(3000) }
           ).catch(() => null),
           localFetch(
-            `/search?content_type=audio&start_time=${encodeURIComponent("3m ago")}&limit=3&max_content_length=80`,
+            `/search?content_type=audio&start_time=${encodeURIComponent("3m ago")}&limit=4&max_content_length=120&filter_pii=true`,
             { signal: AbortSignal.timeout(3000) }
           ).catch(() => null),
+          thumbnails.length < MAX_THUMBNAILS
+            ? localFetch(
+                `/search?content_type=ocr&start_time=${encodeURIComponent("3m ago")}&limit=${MAX_THUMBNAILS}&include_frames=true&max_content_length=1`,
+                { signal: AbortSignal.timeout(5000) }
+              ).catch(() => null)
+            : Promise.resolve(null),
         ]);
 
         const items: ActivityItem[] = [];
         const seen = new Set<string>();
 
-        // Process screen results (accessibility or OCR fallback)
         if (mainRes?.ok) {
           const mainData = await mainRes.json();
           for (const result of mainData.data || []) {
@@ -250,12 +285,11 @@ export default function EngineStartup({
               timestamp: result.content?.timestamp || new Date().toISOString(),
               app_name: appName,
               text_snippet:
-                text.slice(0, 60) + (text.length > 60 ? "..." : ""),
+                text.slice(0, 100) + (text.length > 100 ? "..." : ""),
             });
           }
         }
 
-        // Process audio results
         if (audioRes?.ok) {
           const audioData = await audioRes.json();
           for (const result of audioData.data || []) {
@@ -267,21 +301,35 @@ export default function EngineStartup({
             items.push({
               id: `${result.content?.timestamp || Date.now()}-${items.length}`,
               timestamp: result.content?.timestamp || new Date().toISOString(),
-              app_name: "🎤 microphone",
+              app_name: "voice",
               text_snippet:
-                text.slice(0, 60) + (text.length > 60 ? "..." : ""),
+                text.slice(0, 100) + (text.length > 100 ? "..." : ""),
             });
           }
         }
 
+        if (ocrFramesRes?.ok) {
+          const ocrData = await ocrFramesRes.json();
+          const frames: string[] = [];
+          for (const result of ocrData.data || []) {
+            const frame = result.content?.frame;
+            if (typeof frame === "string" && frame.length > 0) {
+              frames.push(frame);
+            }
+            if (frames.length >= MAX_THUMBNAILS) break;
+          }
+          if (frames.length > 0) {
+            setThumbnails((prev) => (prev.length >= frames.length ? prev : frames));
+          }
+        }
+
         if (items.length > 0) {
-          setActivityItems(items.slice(0, 5));
+          setActivityItems(items.slice(0, SUMMARY_MAX_ITEMS));
           emptyPollCountRef.current = 0;
         } else {
           emptyPollCountRef.current++;
         }
       } catch {
-        // search not ready yet
         emptyPollCountRef.current++;
       }
     };
@@ -289,7 +337,180 @@ export default function EngineStartup({
     poll();
     const interval = setInterval(poll, LIVE_FEED_POLL_MS);
     return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state]);
+
+  // Build a digest from collected signals. Plain prose, app + voice grouped,
+  // capped per-line so we don't blow the context.
+  const buildDigest = useCallback(
+    (items: ActivityItem[]): string => {
+      const lines: string[] = [];
+      const byApp = new Map<string, string[]>();
+      for (const item of items.slice(0, SUMMARY_MAX_ITEMS)) {
+        const bucket = byApp.get(item.app_name) ?? [];
+        bucket.push(item.text_snippet);
+        byApp.set(item.app_name, bucket);
+      }
+      for (const [app, snippets] of byApp.entries()) {
+        const joined = snippets.slice(0, 3).join(" | ");
+        lines.push(`${app}: ${joined.slice(0, 240)}`);
+      }
+      return lines.join("\n");
+    },
+    []
+  );
+
+  // Stream a warm summary using the user's default preset, falling back to
+  // their cloud token. If neither is available, leave summary empty and let
+  // the fallback timer release the continue button.
+  const startSummaryStream = useCallback(
+    async (digest: string) => {
+      if (summaryStartedRef.current) return;
+      summaryStartedRef.current = true;
+
+      const presets = settings.aiPresets ?? [];
+      const preset =
+        (presets.find((p: any) => p.defaultPreset) as any) ?? (presets[0] as any);
+
+      let endpoint = "";
+      let model = "claude-haiku-4-5";
+      let auth: Record<string, string> = {};
+
+      const userToken = settings.user?.token;
+
+      if (preset?.provider === "screenpipe-cloud" && userToken) {
+        endpoint = "https://api.screenpi.pe/v1/chat/completions";
+        model = preset.model || model;
+        auth = { Authorization: `Bearer ${userToken}` };
+      } else if (
+        (preset?.provider === "openai" || preset?.provider === "custom" || preset?.provider === "anthropic") &&
+        preset.apiKey &&
+        preset.url
+      ) {
+        endpoint = `${preset.url.replace(/\/$/, "")}/chat/completions`;
+        model = preset.model;
+        auth = { Authorization: `Bearer ${preset.apiKey}` };
+      } else if (userToken) {
+        // Fall back to cloud even if preset is non-cloud but token exists.
+        endpoint = "https://api.screenpi.pe/v1/chat/completions";
+        auth = { Authorization: `Bearer ${userToken}` };
+      } else {
+        // No way to call any model. Bail — the fallback timer will unlock continue.
+        return;
+      }
+
+      const controller = new AbortController();
+      summaryAbortRef.current = controller;
+      setSummaryStreaming(true);
+
+      const systemPrompt = `you are writing a friendly, warm 4-5 sentence note to a person who just started screenpipe. they are watching this on their onboarding screen. the goal is to make them feel SEEN — show that you noticed what they were doing in the last few minutes — without sounding like a surveillance log.
+
+style:
+- lowercase, plain conversational tone, like a thoughtful friend
+- use "you" — speak directly to the person
+- weave the apps, voice, and topics into a flowing narrative — not a bulleted list
+- 4-5 short sentences, ~40-70 words total
+- end with one warm sentence like "i'll keep watching quietly so we can pick up where you left off."
+
+NEVER use these technical words: ocr, accessibility, a11y, frame, capture, snapshot, extract, scrape, parse, buffer, queue, thread, metadata, schema, keystroke, transcription, transcript, pixel, dom, ui tree. these break the spell.
+
+instead say things like: "you spent some time in slack", "you were typing notes about X", "you had a quick voice conversation about Y", "i caught a bit of your work in vscode".
+
+if the input is sparse, just describe what little you have warmly. don't apologize for not having more.`;
+
+      try {
+        const resp = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...auth },
+          signal: controller.signal,
+          body: JSON.stringify({
+            model,
+            stream: true,
+            max_tokens: 300,
+            messages: [
+              { role: "system", content: systemPrompt },
+              {
+                role: "user",
+                content: `here is what you saw in the last few minutes:\n\n${digest}\n\nwrite the note now.`,
+              },
+            ],
+          }),
+        });
+
+        if (!resp.ok || !resp.body) {
+          throw new Error(`${resp.status}`);
+        }
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = "";
+        let acc = "";
+
+        const lower = (s: string) => s.toLowerCase();
+        const containsBanned = (chunk: string) =>
+          BANNED_WORDS.some((w) => lower(chunk).includes(w));
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+
+          // SSE: split on \n\n, each event is a "data: {...}" line
+          let nl = buf.indexOf("\n\n");
+          while (nl !== -1) {
+            const event = buf.slice(0, nl);
+            buf = buf.slice(nl + 2);
+            nl = buf.indexOf("\n\n");
+
+            for (const rawLine of event.split("\n")) {
+              const line = rawLine.trim();
+              if (!line.startsWith("data:")) continue;
+              const data = line.slice(5).trim();
+              if (data === "[DONE]") continue;
+              try {
+                const parsed = JSON.parse(data);
+                const delta = parsed?.choices?.[0]?.delta?.content;
+                if (typeof delta === "string" && delta.length > 0) {
+                  if (containsBanned(delta)) continue; // skip leaked plumbing words
+                  acc += delta;
+                  setSummaryText(acc);
+                }
+              } catch {
+                // partial JSON, ignore
+              }
+            }
+          }
+        }
+
+        setSummaryComplete(true);
+      } catch (err) {
+        // Network / model error — leave whatever streamed so far visible.
+        // The fallback timer releases the continue button.
+        if ((err as any)?.name !== "AbortError") {
+          console.warn("summary stream failed:", err);
+        }
+      } finally {
+        setSummaryStreaming(false);
+      }
+    },
+    [settings.aiPresets, settings.user?.token]
+  );
+
+  // Kick off the summary once we have enough signals.
+  useEffect(() => {
+    if (state !== "live-feed") return;
+    if (summaryStartedRef.current) return;
+    if (activityItems.length < SUMMARY_MIN_ITEMS) return;
+    const digest = buildDigest(activityItems);
+    if (!digest.trim()) return;
+    startSummaryStream(digest);
+  }, [state, activityItems, buildDigest, startSummaryStream]);
+
+  useEffect(() => {
+    return () => {
+      summaryAbortRef.current?.abort();
+    };
+  }, []);
 
   // Live feed timer
   useEffect(() => {
@@ -298,14 +519,19 @@ export default function EngineStartup({
     return () => clearInterval(interval);
   }, [state]);
 
-  // Enable continue after minimum feed time
+  // Continue is gated on the streaming summary completing — that's the moment
+  // the user has actually seen something meaningful. The fallback timer is a
+  // safety net for users with no token / offline / model errors.
+  useEffect(() => {
+    if (summaryComplete) setCanContinue(true);
+  }, [summaryComplete]);
+
   useEffect(() => {
     if (state !== "live-feed") return;
-    const timer = setTimeout(() => setCanContinue(true), LIVE_FEED_MIN_MS);
+    const timer = setTimeout(() => setCanContinue(true), LIVE_FEED_FALLBACK_MS);
     return () => clearTimeout(timer);
   }, [state]);
 
-  // Show skip after 15s of live feed
   useEffect(() => {
     if (state !== "live-feed") return;
     const timer = setTimeout(() => setShowSkip(true), 15000);
@@ -501,9 +727,11 @@ export default function EngineStartup({
 
   // ── Live feed phase ──
   if (state === "live-feed") {
+    const placeholderTiles = MAX_THUMBNAILS - thumbnails.length;
+    const showWaiting = !summaryStreaming && summaryText.length === 0;
+
     return (
       <div className="w-full flex flex-col items-center justify-center min-h-[400px]">
-        {/* Recording indicator */}
         <motion.div
           className="flex items-center space-x-2 mb-6"
           initial={{ opacity: 0 }}
@@ -511,97 +739,97 @@ export default function EngineStartup({
           transition={{ delay: 0.1 }}
         >
           <motion.div
-            className="w-2 h-2 bg-foreground"
+            className="w-1.5 h-1.5 rounded-full bg-foreground"
             animate={{ opacity: [1, 0.3, 1] }}
             transition={{ duration: 1.5, repeat: Infinity }}
           />
-          <span className="font-mono text-xs text-muted-foreground">
-            recording · {feedSeconds}s
+          <span className="font-mono text-[10px] tracking-wider lowercase text-muted-foreground/70">
+            watching · {feedSeconds}s
           </span>
         </motion.div>
 
         <motion.div
-          className="flex flex-col items-center space-y-6 w-full max-w-sm"
+          className="flex flex-col items-center space-y-7 w-full max-w-md"
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5 }}
         >
-          <h2 className="font-sans text-lg font-bold lowercase">
-            screenpipe sees everything
+          <h2 className="font-mono text-base lowercase tracking-wide text-foreground">
+            here&apos;s what i picked up
           </h2>
 
-          {/* Activity feed */}
-          <div className="w-full border border-border p-4 space-y-3 min-h-[180px]">
-            <AnimatePresence mode="popLayout">
-              {activityItems.length === 0 ? (
-                <motion.div
-                  key="waiting"
-                  className="flex flex-col items-center justify-center h-[150px] space-y-2"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                >
-                  <span className="font-mono text-xs text-muted-foreground/50">
-                    {canContinue
-                      ? "your screen is being recorded."
-                      : "◐ waiting for first capture..."}
-                  </span>
-                  {canContinue && (
-                    <span className="font-mono text-[10px] text-muted-foreground/30">
-                      you&apos;ll see captured data in the timeline.
-                    </span>
-                  )}
-                </motion.div>
-              ) : (
-                activityItems.map((item, index) => (
-                  <motion.div
-                    key={item.id}
-                    className="flex gap-3"
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: index * 0.08, duration: 0.3 }}
-                  >
-                    <span className="font-mono text-[10px] text-muted-foreground/40 shrink-0 w-10 text-right">
-                      {new Date(item.timestamp).toLocaleTimeString([], {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                        second: "2-digit",
-                      })}
-                    </span>
-                    <div className="min-w-0">
-                      <p className="font-mono text-xs font-medium text-foreground truncate">
-                        {item.app_name}
-                      </p>
-                      <p className="font-mono text-[10px] text-muted-foreground truncate">
-                        &quot;{item.text_snippet}&quot;
-                      </p>
-                    </div>
-                  </motion.div>
-                ))
-              )}
-            </AnimatePresence>
-
-            {/* Watching indicator */}
-            <div className="flex justify-end">
-              <span className="font-mono text-[9px] text-muted-foreground/30">
-                ◐ watching
-              </span>
-            </div>
+          {/* Streaming prose — sans-serif body, soft and readable */}
+          <div className="w-full min-h-[140px] flex items-start">
+            {showWaiting ? (
+              <motion.p
+                className="font-sans text-sm text-muted-foreground/50 leading-relaxed text-center w-full"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+              >
+                <span className="inline-block animate-pulse">
+                  settling in. give me a moment to notice what you&apos;re up to…
+                </span>
+              </motion.p>
+            ) : (
+              <motion.p
+                className="font-sans text-[15px] leading-relaxed text-foreground/90"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ duration: 0.3 }}
+              >
+                {summaryText}
+                {summaryStreaming && (
+                  <motion.span
+                    className="inline-block w-[6px] h-[14px] bg-foreground/60 ml-0.5 align-middle"
+                    animate={{ opacity: [1, 0, 1] }}
+                    transition={{ duration: 0.9, repeat: Infinity }}
+                  />
+                )}
+              </motion.p>
+            )}
           </div>
 
-          {/* Privacy reassurance */}
-          <p className="font-mono text-[10px] text-muted-foreground/50 text-center">
-            zero retention on cloud features ·{" "}
+          {/* Thumbnail tiles — small, blurred, decorative proof of capture */}
+          <div className="flex gap-2 w-full justify-center">
+            {thumbnails.map((b64, i) => (
+              <motion.div
+                key={`thumb-${i}`}
+                className="relative w-20 h-14 overflow-hidden border border-border/60 bg-muted/30"
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ delay: i * 0.12, duration: 0.4 }}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={`data:image/jpeg;base64,${b64}`}
+                  alt=""
+                  className="w-full h-full object-cover blur-[6px] scale-110 opacity-70"
+                />
+                <div className="absolute inset-0 bg-foreground/5" />
+              </motion.div>
+            ))}
+            {Array.from({ length: Math.max(0, placeholderTiles) }).map((_, i) => (
+              <motion.div
+                key={`ph-${i}`}
+                className="w-20 h-14 border border-dashed border-border/40 bg-muted/10"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ delay: 0.2 + i * 0.1 }}
+              />
+            ))}
+          </div>
+
+          <p className="font-mono text-[10px] text-muted-foreground/50 text-center lowercase tracking-wide">
+            stays on your machine ·{" "}
             <button
               type="button"
               onClick={() => openUrl("https://screenpi.pe/security")}
               className="underline hover:text-muted-foreground transition-colors"
             >
-              whitepaper ↗
+              how it works ↗
             </button>
           </p>
 
-          {/* Continue button */}
           <button
             onClick={handleContinue}
             disabled={!canContinue}
@@ -611,11 +839,10 @@ export default function EngineStartup({
                 : "border-border text-muted-foreground/30 cursor-not-allowed"
             }`}
           >
-            continue
+            {canContinue ? "continue" : "writing…"}
           </button>
         </motion.div>
 
-        {/* Skip */}
         <div className="h-6 mt-4">
           <AnimatePresence>
             {showSkip && (
@@ -624,9 +851,9 @@ export default function EngineStartup({
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 onClick={handleSkip}
-                className="font-mono text-xs text-muted-foreground/40 hover:text-muted-foreground transition-colors"
+                className="font-mono text-[11px] text-muted-foreground/40 hover:text-muted-foreground transition-colors lowercase"
               >
-                skip →
+                skip — i&apos;ll show you later when there&apos;s more to see
               </motion.button>
             )}
           </AnimatePresence>
