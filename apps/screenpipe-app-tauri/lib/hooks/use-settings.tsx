@@ -225,6 +225,9 @@ export type Settings = SettingsStore & {
 	localRetentionEnabled?: boolean;
 	/** Days to keep data locally before auto-deleting (default: 14) */
 	localRetentionDays?: number;
+	/** What gets deleted past the cutoff: "media" keeps DB rows (search/timeline still
+	 * work), only reclaims mp4/wav/jpeg files. "all" wipes everything. Default: "media". */
+	localRetentionMode?: "media" | "all";
 	/** Apply macOS vibrancy effect to sidebar for a translucent glass look */
 	translucentSidebar?: boolean;
 	/** Notification preferences — which notification sources are enabled */
@@ -457,6 +460,7 @@ let DEFAULT_SETTINGS: Settings = {
 			appendTypedTextToMeetingNotes: true,
 			localRetentionEnabled: true,
 			localRetentionDays: 14,
+			localRetentionMode: "media",
 		};
 
 export function createDefaultSettingsObject(): Settings {

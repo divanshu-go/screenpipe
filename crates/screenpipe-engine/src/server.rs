@@ -27,7 +27,8 @@ use crate::{
         },
         data::{
             backup_handler, checkpoint_handler, delete_device_data_handler,
-            delete_time_range_handler, device_storage_handler,
+            delete_time_range_handler, device_storage_handler, evict_media_handler,
+            storage_preview_handler,
         },
         elements::{get_frame_elements, search_elements},
         frames::{
@@ -625,6 +626,8 @@ impl SCServer {
             .post("/retention/run", crate::retention::retention_run)
             // Data management
             .post("/data/delete-range", delete_time_range_handler)
+            .post("/data/evict-media", evict_media_handler)
+            .get("/data/storage-preview", storage_preview_handler)
             .post("/data/delete-device", delete_device_data_handler)
             .get("/data/device-storage", device_storage_handler)
             // Database backup & checkpoint

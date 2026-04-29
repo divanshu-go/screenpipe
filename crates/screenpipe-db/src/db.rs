@@ -59,6 +59,17 @@ pub struct DeleteTimeRangeResult {
     pub snapshot_files: Vec<String>,
 }
 
+/// Outcome of `evict_media_in_range`. DB rows stay alive (search/timeline
+/// keep working); only mp4/wav/jpeg files are reclaimed.
+pub struct EvictMediaResult {
+    pub video_chunks_evicted: u64,
+    pub audio_chunks_evicted: u64,
+    pub snapshots_evicted: u64,
+    pub video_files: Vec<String>,
+    pub audio_files: Vec<String>,
+    pub snapshot_files: Vec<String>,
+}
+
 /// A transaction wrapper that uses `BEGIN IMMEDIATE` to acquire the write lock upfront,
 /// preventing WAL deadlocks. Automatically rolls back on drop if not committed.
 ///
@@ -4981,6 +4992,189 @@ impl DatabaseManager {
             audio_files,
             snapshot_files,
         })
+    }
+
+    /// Media-only eviction: keeps DB rows (frames, ocr_text, transcriptions,
+    /// ui_events) intact so search/timeline keep working, but reclaims the
+    /// heavy mp4/wav/jpeg files on disk. A chunk is only evicted if every
+    /// frame/transcription it owns falls inside [start, end] — straddling
+    /// chunks are left alone so unrelated playback isn't broken.
+    ///
+    /// Marks evicted chunks with `evicted_at = CURRENT_TIMESTAMP` and clears
+    /// `file_path` to '' so loaders can early-out without dereferencing a
+    /// stale path. Caller is responsible for unlinking the returned files.
+    pub async fn evict_media_in_range(
+        &self,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<EvictMediaResult, sqlx::Error> {
+        let mut tx = self.begin_immediate_with_retry().await?;
+
+        let start_str = start.to_rfc3339();
+        let end_str = end.to_rfc3339();
+
+        // Collect video chunks fully covered by the range and not already
+        // evicted. We only consider chunks whose ALL frames fall inside the
+        // window — straddling chunks are skipped so old playback still works.
+        let video_files: Vec<String> = sqlx::query_scalar(
+            r#"SELECT file_path FROM video_chunks
+               WHERE evicted_at IS NULL
+               AND file_path != ''
+               AND file_path NOT LIKE 'cloud://%'
+               AND id IN (SELECT DISTINCT video_chunk_id FROM frames WHERE timestamp BETWEEN ?1 AND ?2)
+               AND id NOT IN (SELECT DISTINCT video_chunk_id FROM frames WHERE timestamp NOT BETWEEN ?1 AND ?2)"#,
+        )
+        .bind(&start_str)
+        .bind(&end_str)
+        .fetch_all(&mut **tx.conn())
+        .await?;
+
+        let audio_files: Vec<String> = sqlx::query_scalar(
+            r#"SELECT file_path FROM audio_chunks
+               WHERE evicted_at IS NULL
+               AND file_path != ''
+               AND file_path NOT LIKE 'cloud://%'
+               AND id IN (SELECT DISTINCT audio_chunk_id FROM audio_transcriptions WHERE timestamp BETWEEN ?1 AND ?2)
+               AND id NOT IN (SELECT DISTINCT audio_chunk_id FROM audio_transcriptions WHERE timestamp NOT BETWEEN ?1 AND ?2)"#,
+        )
+        .bind(&start_str)
+        .bind(&end_str)
+        .fetch_all(&mut **tx.conn())
+        .await?;
+
+        // Snapshot JPEGs are per-frame, not chunked, so we can evict them
+        // unconditionally for any frame inside the range.
+        let snapshot_files: Vec<String> = sqlx::query_scalar(
+            r#"SELECT snapshot_path FROM frames
+               WHERE timestamp BETWEEN ?1 AND ?2
+               AND snapshot_path IS NOT NULL"#,
+        )
+        .bind(&start_str)
+        .bind(&end_str)
+        .fetch_all(&mut **tx.conn())
+        .await?;
+
+        // Mark video_chunks as evicted (file_path -> '', evicted_at -> now)
+        let video_evict = sqlx::query(
+            r#"UPDATE video_chunks
+               SET file_path = '', evicted_at = CURRENT_TIMESTAMP
+               WHERE evicted_at IS NULL
+               AND file_path != ''
+               AND file_path NOT LIKE 'cloud://%'
+               AND id IN (SELECT DISTINCT video_chunk_id FROM frames WHERE timestamp BETWEEN ?1 AND ?2)
+               AND id NOT IN (SELECT DISTINCT video_chunk_id FROM frames WHERE timestamp NOT BETWEEN ?1 AND ?2)"#,
+        )
+        .bind(&start_str)
+        .bind(&end_str)
+        .execute(&mut **tx.conn())
+        .await?;
+
+        let audio_evict = sqlx::query(
+            r#"UPDATE audio_chunks
+               SET file_path = '', evicted_at = CURRENT_TIMESTAMP
+               WHERE evicted_at IS NULL
+               AND file_path != ''
+               AND file_path NOT LIKE 'cloud://%'
+               AND id IN (SELECT DISTINCT audio_chunk_id FROM audio_transcriptions WHERE timestamp BETWEEN ?1 AND ?2)
+               AND id NOT IN (SELECT DISTINCT audio_chunk_id FROM audio_transcriptions WHERE timestamp NOT BETWEEN ?1 AND ?2)"#,
+        )
+        .bind(&start_str)
+        .bind(&end_str)
+        .execute(&mut **tx.conn())
+        .await?;
+
+        let snapshot_evict = sqlx::query(
+            r#"UPDATE frames
+               SET snapshot_path = NULL
+               WHERE timestamp BETWEEN ?1 AND ?2
+               AND snapshot_path IS NOT NULL"#,
+        )
+        .bind(&start_str)
+        .bind(&end_str)
+        .execute(&mut **tx.conn())
+        .await?;
+
+        tx.commit().await.map_err(|e| {
+            error!("failed to commit evict_media_in_range transaction: {}", e);
+            e
+        })?;
+
+        debug!(
+            "evict_media_in_range committed: video_chunks={}, audio_chunks={}, snapshots={}",
+            video_evict.rows_affected(),
+            audio_evict.rows_affected(),
+            snapshot_evict.rows_affected(),
+        );
+
+        Ok(EvictMediaResult {
+            video_chunks_evicted: video_evict.rows_affected(),
+            audio_chunks_evicted: audio_evict.rows_affected(),
+            snapshots_evicted: snapshot_evict.rows_affected(),
+            video_files,
+            audio_files,
+            snapshot_files,
+        })
+    }
+
+    /// Estimate disk reclaimable by `evict_media_in_range` for [start, end].
+    /// Returns (file count, total bytes). Reads file sizes from disk via
+    /// `tokio::fs::metadata`, so cost is O(N) syscalls — keep ranges
+    /// reasonable (the UI calls this for retention preview, not per-second).
+    pub async fn estimate_evictable_bytes(
+        &self,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<(u64, u64), sqlx::Error> {
+        let start_str = start.to_rfc3339();
+        let end_str = end.to_rfc3339();
+
+        let mut paths: Vec<String> = sqlx::query_scalar(
+            r#"SELECT file_path FROM video_chunks
+               WHERE evicted_at IS NULL
+               AND file_path != ''
+               AND file_path NOT LIKE 'cloud://%'
+               AND id IN (SELECT DISTINCT video_chunk_id FROM frames WHERE timestamp BETWEEN ?1 AND ?2)
+               AND id NOT IN (SELECT DISTINCT video_chunk_id FROM frames WHERE timestamp NOT BETWEEN ?1 AND ?2)"#,
+        )
+        .bind(&start_str)
+        .bind(&end_str)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let audio: Vec<String> = sqlx::query_scalar(
+            r#"SELECT file_path FROM audio_chunks
+               WHERE evicted_at IS NULL
+               AND file_path != ''
+               AND file_path NOT LIKE 'cloud://%'
+               AND id IN (SELECT DISTINCT audio_chunk_id FROM audio_transcriptions WHERE timestamp BETWEEN ?1 AND ?2)
+               AND id NOT IN (SELECT DISTINCT audio_chunk_id FROM audio_transcriptions WHERE timestamp NOT BETWEEN ?1 AND ?2)"#,
+        )
+        .bind(&start_str)
+        .bind(&end_str)
+        .fetch_all(&self.pool)
+        .await?;
+        paths.extend(audio);
+
+        let snapshots: Vec<String> = sqlx::query_scalar(
+            r#"SELECT snapshot_path FROM frames
+               WHERE timestamp BETWEEN ?1 AND ?2
+               AND snapshot_path IS NOT NULL"#,
+        )
+        .bind(&start_str)
+        .bind(&end_str)
+        .fetch_all(&self.pool)
+        .await?;
+        paths.extend(snapshots);
+
+        let mut bytes: u64 = 0;
+        let mut count: u64 = 0;
+        for p in &paths {
+            if let Ok(meta) = tokio::fs::metadata(p).await {
+                bytes = bytes.saturating_add(meta.len());
+                count += 1;
+            }
+        }
+        Ok((count, bytes))
     }
 
     /// Fast batch delete: only deletes time-range-bounded rows (ocr_text,
