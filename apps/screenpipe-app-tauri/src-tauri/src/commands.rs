@@ -189,32 +189,66 @@ extern "C" fn native_shortcut_action_callback(action_ptr: *const std::os::raw::c
                     let client = reqwest::blocking::Client::new();
                     let status_req =
                         api.apply_auth_blocking(client.get(api.url("/meetings/status")));
-                    let status: Option<bool> = status_req
+                    let status: Option<serde_json::Value> = status_req
                         .send()
                         .ok()
-                        .and_then(|r| r.json::<serde_json::Value>().ok())
+                        .and_then(|r| r.json::<serde_json::Value>().ok());
+                    let is_active = status
+                        .as_ref()
                         .and_then(|v| v["active"].as_bool());
+                    let stoppable_id = status
+                        .as_ref()
+                        .and_then(|v| v["stoppableMeetingId"].as_i64());
                     match status {
-                        Some(true) => {
-                            let req =
-                                api.apply_auth_blocking(client.post(api.url("/meetings/stop")));
-                            let _ = req.send();
+                        Some(_) if is_active == Some(true) => {
+                            let req = api.apply_auth_blocking(
+                                client
+                                    .post(api.url("/meetings/stop"))
+                                    .header("Content-Type", "application/json")
+                                    .body(serde_json::json!({ "id": stoppable_id }).to_string()),
+                            );
+                            if req.send().is_ok() {
+                                native_shortcut_reminder::set_meeting_active(false);
+                                let _ = app_clone.emit(
+                                    "native-shortcut-toggle-meeting",
+                                    serde_json::json!({
+                                        "active": false,
+                                        "manualActive": false,
+                                        "activeMeetingId": serde_json::Value::Null,
+                                        "stoppableMeetingId": serde_json::Value::Null,
+                                        "meetingApp": serde_json::Value::Null,
+                                        "detectionSource": serde_json::Value::Null,
+                                    }),
+                                );
+                            }
                         }
-                        Some(false) => {
+                        Some(_) if is_active == Some(false) => {
                             let req = api.apply_auth_blocking(
                                 client
                                     .post(api.url("/meetings/start"))
                                     .header("Content-Type", "application/json")
                                     .body(r#"{"app":"manual"}"#),
                             );
-                            let _ = req.send();
+                            if let Ok(res) = req.send() {
+                                let meeting = res.json::<serde_json::Value>().ok();
+                                native_shortcut_reminder::set_meeting_active(true);
+                                let _ = app_clone.emit(
+                                    "native-shortcut-toggle-meeting",
+                                    serde_json::json!({
+                                        "active": true,
+                                        "manualActive": true,
+                                        "activeMeetingId": meeting.as_ref().and_then(|v| v["id"].as_i64()),
+                                        "stoppableMeetingId": meeting.as_ref().and_then(|v| v["id"].as_i64()),
+                                        "meetingApp": meeting.as_ref().and_then(|v| v["meeting_app"].as_str()),
+                                        "detectionSource": meeting.as_ref().and_then(|v| v["detection_source"].as_str()).unwrap_or("manual"),
+                                    }),
+                                );
+                            }
                         }
-                        None => {
+                        _ => {
                             warn!("failed to check meeting status");
                         }
                     }
-                    // Also emit to JS so the home page UI updates immediately if open
-                    let _ = app_clone.emit("native-shortcut-toggle-meeting", "");
                 }
                 _ => {}
             }
@@ -1439,20 +1473,19 @@ pub async fn show_shortcut_reminder(
                 let guard = state.server.lock().await;
                 if let Some(ref core) = *guard {
                     let mut metrics_ws_url = format!("ws://127.0.0.1:{}/ws/metrics", core.port);
-                    let mut meetings_status_url =
-                        format!("http://127.0.0.1:{}/meetings/status", core.port);
+                    let mut events_ws_url = format!("ws://127.0.0.1:{}/ws/meeting-status", core.port);
                     if let Some(ref key) = core.local_api_key {
                         let enc = urlencoding::encode(key);
                         metrics_ws_url = format!("{}?token={}", metrics_ws_url, enc);
-                        meetings_status_url = format!("{}?token={}", meetings_status_url, enc);
+                        events_ws_url = format!("{}?token={}", events_ws_url, enc);
                     }
                     map.insert(
                         "metrics_ws_url".to_string(),
                         serde_json::json!(metrics_ws_url),
                     );
                     map.insert(
-                        "meetings_status_url".to_string(),
-                        serde_json::json!(meetings_status_url),
+                        "events_ws_url".to_string(),
+                        serde_json::json!(events_ws_url),
                     );
                 }
             }

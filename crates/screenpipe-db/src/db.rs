@@ -7013,6 +7013,17 @@ LIMIT ? OFFSET ?
         Ok(row.0 > 0)
     }
 
+    pub async fn get_active_meeting_by_id(&self, id: i64) -> Result<Option<MeetingRecord>, SqlxError> {
+        let meeting = sqlx::query_as::<_, MeetingRecord>(
+            "SELECT id, meeting_start, meeting_end, meeting_app, title, attendees, note, \
+             detection_source, created_at FROM meetings WHERE id = ?1 AND meeting_end IS NULL",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(meeting)
+    }
+
     pub async fn get_most_recent_active_meeting_id(&self) -> Result<Option<i64>, SqlxError> {
         let row: Option<(i64,)> = sqlx::query_as(
             "SELECT id FROM meetings WHERE meeting_end IS NULL ORDER BY id DESC LIMIT 1",
@@ -7020,6 +7031,17 @@ LIMIT ? OFFSET ?
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.map(|r| r.0))
+    }
+
+    pub async fn get_most_recent_active_meeting(&self) -> Result<Option<MeetingRecord>, SqlxError> {
+        let meeting = sqlx::query_as::<_, MeetingRecord>(
+            "SELECT id, meeting_start, meeting_end, meeting_app, title, attendees, note, \
+             detection_source, created_at FROM meetings WHERE meeting_end IS NULL \
+             ORDER BY id DESC LIMIT 1",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(meeting)
     }
 
     pub async fn list_meetings(
