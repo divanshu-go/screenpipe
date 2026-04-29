@@ -1453,14 +1453,11 @@ pub async fn show_shortcut_reminder(
                 let guard = state.server.lock().await;
                 if let Some(ref core) = *guard {
                     let mut metrics_ws_url = format!("ws://127.0.0.1:{}/ws/metrics", core.port);
-                    let mut events_ws_url = format!("ws://127.0.0.1:{}/ws/events", core.port);
-                    let mut meetings_status_url =
-                        format!("http://127.0.0.1:{}/meetings/status", core.port);
+                    let mut events_ws_url = format!("ws://127.0.0.1:{}/ws/meeting-status", core.port);
                     if let Some(ref key) = core.local_api_key {
                         let enc = urlencoding::encode(key);
                         metrics_ws_url = format!("{}?token={}", metrics_ws_url, enc);
                         events_ws_url = format!("{}?token={}", events_ws_url, enc);
-                        meetings_status_url = format!("{}?token={}", meetings_status_url, enc);
                     }
                     map.insert(
                         "metrics_ws_url".to_string(),
@@ -1469,10 +1466,6 @@ pub async fn show_shortcut_reminder(
                     map.insert(
                         "events_ws_url".to_string(),
                         serde_json::json!(events_ws_url),
-                    );
-                    map.insert(
-                        "meetings_status_url".to_string(),
-                        serde_json::json!(meetings_status_url),
                     );
                 }
             }

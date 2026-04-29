@@ -65,7 +65,7 @@ fn default_limit() -> u32 {
     20
 }
 
-#[derive(OaSchema, Debug, Serialize, Clone)]
+#[derive(OaSchema, Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct MeetingStatusResponse {
     pub active: bool,

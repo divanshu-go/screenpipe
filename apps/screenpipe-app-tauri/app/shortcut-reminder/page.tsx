@@ -27,38 +27,23 @@ function useMeetingState() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    let abortCtrl: AbortController | null = null;
     let ws: WebSocket | null = null;
     let retry: ReturnType<typeof setTimeout> | null = null;
     let backoffMs = 1000;
-
-    const check = () => {
-      abortCtrl?.abort();
-      abortCtrl = new AbortController();
-      localFetch("/meetings/status", { signal: abortCtrl.signal })
-        .then((r) => r.json())
-        .then((d: MeetingStatusResponse) => setMeetingState(computeMeetingActive(d, 0)))
-        .catch(() => {});
-    };
 
     const connect = () => {
       void (async () => {
         try {
           await ensureApiReady();
           const wsBase = getApiBaseUrl().replace("http://", "ws://");
-          ws = new WebSocket(appendAuthToken(`${wsBase}/ws/events`));
+          ws = new WebSocket(appendAuthToken(`${wsBase}/ws/meeting-status`));
           ws.onopen = () => {
             backoffMs = 1000;
-            check();
           };
           ws.onmessage = (event) => {
             try {
-              const parsed = JSON.parse(event.data) as {
-                name?: string;
-                data?: MeetingStatusResponse;
-              };
-              if (parsed.name !== "meeting_status_changed") return;
-              setMeetingState(computeMeetingActive(parsed.data, 0));
+              const parsed = JSON.parse(event.data) as MeetingStatusResponse;
+              setMeetingState(computeMeetingActive(parsed, 0));
             } catch {
               // ignore malformed payloads
             }
@@ -78,11 +63,9 @@ function useMeetingState() {
       })();
     };
 
-    check();
     connect();
 
     return () => {
-      abortCtrl?.abort();
       if (retry) clearTimeout(retry);
       if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
         ws.close(1000, "unmount");

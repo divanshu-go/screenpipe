@@ -274,17 +274,6 @@ function HomeContent() {
   // Timestamp when user clicked start, used for a 10s grace period so a
   // stale poll can't clear local state before the server persists the row.
   const manualMeetingStartedAt = useRef<number>(0);
-  const refreshMeetingState = useCallback(() => {
-    localFetch("/meetings/status")
-      .then((r) => r.ok ? r.json() : null)
-      .then((status: MeetingStatusResponse | null) => {
-        setMeetingState(
-          computeMeetingActive(status, manualMeetingStartedAt.current),
-        );
-      })
-      .catch(() => {});
-  }, []);
-
   useEffect(() => {
     let cancelled = false;
     let ws: WebSocket | null = null;
@@ -297,21 +286,16 @@ function HomeContent() {
           await ensureApiReady();
           if (cancelled) return;
           const wsBase = getApiBaseUrl().replace("http://", "ws://");
-          ws = new WebSocket(appendAuthToken(`${wsBase}/ws/events`));
+          ws = new WebSocket(appendAuthToken(`${wsBase}/ws/meeting-status`));
           ws.onopen = () => {
             backoffMs = 1000;
-            refreshMeetingState();
           };
           ws.onmessage = (event) => {
             try {
-              const parsed = JSON.parse(event.data) as {
-                name?: string;
-                data?: MeetingStatusResponse;
-              };
-              if (parsed.name !== "meeting_status_changed") return;
+              const parsed = JSON.parse(event.data) as MeetingStatusResponse;
               if (cancelled) return;
               setMeetingState(
-                computeMeetingActive(parsed.data, manualMeetingStartedAt.current),
+                computeMeetingActive(parsed, manualMeetingStartedAt.current),
               );
             } catch {
               // ignore malformed event payloads
@@ -333,7 +317,6 @@ function HomeContent() {
       })();
     };
 
-    refreshMeetingState();
     connect();
     return () => {
       cancelled = true;
@@ -342,7 +325,7 @@ function HomeContent() {
         ws.close(1000, "unmount");
       }
     };
-  }, [refreshMeetingState]);
+  }, []);
 
   const toggleMeeting = useCallback(async () => {
     setMeetingLoading(true);
@@ -415,10 +398,18 @@ function HomeContent() {
         });
         return;
       }
-      refreshMeetingState();
+      void (async () => {
+        try {
+          const res = await localFetch("/meetings/status");
+          const status = res.ok ? await res.json() as MeetingStatusResponse : null;
+          setMeetingState(computeMeetingActive(status, manualMeetingStartedAt.current));
+        } catch {
+          // ignore sync failures; websocket remains source of truth
+        }
+      })();
     }).then((fn) => { unlisten = fn; });
     return () => { unlisten?.(); };
-  }, [refreshMeetingState]);
+  }, []);
 
   // Watch pipe: navigate to chat when user clicks "watch" on a running pipe
   useEffect(() => {

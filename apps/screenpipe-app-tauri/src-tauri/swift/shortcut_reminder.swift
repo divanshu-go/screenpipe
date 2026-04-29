@@ -384,8 +384,7 @@ class ShortcutReminderController: NSObject {
     private var prevOcrCompleted: Int?
     /// Set from Rust `show_shortcut_reminder` when API auth is enabled (includes ?token=).
     private var metricsWsUrl = "ws://127.0.0.1:3030/ws/metrics"
-    private var eventsWsUrl = "ws://127.0.0.1:3030/ws/events"
-    private var meetingsStatusUrl = "http://127.0.0.1:3030/meetings/status"
+    private var eventsWsUrl = "ws://127.0.0.1:3030/ws/meeting-status"
 
     func show(shortcuts: String?) {
         DispatchQueue.main.async { [self] in
@@ -406,7 +405,6 @@ class ShortcutReminderController: NSObject {
             panel?.orderFrontRegardless()
             AnimationTick.shared.start()
             connectWebSocket()
-            checkMeetingStatus()
             connectMeetingEventsWebSocket()
         }
     }
@@ -519,7 +517,6 @@ class ShortcutReminderController: NSObject {
                 DispatchQueue.main.async {
                     self.meetingWsRetryTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: false) { [weak self] _ in
                         self?.connectMeetingEventsWebSocket()
-                        self?.checkMeetingStatus()
                     }
                 }
             }
@@ -528,27 +525,9 @@ class ShortcutReminderController: NSObject {
 
     private func processMeetingEventMessage(_ text: String) {
         guard let data = text.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let name = json["name"] as? String,
-              name == "meeting_status_changed",
-              let payload = json["data"] as? [String: Any] else { return }
+              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
         let active = payload["active"] as? Bool ?? false
         setMeetingActive(active)
-    }
-
-    private func checkMeetingStatus() {
-        guard let url = URL(string: meetingsStatusUrl) else { return }
-        URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
-            guard let self = self, let data = data,
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
-            let active = json["active"] as? Bool ?? false
-            DispatchQueue.main.async {
-                if self.metrics.meetingActive != active {
-                    self.metrics.meetingActive = active
-                    self.updateContent()
-                }
-            }
-        }.resume()
     }
 
     func setMeetingActive(_ active: Bool) {
@@ -569,7 +548,6 @@ class ShortcutReminderController: NSObject {
         if let s = dict["search"] { searchShortcut = prettifyShortcut(s) }
         if let s = dict["metrics_ws_url"] { metricsWsUrl = s }
         if let s = dict["events_ws_url"] { eventsWsUrl = s }
-        if let s = dict["meetings_status_url"] { meetingsStatusUrl = s }
     }
 
     /// Convert "Super+Ctrl+S" → "⌘⌃S" for compact overlay display.
