@@ -589,7 +589,7 @@ impl Default for AIPreset {
             prompt: String::new(),
             provider: AIProviderType::ScreenpipeCloud,
             url: "https://api.screenpi.pe/v1".to_string(),
-            model: "auto".to_string(),
+            model: "qwen/qwen3.5-flash-02-23".to_string(),
             default_preset: false,
             api_key: None,
             max_context_chars: 512000,
@@ -877,20 +877,6 @@ impl SettingsStore {
                                         Value::String("custom".to_string()),
                                     );
                                 }
-                            }
-                        }
-
-                        // Migrate the bundled screenpipe-cloud preset off the old hardcoded
-                        // qwen model — the seed is "auto" now, but users who installed
-                        // earlier still carry the literal qwen id.
-                        let id = preset.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                        let model = preset.get("model").and_then(|v| v.as_str()).unwrap_or("");
-                        if id == "screenpipe-cloud" && model == "qwen/qwen3.5-flash-02-23" {
-                            if let Some(obj) = preset.as_object_mut() {
-                                obj.insert(
-                                    "model".to_string(),
-                                    Value::String("auto".to_string()),
-                                );
                             }
                         }
                     }
