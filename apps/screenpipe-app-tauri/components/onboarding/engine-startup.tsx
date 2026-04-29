@@ -380,10 +380,17 @@ export default function EngineStartup({
   // Stream a warm summary using the user's default preset, falling back to
   // their cloud token. If neither is available, leave summary empty and let
   // the fallback timer release the continue button.
+  // Track attempts so a transient failure (no token at first poll, network
+  // blip) gets retried instead of permanently breaking the slide.
+  const summaryAttemptsRef = useRef(0);
+  const MAX_SUMMARY_ATTEMPTS = 3;
+
   const startSummaryStream = useCallback(
     async (digest: string) => {
       if (summaryStartedRef.current) return;
+      if (summaryAttemptsRef.current >= MAX_SUMMARY_ATTEMPTS) return;
       summaryStartedRef.current = true;
+      summaryAttemptsRef.current += 1;
 
       const presets = settings.aiPresets ?? [];
       const preset =
@@ -412,7 +419,10 @@ export default function EngineStartup({
         endpoint = "https://api.screenpi.pe/v1/chat/completions";
         auth = { Authorization: `Bearer ${userToken}` };
       } else {
-        // No way to call any model. Bail — the fallback timer will unlock continue.
+        // No way to call any model. Bail and reset the gate so a later poll
+        // can retry — settings.user.token can land asynchronously after the
+        // login slide completes.
+        summaryStartedRef.current = false;
         return;
       }
 
@@ -502,9 +512,14 @@ if the input is sparse, just describe what little you have warmly. don't apologi
         setSummaryComplete(true);
       } catch (err) {
         // Network / model error — leave whatever streamed so far visible.
-        // The fallback timer releases the continue button.
+        // The fallback timer releases the continue button. Reset the started
+        // flag so the next poll cycle gets one more shot up to
+        // MAX_SUMMARY_ATTEMPTS — a stale settings.user.token at the very
+        // first poll (login slide just finished, token not yet propagated)
+        // would otherwise permanently kill the summary.
         if ((err as any)?.name !== "AbortError") {
           console.warn("summary stream failed:", err);
+          summaryStartedRef.current = false;
         }
       } finally {
         setSummaryStreaming(false);
@@ -745,13 +760,17 @@ if the input is sparse, just describe what little you have warmly. don't apologi
   // ── Live feed phase ──
   if (state === "live-feed") {
     const placeholderTiles = MAX_THUMBNAILS - thumbnails.length;
-    // After the grace window, if we still have nothing captured, drop the
+    // After the grace window, if we have nothing rendered, drop the
     // "settling in" copy in favor of an honest "i'm up and watching" state.
-    // The user is allowed to continue regardless — we don't want to gate the
-    // onboarding on best-effort proof.
+    //
+    // Crucial: this triggers on `summaryText` being empty, NOT on
+    // `activityItems` being empty. Items may have streamed in while the
+    // LLM call silently failed (no token, network error, model error —
+    // all caught and swallowed in startSummaryStream). The user-visible
+    // state in either case is identical: we have nothing to show — so
+    // show the friendly fallback regardless of internal counters.
     const noActivityYet =
       feedSeconds >= NO_ACTIVITY_GRACE_MS / 1000 &&
-      activityItems.length === 0 &&
       !summaryStreaming &&
       summaryText.length === 0;
     const showWaiting =
