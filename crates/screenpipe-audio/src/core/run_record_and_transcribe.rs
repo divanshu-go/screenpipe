@@ -7,14 +7,18 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{anyhow, Result};
 use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 
-use crate::{core::update_device_capture_time, metrics::AudioPipelineMetrics, AudioInput};
+use crate::{
+    core::{device::DeviceType, update_device_capture_time},
+    metrics::AudioPipelineMetrics,
+    AudioInput,
+};
 
 use super::source_buffer::SourceBuffer;
 use super::AudioStream;
@@ -46,6 +50,38 @@ const AUDIO_RECEIVE_TIMEOUT_SECS: u64 = 8;
 /// Grace period after stream start before treating timeouts as fatal.
 /// ScreenCaptureKit may take a moment to begin delivering callbacks.
 const STREAM_STARTUP_GRACE_SECS: u64 = 10;
+
+/// Maximum tolerated duration of zero-fill input buffers before declaring
+/// the stream functionally dead.
+///
+/// Bug class this catches: macOS CoreAudio (and similar HALs on other
+/// platforms) can deliver zero-filled buffers to a non-priority client
+/// when another app exclusively claims an input device. Most reproducible
+/// with Bluetooth mics — e.g. AirPods during a videoconference call: the
+/// AudioUnit render callback keeps firing on the expected schedule, so
+/// the existing AUDIO_RECEIVE_TIMEOUT_SECS watchdog stays happy, but the
+/// buffer contents are exact zeros — no thermal noise, no ADC quantization
+/// noise, no signal at all.
+///
+/// Real microphones never produce sustained exact-zero output; the
+/// preamp + ADC noise floor is always above SILENT_BUFFER_PEAK_THRESHOLD.
+/// 30 s is conservative enough to absorb any legitimate transient (a
+/// short software-mute, a buffering hiccup) while still recovering well
+/// before a typical lost-audio incident becomes minutes long.
+///
+/// Recovery path is identical to AUDIO_RECEIVE_TIMEOUT_SECS: tear down,
+/// let device_monitor rebuild a fresh stream.
+const INPUT_SILENT_BUFFER_TIMEOUT_SECS: u64 = 30;
+
+/// Threshold below which a buffer is treated as functionally silent.
+/// CoreAudio zero-fill produces exact 0.0; any real input source — even
+/// a muted-by-hand AirPods mic — sits well above this floor.
+const SILENT_BUFFER_PEAK_THRESHOLD: f32 = 1e-6;
+
+#[inline]
+fn is_silent_buffer(chunk: &[f32]) -> bool {
+    !chunk.is_empty() && chunk.iter().all(|s| s.abs() < SILENT_BUFFER_PEAK_THRESHOLD)
+}
 
 /// Recording always uses 30s segments. Both batch and realtime modes record identically.
 /// The batch vs realtime distinction is in the processing layer (manager.rs):
@@ -80,7 +116,10 @@ pub async fn run_record_and_transcribe(
     let max_samples = audio_samples_len + overlap_samples;
     let mut collected_audio = Vec::new();
     let mut segment_start_time = now_epoch_secs();
-    let stream_start = std::time::Instant::now();
+    let stream_start = Instant::now();
+    // Tracks the last time we received a buffer with non-zero audio.
+    // Used to detect OS-level zero-fill hijack (see INPUT_SILENT_BUFFER_TIMEOUT_SECS).
+    let mut last_non_zero_at = stream_start;
     let mut segment_count: u64 = 0;
 
     let mut was_paused_for_lock = false;
@@ -148,6 +187,7 @@ pub async fn run_record_and_transcribe(
                 &device_name,
                 &metrics,
                 &stream_start,
+                &mut last_non_zero_at,
             )
             .await?
             {
@@ -207,12 +247,20 @@ pub async fn run_record_and_transcribe(
 /// Receive one audio chunk from the broadcast channel, handling timeouts and device type logic.
 /// Returns `Ok(Some(chunk))` on data, `Ok(None)` when the caller should continue (lag/idle),
 /// or `Err` on fatal errors.
+///
+/// `last_non_zero_at` is updated whenever a buffer with real audio arrives.
+/// If only zero-fill buffers arrive on an input device for longer than
+/// INPUT_SILENT_BUFFER_TIMEOUT_SECS (after startup grace), the stream is
+/// declared dead — this catches OS-level device hijack where the render
+/// callback keeps firing but with empty buffers (e.g. AirPods captured by
+/// another app mid-call), which the receive-timeout watchdog cannot see.
 async fn recv_audio_chunk(
     receiver: &mut broadcast::Receiver<Vec<f32>>,
     audio_stream: &Arc<AudioStream>,
     device_name: &str,
     metrics: &Arc<AudioPipelineMetrics>,
-    stream_start: &std::time::Instant,
+    stream_start: &Instant,
+    last_non_zero_at: &mut Instant,
 ) -> Result<Option<Vec<f32>>> {
     let recv_result = tokio::time::timeout(
         Duration::from_secs(AUDIO_RECEIVE_TIMEOUT_SECS),
@@ -224,7 +272,42 @@ async fn recv_audio_chunk(
         Ok(Ok(chunk)) => {
             metrics.update_audio_level(&chunk);
             metrics.update_audio_level_for_device(device_name, &chunk);
-            update_device_capture_time(device_name);
+
+            if !is_silent_buffer(&chunk) {
+                *last_non_zero_at = Instant::now();
+                // Only tick "device is delivering data" on real audio so
+                // the UI / health endpoint cannot show green during a
+                // zero-fill hijack.
+                update_device_capture_time(device_name);
+                return Ok(Some(chunk));
+            }
+
+            // Silent buffer. Tolerate it past startup grace and only on
+            // input devices — output devices legitimately go silent when
+            // nothing is playing, and the existing per-device-type
+            // handling for output silence lives below.
+            if audio_stream.device.device_type == DeviceType::Input
+                && stream_start.elapsed().as_secs() >= STREAM_STARTUP_GRACE_SECS
+                && last_non_zero_at.elapsed().as_secs() >= INPUT_SILENT_BUFFER_TIMEOUT_SECS
+            {
+                warn!(
+                    "no usable audio from {} for {}s — only zero-fill buffers \
+                     (likely OS device hijack by another app), triggering reconnect",
+                    device_name, INPUT_SILENT_BUFFER_TIMEOUT_SECS
+                );
+                metrics.record_stream_timeout();
+                audio_stream.is_disconnected.store(true, Ordering::Relaxed);
+                return Err(anyhow!(
+                    "Audio stream zero-fill — no usable data from {} for {}s \
+                     (suspected device hijack by another process)",
+                    device_name,
+                    INPUT_SILENT_BUFFER_TIMEOUT_SECS
+                ));
+            }
+
+            // Pass the silent buffer through; downstream VAD will drop it.
+            // Keeping it in the pipeline preserves segment timing alignment
+            // (every recv represents real OS frames, even if empty).
             Ok(Some(chunk))
         }
         Ok(Err(broadcast::error::RecvError::Lagged(n))) => {
