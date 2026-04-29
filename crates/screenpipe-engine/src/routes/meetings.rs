@@ -152,6 +152,14 @@ pub async fn resolve_meeting_status_from(
 }
 
 pub fn emit_meeting_status_changed(status: &MeetingStatusResponse) {
+    tracing::info!(
+        "meeting_status_changed: active={}, manual={}, active_id={:?}, app={:?}, source={:?}",
+        status.active,
+        status.manual,
+        status.active_meeting_id,
+        status.meeting_app,
+        status.detection_source
+    );
     if let Err(e) = screenpipe_events::send_event("meeting_status_changed", status.clone()) {
         tracing::warn!("failed to emit meeting_status_changed event: {}", e);
     }
@@ -417,6 +425,18 @@ pub(crate) async fn stop_meeting_handler(
             JsonResponse(json!({"error": format!("meeting not found: {}", e)})),
         )
     })?;
+
+    // Signal detector to stop tracking this meeting immediately (skip grace period)
+    if let Err(e) = screenpipe_events::send_event(
+        "detector_stop_tracking",
+        serde_json::json!({ "meeting_id": id, "app": &meeting.meeting_app }),
+    ) {
+        tracing::warn!(
+            "failed to emit detector_stop_tracking event for meeting {}: {}",
+            id,
+            e
+        );
+    }
 
     Ok(JsonResponse(meeting))
 }
