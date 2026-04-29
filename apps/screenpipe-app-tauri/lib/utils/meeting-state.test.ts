@@ -12,10 +12,18 @@ import {
 const NEVER_CLICKED = 0;
 const NOW = 1_000_000;
 
-const manualActive: MeetingStatusResponse = { active: true, manualActive: true };
-const manualLegacy: MeetingStatusResponse = { active: true, manual: true };
-const teamsActive: MeetingStatusResponse = { active: true, manualActive: false };
-const zoomActive: MeetingStatusResponse = { active: true, manualActive: false };
+const manualActive: MeetingStatusResponse = {
+  active: true, manualActive: true, activeMeetingId: 41, stoppableMeetingId: 41, meetingApp: "manual", detectionSource: "manual",
+};
+const manualLegacy: MeetingStatusResponse = {
+  active: true, manual: true, activeMeetingId: 42, stoppableMeetingId: 42, meetingApp: "manual", detectionSource: "manual",
+};
+const teamsActive: MeetingStatusResponse = {
+  active: true, manualActive: false, activeMeetingId: 51, stoppableMeetingId: 51, meetingApp: "teams", detectionSource: "ui_scan",
+};
+const zoomActive: MeetingStatusResponse = {
+  active: true, manualActive: false, activeMeetingId: 52, stoppableMeetingId: 52, meetingApp: "zoom", detectionSource: "ui_scan",
+};
 const inactive: MeetingStatusResponse = { active: false, manualActive: false };
 
 describe("computeMeetingActive", () => {
@@ -24,6 +32,7 @@ describe("computeMeetingActive", () => {
       const r = computeMeetingActive(teamsActive, NEVER_CLICKED, NOW);
       expect(r.active).toBe(true);
       expect(r.manualActive).toBe(false);
+      expect(r.stoppableMeetingId).toBe(51);
     });
 
     it("lights up for an active Zoom meeting", () => {
@@ -43,6 +52,7 @@ describe("computeMeetingActive", () => {
       const r = computeMeetingActive(manualActive, NEVER_CLICKED, NOW);
       expect(r.active).toBe(true);
       expect(r.manualActive).toBe(true);
+      expect(r.activeMeetingId).toBe(41);
     });
 
     it("supports the legacy 'manual' key for compatibility", () => {
@@ -57,6 +67,7 @@ describe("computeMeetingActive", () => {
       const r = computeMeetingActive(null, NEVER_CLICKED, NOW);
       expect(r.active).toBe(false);
       expect(r.manualActive).toBe(false);
+      expect(r.stoppableMeetingId).toBeNull();
     });
 
     it("is off when status explicitly says inactive", () => {
@@ -72,6 +83,7 @@ describe("computeMeetingActive", () => {
       const r = computeMeetingActive(null, startedAt, NOW);
       expect(r.active).toBe(true);
       expect(r.manualActive).toBe(true); // grace period implies manual click
+      expect(r.detectionSource).toBe("manual");
     });
 
     it("trusts local click at exactly the start of the grace period", () => {
@@ -119,6 +131,7 @@ describe("computeMeetingActive", () => {
       const r = computeMeetingActive({ active: true }, NEVER_CLICKED, NOW);
       expect(r.active).toBe(true);
       expect(r.manualActive).toBe(false);
+      expect(r.stoppableMeetingId).toBeNull();
     });
   });
 });

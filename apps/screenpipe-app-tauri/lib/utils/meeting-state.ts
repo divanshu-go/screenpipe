@@ -23,12 +23,24 @@ export interface MeetingActiveState {
   active: boolean;
   /** True only if the active meeting is a manual one the user can stop */
   manualActive: boolean;
+  /** Exact active meeting row id, when known */
+  activeMeetingId: number | null;
+  /** Exact meeting id the UI should send to /meetings/stop */
+  stoppableMeetingId: number | null;
+  /** Meeting app name for the current active meeting */
+  meetingApp: string | null;
+  /** Source that created the current active meeting */
+  detectionSource: string | null;
 }
 
 export interface MeetingStatusResponse {
   active?: boolean;
   manual?: boolean;
   manualActive?: boolean;
+  activeMeetingId?: number | null;
+  stoppableMeetingId?: number | null;
+  meetingApp?: string | null;
+  detectionSource?: string | null;
 }
 
 /**
@@ -48,6 +60,10 @@ export function computeMeetingActive(
     return {
       active: true,
       manualActive: status.manualActive ?? status.manual ?? false,
+      activeMeetingId: status.activeMeetingId ?? null,
+      stoppableMeetingId: status.stoppableMeetingId ?? status.activeMeetingId ?? null,
+      meetingApp: status.meetingApp ?? null,
+      detectionSource: status.detectionSource ?? null,
     };
   }
 
@@ -59,8 +75,22 @@ export function computeMeetingActive(
     startedAtMs > 0 && nowMs - startedAtMs < MEETING_GRACE_PERIOD_MS;
 
   if (inGracePeriod) {
-    return { active: true, manualActive: true };
+    return {
+      active: true,
+      manualActive: true,
+      activeMeetingId: null,
+      stoppableMeetingId: null,
+      meetingApp: "manual",
+      detectionSource: "manual",
+    };
   }
 
-  return { active: false, manualActive: false };
+  return {
+    active: false,
+    manualActive: false,
+    activeMeetingId: null,
+    stoppableMeetingId: null,
+    meetingApp: null,
+    detectionSource: null,
+  };
 }

@@ -9,13 +9,15 @@ use axum::{
 };
 use oasgen::{oasgen, OaSchema};
 
+use screenpipe_db::DatabaseManager;
 use screenpipe_db::MeetingRecord;
 
 use crate::server::AppState;
 use chrono::Utc;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 #[derive(OaSchema, Deserialize, Debug)]
 pub struct UpdateMeetingRequest {
@@ -45,6 +47,11 @@ pub struct StartMeetingRequest {
 }
 
 #[derive(OaSchema, Deserialize, Debug)]
+pub struct StopMeetingRequest {
+    pub id: Option<i64>,
+}
+
+#[derive(OaSchema, Deserialize, Debug)]
 pub struct ListMeetingsRequest {
     pub start_time: Option<String>,
     pub end_time: Option<String>,
@@ -56,6 +63,98 @@ pub struct ListMeetingsRequest {
 
 fn default_limit() -> u32 {
     20
+}
+
+#[derive(OaSchema, Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MeetingStatusResponse {
+    pub active: bool,
+    pub manual: bool,
+    pub manual_active: bool,
+    pub active_meeting_id: Option<i64>,
+    pub stoppable_meeting_id: Option<i64>,
+    pub meeting_app: Option<String>,
+    pub detection_source: Option<String>,
+}
+
+async fn resolve_meeting_status(
+    state: &Arc<AppState>,
+) -> Result<MeetingStatusResponse, (StatusCode, JsonResponse<Value>)> {
+    resolve_meeting_status_from(&state.db, &state.manual_meeting)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                JsonResponse(json!({"error": e})),
+            )
+        })
+}
+
+pub async fn resolve_meeting_status_from(
+    db: &DatabaseManager,
+    manual_meeting: &RwLock<Option<i64>>,
+) -> Result<MeetingStatusResponse, String> {
+    let manual_id = {
+        let lock = manual_meeting.read().await;
+        *lock
+    };
+
+    if let Some(id) = manual_id {
+        match db.get_active_meeting_by_id(id).await {
+            Ok(Some(meeting)) => {
+                return Ok(MeetingStatusResponse {
+                    active: true,
+                    manual: true,
+                    manual_active: true,
+                    active_meeting_id: Some(meeting.id),
+                    stoppable_meeting_id: Some(meeting.id),
+                    meeting_app: Some(meeting.meeting_app),
+                    detection_source: Some(meeting.detection_source),
+                });
+            }
+            Ok(None) => {
+                let mut lock = manual_meeting.write().await;
+                if *lock == Some(id) {
+                    *lock = None;
+                }
+            }
+            Err(e) => {
+                return Err(e.to_string());
+            }
+        }
+    }
+
+    let active = db
+        .get_most_recent_active_meeting()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    match active {
+        Some(meeting) => Ok(MeetingStatusResponse {
+            active: true,
+            manual: false,
+            manual_active: false,
+            active_meeting_id: Some(meeting.id),
+            stoppable_meeting_id: Some(meeting.id),
+            meeting_app: Some(meeting.meeting_app),
+            detection_source: Some(meeting.detection_source),
+        }),
+        None => Ok(MeetingStatusResponse {
+            active: false,
+            manual: false,
+            manual_active: false,
+            active_meeting_id: None,
+            stoppable_meeting_id: None,
+            meeting_app: None,
+            detection_source: None,
+        }),
+    }
+}
+
+pub fn emit_meeting_status_changed(status: &MeetingStatusResponse) {
+    if let Err(e) = screenpipe_events::send_event("meeting_status_changed", status.clone()) {
+        tracing::warn!("failed to emit meeting_status_changed event: {}", e);
+    }
 }
 
 #[oasgen]
@@ -202,27 +301,8 @@ pub(crate) async fn merge_meetings_handler(
 #[oasgen]
 pub(crate) async fn meeting_status_handler(
     State(state): State<Arc<AppState>>,
-) -> Result<JsonResponse<Value>, (StatusCode, JsonResponse<Value>)> {
-    // Check manual meeting first
-    let manual_active = {
-        let lock = state.manual_meeting.read().await;
-        lock.is_some()
-    };
-
-    // Also check DB for any ongoing meeting (auto-detected)
-    let any_active = if manual_active {
-        true
-    } else {
-        state.db.has_active_meeting().await.unwrap_or(false)
-    };
-
-    Ok(JsonResponse(
-        json!({
-            "active": any_active,
-            "manual": manual_active,
-            "manualActive": manual_active,
-        }),
-    ))
+) -> Result<JsonResponse<MeetingStatusResponse>, (StatusCode, JsonResponse<Value>)> {
+    Ok(JsonResponse(resolve_meeting_status(&state).await?))
 }
 
 #[oasgen]
@@ -252,6 +332,10 @@ pub(crate) async fn start_meeting_handler(
         *lock = Some(id);
     }
 
+    if let Ok(status) = resolve_meeting_status(&state).await {
+        emit_meeting_status_changed(&status);
+    }
+
     // Emit event so triggered pipes can react
     if let Err(e) = screenpipe_events::send_event(
         "meeting_started",
@@ -273,35 +357,27 @@ pub(crate) async fn start_meeting_handler(
 #[oasgen]
 pub(crate) async fn stop_meeting_handler(
     State(state): State<Arc<AppState>>,
+    axum::Json(body): axum::Json<StopMeetingRequest>,
 ) -> Result<JsonResponse<MeetingRecord>, (StatusCode, JsonResponse<Value>)> {
-    let id = {
-        let lock = state.manual_meeting.read().await;
-        *lock
-    };
-
-    // If no manual meeting, find any active meeting (auto-detected) and end it.
-    // This lets users stop auto-detected meetings (Google Meet, Zoom, etc.)
-    // from the overlay button.
-    let id = match id {
-        Some(id) => id,
-        None => {
-            let active_id = state
-                .db
-                .get_most_recent_active_meeting_id()
-                .await
-                .map_err(|e| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        JsonResponse(json!({"error": e.to_string()})),
-                    )
-                })?;
-            active_id.ok_or_else(|| {
-                (
+    let requested_id = body.id;
+    let status = resolve_meeting_status(&state).await?;
+    let id = match requested_id {
+        Some(id) => {
+            if status.stoppable_meeting_id == Some(id) || status.active_meeting_id == Some(id) {
+                id
+            } else {
+                return Err((
                     StatusCode::BAD_REQUEST,
-                    JsonResponse(json!({"error": "no active meeting"})),
-                )
-            })?
+                    JsonResponse(json!({"error": "requested meeting is not the active meeting"})),
+                ));
+            }
         }
+        None => status.stoppable_meeting_id.ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                JsonResponse(json!({"error": "no active meeting"})),
+            )
+        })?,
     };
 
     let now = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
@@ -319,7 +395,13 @@ pub(crate) async fn stop_meeting_handler(
 
     {
         let mut lock = state.manual_meeting.write().await;
-        *lock = None;
+        if *lock == Some(id) {
+            *lock = None;
+        }
+    }
+
+    if let Ok(status) = resolve_meeting_status(&state).await {
+        emit_meeting_status_changed(&status);
     }
 
     // Emit event so triggered pipes can react

@@ -25,6 +25,7 @@
 
 use chrono::{DateTime, Utc};
 use futures::{FutureExt, StreamExt};
+use crate::routes::meetings::{emit_meeting_status_changed, resolve_meeting_status_from};
 use screenpipe_db::DatabaseManager;
 use screenpipe_events::subscribe_to_event;
 use serde::{Deserialize, Serialize};
@@ -2299,6 +2300,11 @@ pub async fn run_meeting_detection_loop(
                         ) {
                             warn!("meeting v2: failed to emit meeting_ended event: {}", e);
                         }
+                        if let Ok(status) =
+                            resolve_meeting_status_from(db.as_ref(), manual_meeting.as_ref()).await
+                        {
+                            emit_meeting_status_changed(&status);
+                        }
                     }
                     Err(e) => {
                         error!("meeting v2: failed to end meeting {}: {}", meeting_id, e);
@@ -2469,6 +2475,11 @@ pub async fn run_meeting_detection_loop(
                             is_browser,
                         };
                     }
+                    if let Ok(status) =
+                        resolve_meeting_status_from(db.as_ref(), manual_meeting.as_ref()).await
+                    {
+                        emit_meeting_status_changed(&status);
+                    }
                 }
                 StateAction::EndMeeting { meeting_id } => {
                     if meeting_id >= 0 {
@@ -2482,6 +2493,11 @@ pub async fn run_meeting_detection_loop(
                                     serde_json::json!({ "meeting_id": meeting_id }),
                                 ) {
                                     warn!("meeting v2: failed to emit meeting_ended event: {}", e);
+                                }
+                                if let Ok(status) =
+                                    resolve_meeting_status_from(db.as_ref(), manual_meeting.as_ref()).await
+                                {
+                                    emit_meeting_status_changed(&status);
                                 }
                             }
                             Err(e) => {

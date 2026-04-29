@@ -49,7 +49,7 @@ import { EnterpriseLicensePrompt } from "@/components/enterprise-license-prompt"
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { computeMeetingActive, type MeetingStatusResponse } from "@/lib/utils/meeting-state";
 import { useRouter } from "next/navigation";
-import { localFetch } from "@/lib/api";
+import { appendAuthToken, ensureApiReady, getApiBaseUrl, localFetch } from "@/lib/api";
 import {
   Tooltip,
   TooltipContent,
@@ -259,9 +259,16 @@ function HomeContent() {
 
   // Active meeting state — lights up the phone icon for ANY active meeting
   // (manual OR auto-detected: Teams, Zoom, etc.).
-  const [meetingState, setMeetingState] = useState<{ active: boolean; manualActive: boolean }>(
-    { active: false, manualActive: false },
-  );
+  const [meetingState, setMeetingState] = useState<MeetingStatusResponse & {
+    manualActive: boolean;
+  }>({
+    active: false,
+    manualActive: false,
+    activeMeetingId: null,
+    stoppableMeetingId: null,
+    meetingApp: null,
+    detectionSource: null,
+  });
   const [meetingLoading, setMeetingLoading] = useState(false);
 
   // Timestamp when user clicked start, used for a 10s grace period so a
@@ -280,20 +287,61 @@ function HomeContent() {
 
   useEffect(() => {
     let cancelled = false;
-    const check = () => {
-      localFetch("/meetings/status")
-        .then((r) => r.ok ? r.json() : null)
-        .then((status: MeetingStatusResponse | null) => {
+    let ws: WebSocket | null = null;
+    let retry: ReturnType<typeof setTimeout> | null = null;
+    let backoffMs = 1000;
+
+    const connect = () => {
+      void (async () => {
+        try {
+          await ensureApiReady();
           if (cancelled) return;
-          setMeetingState(
-            computeMeetingActive(status, manualMeetingStartedAt.current),
-          );
-        })
-        .catch(() => {});
+          const wsBase = getApiBaseUrl().replace("http://", "ws://");
+          ws = new WebSocket(appendAuthToken(`${wsBase}/ws/events`));
+          ws.onopen = () => {
+            backoffMs = 1000;
+            refreshMeetingState();
+          };
+          ws.onmessage = (event) => {
+            try {
+              const parsed = JSON.parse(event.data) as {
+                name?: string;
+                data?: MeetingStatusResponse;
+              };
+              if (parsed.name !== "meeting_status_changed") return;
+              if (cancelled) return;
+              setMeetingState(
+                computeMeetingActive(parsed.data, manualMeetingStartedAt.current),
+              );
+            } catch {
+              // ignore malformed event payloads
+            }
+          };
+          ws.onclose = (event) => {
+            if (cancelled || event.code === 1000) return;
+            retry = setTimeout(connect, backoffMs);
+            backoffMs = Math.min(backoffMs * 2, 10000);
+          };
+          ws.onerror = () => {
+            ws?.close();
+          };
+        } catch {
+          if (cancelled) return;
+          retry = setTimeout(connect, backoffMs);
+          backoffMs = Math.min(backoffMs * 2, 10000);
+        }
+      })();
     };
-    check();
-    const interval = setInterval(check, 5000);
-    return () => { cancelled = true; clearInterval(interval); };
+
+    refreshMeetingState();
+    connect();
+    return () => {
+      cancelled = true;
+      if (retry) clearTimeout(retry);
+      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+        ws.close(1000, "unmount");
+      }
+    };
   }, [refreshMeetingState]);
 
   const toggleMeeting = useCallback(async () => {
@@ -301,10 +349,22 @@ function HomeContent() {
     try {
       if (meetingState.active) {
         // Stop the currently active meeting, whether manual or auto-detected.
-        const res = await localFetch("/meetings/stop", { method: "POST" });
+        const targetId = meetingState.stoppableMeetingId;
+        const res = await localFetch("/meetings/stop", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: targetId }),
+        });
         if (res.ok) {
           manualMeetingStartedAt.current = 0;
-          setMeetingState({ active: false, manualActive: false });
+          setMeetingState({
+            active: false,
+            manualActive: false,
+            activeMeetingId: null,
+            stoppableMeetingId: null,
+            meetingApp: null,
+            detectionSource: null,
+          });
         }
       } else {
         // No meeting active — start a manual one
@@ -315,7 +375,14 @@ function HomeContent() {
         });
         if (res.ok) {
           manualMeetingStartedAt.current = Date.now();
-          setMeetingState({ active: true, manualActive: true });
+          setMeetingState({
+            active: true,
+            manualActive: true,
+            activeMeetingId: null,
+            stoppableMeetingId: null,
+            meetingApp: "manual",
+            detectionSource: "manual",
+          });
         }
       }
     } catch (e) {
@@ -330,7 +397,7 @@ function HomeContent() {
   // two meetings depending on which UI surfaces are mounted.
   useEffect(() => {
     let unlisten: (() => void) | null = null;
-    listen<{ active?: boolean; manualActive?: boolean }>("native-shortcut-toggle-meeting", (event) => {
+    listen<MeetingStatusResponse>("native-shortcut-toggle-meeting", (event) => {
       const payload = event.payload;
       if (typeof payload?.active === "boolean") {
         if (payload.active) {
@@ -341,6 +408,10 @@ function HomeContent() {
         setMeetingState({
           active: payload.active,
           manualActive: payload.manualActive ?? false,
+          activeMeetingId: payload.activeMeetingId ?? null,
+          stoppableMeetingId: payload.stoppableMeetingId ?? payload.activeMeetingId ?? null,
+          meetingApp: payload.meetingApp ?? null,
+          detectionSource: payload.detectionSource ?? null,
         });
         return;
       }
