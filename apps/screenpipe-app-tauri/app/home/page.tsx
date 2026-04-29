@@ -660,7 +660,7 @@ function HomeContent() {
                           {meetingState.active && (
                             <span className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-foreground animate-pulse" />
                           )}
-                          <Phone className="h-3 w-3" />
+                          <Phone className={cn("h-3 w-3", isTranslucent ? "vibrant-sidebar-fg" : "text-muted-foreground")} />
                         </button>
                       </TooltipTrigger>
                       <TooltipContent side="top" className="text-xs">
