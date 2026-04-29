@@ -765,7 +765,7 @@ function ChatRow({
         "transition-colors",
         isCurrent
           ? "bg-muted/70 text-foreground"
-          : "text-foreground hover:bg-muted/40"
+          : "text-muted-foreground hover:bg-muted/40"
       )}
       data-testid={`chat-row-${session.id}`}
       title={isError && session.lastError ? session.lastError : undefined}
@@ -784,7 +784,9 @@ function ChatRow({
             "truncate flex-1 text-xs",
             isUnread
               ? "font-semibold text-foreground"
-              : "text-foreground"
+              : isCurrent
+                ? "text-foreground/80"
+                : "text-muted-foreground"
           )}
         >
           {session.title || "untitled"}
