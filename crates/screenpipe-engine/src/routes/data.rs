@@ -60,10 +60,7 @@ pub(crate) async fn delete_time_range_handler(
             .delete_time_range_local(payload.start, payload.end)
             .await
     } else {
-        state
-            .db
-            .delete_time_range(payload.start, payload.end)
-            .await
+        state.db.delete_time_range(payload.start, payload.end).await
     }
     .map_err(|e| {
         (
