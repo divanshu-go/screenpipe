@@ -20,6 +20,7 @@ import {
   Search,
   Sparkles,
   Phone,
+  Plug,
   X,
 } from "lucide-react";
 import { emit } from "@tauri-apps/api/event";
@@ -31,6 +32,7 @@ import { usePlatform } from "@/lib/hooks/use-platform";
 import { FeedbackSection } from "@/components/settings/feedback-section";
 import { PipeStoreView } from "@/components/pipe-store";
 import { MemoriesSection } from "@/components/settings/memories-section";
+import { ConnectionsSection } from "@/components/settings/connections-section";
 import { StandaloneChat } from "@/components/standalone-chat";
 import { ChatSidebar } from "@/components/chat-sidebar";
 import { mountPiEventRouter } from "@/lib/stores/pi-event-router";
@@ -57,18 +59,18 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 
-type MainSection = "home" | "timeline" | "memories" | "pipes" | "help";
+type MainSection = "home" | "timeline" | "memories" | "pipes" | "connections" | "help";
 
 // All valid URL sections for the home page
 const ALL_SECTIONS = [
-  "home", "timeline", "pipes", "help", "memories",
+  "home", "timeline", "pipes", "help", "memories", "connections",
   "feedback", // backwards compat → maps to "help"
 ];
 
 // Settings sections that should redirect to /settings
 const SETTINGS_SECTIONS = new Set<string>([
   "account", "recording", "ai", "general", "display", "shortcuts", "notifications",
-  "connections", "privacy", "storage", "meetings", "team", "referral", "usage", "speakers",
+  "privacy", "storage", "meetings", "team", "referral", "usage", "speakers",
   "disk-usage", "cloud-archive", "cloud-sync", // backwards compat → maps to "storage"
 ]);
 
@@ -343,11 +345,17 @@ function HomeContent() {
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
-      openSettings(detail?.section ?? "general");
+      const section = detail?.section ?? "general";
+      // connections is a top-level main-sidebar section now, not in settings
+      if (section === "connections") {
+        setActiveSection("connections");
+        return;
+      }
+      openSettings(section);
     };
     window.addEventListener("open-settings", handler);
     return () => window.removeEventListener("open-settings", handler);
-  }, [openSettings]);
+  }, [openSettings, setActiveSection]);
 
   const renderMainSection = () => {
     if (isSectionHidden(activeSection) && activeSection !== "help") {
@@ -370,6 +378,8 @@ function HomeContent() {
         return <MemoriesSection />;
       case "pipes":
         return <PipeStoreView />;
+      case "connections":
+        return <ConnectionsSection />;
       case "help":
         return <FeedbackSection />;
       default:
@@ -391,6 +401,7 @@ function HomeContent() {
     { id: "pipes", label: "Pipes", icon: <Workflow className="h-3.5 w-3.5" /> },
     { id: "timeline", label: "Timeline", icon: <Clock className="h-3.5 w-3.5" /> },
     { id: "memories", label: "Memories", icon: <Sparkles className="h-3.5 w-3.5" /> },
+    { id: "connections", label: "Connections", icon: <Plug className="h-3.5 w-3.5" /> },
   ].filter((s) => !isSectionHidden(s.id));
 
   // Listen for navigation events from other windows (e.g. tray, Rust-side links)
