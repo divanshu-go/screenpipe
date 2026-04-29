@@ -377,6 +377,47 @@ export default function EngineStartup({
     []
   );
 
+  // Deterministic local prose summary. Runs offline, no auth, no model.
+  // This is the fallback that ALWAYS works as long as we have any signal —
+  // the LLM stream upgrades it once it arrives, but we never gate the user
+  // on a network round-trip. Prior implementation only had the LLM path,
+  // so any auth/network/format glitch left the user staring at "settling
+  // in…" forever.
+  const buildLocalProse = useCallback((items: ActivityItem[]): string => {
+    if (items.length === 0) return "";
+    const apps: string[] = [];
+    const seen = new Set<string>();
+    let voiceSnippet = "";
+    for (const item of items) {
+      if (item.app_name === "voice") {
+        if (!voiceSnippet) voiceSnippet = item.text_snippet;
+        continue;
+      }
+      const name = item.app_name?.trim().toLowerCase();
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      apps.push(item.app_name);
+      if (apps.length >= 4) break;
+    }
+    const parts: string[] = [];
+    if (apps.length === 1) {
+      parts.push(`i caught a bit of your work in ${apps[0]}`);
+    } else if (apps.length === 2) {
+      parts.push(`i caught you moving between ${apps[0]} and ${apps[1]}`);
+    } else if (apps.length >= 3) {
+      const last = apps[apps.length - 1];
+      const head = apps.slice(0, -1).join(", ");
+      parts.push(`i caught you across ${head}, and ${last}`);
+    }
+    if (voiceSnippet) {
+      const trimmed = voiceSnippet.replace(/\s+/g, " ").slice(0, 80).trim();
+      parts.push(`heard a bit of you talking — "${trimmed}${voiceSnippet.length > 80 ? "…" : ""}"`);
+    }
+    if (parts.length === 0) return "";
+    parts.push("i'll keep watching quietly so we can pick up where you left off");
+    return parts.join(". ") + ".";
+  }, []);
+
   // Stream a warm summary using the user's default preset, falling back to
   // their cloud token. If neither is available, leave summary empty and let
   // the fallback timer release the continue button.
@@ -760,26 +801,32 @@ if the input is sparse, just describe what little you have warmly. don't apologi
   // ── Live feed phase ──
   if (state === "live-feed") {
     const placeholderTiles = MAX_THUMBNAILS - thumbnails.length;
-    // After the grace window, if we have nothing rendered, drop the
-    // "settling in" copy in favor of an honest "i'm up and watching" state.
-    //
-    // Crucial: this triggers on `summaryText` being empty, NOT on
-    // `activityItems` being empty. Items may have streamed in while the
-    // LLM call silently failed (no token, network error, model error —
-    // all caught and swallowed in startSummaryStream). The user-visible
-    // state in either case is identical: we have nothing to show — so
-    // show the friendly fallback regardless of internal counters.
+    // Always have something to render the moment we have any captured
+    // signal — built locally, no network, no auth, no model. The LLM
+    // stream overrides this if/when its text actually arrives.
+    const localProse = buildLocalProse(activityItems);
+    const displayedProse = summaryText.length > 0 ? summaryText : localProse;
+    const isLocalProse = displayedProse === localProse && localProse.length > 0;
+    // After the grace window, if we still have nothing displayable
+    // (no LLM text AND no captured signals), show the honest "i'm up
+    // and watching" copy. Triggers on `displayedProse` being empty so
+    // any failure path — silent LLM error, no auth token yet, search
+    // returning zero items — converges to the same friendly state.
     const noActivityYet =
       feedSeconds >= NO_ACTIVITY_GRACE_MS / 1000 &&
       !summaryStreaming &&
-      summaryText.length === 0;
+      displayedProse.length === 0;
     const showWaiting =
-      !summaryStreaming && summaryText.length === 0 && !noActivityYet;
+      !summaryStreaming && displayedProse.length === 0 && !noActivityYet;
     // Hide the dashed-tile row if we haven't gotten any real frames after
     // the cutoff — placeholder dashes that never fill in look broken.
     const hideThumbnailRow =
       thumbnails.length === 0 && feedSeconds >= HIDE_THUMBS_AFTER_MS / 1000;
-    const allowContinueNow = canContinue || noActivityYet;
+    // Unlock Continue once we have anything to show — local prose, LLM
+    // prose, or the honest "no activity yet" copy. Don't make the user
+    // wait on the LLM call when local prose is already rendered.
+    const allowContinueNow =
+      canContinue || noActivityYet || displayedProse.length > 0;
 
     return (
       <div className="w-full flex flex-col items-center justify-center min-h-[400px]">
@@ -832,13 +879,14 @@ if the input is sparse, just describe what little you have warmly. don't apologi
               </motion.p>
             ) : (
               <motion.p
+                key={isLocalProse ? "local" : "llm"}
                 className="font-sans text-[15px] leading-relaxed text-foreground/90"
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 transition={{ duration: 0.3 }}
               >
-                {summaryText}
-                {summaryStreaming && (
+                {displayedProse}
+                {summaryStreaming && !isLocalProse && (
                   <motion.span
                     className="inline-block w-[6px] h-[14px] bg-foreground/60 ml-0.5 align-middle"
                     animate={{ opacity: [1, 0, 1] }}
