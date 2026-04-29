@@ -19,9 +19,13 @@ use std::sync::Mutex;
 use tauri::tray::{TrayIcon, TrayIconBuilder};
 use tauri::Emitter;
 use tauri::{
-    menu::{CheckMenuItemBuilder, MenuBuilder, MenuItem, MenuItemBuilder, PredefinedMenuItem},
+    menu::{
+        CheckMenuItemBuilder, MenuBuilder, MenuItem, MenuItemBuilder, PredefinedMenuItem,
+        SubmenuBuilder,
+    },
     AppHandle, Manager, Wry,
 };
+use tauri::async_runtime::JoinHandle;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_opener::OpenerExt;
 
@@ -131,6 +135,18 @@ fn set_optimistic_status(status: RecordingStatus) {
         status,
         std::time::Instant::now() + std::time::Duration::from_secs(15),
     ));
+}
+
+/// Pending "pause for X minutes" timer. Held so a manual resume — or a fresh
+/// pause click — can abort the previous one and prevent a stale auto-resume
+/// from firing later. No persistence: app quit / crash drops the timer and
+/// recording stays paused, which is the safer default for a privacy bias.
+static PAUSE_TIMER: Lazy<Mutex<Option<JoinHandle<()>>>> = Lazy::new(|| Mutex::new(None));
+
+fn cancel_pause_timer() {
+    if let Some(h) = PAUSE_TIMER.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        h.abort();
+    }
 }
 
 /// Immediately rebuild the tray menu (called from main thread after optimistic status set).
@@ -599,6 +615,19 @@ fn create_dynamic_menu(
             .checked(is_recording)
             .build(app)?;
         menu_builder = menu_builder.item(&toggle);
+
+        // "Pause for…" submenu — only meaningful while currently recording.
+        // Each click stops capture immediately, then a tokio task auto-resumes
+        // after the chosen interval. See cancel_pause_timer / handle_menu_event.
+        if is_recording {
+            let pause_submenu = SubmenuBuilder::new(app, "Pause for…")
+                .item(&MenuItemBuilder::with_id("pause_5", "5 minutes").build(app)?)
+                .item(&MenuItemBuilder::with_id("pause_15", "15 minutes").build(app)?)
+                .item(&MenuItemBuilder::with_id("pause_30", "30 minutes").build(app)?)
+                .item(&MenuItemBuilder::with_id("pause_60", "1 hour").build(app)?)
+                .build()?;
+            menu_builder = menu_builder.item(&pause_submenu);
+        }
     }
 
     // TODO: vault lock tray item disabled — CLI-only for now
@@ -706,6 +735,10 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
             });
         }
         "start_recording" | "stop_recording" | "toggle_recording" => {
+            // Manual toggle cancels any pending auto-resume — otherwise a user
+            // who paused for 30 min and then resumed early would get re-paused
+            // when the original timer fires.
+            cancel_pause_timer();
             let status = get_recording_status();
             let is_recording = status == RecordingStatus::Recording;
             let (optimistic, event) = if is_recording {
@@ -721,6 +754,31 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
             let app2 = app_handle.clone();
             let _ = app_handle.run_on_main_thread(move || {
                 if let Err(e) = force_tray_rebuild(&app2) {
+                    error!("tray rebuild failed: {}", e);
+                }
+            });
+        }
+        id if id.starts_with("pause_") => {
+            let mins: u64 = id.strip_prefix("pause_").and_then(|s| s.parse().ok()).unwrap_or(15);
+            // Cancel any in-flight pause timer before scheduling a new one.
+            cancel_pause_timer();
+            // Pause now (same path as the manual toggle).
+            set_optimistic_status(RecordingStatus::Paused);
+            let app_for_stop = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                let _ = app_for_stop.emit("shortcut-stop-recording", ());
+            });
+            // Schedule auto-resume.
+            let app_for_resume = app_handle.clone();
+            let handle = tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(mins * 60)).await;
+                let _ = app_for_resume.emit("shortcut-start-recording", ());
+            });
+            *PAUSE_TIMER.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
+            // Repaint the tray so "Recording" flips to "Paused" immediately.
+            let app_for_rebuild = app_handle.clone();
+            let _ = app_handle.run_on_main_thread(move || {
+                if let Err(e) = force_tray_rebuild(&app_for_rebuild) {
                     error!("tray rebuild failed: {}", e);
                 }
             });
