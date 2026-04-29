@@ -466,6 +466,7 @@ async fn main() -> anyhow::Result<()> {
                     map.insert("api_auth".into(), json!(record_args.api_auth));
                     map.insert("encrypt_secrets".into(), json!(record_args.encrypt_secrets));
                     map.insert("retention_days".into(), json!(record_args.retention_days));
+                    map.insert("retention_mode".into(), json!(record_args.retention_mode));
                     // Only send counts for privacy-sensitive lists (not actual values)
                     map.insert(
                         "audio_device_count".into(),
@@ -1236,6 +1237,19 @@ async fn main() -> anyhow::Result<()> {
             format!("{}", record_args.retention_days)
         }
     );
+    println!(
+        "│ retention mode         │ {:<34} │",
+        if record_args.retention_days == 0 {
+            "n/a".to_string()
+        } else {
+            match record_args.retention_mode {
+                screenpipe_engine::retention::RetentionMode::Media => {
+                    "media-only (keep transcripts)".to_string()
+                }
+                screenpipe_engine::retention::RetentionMode::All => "all (full delete)".to_string(),
+            }
+        }
+    );
 
     const VALUE_WIDTH: usize = 34;
 
@@ -1441,6 +1455,7 @@ async fn main() -> anyhow::Result<()> {
     {
         let port = config.port;
         let retention_days = record_args.retention_days;
+        let retention_mode = record_args.retention_mode;
         let retention_enabled = retention_days > 0;
         tokio::spawn(async move {
             if !retention_enabled {
@@ -1455,12 +1470,17 @@ async fn main() -> anyhow::Result<()> {
                 .json(&serde_json::json!({
                     "enabled": true,
                     "retention_days": retention_days,
+                    "mode": retention_mode,
                 }))
                 .send()
                 .await
             {
                 Ok(r) if r.status().is_success() => {
-                    tracing::info!("local retention auto-enabled ({} days)", retention_days);
+                    tracing::info!(
+                        "local retention auto-enabled ({} days, mode={:?})",
+                        retention_days,
+                        retention_mode
+                    );
                 }
                 Ok(r) => {
                     tracing::debug!("retention configure returned {}", r.status());

@@ -11,6 +11,7 @@ use axum::{
     response::Json as JsonResponse,
 };
 use chrono::{DateTime, Duration, Utc};
+use clap::ValueEnum;
 use oasgen::{oasgen, OaSchema};
 use screenpipe_db::DatabaseManager;
 use serde::{Deserialize, Serialize};
@@ -55,8 +56,9 @@ struct RetentionRuntime {
 /// What old data gets cleaned up. `Media` (default) keeps DB rows (search,
 /// timeline, transcripts) and only reclaims mp4/wav/jpeg files; `All` is the
 /// legacy behavior that wipes everything past the cutoff.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, OaSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, OaSchema, ValueEnum)]
 #[serde(rename_all = "lowercase")]
+#[clap(rename_all = "lowercase")]
 pub enum RetentionMode {
     Media,
     All,
