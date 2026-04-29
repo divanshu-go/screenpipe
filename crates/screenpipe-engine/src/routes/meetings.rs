@@ -217,7 +217,11 @@ pub(crate) async fn meeting_status_handler(
     };
 
     Ok(JsonResponse(
-        json!({ "active": any_active, "manual": manual_active }),
+        json!({
+            "active": any_active,
+            "manual": manual_active,
+            "manualActive": manual_active,
+        }),
     ))
 }
 

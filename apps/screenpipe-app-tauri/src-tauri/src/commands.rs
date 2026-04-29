@@ -198,7 +198,16 @@ extern "C" fn native_shortcut_action_callback(action_ptr: *const std::os::raw::c
                         Some(true) => {
                             let req =
                                 api.apply_auth_blocking(client.post(api.url("/meetings/stop")));
-                            let _ = req.send();
+                            if req.send().is_ok() {
+                                native_shortcut_reminder::set_meeting_active(false);
+                                let _ = app_clone.emit(
+                                    "native-shortcut-toggle-meeting",
+                                    serde_json::json!({
+                                        "active": false,
+                                        "manualActive": false,
+                                    }),
+                                );
+                            }
                         }
                         Some(false) => {
                             let req = api.apply_auth_blocking(
@@ -207,14 +216,21 @@ extern "C" fn native_shortcut_action_callback(action_ptr: *const std::os::raw::c
                                     .header("Content-Type", "application/json")
                                     .body(r#"{"app":"manual"}"#),
                             );
-                            let _ = req.send();
+                            if req.send().is_ok() {
+                                native_shortcut_reminder::set_meeting_active(true);
+                                let _ = app_clone.emit(
+                                    "native-shortcut-toggle-meeting",
+                                    serde_json::json!({
+                                        "active": true,
+                                        "manualActive": true,
+                                    }),
+                                );
+                            }
                         }
                         None => {
                             warn!("failed to check meeting status");
                         }
                     }
-                    // Also emit to JS so the home page UI updates immediately if open
-                    let _ = app_clone.emit("native-shortcut-toggle-meeting", "");
                 }
                 _ => {}
             }

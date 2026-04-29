@@ -16,11 +16,6 @@
  * "active" state. We trust the local click for 10s after start.
  */
 
-export interface MeetingRow {
-  meeting_end: string | null;
-  detection_source: string;
-}
-
 export const MEETING_GRACE_PERIOD_MS = 10_000;
 
 export interface MeetingActiveState {
@@ -30,24 +25,30 @@ export interface MeetingActiveState {
   manualActive: boolean;
 }
 
+export interface MeetingStatusResponse {
+  active?: boolean;
+  manual?: boolean;
+  manualActive?: boolean;
+}
+
 /**
- * Decide the phone-icon state given the latest poll response and the
- * timestamp of the last user click.
+ * Decide the phone-icon state given the latest meeting status response and
+ * the timestamp of the last user click.
  *
- * @param meetings  rows from GET /meetings
+ * @param status  response from GET /meetings/status
  * @param startedAtMs  timestamp (ms) of last user click on "start" (0 if never)
  * @param nowMs  current time in ms (injectable for tests)
  */
 export function computeMeetingActive(
-  meetings: MeetingRow[],
+  status: MeetingStatusResponse | null | undefined,
   startedAtMs: number,
   nowMs: number = Date.now(),
 ): MeetingActiveState {
-  const activeRows = meetings.filter((m) => m.meeting_end === null);
-  const hasActiveManual = activeRows.some((m) => m.detection_source === "manual");
-
-  if (activeRows.length > 0) {
-    return { active: true, manualActive: hasActiveManual };
+  if (status?.active) {
+    return {
+      active: true,
+      manualActive: status.manualActive ?? status.manual ?? false,
+    };
   }
 
   // No active meeting from server — but if we're within the grace period

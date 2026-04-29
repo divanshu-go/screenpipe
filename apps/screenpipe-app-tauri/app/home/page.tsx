@@ -47,7 +47,7 @@ import { useTeam } from "@/lib/hooks/use-team";
 import { useEnterprisePolicy } from "@/lib/hooks/use-enterprise-policy";
 import { EnterpriseLicensePrompt } from "@/components/enterprise-license-prompt";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
-import { computeMeetingActive, type MeetingRow } from "@/lib/utils/meeting-state";
+import { computeMeetingActive, type MeetingStatusResponse } from "@/lib/utils/meeting-state";
 import { useRouter } from "next/navigation";
 import { localFetch } from "@/lib/api";
 import {
@@ -258,8 +258,7 @@ function HomeContent() {
   }, [settings.monitorIds, settings.useAllMonitors]);
 
   // Active meeting state — lights up the phone icon for ANY active meeting
-  // (manual OR auto-detected: Teams, Zoom, etc.). manualActive is true only
-  // when the user can stop it via the icon click.
+  // (manual OR auto-detected: Teams, Zoom, etc.).
   const [meetingState, setMeetingState] = useState<{ active: boolean; manualActive: boolean }>(
     { active: false, manualActive: false },
   );
@@ -268,15 +267,26 @@ function HomeContent() {
   // Timestamp when user clicked start, used for a 10s grace period so a
   // stale poll can't clear local state before the server persists the row.
   const manualMeetingStartedAt = useRef<number>(0);
+  const refreshMeetingState = useCallback(() => {
+    localFetch("/meetings/status")
+      .then((r) => r.ok ? r.json() : null)
+      .then((status: MeetingStatusResponse | null) => {
+        setMeetingState(
+          computeMeetingActive(status, manualMeetingStartedAt.current),
+        );
+      })
+      .catch(() => {});
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     const check = () => {
-      localFetch("/meetings?limit=5")
-        .then((r) => r.ok ? r.json() : [])
-        .then((meetings: MeetingRow[]) => {
+      localFetch("/meetings/status")
+        .then((r) => r.ok ? r.json() : null)
+        .then((status: MeetingStatusResponse | null) => {
           if (cancelled) return;
           setMeetingState(
-            computeMeetingActive(meetings, manualMeetingStartedAt.current),
+            computeMeetingActive(status, manualMeetingStartedAt.current),
           );
         })
         .catch(() => {});
@@ -284,20 +294,18 @@ function HomeContent() {
     check();
     const interval = setInterval(check, 5000);
     return () => { cancelled = true; clearInterval(interval); };
-  }, []);
+  }, [refreshMeetingState]);
 
   const toggleMeeting = useCallback(async () => {
     setMeetingLoading(true);
     try {
-      if (meetingState.manualActive) {
-        // Stop the manual meeting we previously started
-        await localFetch("/meetings/stop", { method: "POST" });
-        manualMeetingStartedAt.current = 0;
-        setMeetingState({ active: false, manualActive: false });
-      } else if (meetingState.active) {
-        // Auto-detected meeting in progress — icon is a passive indicator,
-        // user can't stop someone else's Teams/Zoom call from here
-        return;
+      if (meetingState.active) {
+        // Stop the currently active meeting, whether manual or auto-detected.
+        const res = await localFetch("/meetings/stop", { method: "POST" });
+        if (res.ok) {
+          manualMeetingStartedAt.current = 0;
+          setMeetingState({ active: false, manualActive: false });
+        }
       } else {
         // No meeting active — start a manual one
         const res = await localFetch("/meetings/start", {
@@ -317,14 +325,29 @@ function HomeContent() {
     }
   }, [meetingState]);
 
-  // Native overlay: toggle meeting when user clicks phone icon in Swift overlay
+  // Native overlay already toggles the meeting in Rust. Refresh local state
+  // here instead of toggling again, otherwise one click can create or stop
+  // two meetings depending on which UI surfaces are mounted.
   useEffect(() => {
     let unlisten: (() => void) | null = null;
-    listen("native-shortcut-toggle-meeting", () => {
-      toggleMeeting();
+    listen<{ active?: boolean; manualActive?: boolean }>("native-shortcut-toggle-meeting", (event) => {
+      const payload = event.payload;
+      if (typeof payload?.active === "boolean") {
+        if (payload.active) {
+          manualMeetingStartedAt.current = Date.now();
+        } else {
+          manualMeetingStartedAt.current = 0;
+        }
+        setMeetingState({
+          active: payload.active,
+          manualActive: payload.manualActive ?? false,
+        });
+        return;
+      }
+      refreshMeetingState();
     }).then((fn) => { unlisten = fn; });
     return () => { unlisten?.(); };
-  }, [toggleMeeting]);
+  }, [refreshMeetingState]);
 
   // Watch pipe: navigate to chat when user clicks "watch" on a running pipe
   useEffect(() => {
@@ -555,7 +578,7 @@ function HomeContent() {
                       <TooltipTrigger asChild>
                         <button
                           onClick={toggleMeeting}
-                          disabled={meetingLoading || (meetingState.active && !meetingState.manualActive)}
+                          disabled={meetingLoading}
                           className={cn(
                             "relative flex items-center justify-center h-5 w-5 rounded transition-colors",
                             isTranslucent ? "vibrant-nav-item hover:bg-white/10" : "text-muted-foreground hover:text-foreground hover:bg-muted"
@@ -568,7 +591,7 @@ function HomeContent() {
                         </button>
                       </TooltipTrigger>
                       <TooltipContent side="top" className="text-xs">
-                        {meetingState.manualActive ? "stop meeting" : meetingState.active ? "meeting detected" : "start meeting"}
+                        {meetingState.active ? "stop meeting" : "start meeting"}
                       </TooltipContent>
                     </Tooltip>
                   </div>

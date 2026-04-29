@@ -15,6 +15,13 @@ public func shortcutSetActionCallback(_ cb: @escaping ShortcutActionCallback) {
     gShortcutCallback = cb
 }
 
+@_cdecl("shortcut_set_meeting_active")
+public func shortcutSetMeetingActive(_ active: Int32) {
+    if #available(macOS 13.0, *) {
+        ShortcutReminderController.shared.setMeetingActive(active != 0)
+    }
+}
+
 // MARK: - Metrics data pushed from Rust
 
 struct OverlayMetrics {
@@ -501,6 +508,15 @@ class ShortcutReminderController: NSObject {
                 }
             }
         }.resume()
+    }
+
+    func setMeetingActive(_ active: Bool) {
+        DispatchQueue.main.async { [self] in
+            if self.metrics.meetingActive != active {
+                self.metrics.meetingActive = active
+                self.updateContent()
+            }
+        }
     }
 
     private func parseShortcuts(_ json: String) {
