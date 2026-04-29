@@ -22,6 +22,11 @@ pub struct DeleteTimeRangeRequest {
     pub start: DateTime<Utc>,
     #[serde(deserialize_with = "super::time::deserialize_flexible_datetime")]
     pub end: DateTime<Utc>,
+    /// When true, also delete local-only mp4/wav files that haven't been
+    /// uploaded to cloud yet. The default (`false`) preserves the original
+    /// cloud-archive-aware behavior used by sync flows.
+    #[serde(default)]
+    pub local_only: bool,
 }
 
 #[derive(Serialize, OaSchema)]
@@ -49,16 +54,23 @@ pub(crate) async fn delete_time_range_handler(
         ));
     }
 
-    let result = state
-        .db
-        .delete_time_range(payload.start, payload.end)
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                JsonResponse(json!({"error": format!("failed to delete time range: {}", e)})),
-            )
-        })?;
+    let result = if payload.local_only {
+        state
+            .db
+            .delete_time_range_local(payload.start, payload.end)
+            .await
+    } else {
+        state
+            .db
+            .delete_time_range(payload.start, payload.end)
+            .await
+    }
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            JsonResponse(json!({"error": format!("failed to delete time range: {}", e)})),
+        )
+    })?;
 
     // Delete files from disk AFTER successful DB commit
     let mut video_files_deleted: u64 = 0;

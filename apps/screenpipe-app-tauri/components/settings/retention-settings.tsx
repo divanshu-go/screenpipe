@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/use-toast";
-import { Trash2, Loader2, Play, AlertTriangle } from "lucide-react";
+import { Trash2, Loader2, Play, AlertTriangle, Clock } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -57,6 +57,12 @@ function formatRelativeTime(isoString: string): string {
   return `${diffDays}d ago`;
 }
 
+const RECENT_DELETE_OPTIONS = [
+  { minutes: 15, label: "last 15 min" },
+  { minutes: 30, label: "last 30 min" },
+  { minutes: 60, label: "last hour" },
+];
+
 export function RetentionSettings() {
   const { settings, updateSettings } = useSettings();
   const { toast } = useToast();
@@ -64,6 +70,8 @@ export function RetentionSettings() {
   const [toggling, setToggling] = useState(false);
   const [running, setRunning] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
+  const [pendingRecent, setPendingRecent] = useState<number | null>(null);
+  const [deletingRecent, setDeletingRecent] = useState(false);
 
   const enabled = settings.localRetentionEnabled ?? false;
   const retentionDays = settings.localRetentionDays ?? 14;
@@ -164,6 +172,49 @@ export function RetentionSettings() {
     }
   };
 
+  const confirmDeleteRecent = async () => {
+    if (pendingRecent === null) return;
+    const minutes = pendingRecent;
+    setPendingRecent(null);
+    setDeletingRecent(true);
+    try {
+      const end = new Date();
+      const start = new Date(end.getTime() - minutes * 60_000);
+      const res = await localFetch("/data/delete-range", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          start: start.toISOString(),
+          end: end.toISOString(),
+          local_only: true,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `request failed (${res.status})`);
+      }
+      const r = await res.json();
+      const total =
+        (r.frames_deleted || 0) +
+        (r.audio_transcriptions_deleted || 0) +
+        (r.ui_events_deleted || 0);
+      const files = (r.video_files_deleted || 0) + (r.audio_files_deleted || 0);
+      toast({
+        title: `deleted last ${minutes} min`,
+        description: `${total.toLocaleString()} records, ${files} files removed from disk`,
+      });
+      fetchStatus();
+    } catch (e: any) {
+      toast({
+        title: "failed to delete recent data",
+        description: e.message,
+        variant: "destructive",
+      });
+    } finally {
+      setDeletingRecent(false);
+    }
+  };
+
   const handleRunNow = async () => {
     setRunning(true);
     try {
@@ -191,7 +242,36 @@ export function RetentionSettings() {
   return (
     <>
       <div className="space-y-4 pt-4 border-t border-border">
-        <div className="flex items-center justify-between">
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <Clock className="h-4 w-4 text-muted-foreground" />
+            <div>
+              <p className="text-sm font-medium">delete recent data</p>
+              <p className="text-xs text-muted-foreground">
+                instantly purge everything captured in the chosen window
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 pl-6">
+            {RECENT_DELETE_OPTIONS.map((opt) => (
+              <Button
+                key={opt.minutes}
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={() => setPendingRecent(opt.minutes)}
+                disabled={deletingRecent}
+              >
+                {deletingRecent && pendingRecent === null ? (
+                  <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+                ) : null}
+                {opt.label}
+              </Button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between pt-2 border-t border-border/50">
           <div className="flex items-center gap-2">
             <Trash2 className="h-4 w-4 text-muted-foreground" />
             <div>
@@ -267,6 +347,35 @@ export function RetentionSettings() {
           you want to keep a backup.
         </p>
       </div>
+
+      <AlertDialog
+        open={pendingRecent !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingRecent(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              delete the last {pendingRecent} minutes?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              this permanently removes every screen recording, audio segment,
+              transcription, and ocr capture from the last {pendingRecent}{" "}
+              minutes. files are also deleted from disk. this cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmDeleteRecent}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              delete {pendingRecent} min of data
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={showConfirm} onOpenChange={setShowConfirm}>
         <AlertDialogContent>
