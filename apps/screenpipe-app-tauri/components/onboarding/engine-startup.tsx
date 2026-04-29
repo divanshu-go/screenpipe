@@ -41,14 +41,27 @@ const TAKING_LONGER_MS = 8000;
 const STUCK_TIMEOUT_MS = 15000;
 // Fallback timer — if the streaming summary never completes (no token, network
 // fails, model errors), we still let the user continue after this delay.
-const LIVE_FEED_FALLBACK_MS = 12000;
-const LIVE_FEED_POLL_MS = 3000;
-// Once we have at least this many distinct signals, we have enough to write a
-// summary worth showing. More items = richer prose, but waiting forever on a
-// quiet machine just blocks the user.
-const SUMMARY_MIN_ITEMS = 2;
+const LIVE_FEED_FALLBACK_MS = 7000;
+const LIVE_FEED_POLL_MS = 2000;
+// One real signal is enough to summarize. Holding out for two means a quiet
+// machine (or one whose accessibility text just hasn't flushed yet) blocks the
+// summary from ever starting and the user stares at "settling in" forever.
+const SUMMARY_MIN_ITEMS = 1;
 const SUMMARY_MAX_ITEMS = 8;
 const MAX_THUMBNAILS = 3;
+// If we have zero captured signals after this long the engine just isn't
+// producing data fast enough to summarize warmly — switch the copy to honest
+// "i'm running, activity will appear here" instead of the cryptic spinner.
+const NO_ACTIVITY_GRACE_MS = 9000;
+// Stop hammering the search route for frames after this long with zero
+// returns. The mp4 file may not have any extractable keyframes yet (the
+// backend logs "failed to extract frame: no data received"); pretending
+// otherwise just spams the engine.
+const HIDE_THUMBS_AFTER_MS = 10000;
+// Minimum size for a frame to be plausibly real. Smaller than this and it's
+// almost certainly a corrupted/empty payload — render nothing rather than a
+// broken-image icon.
+const MIN_FRAME_B64_LEN = 1000;
 
 // Words that smell like plumbing. The system prompt forbids them, but models
 // leak. If any show up in the stream we drop the chunk on the floor and let
@@ -313,7 +326,11 @@ export default function EngineStartup({
           const frames: string[] = [];
           for (const result of ocrData.data || []) {
             const frame = result.content?.frame;
-            if (typeof frame === "string" && frame.length > 0) {
+            // Defensive: backend logs "failed to extract frame: no data
+            // received" when ffmpeg can't seek to the requested offset
+            // (file still being written). It then returns null/empty/short
+            // payload — render nothing rather than a broken image.
+            if (typeof frame === "string" && frame.length >= MIN_FRAME_B64_LEN) {
               frames.push(frame);
             }
             if (frames.length >= MAX_THUMBNAILS) break;
@@ -728,7 +745,22 @@ if the input is sparse, just describe what little you have warmly. don't apologi
   // ── Live feed phase ──
   if (state === "live-feed") {
     const placeholderTiles = MAX_THUMBNAILS - thumbnails.length;
-    const showWaiting = !summaryStreaming && summaryText.length === 0;
+    // After the grace window, if we still have nothing captured, drop the
+    // "settling in" copy in favor of an honest "i'm up and watching" state.
+    // The user is allowed to continue regardless — we don't want to gate the
+    // onboarding on best-effort proof.
+    const noActivityYet =
+      feedSeconds >= NO_ACTIVITY_GRACE_MS / 1000 &&
+      activityItems.length === 0 &&
+      !summaryStreaming &&
+      summaryText.length === 0;
+    const showWaiting =
+      !summaryStreaming && summaryText.length === 0 && !noActivityYet;
+    // Hide the dashed-tile row if we haven't gotten any real frames after
+    // the cutoff — placeholder dashes that never fill in look broken.
+    const hideThumbnailRow =
+      thumbnails.length === 0 && feedSeconds >= HIDE_THUMBS_AFTER_MS / 1000;
+    const allowContinueNow = canContinue || noActivityYet;
 
     return (
       <div className="w-full flex flex-col items-center justify-center min-h-[400px]">
@@ -760,7 +792,16 @@ if the input is sparse, just describe what little you have warmly. don't apologi
 
           {/* Streaming prose — sans-serif body, soft and readable */}
           <div className="w-full min-h-[140px] flex items-start">
-            {showWaiting ? (
+            {noActivityYet ? (
+              <motion.p
+                className="font-sans text-sm text-muted-foreground/70 leading-relaxed text-center w-full"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+              >
+                screenpipe is up and watching. as you work, what you see and
+                say will start appearing here. you can continue now.
+              </motion.p>
+            ) : showWaiting ? (
               <motion.p
                 className="font-sans text-sm text-muted-foreground/50 leading-relaxed text-center w-full"
                 initial={{ opacity: 0 }}
@@ -789,35 +830,39 @@ if the input is sparse, just describe what little you have warmly. don't apologi
             )}
           </div>
 
-          {/* Thumbnail tiles — small, blurred, decorative proof of capture */}
-          <div className="flex gap-2 w-full justify-center">
-            {thumbnails.map((b64, i) => (
-              <motion.div
-                key={`thumb-${i}`}
-                className="relative w-20 h-14 overflow-hidden border border-border/60 bg-muted/30"
-                initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1 }}
-                transition={{ delay: i * 0.12, duration: 0.4 }}
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={`data:image/jpeg;base64,${b64}`}
-                  alt=""
-                  className="w-full h-full object-cover blur-[6px] scale-110 opacity-70"
+          {/* Thumbnail tiles — small, blurred, decorative proof of capture.
+              Only render the row if we have real frames or are still within
+              the grace window — empty dashed boxes look broken. */}
+          {!hideThumbnailRow && (
+            <div className="flex gap-2 w-full justify-center">
+              {thumbnails.map((b64, i) => (
+                <motion.div
+                  key={`thumb-${i}`}
+                  className="relative w-20 h-14 overflow-hidden border border-border/60 bg-muted/30"
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={{ delay: i * 0.12, duration: 0.4 }}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={`data:image/jpeg;base64,${b64}`}
+                    alt=""
+                    className="w-full h-full object-cover blur-[6px] scale-110 opacity-70"
+                  />
+                  <div className="absolute inset-0 bg-foreground/5" />
+                </motion.div>
+              ))}
+              {Array.from({ length: Math.max(0, placeholderTiles) }).map((_, i) => (
+                <motion.div
+                  key={`ph-${i}`}
+                  className="w-20 h-14 border border-dashed border-border/40 bg-muted/10"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ delay: 0.2 + i * 0.1 }}
                 />
-                <div className="absolute inset-0 bg-foreground/5" />
-              </motion.div>
-            ))}
-            {Array.from({ length: Math.max(0, placeholderTiles) }).map((_, i) => (
-              <motion.div
-                key={`ph-${i}`}
-                className="w-20 h-14 border border-dashed border-border/40 bg-muted/10"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ delay: 0.2 + i * 0.1 }}
-              />
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
 
           <p className="font-mono text-[10px] text-muted-foreground/50 text-center lowercase tracking-wide">
             stays on your machine ·{" "}
@@ -832,14 +877,14 @@ if the input is sparse, just describe what little you have warmly. don't apologi
 
           <button
             onClick={handleContinue}
-            disabled={!canContinue}
+            disabled={!allowContinueNow}
             className={`w-full border py-3 font-mono text-sm uppercase tracking-widest transition-colors duration-150 ${
-              canContinue
+              allowContinueNow
                 ? "border-foreground bg-foreground text-background hover:bg-background hover:text-foreground"
                 : "border-border text-muted-foreground/30 cursor-not-allowed"
             }`}
           >
-            {canContinue ? "continue" : "writing…"}
+            {allowContinueNow ? "continue" : "writing…"}
           </button>
         </motion.div>
 
