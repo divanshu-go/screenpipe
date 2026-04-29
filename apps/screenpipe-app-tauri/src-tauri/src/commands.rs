@@ -476,11 +476,19 @@ pub fn show_main_window(app_handle: &tauri::AppHandle, _overlay: bool) {
 
             // NOTE: On macOS, Escape is registered only from the focus-gain handler
             // in window/show.rs (duplicate RegisterEventHotKey fails there).
-            // On Windows/Linux, set_focus can succeed without delivering a new
-            // Focused(true) event when Home already had focus — then Escape never
-            // re-registers until another focus cycle. Sync once after show.
+            // On Windows/Linux, bypass the is_visible() guard — window.show() posts
+            // an async Win32 message so IsWindowVisible returns false in the same
+            // synchronous frame, causing register_if_main_visible to skip silently.
+            // IMPORTANT: spawn a new thread — show_main_window is invoked from within
+            // the global-shortcut callback which holds the plugin's handler-map lock.
+            // Calling on_shortcut() from inside that callback deadlocks.
             #[cfg(not(target_os = "macos"))]
-            register_window_shortcuts_if_main_visible(app_handle.clone());
+            {
+                let app = app_handle.clone();
+                std::thread::spawn(move || {
+                    let _ = register_window_shortcuts_with_generation(app);
+                });
+            }
         }
         Err(e) => {
             error!("ShowRewindWindow::Main.show failed: {}", e);
@@ -1001,6 +1009,18 @@ pub async fn search_navigate_to_timeline(
     ShowRewindWindow::Main
         .show(&app_handle)
         .map_err(|e| e.to_string())?;
+
+    // Register Escape shortcut so it works even when the overlay doesn't gain keyboard
+    // focus (e.g. Home window keeps focus when a search result opens the overlay).
+    // Bypass register_if_main_visible: window.show() is async on Windows so
+    // IsWindowVisible returns false in the same frame, causing silent skip.
+    #[cfg(not(target_os = "macos"))]
+    {
+        let app = app_handle.clone();
+        std::thread::spawn(move || {
+            let _ = register_window_shortcuts_with_generation(app);
+        });
+    }
 
     // Emit the navigation event multiple times — the Main webview may take
     // varying time to restore from order_out and mount the event listener.
