@@ -1227,12 +1227,12 @@ async fn main() {
             let file_layer = tracing_subscriber::fmt::layer()
                 .with_writer(file_appender)
                 .with_ansi(false)
-                .with_filter(EnvFilter::new("info,hyper=error,tower_http=error,whisper_rs=warn,audiopipe=warn"));
+                .with_filter(EnvFilter::new("info,hyper=error,tower_http=error,whisper_rs=warn,audiopipe=warn,ort=warn"));
 
             // Create a custom layer for console logging
             let console_layer = tracing_subscriber::fmt::layer()
                 .with_writer(std::io::stdout)
-                .with_filter(EnvFilter::new("info,hyper=error,tower_http=error,whisper_rs=warn,audiopipe=warn"));
+                .with_filter(EnvFilter::new("info,hyper=error,tower_http=error,whisper_rs=warn,audiopipe=warn,ort=warn"));
 
             // Initialize the tracing subscriber with both layers + optional Sentry layer
             // The Sentry layer captures error!() and warn!() events (not just panics)
