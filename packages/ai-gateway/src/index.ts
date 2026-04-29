@@ -10,6 +10,7 @@ import { handleFileTranscription, handleABTestAdmin } from './handlers/transcrip
 import { handleVoiceTranscription, handleVoiceQuery, handleTextToSpeech, handleVoiceChat } from './handlers/voice';
 import { handleVertexProxy, handleVertexModels } from './handlers/vertex-proxy';
 import { handleWebSearch } from './handlers/web-search';
+import { handleTinfoilAttestation, handleTinfoilProxy } from './handlers/tinfoil-proxy';
 import { logCost, getModelCost, inferProvider, getSpendSummary, getDailyUserCost, getMaxDailyCostPerUser, getTierDailyCostCap, isZeroCostModel } from './services/cost-tracker';
 import { trackResponseUsage } from './utils/stream-usage-tracker';
 import { getModelWeight } from './services/usage-tracker';
@@ -281,6 +282,23 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
 			ctx.waitUntil(pruneModelHealth(env));
 			// Return tier-filtered models with live health status
 			return await handleModelListing(env, authResult.tier);
+		}
+
+		// ─── Tinfoil E2EE proxy ────────────────────────────────────────
+		// Distinct from the server-side `gemma4-31b` integration in
+		// providers/tinfoil.ts — these routes preserve end-to-end body
+		// encryption (HPKE/EHBP). The gateway never sees plaintext.
+		// Spec: https://docs.tinfoil.sh/guides/proxy-server
+		if (path === '/v1/tinfoil/attestation' && request.method === 'GET') {
+			// Public-ish (still tier-gated above so we know who's calling) —
+			// just forwards the attestation bundle which is itself public.
+			return await handleTinfoilAttestation(env);
+		}
+		if (path === '/v1/tinfoil/chat/completions' && request.method === 'POST') {
+			return await handleTinfoilProxy(request, env, authResult, '/v1/chat/completions');
+		}
+		if (path === '/v1/tinfoil/responses' && request.method === 'POST') {
+			return await handleTinfoilProxy(request, env, authResult, '/v1/responses');
 		}
 
 		if (path === '/v1/voice/transcribe' && request.method === 'POST') {
