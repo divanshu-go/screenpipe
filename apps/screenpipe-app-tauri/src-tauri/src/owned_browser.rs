@@ -123,18 +123,32 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
             .get_webview_window(WEBVIEW_LABEL)
             .ok_or_else(|| "owned-browser webview window not found".to_string())?;
 
-        // If a target URL was supplied and the current location isn't on it,
-        // navigate first. Tauri's `eval` is fire-and-forget so we wait a
-        // beat for the page to start loading. The frontend listens to
-        // NAVIGATE_EVENT so it can mount the sidebar before the page paints.
+        // A hidden WebView2 window can accept `eval()` without actually
+        // executing the script. Make sure the native webview is live before
+        // we use JS either for navigation or result delivery. If this was a
+        // code-only background eval, restore the hidden state at the end; URL
+        // navigations are expected to remain visible because the frontend
+        // sidebar will receive NAVIGATE_EVENT and position the window.
+        let was_visible = webview_window.is_visible().unwrap_or(false);
+        if !was_visible {
+            let _ = webview_window.show();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        // If a target URL was supplied, navigate via Tauri's native navigate
+        // API instead of `eval("location.href = ...")`. On Windows/WebView2
+        // the old eval-based navigation could no-op while the window was
+        // hidden/offscreen, leaving the request waiting forever for a title
+        // marker that would never be written.
         if let Some(target) = url {
-            let _ = self.app.emit(NAVIGATE_EVENT, target);
-            let target_lit = serde_json::to_string(target).unwrap_or_default();
-            let _ = webview_window.eval(format!(
-                "if (!location.href.includes({lit})) location.href = {lit};",
-                lit = target_lit
-            ));
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            let parsed: url::Url = target
+                .parse()
+                .map_err(|e: url::ParseError| format!("invalid url: {e}"))?;
+            let _ = self.app.emit(NAVIGATE_EVENT, parsed.as_str());
+            webview_window
+                .navigate(parsed)
+                .map_err(|e| format!("webview.navigate failed: {e}"))?;
+            tokio::time::sleep(Duration::from_millis(1_000)).await;
         }
 
         // Snapshot the current title so we can restore it after we read
@@ -184,6 +198,9 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
         let start = Instant::now();
         let result_json = loop {
             if start.elapsed() >= timeout {
+                if !was_visible && url.is_none() {
+                    let _ = webview_window.hide();
+                }
                 return Err(format!(
                     "owned-browser eval timed out after {}s (last title: {:?})",
                     timeout.as_secs(),
@@ -202,6 +219,9 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
         // tab labels in any embedding UI) doesn't keep our marker.
         let restore_lit = serde_json::to_string(&original_title).unwrap_or_else(|_| "\"\"".into());
         let _ = webview_window.eval(format!("document.title = {restore_lit};"));
+        if !was_visible && url.is_none() {
+            let _ = webview_window.hide();
+        }
 
         // Parse the payload our wrapper emitted. We expect the same
         // shape as before: { id, ok, result?, error? }.
