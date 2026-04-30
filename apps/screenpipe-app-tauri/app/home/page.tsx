@@ -351,7 +351,7 @@ function HomeContent() {
     };
   }, []);
 
-  const toggleMeeting = useCallback(async () => {
+  const toggleMeeting = useCallback(async (seed?: { title?: string; attendees?: string }) => {
     setMeetingLoading(true);
     try {
       if (meetingState.active) {
@@ -374,11 +374,15 @@ function HomeContent() {
           });
         }
       } else {
-        // No meeting active — start a manual one
+        // No meeting active — start a manual one (optionally seeded from a
+        // calendar event when the caller has it).
+        const body: Record<string, string> = { app: "manual" };
+        if (seed?.title) body.title = seed.title;
+        if (seed?.attendees) body.attendees = seed.attendees;
         const res = await localFetch("/meetings/start", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ app: "manual" }),
+          body: JSON.stringify(body),
         });
         if (res.ok) {
           manualMeetingStartedAt.current = Date.now();
@@ -685,7 +689,7 @@ function HomeContent() {
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <button
-                          onClick={toggleMeeting}
+                          onClick={() => toggleMeeting()}
                           disabled={meetingLoading}
                           className={cn(
                             "relative flex items-center justify-center h-5 w-5 rounded transition-colors",

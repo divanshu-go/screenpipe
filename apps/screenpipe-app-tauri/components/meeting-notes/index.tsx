@@ -9,15 +9,25 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { localFetch } from "@/lib/api";
 import type { MeetingStatusResponse } from "@/lib/utils/meeting-state";
 import type { MeetingRecord } from "@/lib/utils/meeting-format";
+import {
+  attendeesToString,
+  fetchUpcomingCalendarEvents,
+  findOverlappingEvent,
+  pickComingUp,
+  type CalendarEvent,
+} from "@/lib/utils/calendar";
 import { ListView } from "./list-view";
 import { NoteView } from "./note-view";
 
 const PAGE_SIZE = 30;
+const CALENDAR_REFRESH_MS = 60_000;
 
 interface MeetingNotesSectionProps {
   meetingState: MeetingStatusResponse & { manualActive: boolean };
   meetingLoading: boolean;
-  onToggleMeeting: () => Promise<void> | void;
+  onToggleMeeting: (
+    seed?: { title?: string; attendees?: string },
+  ) => Promise<void> | void;
   /**
    * Called when the section enters or exits focused note mode.
    * The host (HomeContent) collapses the sidebar on enter and
@@ -39,6 +49,7 @@ export function MeetingNotesSection({
   const [hasMore, setHasMore] = useState(true);
   const [errorText, setErrorText] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [upcoming, setUpcoming] = useState<CalendarEvent[]>([]);
 
   const fetchPage = useCallback(
     async (offset: number, append: boolean) => {
@@ -75,11 +86,32 @@ export function MeetingNotesSection({
   // Refetch on visibility change — picks up changes made elsewhere
   useEffect(() => {
     const handler = () => {
-      if (document.visibilityState === "visible") void fetchPage(0, false);
+      if (document.visibilityState === "visible") {
+        void fetchPage(0, false);
+        void refreshUpcoming();
+      }
     };
     document.addEventListener("visibilitychange", handler);
     return () => document.removeEventListener("visibilitychange", handler);
+    // refreshUpcoming is stable
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchPage]);
+
+  // Calendar — fetch upcoming events for the "Coming up" section. Polls
+  // periodically so the "starts in Xm" copy stays accurate. If the calendar
+  // isn't connected, this returns null and the section stays hidden.
+  const refreshUpcoming = useCallback(async () => {
+    const events = await fetchUpcomingCalendarEvents({ hoursAhead: 8 });
+    if (events !== null) setUpcoming(events);
+  }, []);
+
+  useEffect(() => {
+    void refreshUpcoming();
+    const handle = setInterval(() => {
+      void refreshUpcoming();
+    }, CALENDAR_REFRESH_MS);
+    return () => clearInterval(handle);
+  }, [refreshUpcoming]);
 
   // Refresh when active meeting transitions (start / stop). When the
   // user just clicked "new meeting", `intendingToFocusRef` is set, so
@@ -119,11 +151,92 @@ export function MeetingNotesSection({
     setSelectedId(null);
   }, [meetings, selectedId]);
 
-  const handleStart = useCallback(async () => {
-    if (meetingState.active) return;
-    intendingToFocusRef.current = true;
-    await onToggleMeeting();
-  }, [meetingState.active, onToggleMeeting]);
+  // Auto-enrich a freshly-active meeting with calendar metadata when both
+  // title AND attendees are blank. Auto-detected meetings already get this
+  // server-side; this is the backstop for manual meetings and for any
+  // races where the calendar wasn't loaded when the row was inserted.
+  const enrichedMeetingIdsRef = useRef<Set<number>>(new Set());
+  useEffect(() => {
+    const id = meetingState.activeMeetingId ?? null;
+    if (id === null) return;
+    if (enrichedMeetingIdsRef.current.has(id)) return;
+    const meeting = meetings.find((m) => m.id === id);
+    if (!meeting) return; // wait for fetchPage to populate it
+    const titleEmpty = !meeting.title || !meeting.title.trim();
+    const attendeesEmpty = !meeting.attendees || !meeting.attendees.trim();
+    if (!titleEmpty && !attendeesEmpty) {
+      enrichedMeetingIdsRef.current.add(id);
+      return;
+    }
+    enrichedMeetingIdsRef.current.add(id);
+    void (async () => {
+      const events = await fetchUpcomingCalendarEvents({
+        hoursBack: 1,
+        hoursAhead: 1,
+      });
+      if (!events) return;
+      const overlap = findOverlappingEvent(
+        events,
+        meeting.meeting_start,
+        meeting.meeting_end,
+      );
+      if (!overlap) return;
+      const next = {
+        title: titleEmpty ? overlap.title : meeting.title || "",
+        attendees: attendeesEmpty
+          ? attendeesToString(overlap.attendees)
+          : meeting.attendees || "",
+      };
+      try {
+        const body: Record<string, string> = {
+          title: next.title,
+          meeting_start: meeting.meeting_start,
+          attendees: next.attendees,
+          note: meeting.note ?? "",
+        };
+        if (meeting.meeting_end) body.meeting_end = meeting.meeting_end;
+        const res = await localFetch(`/meetings/${meeting.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (res.ok) {
+          setMeetings((prev) =>
+            prev.map((m) =>
+              m.id === meeting.id
+                ? {
+                    ...m,
+                    title: next.title || null,
+                    attendees: next.attendees || null,
+                  }
+                : m,
+            ),
+          );
+        }
+      } catch (err) {
+        console.warn("meeting notes: auto-enrich failed", err);
+      }
+    })();
+  }, [meetings, meetingState.activeMeetingId]);
+
+  const handleStart = useCallback(
+    async (seed?: { title?: string; attendees?: string }) => {
+      if (meetingState.active) return;
+      intendingToFocusRef.current = true;
+      await onToggleMeeting(seed);
+    },
+    [meetingState.active, onToggleMeeting],
+  );
+
+  const handleStartFromEvent = useCallback(
+    async (event: CalendarEvent) => {
+      await handleStart({
+        title: event.title,
+        attendees: attendeesToString(event.attendees),
+      });
+    },
+    [handleStart],
+  );
 
   const handleStop = useCallback(async () => {
     if (!meetingState.active) return;
@@ -158,6 +271,19 @@ export function MeetingNotesSection({
   const activeId = meetingState.activeMeetingId ?? null;
   const isLive =
     selected !== null && selected.id === activeId && meetingState.active === true;
+
+  const activeMeeting = activeId
+    ? meetings.find((m) => m.id === activeId) ?? null
+    : null;
+  const comingUp = useMemo(
+    () =>
+      pickComingUp(upcoming, {
+        excludeOverlappingActive: meetingState.active === true,
+        activeMeetingStartIso: activeMeeting?.meeting_start ?? null,
+        activeMeetingEndIso: activeMeeting?.meeting_end ?? null,
+      }),
+    [upcoming, meetingState.active, activeMeeting],
+  );
 
   if (loading) {
     return (
@@ -206,13 +332,16 @@ export function MeetingNotesSection({
       meetings={meetings}
       activeId={activeId}
       onSelect={setSelectedId}
-      onStart={handleStart}
+      onStart={() => handleStart()}
+      onStartFromEvent={handleStartFromEvent}
       starting={meetingLoading}
       loadingMore={loadingMore}
       hasMore={hasMore}
       onLoadMore={handleLoadMore}
       errorText={errorText}
       onRetry={handleRetry}
+      comingUp={comingUp}
+      meetingActive={meetingState.active === true}
     />
   );
 }

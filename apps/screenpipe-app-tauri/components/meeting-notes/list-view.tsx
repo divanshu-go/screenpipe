@@ -12,6 +12,8 @@ import {
   formatDuration,
   type MeetingRecord,
 } from "@/lib/utils/meeting-format";
+import type { CalendarEvent } from "@/lib/utils/calendar";
+import { ComingUp } from "./coming-up";
 
 interface DayBucket {
   key: string; // YYYY-MM-DD
@@ -51,12 +53,15 @@ interface ListViewProps {
   activeId: number | null;
   onSelect: (id: number) => void;
   onStart: () => void | Promise<void>;
+  onStartFromEvent: (event: CalendarEvent) => void | Promise<void>;
   starting: boolean;
   loadingMore: boolean;
   hasMore: boolean;
   onLoadMore: () => void;
   errorText: string | null;
   onRetry: () => void;
+  comingUp: CalendarEvent[];
+  meetingActive: boolean;
 }
 
 export function ListView({
@@ -64,12 +69,15 @@ export function ListView({
   activeId,
   onSelect,
   onStart,
+  onStartFromEvent,
   starting,
   loadingMore,
   hasMore,
   onLoadMore,
   errorText,
   onRetry,
+  comingUp,
+  meetingActive,
 }: ListViewProps) {
   const sentinelRef = useRef<HTMLDivElement>(null);
   const loadingMoreRef = useRef(false);
@@ -139,8 +147,19 @@ export function ListView({
           </div>
         )}
 
-        {meetings.length === 0 && !errorText ? (
+        <ComingUp
+          events={comingUp}
+          onStart={onStartFromEvent}
+          meetingActive={meetingActive}
+        />
+
+        {meetings.length === 0 && !errorText && comingUp.length === 0 ? (
           <ListEmpty onStart={onStart} starting={starting} />
+        ) : meetings.length === 0 && !errorText ? (
+          // Calendar has events but no recordings yet — quieter empty hint
+          <p className="text-sm text-muted-foreground">
+            No past meetings yet. Click an upcoming event above to start one.
+          </p>
         ) : (
           <ol className="space-y-10">
             {buckets.map((bucket) => (
