@@ -23,6 +23,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, RotateCw } from "lucide-react";
 import {
@@ -53,9 +54,16 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
     [conversationId],
   );
 
-  // Push the current placeholder rect to Tauri so the child webview lines up.
-  // Logical pixels (CSS pixels) — Tauri's LogicalPosition/LogicalSize match
-  // getBoundingClientRect()'s units exactly.
+  // Push the current placeholder rect to Tauri so the top-level webview
+  // window lines up. The Rust side positions a *top-level* WebviewWindow,
+  // so the bounds must be in **screen coordinates** (origin = primary
+  // display top-left), not viewport-relative.
+  //
+  // Translation: screen = active-window-inner-position + placeholder
+  // viewport rect. `innerPosition()` returns physical pixels; divide by
+  // scaleFactor() to get logical CSS pixels (which is what
+  // `getBoundingClientRect()` returns and what Tauri's
+  // LogicalPosition/LogicalSize expects).
   const pushBounds = useCallback(async () => {
     const el = placeholderRef.current;
     if (!el) return;
@@ -64,14 +72,23 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
       await invoke("owned_browser_hide").catch(() => {});
       return;
     }
-    await invoke("owned_browser_set_bounds", {
-      x: r.left,
-      y: r.top,
-      width: r.width,
-      height: r.height,
-    }).catch((e) => {
+    try {
+      const w = getCurrentWindow();
+      const [innerPos, scale] = await Promise.all([
+        w.innerPosition(),
+        w.scaleFactor(),
+      ]);
+      const logicalInnerX = innerPos.x / scale;
+      const logicalInnerY = innerPos.y / scale;
+      await invoke("owned_browser_set_bounds", {
+        x: logicalInnerX + r.left,
+        y: logicalInnerY + r.top,
+        width: r.width,
+        height: r.height,
+      });
+    } catch (e) {
       console.error("owned_browser_set_bounds failed", e);
-    });
+    }
   }, []);
 
   // Close: hide the webview, clear chat state. The webview itself stays
@@ -134,8 +151,10 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
     };
   }, [conversationId]);
 
-  // Track placeholder rect — covers panel slide-in, window resize, and
-  // chat-history sidebar collapse/expand.
+  // Track placeholder rect — covers panel slide-in, window resize,
+  // window *move* (top-level webview windows live in screen coords so
+  // they don't follow parent moves automatically), and chat-history
+  // sidebar collapse/expand.
   useEffect(() => {
     if (!visible) return;
     const el = placeholderRef.current;
@@ -145,9 +164,18 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
     ro.observe(el);
     const onResize = () => pushBounds();
     window.addEventListener("resize", onResize);
+
+    // Window-moved + window-resized fire on the active Tauri window.
+    // Both translate to a re-push of bounds in screen coordinates.
+    const w = getCurrentWindow();
+    const unlistenMovedP = w.listen("tauri://move", () => pushBounds());
+    const unlistenResizedP = w.listen("tauri://resize", () => pushBounds());
+
     return () => {
       ro.disconnect();
       window.removeEventListener("resize", onResize);
+      unlistenMovedP.then((fn) => fn()).catch(() => {});
+      unlistenResizedP.then((fn) => fn()).catch(() => {});
     };
   }, [visible, pushBounds]);
 
