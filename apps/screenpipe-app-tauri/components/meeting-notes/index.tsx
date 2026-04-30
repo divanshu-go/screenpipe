@@ -18,12 +18,20 @@ interface MeetingNotesSectionProps {
   meetingState: MeetingStatusResponse & { manualActive: boolean };
   meetingLoading: boolean;
   onToggleMeeting: () => Promise<void> | void;
+  /**
+   * Called when the section enters or exits focused note mode.
+   * The host (HomeContent) collapses the sidebar on enter and
+   * restores prior state on exit so users get a distraction-free
+   * canvas while editing notes, then their normal layout back.
+   */
+  onFocusModeChange?: (focused: boolean) => void;
 }
 
 export function MeetingNotesSection({
   meetingState,
   meetingLoading,
   onToggleMeeting,
+  onFocusModeChange,
 }: MeetingNotesSectionProps) {
   const [meetings, setMeetings] = useState<MeetingRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -73,15 +81,36 @@ export function MeetingNotesSection({
     return () => document.removeEventListener("visibilitychange", handler);
   }, [fetchPage]);
 
-  // Refresh when active meeting transitions (start / stop)
+  // Refresh when active meeting transitions (start / stop). When the
+  // user just clicked "new meeting", `intendingToFocusRef` is set, so
+  // we drop them into the focused note view as soon as the backend
+  // assigns the row id (after the WS event arrives).
   const lastActiveIdRef = useRef<number | null>(null);
+  const intendingToFocusRef = useRef(false);
   useEffect(() => {
     const active = meetingState.activeMeetingId ?? null;
     if (active !== lastActiveIdRef.current) {
       lastActiveIdRef.current = active;
-      void fetchPage(0, false);
+      void fetchPage(0, false).then(() => {
+        if (active !== null && intendingToFocusRef.current) {
+          intendingToFocusRef.current = false;
+          setSelectedId(active);
+        }
+      });
     }
   }, [meetingState.activeMeetingId, fetchPage]);
+
+  // Notify host of focus-mode transitions so it can collapse the sidebar.
+  useEffect(() => {
+    onFocusModeChange?.(selectedId !== null);
+  }, [selectedId, onFocusModeChange]);
+
+  // Ensure we exit focus mode if the user navigates away entirely.
+  useEffect(() => {
+    return () => {
+      onFocusModeChange?.(false);
+    };
+  }, [onFocusModeChange]);
 
   // If selection vanishes (deleted elsewhere), drop selection
   useEffect(() => {
@@ -92,6 +121,7 @@ export function MeetingNotesSection({
 
   const handleStart = useCallback(async () => {
     if (meetingState.active) return;
+    intendingToFocusRef.current = true;
     await onToggleMeeting();
   }, [meetingState.active, onToggleMeeting]);
 

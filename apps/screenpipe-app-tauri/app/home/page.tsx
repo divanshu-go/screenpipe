@@ -193,6 +193,26 @@ function HomeContent() {
     });
   }, []);
 
+  // Ephemeral collapse for focused workflows (e.g. taking notes during
+  // a meeting). Captures the user's prior sidebar state on enter and
+  // restores it on exit — never persisted to localStorage.
+  const sidebarPrevCollapsedRef = useRef<boolean | null>(null);
+  const handleMeetingFocusModeChange = useCallback(
+    (focused: boolean) => {
+      if (focused) {
+        if (sidebarPrevCollapsedRef.current === null) {
+          sidebarPrevCollapsedRef.current = sidebarCollapsed;
+        }
+        setSidebarCollapsed(true);
+      } else if (sidebarPrevCollapsedRef.current !== null) {
+        const prev = sidebarPrevCollapsedRef.current;
+        sidebarPrevCollapsedRef.current = null;
+        setSidebarCollapsed(prev);
+      }
+    },
+    [sidebarCollapsed],
+  );
+
   // Cmd+B / Ctrl+B to toggle sidebar
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -473,6 +493,7 @@ function HomeContent() {
             meetingState={meetingState}
             meetingLoading={meetingLoading}
             onToggleMeeting={toggleMeeting}
+            onFocusModeChange={handleMeetingFocusModeChange}
           />
         );
       case "help":

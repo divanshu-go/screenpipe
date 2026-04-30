@@ -96,31 +96,28 @@ export function ListView({
     <div className="h-full overflow-y-auto">
       <div className="max-w-3xl mx-auto px-12 py-12">
         <header className="flex items-end justify-between mb-10">
-          <div>
-            <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground mb-2">
-              meeting notes
-            </div>
-            <h1 className="text-4xl font-medium tracking-tight">meetings</h1>
-          </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => void onStart()}
-            disabled={starting || activeId !== null}
-            className="gap-2"
-            title={
-              activeId !== null
-                ? "a meeting is already active"
-                : "start a manual meeting"
-            }
-          >
-            {starting ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Plus className="h-3.5 w-3.5" />
-            )}
-            new meeting
-          </Button>
+          <h1 className="text-4xl font-medium tracking-tight">meetings</h1>
+          {meetings.length > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void onStart()}
+              disabled={starting || activeId !== null}
+              className="gap-2"
+              title={
+                activeId !== null
+                  ? "a meeting is already active"
+                  : "start a manual meeting"
+              }
+            >
+              {starting ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Plus className="h-3.5 w-3.5" />
+              )}
+              new meeting
+            </Button>
+          )}
         </header>
 
         {errorText && (
@@ -311,8 +308,8 @@ function ListEmpty({
       <div className="max-w-md">
         <h2 className="text-lg font-medium mb-2">no meetings yet</h2>
         <p className="text-sm text-muted-foreground mb-5 leading-relaxed">
-          join a Zoom, Meet, or Teams call and screenpipe will detect it
-          automatically. or start one manually to take notes against any
+          Join a Zoom, Meet, or Teams call and screenpipe will detect it
+          automatically. Or start one manually to take notes against any
           conversation.
         </p>
         <Button
