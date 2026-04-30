@@ -13,16 +13,101 @@ export interface CalendarEvent {
   location?: string;
   calendar_name?: string;
   is_all_day?: boolean;
+  source?: "native" | "google";
 }
 
-interface CalendarEventsResponse {
-  data?: CalendarEvent[];
+// Native macOS Calendar wraps in {data: [...]}; Google Calendar returns the
+// array directly. Field casing also differs (snake_case vs camelCase). Both
+// providers can be connected at once — we query both and merge.
+interface RawNativeEvent {
+  id?: string;
+  title?: string;
+  start?: string;
+  end?: string;
+  attendees?: string[];
+  location?: string;
+  calendar_name?: string;
+  is_all_day?: boolean;
+}
+interface RawGoogleEvent {
+  id?: string;
+  title?: string;
+  start?: string;
+  end?: string;
+  attendees?: string[];
+  location?: string;
+  calendarName?: string;
+  isAllDay?: boolean;
+}
+
+function normalizeNative(e: RawNativeEvent): CalendarEvent | null {
+  if (!e.start || !e.end) return null;
+  return {
+    id: e.id,
+    title: e.title ?? "",
+    start: e.start,
+    end: e.end,
+    attendees: e.attendees ?? [],
+    location: e.location,
+    calendar_name: e.calendar_name,
+    is_all_day: e.is_all_day ?? false,
+    source: "native",
+  };
+}
+
+function normalizeGoogle(e: RawGoogleEvent): CalendarEvent | null {
+  if (!e.start || !e.end) return null;
+  return {
+    id: e.id,
+    title: e.title ?? "",
+    start: e.start,
+    end: e.end,
+    attendees: e.attendees ?? [],
+    location: e.location,
+    calendar_name: e.calendarName,
+    is_all_day: e.isAllDay ?? false,
+    source: "google",
+  };
+}
+
+async function fetchNativeCalendar(
+  hoursBack: number,
+  hoursAhead: number,
+): Promise<CalendarEvent[] | null> {
+  try {
+    const res = await localFetch(
+      `/connections/calendar/events?hours_back=${hoursBack}&hours_ahead=${hoursAhead}`,
+    );
+    if (!res.ok) return null;
+    const body = (await res.json()) as { data?: RawNativeEvent[] };
+    const arr = body.data ?? [];
+    return arr.map(normalizeNative).filter((e): e is CalendarEvent => e !== null);
+  } catch {
+    return null;
+  }
+}
+
+async function fetchGoogleCalendar(
+  hoursBack: number,
+  hoursAhead: number,
+): Promise<CalendarEvent[] | null> {
+  try {
+    const res = await localFetch(
+      `/connections/google-calendar/events?hours_back=${hoursBack}&hours_ahead=${hoursAhead}`,
+    );
+    if (!res.ok) return null;
+    const body = (await res.json()) as RawGoogleEvent[] | { error?: string };
+    if (!Array.isArray(body)) return null;
+    return body.map(normalizeGoogle).filter((e): e is CalendarEvent => e !== null);
+  } catch {
+    return null;
+  }
 }
 
 /**
- * Fetch upcoming calendar events from the local screenpipe daemon.
- * Silently returns null if the calendar isn't connected — callers
- * should treat that as "no Coming up section".
+ * Fetch upcoming calendar events from any connected provider (native macOS
+ * Calendar and/or Google Calendar). Returns null only if BOTH fail; an empty
+ * array means "connected but nothing in window". Dedupes by (start + title).
  */
 export async function fetchUpcomingCalendarEvents(opts?: {
   hoursAhead?: number;
@@ -30,16 +115,29 @@ export async function fetchUpcomingCalendarEvents(opts?: {
 }): Promise<CalendarEvent[] | null> {
   const hoursAhead = opts?.hoursAhead ?? 8;
   const hoursBack = opts?.hoursBack ?? 0;
-  try {
-    const res = await localFetch(
-      `/connections/calendar/events?hours_back=${hoursBack}&hours_ahead=${hoursAhead}`,
-    );
-    if (!res.ok) return null;
-    const body = (await res.json()) as CalendarEventsResponse;
-    return body.data ?? [];
-  } catch {
-    return null;
+
+  const [native, google] = await Promise.all([
+    fetchNativeCalendar(hoursBack, hoursAhead),
+    fetchGoogleCalendar(hoursBack, hoursAhead),
+  ]);
+
+  if (native === null && google === null) return null;
+
+  const merged: CalendarEvent[] = [];
+  if (native) merged.push(...native);
+  if (google) merged.push(...google);
+
+  // Dedupe — Google + native sometimes report the same event when a user has
+  // their Google account synced into Apple Calendar. Key on start+title.
+  const seen = new Set<string>();
+  const out: CalendarEvent[] = [];
+  for (const e of merged) {
+    const key = `${e.start}::${e.title.trim().toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(e);
   }
+  return out;
 }
 
 /**
