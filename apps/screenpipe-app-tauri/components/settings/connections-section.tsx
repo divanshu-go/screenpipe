@@ -30,6 +30,7 @@ import { GoogleDocsCard } from "./google-docs-card";
 import { GmailCard } from "./gmail-card";
 import { IcsCalendarCard } from "./ics-calendar-card";
 import { OpenClawCard } from "./openclaw-card";
+import { BeeCard } from "./bee-card";
 import { BrowserUrlCard } from "./browser-url-card";
 import { UserBrowserCard } from "./user-browser-card";
 import { VoiceMemosCard } from "./voice-memos-card";
@@ -234,7 +235,8 @@ export function IntegrationIcon({ icon }: { icon: string }) {
     "google-calendar": <img src="/images/google-calendar.svg" alt="Google Calendar" className="w-5 h-5" />,
     "google-docs": <img src="/images/google-docs.svg" alt="Google Docs" className="w-5 h-5" />,
     "ics-calendar": <CalendarIcon className="h-5 w-5 text-muted-foreground" />,
-    openclaw: <img src="/images/openclaw.png" alt="OpenClaw" className="w-5 h-5" />,
+    openclaw: <img src="/images/openclaw.png" alt="Hermes / OpenClaw" className="w-5 h-5" />,
+    bee: <img src="/images/bee.png" alt="Bee" className="w-5 h-5 rounded" />,
     email: <Send className="h-5 w-5 text-muted-foreground" />,
     todoist: (
       <svg viewBox="0 0 24 24" className="w-5 h-5" fill="#E44332">
@@ -1588,7 +1590,8 @@ export function ConnectionsSection() {
       { id: "google-docs", name: "Google Docs", icon: "google-docs", connected: false },
       { id: "gmail", name: "Gmail", icon: "gmail", connected: false },
       { id: "ics-calendar", name: "ICS Calendar", icon: "ics-calendar", connected: false },
-      { id: "openclaw", name: "OpenClaw", icon: "openclaw", connected: false },
+      { id: "openclaw", name: "Hermes / OpenClaw", icon: "openclaw", connected: false },
+      { id: "bee", name: "Bee", icon: "bee", connected: false },
       { id: "whatsapp", name: "WhatsApp", icon: "whatsapp", connected: false },
       { id: "anythingllm", name: "AnythingLLM", icon: "anythingllm", connected: false },
       { id: "ollama", name: "Ollama", icon: "ollama", connected: false },
@@ -1655,6 +1658,7 @@ export function ConnectionsSection() {
       case "gmail": return <GmailCard />;
       case "ics-calendar": return <IcsCalendarCard />;
       case "openclaw": return <OpenClawCard />;
+      case "bee": return <BeeCard />;
       case "whatsapp": return <WhatsAppPanel />;
       case "anythingllm": return <AnythingLLMPanel />;
       case "ollama": return <OllamaPanel />;
@@ -1748,7 +1752,7 @@ export function ConnectionsSection() {
 
       {/* Expanded panel */}
       {selected && selectedTile && (() => {
-        const standaloneIds = ["browser-url", "voice-memos", "apple-intelligence", "apple-calendar", "google-calendar", "google-docs", "gmail", "ics-calendar", "openclaw"];
+        const standaloneIds = ["browser-url", "voice-memos", "apple-intelligence", "apple-calendar", "google-calendar", "google-docs", "gmail", "ics-calendar", "openclaw", "bee"];
         if (standaloneIds.includes(selected)) {
           // These components render their own Card
           return <div ref={panelRef}>{renderPanel()}</div>;
