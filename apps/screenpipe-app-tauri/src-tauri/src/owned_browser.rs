@@ -38,20 +38,25 @@ use uuid::Uuid;
 pub const WEBVIEW_LABEL: &str = "owned-browser";
 
 /// Candidate parent windows, in preference order:
-///   - "main"        — overlay-mode main window (NSPanel-based on macOS)
-///   - "main-window" — window-mode main window (traditional WebviewWindow)
-///   - "chat"        — pre-created chat panel; exists in tray-only flows where
-///                     the user only ever talks to Pi via the chat overlay
-///                     and never opens the regular home window
+///   - "home"        — the standard app window (post-onboarding default;
+///                     created at startup via `ShowRewindWindow::Home`).
+///                     This is what the prod fallback caught on Louis's
+///                     MBA — the most common parent in real sessions.
+///   - "main"        — overlay-mode main window (NSPanel-based on macOS).
+///   - "main-window" — window-mode main window (traditional WebviewWindow).
+///   - "chat"        — pre-created chat panel; exists in tray-only flows
+///                     where the user only ever talks to Pi via the chat
+///                     overlay and never opens the regular home window.
 ///
-/// Why a list: the previous hardcoded "main" silently broke for two real
-/// flows — window-mode users (whose main is "main-window") and chat-panel-
-/// only users (whose only window is "chat"). Both ended up with the agent
-/// permanently seeing `ready=false` and reporting "browser extension not
-/// connected" on every eval. Trying these in order, then falling back to
-/// any other webview window, makes the install resilient to whatever
-/// window topology the user happens to be running.
-const PARENT_WINDOW_CANDIDATES: &[&str] = &["main", "main-window", "chat"];
+/// Why a list: the previous hardcoded "main" silently broke for everyone
+/// whose actual window label was something else — overwhelmingly "home"
+/// (post-onboarding default) and "chat" (tray-only). Trying each known
+/// label in order, with any other webview window as a final fallback,
+/// makes the install resilient to whatever window topology the user
+/// happens to be running. The fallback is what rescued the v2.4.113
+/// release in prod when "home" wasn't in the list yet — keeping it as a
+/// belt-and-suspenders for any future window label we forget to add.
+const PARENT_WINDOW_CANDIDATES: &[&str] = &["home", "main", "main-window", "chat"];
 
 /// Resolve a parent window for the child webview. Prefers the candidates
 /// above (in order). Falls back to any other webview window so future
