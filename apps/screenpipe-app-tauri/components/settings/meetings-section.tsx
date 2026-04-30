@@ -22,18 +22,13 @@ import { Switch } from "@/components/ui/switch";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { showChatWithPrefill } from "@/lib/chat-utils";
 import { localFetch } from "@/lib/api";
-
-interface MeetingRecord {
-  id: number;
-  meeting_start: string;
-  meeting_end: string | null;
-  meeting_app: string;
-  title: string | null;
-  attendees: string | null;
-  note: string | null;
-  detection_source: string;
-  created_at: string;
-}
+import {
+  buildSummarizePrompt,
+  formatDuration,
+  formatTime,
+  toDatetimeLocal,
+  type MeetingRecord,
+} from "@/lib/utils/meeting-format";
 
 interface EditState {
   title: string;
@@ -43,43 +38,7 @@ interface EditState {
   note: string;
 }
 
-function formatDuration(start: string, end: string | null): string {
-  if (!end) {
-    const startMs = new Date(start).getTime();
-    const nowMs = Date.now();
-    if (nowMs < startMs) {
-      const minsUntil = Math.ceil((startMs - nowMs) / 60000);
-      return minsUntil <= 1 ? "starts in <1m" : `starts in ${minsUntil}m`;
-    }
-    return "ongoing";
-  }
-  const ms = new Date(end).getTime() - new Date(start).getTime();
-  if (ms < 0) return "—";
-  const totalMinutes = Math.floor(ms / 60000);
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  if (hours === 0) return `${minutes}m`;
-  if (minutes === 0) return `${hours}h`;
-  return `${hours}h ${minutes}m`;
-}
-
-function formatTime(iso: string): string {
-  const d = new Date(iso);
-  return d.toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
 const PAGE_SIZE = 20;
-
-function toDatetimeLocal(iso: string): string {
-  const d = new Date(iso);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
 
 function MeetingsSkeleton() {
   const rows = [
@@ -329,26 +288,10 @@ export function MeetingsSection() {
   };
 
   const summarizeMeeting = async (meeting: MeetingRecord) => {
-    const start = new Date(meeting.meeting_start);
-    const end = meeting.meeting_end ? new Date(meeting.meeting_end) : null;
-    const duration = end
-      ? `${Math.round((end.getTime() - start.getTime()) / 60000)} minutes`
-      : "ongoing";
-
-    const parts: string[] = [
-      `app: ${meeting.meeting_app}`,
-      `time: ${start.toISOString()}${end ? ` to ${end.toISOString()}` : ""} (${duration})`,
-    ];
-    if (meeting.title) parts.push(`title: ${meeting.title}`);
-    if (meeting.attendees) parts.push(`attendees: ${meeting.attendees}`);
-    if (meeting.note) parts.push(`notes: ${meeting.note}`);
-
-    const prompt = `search screenpipe for what happened during this meeting and summarize it: key topics, decisions, action items. then suggest which of my connected integrations would be useful to share this with and draft a message for each.\n\nmeeting:\n${parts.join("\n")}`;
-
     try {
       await showChatWithPrefill({
         context: "",
-        prompt,
+        prompt: buildSummarizePrompt(meeting),
         autoSend: true,
         source: "meeting-summarize",
         useHomeChat: true,

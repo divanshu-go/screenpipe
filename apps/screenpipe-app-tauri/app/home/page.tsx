@@ -21,6 +21,7 @@ import {
   Sparkles,
   Phone,
   Plug,
+  NotebookPen,
   X,
 } from "lucide-react";
 import { emit } from "@tauri-apps/api/event";
@@ -33,6 +34,7 @@ import { FeedbackSection } from "@/components/settings/feedback-section";
 import { PipeStoreView } from "@/components/pipe-store";
 import { MemoriesSection } from "@/components/settings/memories-section";
 import { ConnectionsSection } from "@/components/settings/connections-section";
+import { MeetingNotesSection } from "@/components/meeting-notes";
 import { StandaloneChat } from "@/components/standalone-chat";
 import { ChatSidebar } from "@/components/chat-sidebar";
 import { mountPiEventRouter } from "@/lib/stores/pi-event-router";
@@ -59,18 +61,18 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 
-type MainSection = "home" | "timeline" | "memories" | "pipes" | "connections" | "help";
+type MainSection = "home" | "timeline" | "memories" | "pipes" | "connections" | "meetings" | "help";
 
 // All valid URL sections for the home page
 const ALL_SECTIONS = [
-  "home", "timeline", "pipes", "help", "memories", "connections",
+  "home", "timeline", "pipes", "help", "memories", "connections", "meetings",
   "feedback", // backwards compat → maps to "help"
 ];
 
 // Settings sections that should redirect to /settings
 const SETTINGS_SECTIONS = new Set<string>([
   "account", "recording", "ai", "general", "display", "shortcuts", "notifications",
-  "privacy", "storage", "meetings", "team", "referral", "usage", "speakers",
+  "privacy", "storage", "team", "referral", "usage", "speakers",
   "disk-usage", "cloud-archive", "cloud-sync", // backwards compat → maps to "storage"
 ]);
 
@@ -465,6 +467,14 @@ function HomeContent() {
         return <PipeStoreView />;
       case "connections":
         return <ConnectionsSection />;
+      case "meetings":
+        return (
+          <MeetingNotesSection
+            meetingState={meetingState}
+            meetingLoading={meetingLoading}
+            onToggleMeeting={toggleMeeting}
+          />
+        );
       case "help":
         return <FeedbackSection />;
       default:
@@ -485,6 +495,7 @@ function HomeContent() {
     { id: "home", label: "New chat", icon: <Plus className="h-3.5 w-3.5" /> },
     { id: "pipes", label: "Pipes", icon: <Workflow className="h-3.5 w-3.5" /> },
     { id: "timeline", label: "Timeline", icon: <Clock className="h-3.5 w-3.5" /> },
+    { id: "meetings", label: "Meeting notes", icon: <NotebookPen className="h-3.5 w-3.5" /> },
     { id: "memories", label: "Memories", icon: <Sparkles className="h-3.5 w-3.5" /> },
     { id: "connections", label: "Connections", icon: <Plug className="h-3.5 w-3.5" /> },
   ].filter((s) => !isSectionHidden(s.id));
@@ -507,7 +518,10 @@ function HomeContent() {
     return () => { unlisten.then((fn) => fn()); };
   }, [setActiveSection, router]);
 
-  const isFullHeight = activeSection === "home" || activeSection === "timeline";
+  const isFullHeight =
+    activeSection === "home" ||
+    activeSection === "timeline" ||
+    activeSection === "meetings";
 
   return (
     <div className={cn("bg-transparent", isFullHeight ? "h-screen overflow-hidden" : "min-h-screen")} data-testid="home-page">
