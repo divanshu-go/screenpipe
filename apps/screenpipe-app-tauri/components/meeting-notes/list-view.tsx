@@ -4,9 +4,12 @@
 "use client";
 
 import React, { useEffect, useRef } from "react";
-import { Loader2, Plus, Phone } from "lucide-react";
+import { Loader2, Plus, Phone, Square, ArrowUpRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { MeetingRecord } from "@/lib/utils/meeting-format";
+import {
+  formatDuration,
+  type MeetingRecord,
+} from "@/lib/utils/meeting-format";
 import type { CalendarEvent } from "@/lib/utils/calendar";
 import { ComingUp } from "./coming-up";
 import { PastMeetings } from "./past-meetings";
@@ -14,8 +17,10 @@ import { PastMeetings } from "./past-meetings";
 interface ListViewProps {
   meetings: MeetingRecord[];
   activeId: number | null;
+  activeMeeting: MeetingRecord | null;
   onSelect: (id: number) => void;
   onStart: () => void | Promise<void>;
+  onStop: () => void | Promise<void>;
   onStartFromEvent: (event: CalendarEvent) => void | Promise<void>;
   starting: boolean;
   loadingMore: boolean;
@@ -30,8 +35,10 @@ interface ListViewProps {
 export function ListView({
   meetings,
   activeId,
+  activeMeeting,
   onSelect,
   onStart,
+  onStop,
   onStartFromEvent,
   starting,
   loadingMore,
@@ -66,27 +73,34 @@ export function ListView({
   return (
     <div className="h-full overflow-y-auto">
       <div className="max-w-3xl mx-auto px-12 py-10">
-        <header className="flex items-center justify-end mb-8">
-          {!trulyEmpty && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void onStart()}
-              disabled={starting || activeId !== null}
-              className="gap-2"
-              title={
-                activeId !== null
-                  ? "a meeting is already active"
-                  : "start a manual meeting"
-              }
-            >
-              {starting ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Plus className="h-3.5 w-3.5" />
-              )}
-              new meeting
-            </Button>
+        <header className="mb-8">
+          {meetingActive && activeMeeting ? (
+            <RecordingStrip
+              meeting={activeMeeting}
+              onOpen={() => onSelect(activeMeeting.id)}
+              onStop={onStop}
+              stopping={starting}
+            />
+          ) : (
+            !trulyEmpty && (
+              <div className="flex items-center justify-end">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void onStart()}
+                  disabled={starting}
+                  className="gap-2"
+                  title="start a manual meeting"
+                >
+                  {starting ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Plus className="h-3.5 w-3.5" />
+                  )}
+                  new meeting
+                </Button>
+              </div>
+            )
           )}
         </header>
 
@@ -135,6 +149,65 @@ export function ListView({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function RecordingStrip({
+  meeting,
+  onOpen,
+  onStop,
+  stopping,
+}: {
+  meeting: MeetingRecord;
+  onOpen: () => void;
+  onStop: () => void | Promise<void>;
+  stopping: boolean;
+}) {
+  const title = meeting.title?.trim() || "untitled meeting";
+  const duration = formatDuration(meeting.meeting_start, meeting.meeting_end);
+  return (
+    <div className="border border-foreground/30 bg-muted/20 px-4 py-3 flex items-center gap-3">
+      <span
+        className="h-2 w-2 rounded-full bg-foreground animate-pulse shrink-0"
+        aria-label="recording"
+      />
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-[10px] uppercase tracking-[0.18em] text-foreground/80 shrink-0">
+            recording
+          </span>
+          <span className="text-muted-foreground/60" aria-hidden>·</span>
+          <span className="text-sm text-foreground truncate">{title}</span>
+        </div>
+        <div className="text-[11px] text-muted-foreground tabular-nums mt-0.5">
+          {duration}
+        </div>
+      </div>
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={onOpen}
+        className="gap-1.5 h-8 px-2 normal-case tracking-normal shrink-0"
+        title="open notes"
+      >
+        <ArrowUpRight className="h-3.5 w-3.5" />
+        open
+      </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => void onStop()}
+        disabled={stopping}
+        className="gap-1.5 h-8 px-3 shrink-0"
+      >
+        {stopping ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        ) : (
+          <Square className="h-3.5 w-3.5" />
+        )}
+        stop
+      </Button>
     </div>
   );
 }

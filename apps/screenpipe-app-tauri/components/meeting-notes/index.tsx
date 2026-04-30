@@ -123,13 +123,19 @@ export function MeetingNotesSection({
     const active = meetingState.activeMeetingId ?? null;
     if (active !== lastActiveIdRef.current) {
       lastActiveIdRef.current = active;
+      // Refresh both the meetings list and the upcoming-events list:
+      // a freshly-consumed Coming up event needs to disappear, and a
+      // freshly-stopped one may re-surface in the picker.
       void fetchPage(0, false).then(() => {
         if (active !== null && intendingToFocusRef.current) {
           intendingToFocusRef.current = false;
           setSelectedId(active);
         }
       });
+      void refreshUpcoming();
     }
+    // refreshUpcoming is stable
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [meetingState.activeMeetingId, fetchPage]);
 
   // Notify host of focus-mode transitions so it can collapse the sidebar.
@@ -281,6 +287,7 @@ export function MeetingNotesSection({
         excludeOverlappingActive: meetingState.active === true,
         activeMeetingStartIso: activeMeeting?.meeting_start ?? null,
         activeMeetingEndIso: activeMeeting?.meeting_end ?? null,
+        activeMeetingTitle: activeMeeting?.title ?? null,
       }),
     [upcoming, meetingState.active, activeMeeting],
   );
@@ -331,8 +338,10 @@ export function MeetingNotesSection({
     <ListView
       meetings={meetings}
       activeId={activeId}
+      activeMeeting={activeMeeting}
       onSelect={setSelectedId}
       onStart={() => handleStart()}
+      onStop={handleStop}
       onStartFromEvent={handleStartFromEvent}
       starting={meetingLoading}
       loadingMore={loadingMore}

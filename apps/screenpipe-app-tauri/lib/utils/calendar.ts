@@ -148,15 +148,26 @@ export async function fetchUpcomingCalendarEvents(opts?: {
  */
 export function pickComingUp(
   events: CalendarEvent[],
-  opts?: { now?: number; excludeOverlappingActive?: boolean; activeMeetingStartIso?: string | null; activeMeetingEndIso?: string | null },
+  opts?: {
+    now?: number;
+    excludeOverlappingActive?: boolean;
+    activeMeetingStartIso?: string | null;
+    activeMeetingEndIso?: string | null;
+    /** Hide a cal event whose title matches the currently-recording meeting
+     *  — covers the "user clicked Coming up to start a meeting; the source
+     *  event would otherwise still show up in the list" case. */
+    activeMeetingTitle?: string | null;
+  },
 ): CalendarEvent[] {
   const now = opts?.now ?? Date.now();
+  const activeTitle = opts?.activeMeetingTitle?.trim().toLowerCase() ?? "";
   const result: CalendarEvent[] = [];
   for (const e of events) {
     if (e.is_all_day) continue;
     const startMs = Date.parse(e.start);
     const endMs = Date.parse(e.end);
     if (!Number.isFinite(endMs) || endMs <= now) continue;
+    if (activeTitle && e.title.trim().toLowerCase() === activeTitle) continue;
     if (
       opts?.excludeOverlappingActive &&
       opts.activeMeetingStartIso &&
