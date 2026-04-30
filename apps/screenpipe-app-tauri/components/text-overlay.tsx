@@ -350,6 +350,12 @@ export const TextOverlay = memo(function TextOverlay({
 						transition: "opacity 600ms ease-out",
 					}}
 				>
+					<style>{`
+						@keyframes screenpipe-search-hl-pulse {
+							0%, 100% { box-shadow: 0 0 6px rgba(250, 204, 21, 0.45); }
+							50%      { box-shadow: 0 0 14px rgba(250, 204, 21, 0.85); }
+						}
+					`}</style>
 					{highlights.map((hl) => (
 						<div
 							key={hl.key}
@@ -363,6 +369,9 @@ export const TextOverlay = memo(function TextOverlay({
 								border: "1px solid rgba(250, 204, 21, 0.85)",
 								borderRadius: "3px",
 								boxShadow: "0 0 6px rgba(250, 204, 21, 0.45)",
+								animation: highlightFading
+									? undefined
+									: "screenpipe-search-hl-pulse 1.8s ease-in-out infinite",
 							}}
 						/>
 					))}

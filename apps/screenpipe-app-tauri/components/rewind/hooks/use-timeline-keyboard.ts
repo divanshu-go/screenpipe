@@ -107,6 +107,33 @@ export function useTimelineKeyboard(opts: {
 		return () => window.removeEventListener("keydown", handleKeyDown);
 	}, [showSearchModal]);
 
+	// Cmd+G / Cmd+Shift+G (mac) or Ctrl+G / Ctrl+Shift+G (other) —
+	// jump to next/previous search match while in search review mode.
+	// Mirrors the chevron buttons: G = forward in time (newer), Shift+G = backward.
+	useEffect(() => {
+		const handleFindNav = (e: KeyboardEvent) => {
+			if (!inSearchReviewMode) return;
+			if (showSearchModal) return;
+			const target = e.target as HTMLElement;
+			if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target?.isContentEditable) {
+				return;
+			}
+			const mod = isMac ? e.metaKey : e.ctrlKey;
+			if (!mod) return;
+			if (e.key.toLowerCase() !== "g") return;
+			e.preventDefault();
+			if (isPlaying) pausePlayback();
+			const newIndex = e.shiftKey
+				? Math.min(searchResultIndex + 1, searchResults.length - 1) // older
+				: Math.max(searchResultIndex - 1, 0); // newer
+			if (newIndex !== searchResultIndex) {
+				navigateToSearchResultRef.current(newIndex);
+			}
+		};
+		window.addEventListener("keydown", handleFindNav);
+		return () => window.removeEventListener("keydown", handleFindNav);
+	}, [inSearchReviewMode, showSearchModal, isMac, isPlaying, pausePlayback, searchResultIndex, searchResults.length, navigateToSearchResultRef]);
+
 	// Cmd+Shift+C / Ctrl+Shift+C — copy current frame image
 	useEffect(() => {
 		const handleCopyFrame = (e: KeyboardEvent) => {
