@@ -248,3 +248,35 @@ describe("chat-store: setCurrent clears unread atomically", () => {
     expect(state.sessions.A.unread).toBe(false);
   });
 });
+
+describe("chat-store: markUnread guards", () => {
+  beforeEach(reset);
+
+  it("no-ops when the session is the current one", () => {
+    useChatStore.getState().actions.upsert(baseRecord({ id: "A", unread: false }));
+    useChatStore.getState().actions.setCurrent("A");
+    useChatStore.getState().actions.markUnread("A");
+    expect(useChatStore.getState().sessions.A.unread).toBe(false);
+  });
+
+  it("no-ops when the session is loaded in the panel even if currentId was cleared", () => {
+    // Bug: navigating away from /home reset currentId to null. Late deltas
+    // for the still-loaded panel chat then re-marked it unread, even though
+    // the user had read everything on screen. Guard on panelSessionId fixes
+    // that — the panel keeps the chat visible-on-return, so deltas there
+    // don't count as "new since last seen".
+    useChatStore.getState().actions.upsert(baseRecord({ id: "A", unread: false }));
+    useChatStore.setState({ currentId: null, panelSessionId: "A" });
+    useChatStore.getState().actions.markUnread("A");
+    expect(useChatStore.getState().sessions.A.unread).toBe(false);
+  });
+
+  it("DOES mark a different session unread when nav'd away", () => {
+    useChatStore.getState().actions.upsert(baseRecord({ id: "A", unread: false }));
+    useChatStore.getState().actions.upsert(baseRecord({ id: "B", unread: false }));
+    useChatStore.setState({ currentId: null, panelSessionId: "A" });
+    useChatStore.getState().actions.markUnread("B");
+    expect(useChatStore.getState().sessions.A.unread).toBe(false);
+    expect(useChatStore.getState().sessions.B.unread).toBe(true);
+  });
+});
