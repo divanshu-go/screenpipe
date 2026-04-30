@@ -30,6 +30,7 @@ import { GoogleDocsCard } from "./google-docs-card";
 import { GmailCard } from "./gmail-card";
 import { IcsCalendarCard } from "./ics-calendar-card";
 import { OpenClawCard } from "./openclaw-card";
+import { HermesCard } from "./hermes-card";
 import { BrowserUrlCard } from "./browser-url-card";
 import { UserBrowserCard } from "./user-browser-card";
 import { VoiceMemosCard } from "./voice-memos-card";
@@ -652,47 +653,6 @@ function AnythingLLMPanel() {
       </div>
       <p className="text-xs text-muted-foreground">
         3. Click <strong>Refresh</strong> in Agent Skills to load the server.
-      </p>
-    </div>
-  );
-}
-
-function HermesPanel() {
-  const [copied, setCopied] = useState(false);
-  const config = `mcp_servers:
-  screenpipe:
-    command: npx
-    args:
-      - "-y"
-      - screenpipe-mcp@latest
-`;
-  const handleCopy = useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(config);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {}
-  }, [config]);
-
-  return (
-    <div className="space-y-3">
-      <p className="text-xs text-muted-foreground">
-        Let Hermes Agent search your screen &amp; audio history via MCP. Talk to it from Telegram, Discord, Slack, WhatsApp, or the CLI.
-      </p>
-      <p className="text-xs text-muted-foreground">
-        1. Open <code className="bg-muted px-1 rounded">~/.hermes/config.yaml</code> (run <code className="bg-muted px-1 rounded">hermes config edit</code>)
-      </p>
-      <p className="text-xs text-muted-foreground">
-        2. Merge this block into the file (preserve indentation):
-      </p>
-      <div className="relative group">
-        <pre className="bg-muted border border-border rounded-lg p-3 pr-10 text-xs font-mono text-foreground overflow-x-auto whitespace-pre-wrap">{config}</pre>
-        <Button variant="ghost" size="sm" onClick={handleCopy} className="absolute top-2 right-2 h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity">
-          {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3 text-muted-foreground" />}
-        </Button>
-      </div>
-      <p className="text-xs text-muted-foreground">
-        3. Restart Hermes (<code className="bg-muted px-1 rounded">hermes chat</code> or <code className="bg-muted px-1 rounded">hermes gateway</code>). Try: &quot;what did I do in the last 5 minutes?&quot;
       </p>
     </div>
   );
@@ -1701,7 +1661,7 @@ export function ConnectionsSection() {
       case "openclaw": return <OpenClawCard />;
       case "whatsapp": return <WhatsAppPanel />;
       case "anythingllm": return <AnythingLLMPanel />;
-      case "hermes": return <HermesPanel />;
+      case "hermes": return <HermesCard />;
       case "ollama": return <OllamaPanel />;
       case "lmstudio": return <LMStudioPanel />;
       case "msty": return <MstyPanel />;
@@ -1793,7 +1753,7 @@ export function ConnectionsSection() {
 
       {/* Expanded panel */}
       {selected && selectedTile && (() => {
-        const standaloneIds = ["browser-url", "voice-memos", "apple-intelligence", "apple-calendar", "google-calendar", "google-docs", "gmail", "ics-calendar", "openclaw"];
+        const standaloneIds = ["browser-url", "voice-memos", "apple-intelligence", "apple-calendar", "google-calendar", "google-docs", "gmail", "ics-calendar", "openclaw", "hermes"];
         if (standaloneIds.includes(selected)) {
           // These components render their own Card
           return <div ref={panelRef}>{renderPanel()}</div>;
