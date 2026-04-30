@@ -333,12 +333,46 @@ export function AIProviderConfig({
   useEffect(() => {
     setOpenAIModels([]);
     if (selectedProvider === "openai" && formData.apiKey) {
-      setOpenAIModels([
-        { id: "gpt-4" },
-        {
-          id: "gpt-3.5-turbo",
-        },
-      ]);
+      // Fetch the live model catalog from the user's OpenAI account so the
+      // dropdown reflects whatever they actually have access to (gpt-5*,
+      // gpt-4.1, o-series, etc). Fall back to a curated list when the
+      // request fails (offline / bad key) so the dropdown still has
+      // something usable instead of an empty menu.
+      (async () => {
+        setIsLoadingModels(true);
+        try {
+          const resp = await fetch("https://api.openai.com/v1/models", {
+            headers: {
+              Authorization: `Bearer ${formData.apiKey}`,
+              "Content-Type": "application/json",
+            },
+          });
+          if (resp.ok) {
+            const data = await resp.json();
+            if (data?.data?.length > 0) {
+              setOpenAIModels(data.data);
+              setIsLoadingModels(false);
+              return;
+            }
+          }
+        } catch {
+          /* fall through to fallback */
+        }
+        setOpenAIModels([
+          { id: "gpt-5" },
+          { id: "gpt-5-mini" },
+          { id: "gpt-5-nano" },
+          { id: "gpt-4.1" },
+          { id: "gpt-4.1-mini" },
+          { id: "gpt-4o" },
+          { id: "gpt-4o-mini" },
+          { id: "o3-mini" },
+          { id: "o1-mini" },
+          { id: "gpt-4" },
+          { id: "gpt-3.5-turbo" },
+        ]);
+        setIsLoadingModels(false);
+      })();
     } else if (selectedProvider === "native-ollama") {
       const baseUrl = "http://localhost:11434/v1";
       fetchOllamaModels(baseUrl);
