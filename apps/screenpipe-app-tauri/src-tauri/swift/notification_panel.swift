@@ -434,7 +434,20 @@ struct MarkdownText: View {
                             if urlStr.hasPrefix("/") && !urlStr.hasPrefix("//") {
                                 urlStr = "file://" + urlStr
                             }
-                            if let url = URL(string: urlStr.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? urlStr) ?? URL(string: urlStr) {
+                            // Try the raw string first — markdown links are
+                            // already valid URLs almost always, and
+                            // `addingPercentEncoding(.urlQueryAllowed)` will
+                            // re-encode existing `%xx` escapes (e.g. the
+                            // `%2F`s in a `screenpipe://view?path=…` link
+                            // produced by the /notify rewrite). That
+                            // double-encoding silently corrupts the path,
+                            // so the viewer ends up calling
+                            // `read_viewer_file` with literal `%2F` in the
+                            // filename and fails with ENOENT.
+                            // Fall back to encoding only if the raw form
+                            // doesn't parse (e.g. unencoded spaces).
+                            if let url = URL(string: urlStr)
+                                ?? URL(string: urlStr.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? urlStr) {
                                 flushText()
                                 let override = MarkdownText.viewerOverridePath(for: url)
                                 segments.append(.link(label: linkText, url: url, viewerOverridePath: override))
