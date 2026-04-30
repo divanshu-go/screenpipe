@@ -91,6 +91,30 @@ note: AirPods don't have this issue — Apple uses a proprietary codec.
 
 ---
 
+## chat & AI interactions
+
+### chat hangs or stops responding
+
+if your chat window freezes, try these fixes in order:
+
+1. **restart screenpipe** — closes stalled message queues
+2. **check health:** `curl http://localhost:3030/health` — if it fails, backend is stuck
+3. **verify you have data** — screenpipe needs screen/audio history; wait 1-2 minutes after startup
+4. **verify AI provider connection** — settings → model selector. for ChatGPT/Claude, sign out/back in
+5. **reduce load** — disable unused pipes (settings → pipes), switch to faster model (gpt-4o mini), check logs for "timeout" errors
+
+### chat messages disappear
+
+if assistant replies vanish when navigating away, **update to v0.4+** — this message persistence bug was fixed. on older versions, reinstall screenpipe.
+
+### AI model connection fails
+
+1. verify subscription active: [openai.com](https://openai.com) (ChatGPT Plus/Pro) or [claude.ai](https://claude.ai) (Claude Pro)
+2. sign out/in: settings → model selector → sign out, restart, sign back in
+3. if still failing, your tokens expired — try again
+
+---
+
 ## pipes
 
 ### pipe runs but produces no output
