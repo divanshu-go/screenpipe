@@ -77,6 +77,7 @@ export function PastMeetings({
               <PastMeetingRow
                 key={m.id}
                 meeting={m}
+                bucket={b.label}
                 isActive={m.id === activeId}
                 onClick={() => onSelect(m.id)}
               />
@@ -90,16 +91,19 @@ export function PastMeetings({
 
 function PastMeetingRow({
   meeting,
+  bucket,
   isActive,
   onClick,
 }: {
   meeting: MeetingRecord;
+  bucket: string;
   isActive: boolean;
   onClick: () => void;
 }) {
   const title = meeting.title?.trim() || titleFromApp(meeting.meeting_app);
   const hasNote = Boolean(meeting.note?.trim());
   const Icon = isActive ? Phone : hasNote ? FileText : Phone;
+  const stamp = formatRowStamp(meeting.meeting_start, bucket);
   return (
     <li className="border-b border-border">
       <button
@@ -130,13 +134,30 @@ function PastMeetingRow({
         </div>
         <div className="shrink-0 flex items-center gap-3 text-[11px] text-muted-foreground tabular-nums">
           <span>{formatDuration(meeting.meeting_start, meeting.meeting_end)}</span>
-          <span className="w-12 text-right">
-            {formatClock(meeting.meeting_start)}
-          </span>
+          <span className="w-16 text-right">{stamp}</span>
         </div>
       </button>
     </li>
   );
+}
+
+function formatRowStamp(iso: string, bucket: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  if (bucket === "today" || bucket === "yesterday") {
+    return formatClock(iso);
+  }
+  if (bucket === "earlier this week") {
+    return d.toLocaleDateString(undefined, { weekday: "short" }).toLowerCase();
+  }
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  return d
+    .toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+      ...(sameYear ? {} : { year: "2-digit" }),
+    })
+    .toLowerCase();
 }
 
 function titleFromApp(app: string): string {
