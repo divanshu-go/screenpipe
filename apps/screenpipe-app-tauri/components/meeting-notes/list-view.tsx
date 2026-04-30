@@ -6,47 +6,10 @@
 import React, { useEffect, useRef } from "react";
 import { Loader2, Plus, Phone } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
-import {
-  formatClock,
-  formatDuration,
-  type MeetingRecord,
-} from "@/lib/utils/meeting-format";
+import type { MeetingRecord } from "@/lib/utils/meeting-format";
 import type { CalendarEvent } from "@/lib/utils/calendar";
 import { ComingUp } from "./coming-up";
-
-interface DayBucket {
-  key: string; // YYYY-MM-DD
-  date: Date;
-  meetings: MeetingRecord[];
-}
-
-function bucketByCalendarDay(meetings: MeetingRecord[]): DayBucket[] {
-  const byDay = new Map<string, MeetingRecord[]>();
-  for (const m of meetings) {
-    const d = new Date(m.meeting_start);
-    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-    if (!byDay.has(key)) byDay.set(key, []);
-    byDay.get(key)!.push(m);
-  }
-  // Newest day first
-  return Array.from(byDay.entries())
-    .sort((a, b) => (a[0] < b[0] ? 1 : -1))
-    .map(([key, ms]) => ({ key, date: new Date(ms[0].meeting_start), meetings: ms }));
-}
-
-function relativeDayLabel(date: Date): string | null {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const candidate = new Date(date);
-  candidate.setHours(0, 0, 0, 0);
-  const diffDays = Math.round(
-    (today.getTime() - candidate.getTime()) / (24 * 60 * 60 * 1000),
-  );
-  if (diffDays === 0) return "today";
-  if (diffDays === 1) return "yesterday";
-  return null;
-}
+import { PastMeetings } from "./past-meetings";
 
 interface ListViewProps {
   meetings: MeetingRecord[];
@@ -98,14 +61,13 @@ export function ListView({
     return () => observer.disconnect();
   }, [hasMore, onLoadMore]);
 
-  const buckets = bucketByCalendarDay(meetings);
+  const trulyEmpty = meetings.length === 0 && comingUp.length === 0;
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="max-w-3xl mx-auto px-12 py-12">
-        <header className="flex items-end justify-between mb-10">
-          <h1 className="text-4xl font-medium tracking-tight">meetings</h1>
-          {meetings.length > 0 && (
+      <div className="max-w-3xl mx-auto px-12 py-10">
+        <header className="flex items-center justify-end mb-8">
+          {!trulyEmpty && (
             <Button
               variant="outline"
               size="sm"
@@ -153,25 +115,18 @@ export function ListView({
           meetingActive={meetingActive}
         />
 
-        {meetings.length === 0 && !errorText && comingUp.length === 0 ? (
+        {trulyEmpty && !errorText ? (
           <ListEmpty onStart={onStart} starting={starting} />
         ) : meetings.length === 0 && !errorText ? (
-          // Calendar has events but no recordings yet — quieter empty hint
           <p className="text-sm text-muted-foreground">
             No past meetings yet. Click an upcoming event above to start one.
           </p>
         ) : (
-          <ol className="space-y-10">
-            {buckets.map((bucket) => (
-              <DayGroup
-                key={bucket.key}
-                date={bucket.date}
-                meetings={bucket.meetings}
-                activeId={activeId}
-                onSelect={onSelect}
-              />
-            ))}
-          </ol>
+          <PastMeetings
+            meetings={meetings}
+            activeId={activeId}
+            onSelect={onSelect}
+          />
         )}
 
         <div ref={sentinelRef} className="py-6 flex justify-center">
@@ -184,134 +139,6 @@ export function ListView({
   );
 }
 
-function DayGroup({
-  date,
-  meetings,
-  activeId,
-  onSelect,
-}: {
-  date: Date;
-  meetings: MeetingRecord[];
-  activeId: number | null;
-  onSelect: (id: number) => void;
-}) {
-  const day = String(date.getDate()).padStart(2, "0");
-  const month = date
-    .toLocaleString(undefined, { month: "short" })
-    .toLowerCase();
-  const dow = date
-    .toLocaleString(undefined, { weekday: "short" })
-    .toLowerCase();
-  const rel = relativeDayLabel(date);
-
-  return (
-    <li className="grid grid-cols-[88px_1fr] gap-6">
-      <div className="pt-1 text-right">
-        <div className="text-3xl font-medium leading-none tracking-tight">{day}</div>
-        <div className="text-xs text-muted-foreground mt-1">{month}</div>
-        <div className="text-xs text-muted-foreground/70 mt-0.5">{dow}</div>
-        {rel && (
-          <div className="text-[10px] uppercase tracking-[0.15em] text-foreground/80 mt-2">
-            {rel}
-          </div>
-        )}
-      </div>
-      <ul className="space-y-px">
-        {meetings.map((m) => (
-          <MeetingRow
-            key={m.id}
-            meeting={m}
-            isActive={m.id === activeId}
-            onClick={() => onSelect(m.id)}
-          />
-        ))}
-      </ul>
-    </li>
-  );
-}
-
-function MeetingRow({
-  meeting,
-  isActive,
-  onClick,
-}: {
-  meeting: MeetingRecord;
-  isActive: boolean;
-  onClick: () => void;
-}) {
-  const title = meeting.title?.trim() || titleFromApp(meeting.meeting_app);
-  const attendees = meeting.attendees
-    ?.split(",")
-    .map((s) => s.trim())
-    .filter(Boolean) ?? [];
-  const noteOneLiner = meeting.note?.replace(/\s+/g, " ").trim().slice(0, 110);
-
-  return (
-    <li>
-      <button
-        onClick={onClick}
-        className={cn(
-          "group w-full text-left flex gap-4 py-3 px-3 -mx-3 transition-colors hover:bg-muted/40",
-          isActive && "bg-muted/30",
-        )}
-      >
-        <div
-          className={cn(
-            "w-px self-stretch shrink-0 transition-colors",
-            isActive
-              ? "bg-foreground"
-              : "bg-border group-hover:bg-foreground/50",
-          )}
-          aria-hidden
-        />
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 min-w-0">
-            {isActive && (
-              <span
-                className="h-1.5 w-1.5 rounded-full bg-foreground shrink-0 animate-pulse"
-                aria-label="recording"
-              />
-            )}
-            <span className="text-base font-medium text-foreground truncate">
-              {title}
-            </span>
-          </div>
-          <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-            <span>{formatClock(meeting.meeting_start)}</span>
-            {meeting.meeting_end && (
-              <>
-                <span aria-hidden>—</span>
-                <span>{formatClock(meeting.meeting_end)}</span>
-              </>
-            )}
-            <span aria-hidden>·</span>
-            <span>{formatDuration(meeting.meeting_start, meeting.meeting_end)}</span>
-            {attendees.length > 0 && (
-              <>
-                <span aria-hidden>·</span>
-                <span>
-                  {attendees.length} {attendees.length === 1 ? "person" : "people"}
-                </span>
-              </>
-            )}
-            {meeting.meeting_app && meeting.meeting_app !== "manual" && (
-              <>
-                <span aria-hidden>·</span>
-                <span>{meeting.meeting_app.toLowerCase()}</span>
-              </>
-            )}
-          </div>
-          {noteOneLiner && (
-            <div className="mt-1 text-xs text-muted-foreground/70 line-clamp-1">
-              {noteOneLiner}
-            </div>
-          )}
-        </div>
-      </button>
-    </li>
-  );
-}
-
 function ListEmpty({
   onStart,
   starting,
@@ -320,37 +147,28 @@ function ListEmpty({
   starting: boolean;
 }) {
   return (
-    <div className="py-16 grid grid-cols-[88px_1fr] gap-6">
-      <div className="pt-1 text-right">
-        <Phone className="inline-block h-5 w-5 text-muted-foreground/40" />
-      </div>
-      <div className="max-w-md">
-        <h2 className="text-lg font-medium mb-2">no meetings yet</h2>
-        <p className="text-sm text-muted-foreground mb-5 leading-relaxed">
-          Join a Zoom, Meet, or Teams call and screenpipe will detect it
-          automatically. Or start one manually to take notes against any
-          conversation.
-        </p>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => void onStart()}
-          disabled={starting}
-          className="gap-2"
-        >
-          {starting ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <Plus className="h-3.5 w-3.5" />
-          )}
-          new meeting
-        </Button>
-      </div>
+    <div className="py-16 text-center max-w-md mx-auto">
+      <Phone className="inline-block h-6 w-6 text-muted-foreground/40 mb-4" />
+      <h2 className="text-lg font-medium mb-2">no meetings yet</h2>
+      <p className="text-sm text-muted-foreground mb-6 leading-relaxed">
+        Join a Zoom, Meet, or Teams call and screenpipe will detect it
+        automatically. Or start one manually to take notes against any
+        conversation.
+      </p>
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => void onStart()}
+        disabled={starting}
+        className="gap-2"
+      >
+        {starting ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        ) : (
+          <Plus className="h-3.5 w-3.5" />
+        )}
+        new meeting
+      </Button>
     </div>
   );
-}
-
-function titleFromApp(app: string): string {
-  if (!app || app === "manual") return "untitled meeting";
-  return app.toLowerCase();
 }
