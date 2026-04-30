@@ -235,6 +235,7 @@ export function IntegrationIcon({ icon }: { icon: string }) {
     "google-docs": <img src="/images/google-docs.svg" alt="Google Docs" className="w-5 h-5" />,
     "ics-calendar": <CalendarIcon className="h-5 w-5 text-muted-foreground" />,
     openclaw: <img src="/images/openclaw.png" alt="OpenClaw" className="w-5 h-5" />,
+    hermes: <img src="/images/hermes.png" alt="Hermes" className="w-5 h-5 rounded" />,
     bee: <img src="/images/bee.png" alt="Bee" className="w-5 h-5 rounded" />,
     email: <Send className="h-5 w-5 text-muted-foreground" />,
     todoist: (
@@ -651,6 +652,47 @@ function AnythingLLMPanel() {
       </div>
       <p className="text-xs text-muted-foreground">
         3. Click <strong>Refresh</strong> in Agent Skills to load the server.
+      </p>
+    </div>
+  );
+}
+
+function HermesPanel() {
+  const [copied, setCopied] = useState(false);
+  const config = `mcp_servers:
+  screenpipe:
+    command: npx
+    args:
+      - "-y"
+      - screenpipe-mcp@latest
+`;
+  const handleCopy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(config);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {}
+  }, [config]);
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-muted-foreground">
+        Let Hermes Agent search your screen &amp; audio history via MCP. Talk to it from Telegram, Discord, Slack, WhatsApp, or the CLI.
+      </p>
+      <p className="text-xs text-muted-foreground">
+        1. Open <code className="bg-muted px-1 rounded">~/.hermes/config.yaml</code> (run <code className="bg-muted px-1 rounded">hermes config edit</code>)
+      </p>
+      <p className="text-xs text-muted-foreground">
+        2. Merge this block into the file (preserve indentation):
+      </p>
+      <div className="relative group">
+        <pre className="bg-muted border border-border rounded-lg p-3 pr-10 text-xs font-mono text-foreground overflow-x-auto whitespace-pre-wrap">{config}</pre>
+        <Button variant="ghost" size="sm" onClick={handleCopy} className="absolute top-2 right-2 h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity">
+          {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3 text-muted-foreground" />}
+        </Button>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        3. Restart Hermes (<code className="bg-muted px-1 rounded">hermes chat</code> or <code className="bg-muted px-1 rounded">hermes gateway</code>). Try: &quot;what did I do in the last 5 minutes?&quot;
       </p>
     </div>
   );
@@ -1590,6 +1632,7 @@ export function ConnectionsSection() {
       { id: "gmail", name: "Gmail", icon: "gmail", connected: false },
       { id: "ics-calendar", name: "ICS Calendar", icon: "ics-calendar", connected: false },
       { id: "openclaw", name: "OpenClaw", icon: "openclaw", connected: false },
+      { id: "hermes", name: "Hermes", icon: "hermes", connected: false },
       { id: "whatsapp", name: "WhatsApp", icon: "whatsapp", connected: false },
       { id: "anythingllm", name: "AnythingLLM", icon: "anythingllm", connected: false },
       { id: "ollama", name: "Ollama", icon: "ollama", connected: false },
@@ -1658,6 +1701,7 @@ export function ConnectionsSection() {
       case "openclaw": return <OpenClawCard />;
       case "whatsapp": return <WhatsAppPanel />;
       case "anythingllm": return <AnythingLLMPanel />;
+      case "hermes": return <HermesPanel />;
       case "ollama": return <OllamaPanel />;
       case "lmstudio": return <LMStudioPanel />;
       case "msty": return <MstyPanel />;
