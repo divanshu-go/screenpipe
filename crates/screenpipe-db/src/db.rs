@@ -8085,6 +8085,81 @@ mod tests {
         assert_eq!(positions.len(), 2);
     }
 
+    #[test]
+    fn test_narrow_bbox_full_match_keeps_bbox() {
+        // text == query → narrowing produces the same bbox
+        let (l, w) = narrow_bbox_to_needle("rotor", "rotor", "rotor", 100.0, 80.0, 20.0);
+        assert!((l - 100.0).abs() < 0.01);
+        assert!((w - 80.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_narrow_bbox_single_line_query_at_start() {
+        // "rotor mech" 100..200 (w=100), query "rotor" at offset 0 of 10 chars → first half
+        let (l, w) = narrow_bbox_to_needle("rotor mech", "rotor mech", "rotor", 100.0, 100.0, 20.0);
+        assert!((l - 100.0).abs() < 0.01, "left should not shift: got {l}");
+        // 5/10 * 100 = 50, max(50, height*0.5=10) = 50
+        assert!((w - 50.0).abs() < 0.01, "width should be ~50: got {w}");
+    }
+
+    #[test]
+    fn test_narrow_bbox_single_line_query_in_middle() {
+        // "the rotor mech" 14 chars, query "rotor" starts at char 4
+        let (l, w) = narrow_bbox_to_needle(
+            "the rotor mech",
+            "the rotor mech",
+            "rotor",
+            100.0,
+            140.0,
+            20.0,
+        );
+        // expected left = 100 + (4/14)*140 = 100 + 40 = 140
+        assert!((l - 140.0).abs() < 0.5, "left ~140 expected: got {l}");
+        // expected width = (5/14)*140 = 50
+        assert!((w - 50.0).abs() < 0.5, "width ~50 expected: got {w}");
+    }
+
+    #[test]
+    fn test_narrow_bbox_multiline_paragraph_keeps_full() {
+        // text is much longer than aspect ratio capacity → multi-line, leave alone
+        let long = "Canonicalization. For each neutral-transformed sentence pair, compute a rotor R(n_i) that maps n_i to the reference direction e_1.";
+        let (l, w) = narrow_bbox_to_needle(long, &long.to_lowercase(), "rotor", 50.0, 1400.0, 200.0);
+        assert!((l - 50.0).abs() < 0.01, "multi-line should not narrow left: got {l}");
+        assert!((w - 1400.0).abs() < 0.01, "multi-line should not narrow width: got {w}");
+    }
+
+    #[test]
+    fn test_narrow_bbox_zero_height_keeps_full() {
+        let (l, w) = narrow_bbox_to_needle("rotor", "rotor", "rotor", 100.0, 80.0, 0.0);
+        assert!((l - 100.0).abs() < 0.01);
+        assert!((w - 80.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_narrow_bbox_short_query_floors_width() {
+        // single-char query; min_w = height*0.5 = 10, so 1/10*100=10 also lands at floor
+        let (_, w) = narrow_bbox_to_needle("abcdefghij", "abcdefghij", "a", 0.0, 100.0, 20.0);
+        assert!(w >= 10.0, "narrow width must be at least height*0.5: got {w}");
+    }
+
+    #[test]
+    fn test_find_matching_positions_narrows_partial_match_bbox() {
+        let blocks = vec![create_test_block(
+            "the rotor mech",
+            "95.5",
+            "100",
+            "50",
+            "140",
+            "20",
+        )];
+        let positions = find_matching_positions(&blocks, "rotor");
+        assert_eq!(positions.len(), 1);
+        // bbox should have narrowed off the leading "the " (4 of 14 chars)
+        let pos = &positions[0];
+        assert!(pos.bounds.left > 100.0 + 30.0, "left should shift right: {}", pos.bounds.left);
+        assert!(pos.bounds.width < 140.0, "width should narrow: {}", pos.bounds.width);
+    }
+
     fn make_search_match(
         frame_id: i64,
         timestamp_secs: i64,

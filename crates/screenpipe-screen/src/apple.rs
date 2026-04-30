@@ -229,8 +229,11 @@ pub fn perform_ocr_apple(
                             // Convert to top-left origin (same as other OCR engines)
                             let top = 1.0 - y_vision - height;
 
+                            // Stay on level "0" (Apple Native, flat) so frames hit the
+                            // bulk fast-path in insert_ocr_elements; level 5 would route
+                            // every word through the per-row Tesseract hierarchical path.
                             ocr_results_vec.push(serde_json::json!({
-                                "level": "5",
+                                "level": "0",
                                 "page_num": "0",
                                 "block_num": "0",
                                 "par_num": "0",
@@ -270,4 +273,66 @@ pub fn perform_ocr_apple(
 
         default_ocr_result
     })
+}
+
+#[cfg(all(target_os = "macos", test))]
+mod tests {
+    use super::utf16_word_ranges;
+
+    #[test]
+    fn empty_string_yields_empty() {
+        assert!(utf16_word_ranges("").is_empty());
+    }
+
+    #[test]
+    fn whitespace_only_yields_empty() {
+        assert!(utf16_word_ranges("   \t\n  ").is_empty());
+    }
+
+    #[test]
+    fn single_word_one_range() {
+        let r = utf16_word_ranges("rotor");
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0], (0, 5, "rotor".to_string()));
+    }
+
+    #[test]
+    fn two_words_two_ranges() {
+        let r = utf16_word_ranges("hello world");
+        assert_eq!(r.len(), 2);
+        assert_eq!(r[0], (0, 5, "hello".to_string()));
+        assert_eq!(r[1], (6, 5, "world".to_string()));
+    }
+
+    #[test]
+    fn leading_and_trailing_whitespace_skipped() {
+        let r = utf16_word_ranges("  rotor  ");
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0], (2, 5, "rotor".to_string()));
+    }
+
+    #[test]
+    fn cjk_no_whitespace_collapses_to_one_range() {
+        // No whitespace in CJK strings → single range covering the whole string.
+        // Each Han char is 1 UTF-16 code unit (BMP), so utf16_len == char count.
+        let r = utf16_word_ranges("你好世界");
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].0, 0);
+        assert_eq!(r[0].1, 4);
+        assert_eq!(r[0].2, "你好世界");
+    }
+
+    #[test]
+    fn supplementary_chars_count_as_two_utf16_units() {
+        // Emoji 🎉 (U+1F389) lives outside the BMP and takes 2 UTF-16 code units.
+        let r = utf16_word_ranges("a 🎉 b");
+        assert_eq!(r.len(), 3);
+        assert_eq!(r[0], (0, 1, "a".to_string()));
+        // 🎉 starts at utf16 offset 2, length 2
+        assert_eq!(r[1].0, 2);
+        assert_eq!(r[1].1, 2);
+        // 'b' is at utf16 offset 5 (1 + 1 + 2 + 1)
+        assert_eq!(r[2].0, 5);
+        assert_eq!(r[2].1, 1);
+    }
 }
