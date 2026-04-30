@@ -1952,6 +1952,29 @@ export function StandaloneChat({
     useChatStore.getState().actions.setPanelSession(conversationId);
   }, [conversationId]);
 
+  // Cross-window rename sync. The chat-store is window-local (zustand
+  // lives in each WebView's JS context), so a rename done in the /chat
+  // overlay would otherwise never reach the chat-sidebar in /home. The
+  // canonical rename path (`renameConversation` in use-chat-conversations)
+  // emits this event to all windows; we patch the local store on receipt.
+  // Self-receipt is a harmless idempotent no-op (patch sets the same
+  // title we just wrote).
+  useEffect(() => {
+    const unlisten = listen<{ id: string; title: string }>(
+      "chat-renamed",
+      (event) => {
+        const { id, title } = event.payload;
+        if (!id || !title) return;
+        if (useChatStore.getState().sessions[id]) {
+          useChatStore.getState().actions.patch(id, { title });
+        }
+      },
+    );
+    return () => {
+      unlisten.then((fn) => fn()).catch(() => {});
+    };
+  }, []);
+
   // Component-lifetime guard for bus handlers that fire across the
   // longer-lived useEffects (terminated, foreground registrations).
   // Useful because the panel's per-effect `mounted` flags are scoped

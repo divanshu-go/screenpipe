@@ -313,6 +313,17 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     } catch (e) {
       console.warn("[chat] failed to sync rename to store:", e);
     }
+    // Broadcast across windows. The chat-store is window-local (zustand
+    // lives in each WebView's JS context); without this, renaming in the
+    // /chat overlay window never reaches the chat-sidebar in /home (and
+    // vice versa) until the next on-disk hydration. Listeners in
+    // standalone-chat.tsx patch their local store on receipt.
+    try {
+      const { emit } = await import("@tauri-apps/api/event");
+      await emit("chat-renamed", { id: convId, title: trimmed });
+    } catch (e) {
+      console.warn("[chat] failed to broadcast rename:", e);
+    }
   };
 
   // ---- deleteConversation ----
