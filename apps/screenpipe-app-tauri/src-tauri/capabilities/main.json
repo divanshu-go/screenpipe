@@ -415,17 +415,6 @@
           "sidecar": false
         }
       ]
-    },
-    {
-      "identifier": "shell:allow-execute",
-      "allow": [
-        {
-          "name": "bee",
-          "cmd": "bee",
-          "args": true,
-          "sidecar": false
-        }
-      ]
     }
   ]
 }
