@@ -330,7 +330,14 @@ export const useChatStore = create<ChatStore>((set) => ({
       set((s) => {
         const existing = s.sessions[id];
         if (!existing) return {};
-        if (s.currentId === id) return {}; // can't be unread for the current view
+        // Can't be unread for the chat the user is actively looking at.
+        if (s.currentId === id) return {};
+        // Also a no-op when the chat is still loaded in the (display:none)
+        // panel — the user already read what's there; trailing deltas that
+        // arrive after they navigate to Settings/Pipes/Memories/Timeline
+        // shouldn't re-light the unread dot. The panel keeps streaming in
+        // the background and panelSessionId tracks its current conversation.
+        if (s.panelSessionId === id) return {};
         if (existing.unread) return {}; // already unread, avoid re-render churn
         return {
           sessions: { ...s.sessions, [id]: { ...existing, unread: true } },
