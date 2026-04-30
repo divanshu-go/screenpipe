@@ -33,8 +33,11 @@ The easiest way to use screenpipe-mcp is with npx. Edit your Claude Desktop conf
 The MCP server can run over HTTP using the [Streamable HTTP transport](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http), allowing remote MCP clients to connect over the network instead of stdio. This is ideal when your AI assistant (e.g., OpenClaw) runs on a different machine than screenpipe.
 
 ```bash
-# from npm
+# loopback only (default)
 npx screenpipe-mcp-http --port 3031
+
+# expose to your LAN with bearer auth
+npx screenpipe-mcp-http --listen-on-lan --api-key $(openssl rand -hex 16)
 
 # or from source
 npm run start:http -- --port 3031
@@ -42,13 +45,15 @@ npm run start:http -- --port 3031
 
 The server exposes:
 - **MCP endpoint**: `http://localhost:3031/mcp` — Streamable HTTP transport (POST for requests, GET for SSE stream)
-- **Health check**: `http://localhost:3031/health`
+- **Health check**: `http://localhost:3031/health` — always unauthenticated, for monitors
 
 **Options:**
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--port` | Port for the MCP HTTP server | 3031 |
-| `--screenpipe-port` | Port where screenpipe API is running | 3030 |
+| `--port` | Port for the MCP HTTP server | `3031` |
+| `--screenpipe-port` | Port where screenpipe API is running | `3030` |
+| `--listen-on-lan` | Bind `0.0.0.0` so other devices on the LAN can connect. Requires `--api-key`. | off (binds `127.0.0.1`) |
+| `--api-key <secret>` | Bearer token required for non-loopback requests (`Authorization: Bearer <secret>`). Loopback always allowed. | none |
 
 **Connecting a remote MCP client:**
 
@@ -58,7 +63,10 @@ Point any MCP client that supports HTTP transport at the `/mcp` endpoint:
 {
   "mcpServers": {
     "screenpipe": {
-      "url": "http://<your-ip>:3031/mcp"
+      "url": "http://<your-ip>:3031/mcp",
+      "headers": {
+        "Authorization": "Bearer <your-secret>"
+      }
     }
   }
 }

@@ -7,10 +7,18 @@
  * HTTP Server for Screenpipe MCP
  *
  * This allows web apps to call MCP tools over HTTP instead of stdio.
- * Run with: npx ts-node src/http-server.ts --port 3031
+ *
+ * Run on localhost (default):
+ *   npx ts-node src/http-server.ts --port 3031
+ *
+ * Expose to your LAN (requires --api-key):
+ *   npx ts-node src/http-server.ts --listen-on-lan --api-key <secret>
+ *
+ * Loopback callers are always allowed without auth. Non-loopback callers
+ * must send `Authorization: Bearer <secret>` whenever --api-key is set.
  */
 
-import { createServer } from "http";
+import { createServer, type IncomingMessage, type ServerResponse } from "http";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
@@ -18,23 +26,121 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
-// Parse command line arguments
-const args = process.argv.slice(2);
-let mcpPort = 3031;
-let screenpipePort = 3030;
+// ── CLI parsing ─────────────────────────────────────────────────────────
 
-for (let i = 0; i < args.length; i++) {
-  if (args[i] === "--port" && args[i + 1]) {
-    mcpPort = parseInt(args[i + 1], 10);
-  }
-  if (args[i] === "--screenpipe-port" && args[i + 1]) {
-    screenpipePort = parseInt(args[i + 1], 10);
-  }
+export interface CliConfig {
+  mcpPort: number;
+  screenpipePort: number;
+  /** Bind address: "127.0.0.1" (default) or "0.0.0.0" when --listen-on-lan. */
+  host: string;
+  /** Required bearer token for non-loopback requests. Loopback skips auth. */
+  apiKey?: string;
 }
 
-const SCREENPIPE_API = `http://localhost:${screenpipePort}`;
+export class CliError extends Error {}
 
-// Tool definitions
+/**
+ * Parse CLI args. Pure for testability.
+ *
+ * Mirrors the screenpipe-engine CLI: --listen-on-lan flips bind to 0.0.0.0
+ * and *requires* --api-key so we never accidentally expose an unauthenticated
+ * MCP endpoint on the user's network.
+ */
+export function parseArgs(argv: string[]): CliConfig {
+  let mcpPort = 3031;
+  let screenpipePort = 3030;
+  let listenOnLan = false;
+  let apiKey: string | undefined;
+
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--port" && argv[i + 1]) {
+      mcpPort = parseInt(argv[++i], 10);
+    } else if (a === "--screenpipe-port" && argv[i + 1]) {
+      screenpipePort = parseInt(argv[++i], 10);
+    } else if (a === "--listen-on-lan") {
+      listenOnLan = true;
+    } else if (a === "--api-key" && argv[i + 1]) {
+      apiKey = argv[++i];
+    } else if (a === "--help" || a === "-h") {
+      throw new CliError(usage());
+    }
+  }
+
+  if (Number.isNaN(mcpPort) || mcpPort <= 0 || mcpPort > 65535) {
+    throw new CliError(`invalid --port: ${mcpPort}`);
+  }
+  if (Number.isNaN(screenpipePort) || screenpipePort <= 0 || screenpipePort > 65535) {
+    throw new CliError(`invalid --screenpipe-port: ${screenpipePort}`);
+  }
+  if (listenOnLan && !apiKey) {
+    throw new CliError(
+      "--listen-on-lan requires --api-key <secret> — refusing to expose " +
+        "an unauthenticated MCP endpoint on your network."
+    );
+  }
+
+  return {
+    mcpPort,
+    screenpipePort,
+    host: listenOnLan ? "0.0.0.0" : "127.0.0.1",
+    apiKey,
+  };
+}
+
+function usage(): string {
+  return [
+    "screenpipe-mcp http server",
+    "",
+    "  --port <n>             listen port (default 3031)",
+    "  --screenpipe-port <n>  upstream screenpipe API port (default 3030)",
+    "  --listen-on-lan        bind 0.0.0.0 instead of 127.0.0.1",
+    "                         (requires --api-key)",
+    "  --api-key <secret>     bearer token for non-loopback requests",
+    "  --help, -h             show this message",
+  ].join("\n");
+}
+
+// ── Auth ────────────────────────────────────────────────────────────────
+
+/**
+ * True if `req` came from the local machine. Covers IPv4 loopback,
+ * IPv6 loopback, and IPv4-mapped-IPv6 loopback (`::ffff:127.x`).
+ */
+export function isLoopbackRequest(req: { socket: { remoteAddress?: string } }): boolean {
+  const addr = req.socket.remoteAddress ?? "";
+  if (addr === "127.0.0.1" || addr === "::1") return true;
+  if (addr.startsWith("::ffff:127.")) return true;
+  return false;
+}
+
+/**
+ * Authorization decision. Loopback is always allowed; non-loopback requires
+ * a matching bearer token when one is configured. If no api key is set
+ * (loopback-only deployment), non-loopback shouldn't even be reachable —
+ * but we still 401 it as belt-and-suspenders.
+ */
+export function isAuthorized(
+  req: { socket: { remoteAddress?: string }; headers: { authorization?: string } },
+  apiKey: string | undefined
+): boolean {
+  if (isLoopbackRequest(req)) return true;
+  if (!apiKey) return false;
+  const expected = `Bearer ${apiKey}`;
+  const got = req.headers.authorization ?? "";
+  return constantTimeEq(got, expected);
+}
+
+/** Constant-time string compare to keep timing attacks off the table. */
+function constantTimeEq(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+// ── Tool definitions ────────────────────────────────────────────────────
+
 const TOOLS = [
   {
     name: "search_content",
@@ -52,17 +158,12 @@ const TOOLS = [
         content_type: {
           type: "string",
           enum: ["all", "ocr", "audio", "input", "accessibility"],
-          description: "Content type filter: 'ocr' (screen text), 'audio' (transcriptions), 'input' (clicks, keystrokes, clipboard, app switches), 'accessibility' (accessibility tree text), 'all'. Default: 'all'",
+          description:
+            "Content type filter: 'ocr' (screen text), 'audio' (transcriptions), 'input' (clicks, keystrokes, clipboard, app switches), 'accessibility' (accessibility tree text), 'all'. Default: 'all'",
           default: "all",
         },
-        limit: {
-          type: "integer",
-          description: "Max results. Default: 10",
-        },
-        offset: {
-          type: "integer",
-          description: "Skip N results for pagination. Default: 0",
-        },
+        limit: { type: "integer", description: "Max results. Default: 10" },
+        offset: { type: "integer", description: "Skip N results for pagination. Default: 0" },
         start_time: {
           type: "string",
           description: "ISO 8601 UTC start time (e.g., 2024-01-15T10:00:00Z)",
@@ -75,29 +176,27 @@ const TOOLS = [
           type: "string",
           description: "Filter by app (e.g., 'Google Chrome', 'Slack', 'zoom.us')",
         },
-        window_name: {
-          type: "string",
-          description: "Filter by window title",
-        },
+        window_name: { type: "string", description: "Filter by window title" },
       },
     },
   },
 ];
 
-// Helper function to make HTTP requests
-async function fetchAPI(endpoint: string, options: RequestInit = {}): Promise<Response> {
-  const url = `${SCREENPIPE_API}${endpoint}`;
-  return fetch(url, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...options.headers,
-    },
-  });
+// ── Tool handlers ───────────────────────────────────────────────────────
+
+function makeFetchAPI(screenpipePort: number) {
+  const base = `http://localhost:${screenpipePort}`;
+  return async (endpoint: string, options: RequestInit = {}): Promise<Response> =>
+    fetch(`${base}${endpoint}`, {
+      ...options,
+      headers: { "Content-Type": "application/json", ...options.headers },
+    });
 }
 
-// Tool handler for search_content
-async function handleSearchContent(args: Record<string, unknown>) {
+async function handleSearchContent(
+  fetchAPI: ReturnType<typeof makeFetchAPI>,
+  args: Record<string, unknown>
+) {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(args)) {
     if (value !== null && value !== undefined) {
@@ -133,26 +232,29 @@ async function handleSearchContent(args: Record<string, unknown>) {
     if (result.type === "OCR") {
       formattedResults.push(
         `[OCR] ${content.app_name || "?"} | ${content.window_name || "?"}\n` +
-        `${content.timestamp || ""}\n` +
-        `${content.text || ""}`
+          `${content.timestamp || ""}\n` +
+          `${content.text || ""}`
       );
     } else if (result.type === "Audio") {
       formattedResults.push(
         `[Audio] ${content.device_name || "?"}\n` +
-        `${content.timestamp || ""}\n` +
-        `${content.transcription || ""}`
+          `${content.timestamp || ""}\n` +
+          `${content.transcription || ""}`
       );
     } else if (result.type === "UI" || result.type === "Accessibility") {
       formattedResults.push(
         `[Accessibility] ${content.app_name || "?"} | ${content.window_name || "?"}\n` +
-        `${content.timestamp || ""}\n` +
-        `${content.text || ""}`
+          `${content.timestamp || ""}\n` +
+          `${content.text || ""}`
       );
     }
   }
 
-  const header = `Results: ${results.length}/${pagination.total || "?"}` +
-    (pagination.total > results.length ? ` (use offset=${(pagination.offset || 0) + results.length} for more)` : "");
+  const header =
+    `Results: ${results.length}/${pagination.total || "?"}` +
+    (pagination.total > results.length
+      ? ` (use offset=${(pagination.offset || 0) + results.length} for more)`
+      : "");
 
   return {
     content: [
@@ -164,11 +266,12 @@ async function handleSearchContent(args: Record<string, unknown>) {
   };
 }
 
-// Create a fresh MCP Server instance with handlers registered.
+// ── MCP server factory ──────────────────────────────────────────────────
+
 // Each HTTP session gets its own Server — the MCP SDK requires a 1:1
 // mapping between Server and transport (reusing a Server across
 // transports throws "Already connected to a transport").
-function createMcpServer(): Server {
+function createMcpServer(fetchAPI: ReturnType<typeof makeFetchAPI>): Server {
   const s = new Server(
     { name: "screenpipe-http", version: "0.14.0" },
     { capabilities: { tools: {} } }
@@ -179,65 +282,111 @@ function createMcpServer(): Server {
   s.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
     if (!args) throw new Error("Missing arguments");
-    if (name === "search_content") return handleSearchContent(args);
+    if (name === "search_content") return handleSearchContent(fetchAPI, args);
     throw new Error(`Unknown tool: ${name}`);
   });
 
   return s;
 }
 
-// Per-session state: each session gets its own Server + transport pair.
-const sessions = new Map<string, { server: Server; transport: StreamableHTTPServerTransport }>();
+// ── HTTP server ─────────────────────────────────────────────────────────
 
-const httpServer = createServer(async (req, res) => {
-  // CORS headers
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, mcp-session-id");
+export function buildHttpServer(config: CliConfig) {
+  const fetchAPI = makeFetchAPI(config.screenpipePort);
+  const sessions = new Map<
+    string,
+    { server: Server; transport: StreamableHTTPServerTransport }
+  >();
 
-  if (req.method === "OPTIONS") {
-    res.writeHead(204);
-    res.end();
-    return;
-  }
+  return createServer(async (req: IncomingMessage, res: ServerResponse) => {
+    // CORS
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization, mcp-session-id"
+    );
 
-  // Health check
-  if (req.url === "/health") {
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ status: "ok", sessions: sessions.size }));
-    return;
-  }
-
-  // MCP endpoint
-  if (req.url === "/mcp" || req.url?.startsWith("/mcp?")) {
-    const sessionId = req.headers["mcp-session-id"] as string | undefined;
-
-    let session = sessionId ? sessions.get(sessionId) : undefined;
-
-    if (!session) {
-      const server = createMcpServer();
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => crypto.randomUUID(),
-      });
-
-      await server.connect(transport);
-
-      if (transport.sessionId) {
-        sessions.set(transport.sessionId, { server, transport });
-      }
-      session = { server, transport };
+    if (req.method === "OPTIONS") {
+      res.writeHead(204);
+      res.end();
+      return;
     }
 
-    await session.transport.handleRequest(req, res);
-    return;
+    // Health check is unauthenticated — monitors / load balancers need it.
+    // It only reveals session count, no user data.
+    if (req.url === "/health") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "ok", sessions: sessions.size }));
+      return;
+    }
+
+    // Auth gate for everything else.
+    if (!isAuthorized(req, config.apiKey)) {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
+
+    // MCP endpoint
+    if (req.url === "/mcp" || req.url?.startsWith("/mcp?")) {
+      const sessionId = req.headers["mcp-session-id"] as string | undefined;
+      let session = sessionId ? sessions.get(sessionId) : undefined;
+
+      if (!session) {
+        const server = createMcpServer(fetchAPI);
+        const transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: () => crypto.randomUUID(),
+        });
+
+        await server.connect(transport);
+
+        if (transport.sessionId) {
+          sessions.set(transport.sessionId, { server, transport });
+        }
+        session = { server, transport };
+      }
+
+      await session.transport.handleRequest(req, res);
+      return;
+    }
+
+    res.writeHead(404, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Not found" }));
+  });
+}
+
+// ── Entry point ─────────────────────────────────────────────────────────
+
+// Don't auto-start when imported (e.g. by tests). Compare to argv[1] so
+// `node dist/http-server.js` and `npx ts-node src/http-server.ts` both
+// match, but `import "./http-server"` from a test does not.
+const isMain =
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (typeof require !== "undefined" && (require as any).main === module) ||
+  process.argv[1]?.endsWith("http-server.ts") ||
+  process.argv[1]?.endsWith("http-server.js");
+
+if (isMain) {
+  let config: CliConfig;
+  try {
+    config = parseArgs(process.argv.slice(2));
+  } catch (e) {
+    if (e instanceof CliError) {
+      console.error(e.message);
+      process.exit(2);
+    }
+    throw e;
   }
 
-  res.writeHead(404, { "Content-Type": "application/json" });
-  res.end(JSON.stringify({ error: "Not found" }));
-});
-
-httpServer.listen(mcpPort, () => {
-  console.log(`Screenpipe MCP HTTP server running on http://localhost:${mcpPort}`);
-  console.log(`MCP endpoint: http://localhost:${mcpPort}/mcp`);
-  console.log(`Health check: http://localhost:${mcpPort}/health`);
-});
+  const server = buildHttpServer(config);
+  server.listen(config.mcpPort, config.host, () => {
+    const printable = config.host === "0.0.0.0" ? "0.0.0.0 (LAN)" : config.host;
+    console.log(`Screenpipe MCP HTTP server listening on ${printable}:${config.mcpPort}`);
+    console.log(`  MCP endpoint:  http://${config.host}:${config.mcpPort}/mcp`);
+    console.log(`  Health check:  http://${config.host}:${config.mcpPort}/health`);
+    if (config.apiKey) {
+      console.log("  Auth required for non-loopback requests (Authorization: Bearer …)");
+    }
+  });
+}
