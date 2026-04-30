@@ -118,8 +118,13 @@ pub async fn run_record_and_transcribe(
     let mut segment_start_time = now_epoch_secs();
     let stream_start = Instant::now();
     // Tracks the last time we received a buffer with non-zero audio.
-    // Used to detect OS-level zero-fill hijack (see INPUT_SILENT_BUFFER_TIMEOUT_SECS).
-    let mut last_non_zero_at = stream_start;
+    // None until the first real (non-zero) buffer arrives. Used to detect
+    // OS-level zero-fill *hijack* — i.e. a stream that was healthy and
+    // went silent. Devices that never produce real audio (USB inputs with
+    // nothing plugged in, virtual interfaces) stay None forever and never
+    // trigger the watchdog: rebuilding them wouldn't help anyway, and the
+    // tight rebuild loop is itself a problem (recovery storm).
+    let mut last_non_zero_at: Option<Instant> = None;
     let mut segment_count: u64 = 0;
 
     let mut was_paused_for_lock = false;
@@ -248,19 +253,24 @@ pub async fn run_record_and_transcribe(
 /// Returns `Ok(Some(chunk))` on data, `Ok(None)` when the caller should continue (lag/idle),
 /// or `Err` on fatal errors.
 ///
-/// `last_non_zero_at` is updated whenever a buffer with real audio arrives.
-/// If only zero-fill buffers arrive on an input device for longer than
-/// INPUT_SILENT_BUFFER_TIMEOUT_SECS (after startup grace), the stream is
-/// declared dead — this catches OS-level device hijack where the render
-/// callback keeps firing but with empty buffers (e.g. AirPods captured by
-/// another app mid-call), which the receive-timeout watchdog cannot see.
+/// `last_non_zero_at` is set the first time a buffer with real audio
+/// arrives, then updated on every subsequent real-audio buffer.
+///
+/// The watchdog only fires when the stream was previously healthy
+/// (`Some(t)`) and has gone silent for INPUT_SILENT_BUFFER_TIMEOUT_SECS.
+/// This catches OS-level device hijack — render callback keeps firing
+/// with empty buffers (e.g. AirPods captured by another app mid-call) —
+/// without false-positing on devices that never had real audio (a USB
+/// input with nothing plugged in, a webcam mic that's muted): rebuilding
+/// those wouldn't help, and the tight rebuild loop is itself harmful
+/// (recovery storm hammers the device monitor and CoreAudio).
 async fn recv_audio_chunk(
     receiver: &mut broadcast::Receiver<Vec<f32>>,
     audio_stream: &Arc<AudioStream>,
     device_name: &str,
     metrics: &Arc<AudioPipelineMetrics>,
     stream_start: &Instant,
-    last_non_zero_at: &mut Instant,
+    last_non_zero_at: &mut Option<Instant>,
 ) -> Result<Option<Vec<f32>>> {
     let recv_result = tokio::time::timeout(
         Duration::from_secs(AUDIO_RECEIVE_TIMEOUT_SECS),
@@ -274,7 +284,7 @@ async fn recv_audio_chunk(
             metrics.update_audio_level_for_device(device_name, &chunk);
 
             if !is_silent_buffer(&chunk) {
-                *last_non_zero_at = Instant::now();
+                *last_non_zero_at = Some(Instant::now());
                 // Only tick "device is delivering data" on real audio so
                 // the UI / health endpoint cannot show green during a
                 // zero-fill hijack.
@@ -282,27 +292,29 @@ async fn recv_audio_chunk(
                 return Ok(Some(chunk));
             }
 
-            // Silent buffer. Tolerate it past startup grace and only on
-            // input devices — output devices legitimately go silent when
-            // nothing is playing, and the existing per-device-type
-            // handling for output silence lives below.
-            if audio_stream.device.device_type == DeviceType::Input
-                && stream_start.elapsed().as_secs() >= STREAM_STARTUP_GRACE_SECS
-                && last_non_zero_at.elapsed().as_secs() >= INPUT_SILENT_BUFFER_TIMEOUT_SECS
-            {
-                warn!(
-                    "no usable audio from {} for {}s — only zero-fill buffers \
-                     (likely OS device hijack by another app), triggering reconnect",
-                    device_name, INPUT_SILENT_BUFFER_TIMEOUT_SECS
-                );
-                metrics.record_stream_timeout();
-                audio_stream.is_disconnected.store(true, Ordering::Relaxed);
-                return Err(anyhow!(
-                    "Audio stream zero-fill — no usable data from {} for {}s \
-                     (suspected device hijack by another process)",
-                    device_name,
-                    INPUT_SILENT_BUFFER_TIMEOUT_SECS
-                ));
+            // Silent buffer. Only declare the stream hijacked if we had
+            // confirmed real audio earlier — i.e. the stream WAS healthy
+            // and went silent. Input devices only; output devices
+            // legitimately go silent when nothing is playing.
+            if let Some(last_seen) = *last_non_zero_at {
+                if audio_stream.device.device_type == DeviceType::Input
+                    && stream_start.elapsed().as_secs() >= STREAM_STARTUP_GRACE_SECS
+                    && last_seen.elapsed().as_secs() >= INPUT_SILENT_BUFFER_TIMEOUT_SECS
+                {
+                    warn!(
+                        "no usable audio from {} for {}s — only zero-fill buffers \
+                         (likely OS device hijack by another app), triggering reconnect",
+                        device_name, INPUT_SILENT_BUFFER_TIMEOUT_SECS
+                    );
+                    metrics.record_stream_timeout();
+                    audio_stream.is_disconnected.store(true, Ordering::Relaxed);
+                    return Err(anyhow!(
+                        "Audio stream zero-fill — no usable data from {} for {}s \
+                         (suspected device hijack by another process)",
+                        device_name,
+                        INPUT_SILENT_BUFFER_TIMEOUT_SECS
+                    ));
+                }
             }
 
             // Pass the silent buffer through; downstream VAD will drop it.
