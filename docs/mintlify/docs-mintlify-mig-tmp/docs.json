@@ -4,8 +4,8 @@
   "name": "screenpipe docs",
   "colors": {
     "primary": "#000000",
-    "light": "#333333",
-    "dark": "#ffffff"
+    "light": "#ffffff",
+    "dark": "#000000"
   },
   "announcement": {
     "title": "Get screenpipe — AI that knows everything you've seen, said, or heard →",
