@@ -4,9 +4,14 @@
 
 //! Tauri-side glue for the owned-browser instance.
 //!
-//! The owned browser is a child `Webview` embedded inside the main window.
-//! The frontend positions it (via `owned_browser_set_bounds`) so it visually
-//! lives as a right-side panel within the chat layout — no separate window.
+//! The owned browser is a child `Webview` attached to one of the app's
+//! existing windows. The parent is picked from `PARENT_WINDOW_CANDIDATES`
+//! at install time — main, main-window, or chat — whichever the user's
+//! current session has, with any other webview window as a final
+//! fallback. The frontend positions it (via `owned_browser_set_bounds`)
+//! in the parent's coordinate space; since the sidebar UI is rendered in
+//! the same window it's attached to, the bounds are always meaningful
+//! regardless of which parent was picked.
 //!
 //! [`OwnedWebviewHandle`] is implemented by translating the agent's `eval`
 //! requests into `webview.eval()` + a Tauri-event round-trip. The webview is
@@ -23,7 +28,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tauri::{
     webview::WebviewBuilder, AppHandle, Emitter, Listener, LogicalPosition, LogicalSize, Manager,
-    WebviewUrl,
+    WebviewUrl, WebviewWindow,
 };
 use tokio::sync::{oneshot, Mutex};
 use tracing::{info, warn};
@@ -32,8 +37,33 @@ use uuid::Uuid;
 /// Webview label — the same string is used by the frontend Tauri commands.
 pub const WEBVIEW_LABEL: &str = "owned-browser";
 
-/// The window the child webview attaches to.
-const PARENT_WINDOW_LABEL: &str = "main";
+/// Candidate parent windows, in preference order:
+///   - "main"        — overlay-mode main window (NSPanel-based on macOS)
+///   - "main-window" — window-mode main window (traditional WebviewWindow)
+///   - "chat"        — pre-created chat panel; exists in tray-only flows where
+///                     the user only ever talks to Pi via the chat overlay
+///                     and never opens the regular home window
+///
+/// Why a list: the previous hardcoded "main" silently broke for two real
+/// flows — window-mode users (whose main is "main-window") and chat-panel-
+/// only users (whose only window is "chat"). Both ended up with the agent
+/// permanently seeing `ready=false` and reporting "browser extension not
+/// connected" on every eval. Trying these in order, then falling back to
+/// any other webview window, makes the install resilient to whatever
+/// window topology the user happens to be running.
+const PARENT_WINDOW_CANDIDATES: &[&str] = &["main", "main-window", "chat"];
+
+/// Resolve a parent window for the child webview. Prefers the candidates
+/// above (in order). Falls back to any other webview window so future
+/// labels we don't know about still work without code changes.
+fn pick_parent_window(app: &AppHandle) -> Option<WebviewWindow> {
+    for label in PARENT_WINDOW_CANDIDATES {
+        if let Some(w) = app.get_webview_window(label) {
+            return Some(w);
+        }
+    }
+    app.webview_windows().into_values().next()
+}
 
 /// Event the injected JS emits when an eval finishes (or throws).
 const RESULT_EVENT: &str = "owned-browser:result";
@@ -143,25 +173,32 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
 // ---------------------------------------------------------------------------
 
 /// Spawn the owned-browser install on a background task that survives
-/// tray-only mode. The previous fixed 30-attempt × 500ms loop (15s budget)
-/// failed silently when the user had the app running with the main window
-/// closed — by the time the budget expired, the agent permanently saw
-/// `ready=false` until the next recording restart.
+/// every window topology — main visible, main hidden, tray-only with the
+/// chat panel, all of the above with mode switching mid-session.
 ///
-/// New behavior: a fast retry loop covers the normal window-creation race
-/// (`bun tauri dev` server thread vs WebviewWindow creation), then the task
-/// switches into a passive watcher driven by the existing `window-focused`
-/// Tauri event and a 30-second fallback poll. As soon as the main window
-/// appears the install runs and attaches.
+/// Two phases:
+///   1. Fast retry to absorb the normal window-creation race (`bun tauri
+///      dev` server thread vs WebviewWindow creation, app cold-start).
+///   2. Event-driven retry — wakes up on every `window-focused` event
+///      (emitted whenever any window is shown or focused) and polls every
+///      30s as a backstop. Tries every candidate parent in
+///      `PARENT_WINDOW_CANDIDATES`; as soon as one exists the install
+///      runs and attaches. There is no give-up timeout: the install task
+///      is cheap (one mpsc receiver + one tokio listener) and the only
+///      way it ever sees zero usable parents is if the user never
+///      interacts with the app at all, in which case the agent isn't
+///      asking for the browser anyway. Previous 30-minute deadline was
+///      the source of the user-visible "owned browser permanently broken"
+///      bug for chat-panel-only users.
 pub fn spawn_install_when_ready(
     app: AppHandle,
     screenpipe_dir: PathBuf,
     owned_browser: std::sync::Arc<screenpipe_connect::connections::browser::OwnedBrowser>,
 ) {
     tauri::async_runtime::spawn(async move {
-        // Phase 1 — fast retry for the dev-server race where the main window
-        // is in the process of being created at the same moment recording
-        // starts. Same budget as before (15s) — most installs land here.
+        // Phase 1 — fast retry. The chat panel is pre-created ~3s after
+        // app setup (see main.rs `Pre-creating chat panel`), so 15s of
+        // 500ms attempts is enough for the cold-start case to land here.
         const FAST_ATTEMPTS: u32 = 30;
         const FAST_BACKOFF: Duration = Duration::from_millis(500);
         let mut last_err = String::new();
@@ -182,13 +219,12 @@ pub fn spawn_install_when_ready(
             }
         }
 
-        // Phase 2 — main window probably closed/hidden (app in tray-only
-        // mode). Don't give up. Listen for the existing `window-focused`
-        // event (emitted by `show_main_window`) and retry on each kick;
-        // poll every 30s as a fallback in case the event is missed.
+        // Phase 2 — event-driven retry. No deadline; the install task is
+        // cheap and we'd rather wait indefinitely than ever silently
+        // surface ready=false to the agent.
         info!(
-            "owned-browser: main window not present after {FAST_ATTEMPTS} attempts \
-            ({last_err}) — switching to event-driven retry"
+            "owned-browser: no candidate parent window after {FAST_ATTEMPTS} attempts \
+             ({last_err}) — switching to event-driven retry, listening for window-focused"
         );
 
         let (tx, mut rx) = tokio::sync::mpsc::channel::<()>(8);
@@ -197,37 +233,25 @@ pub fn spawn_install_when_ready(
             let _ = tx.try_send(());
         });
 
-        // Cap total wait at 30 minutes per recording session — beyond that
-        // the user almost certainly isn't going to open the window, and we
-        // don't want a leaked task hanging around forever. The next
-        // recording restart will spawn a fresh attempt.
-        let deadline = std::time::Instant::now() + Duration::from_secs(30 * 60);
         let mut last_log = std::time::Instant::now();
         loop {
-            if std::time::Instant::now() >= deadline {
-                warn!(
-                    "owned-browser install gave up after 30 minutes of waiting \
-                    for the main window — agent will see ready=false until next \
-                    recording restart"
-                );
-                return;
-            }
             tokio::select! {
                 _ = rx.recv() => {
-                    // Window-focused fired — try install on the next tick to
-                    // give the WebviewWindow a moment to settle.
+                    // window-focused fired — give the WebviewWindow a beat
+                    // to settle before trying to add_child to it.
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
                 _ = tokio::time::sleep(Duration::from_secs(30)) => {
-                    // Fallback poll. No log on this branch — it fires twice
-                    // a minute and would be noise.
+                    // Fallback poll. No log here — it would fire twice a
+                    // minute forever for a true tray-only session.
                 }
             }
-            if app.get_webview_window(PARENT_WINDOW_LABEL).is_none() {
-                // Main window still doesn't exist; loop and wait for the
-                // next event/poll.
+            if pick_parent_window(&app).is_none() {
                 if last_log.elapsed() > Duration::from_secs(300) {
-                    tracing::debug!("owned-browser: still waiting for main window");
+                    tracing::debug!(
+                        "owned-browser: still waiting for any candidate parent window \
+                         (looked for: {PARENT_WINDOW_CANDIDATES:?})"
+                    );
                     last_log = std::time::Instant::now();
                 }
                 continue;
@@ -235,13 +259,12 @@ pub fn spawn_install_when_ready(
             match install(&app, screenpipe_dir.clone()).await {
                 Ok(handle) => {
                     owned_browser.attach(handle).await;
-                    info!("owned-browser ready (after main window appeared)");
+                    info!("owned-browser ready (after parent window appeared)");
                     return;
                 }
                 Err(e) => {
-                    // The window was visible in the check above but install
-                    // still failed. Could be a closing race; loop and try
-                    // again.
+                    // pick_parent_window saw something, but install failed
+                    // — likely a closing race. Loop and try again.
                     tracing::debug!("owned-browser delayed install: {e}");
                 }
             }
@@ -270,11 +293,12 @@ pub async fn install(
     }
 
     if app.get_webview(WEBVIEW_LABEL).is_none() {
-        let main_ww = app
-            .get_webview_window(PARENT_WINDOW_LABEL)
-            .ok_or_else(|| format!("parent window '{PARENT_WINDOW_LABEL}' not found"))?;
+        let parent_ww = pick_parent_window(app).ok_or_else(|| {
+            format!("no candidate parent window found (looked for: {PARENT_WINDOW_CANDIDATES:?})")
+        })?;
+        let parent_label = parent_ww.label().to_string();
         // `add_child` lives on `Window`, not `WebviewWindow` — drop down to it.
-        let main_window = main_ww.as_ref().window();
+        let parent_window = parent_ww.as_ref().window();
 
         let blank: url::Url = "about:blank"
             .parse()
@@ -293,7 +317,7 @@ pub async fn install(
 
         // 1×1 placeholder; some platforms reject 0×0. The frontend will
         // resize as soon as the sidebar mounts.
-        main_window
+        parent_window
             .add_child(
                 builder,
                 LogicalPosition::new(0.0, 0.0),
@@ -302,12 +326,12 @@ pub async fn install(
             .map_err(|e| format!("add_child failed: {e}"))?;
 
         // Hide until the sidebar mounts and positions us — avoids a brief
-        // flash of about:blank in the corner of the main window.
+        // flash of about:blank in the corner of the parent window.
         if let Some(wv) = app.get_webview(WEBVIEW_LABEL) {
             let _ = wv.hide();
         }
 
-        info!("owned-browser: child webview created");
+        info!("owned-browser: child webview created (parent: {parent_label})");
     }
 
     let handle = Arc::new(TauriOwnedHandle {
@@ -346,9 +370,11 @@ pub async fn install(
 // Tauri commands — sidebar controls (frontend → child webview)
 // ---------------------------------------------------------------------------
 
-/// Position and size the embedded webview in the main window's coordinate
-/// space (logical pixels, origin = top-left of the parent window's content
-/// area). Call with width/height = 0 to hide.
+/// Position and size the embedded webview in its parent window's
+/// coordinate space (logical pixels, origin = top-left of the parent
+/// window's content area). The parent is whichever window the install
+/// picked — see `PARENT_WINDOW_CANDIDATES`. Call with width/height = 0
+/// to hide.
 #[tauri::command]
 pub async fn owned_browser_set_bounds(
     app: AppHandle,
