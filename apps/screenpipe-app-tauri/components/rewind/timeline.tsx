@@ -1361,8 +1361,8 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 						<span className="text-white/60 truncate max-w-[120px]">&ldquo;{searchQuery}&rdquo;</span>
 						<button
 							className="px-1.5 hover:text-white/80 disabled:text-white/30"
-							disabled={searchResultIndex <= 0}
-							onClick={() => navigateToSearchResult(searchResultIndex - 1)}
+							disabled={searchResultIndex >= searchResults.length - 1}
+							onClick={() => navigateToSearchResult(searchResultIndex + 1)}
 						>
 							&#9664;
 						</button>
@@ -1371,8 +1371,8 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 						</span>
 						<button
 							className="px-1.5 hover:text-white/80 disabled:text-white/30"
-							disabled={searchResultIndex >= searchResults.length - 1}
-							onClick={() => navigateToSearchResult(searchResultIndex + 1)}
+							disabled={searchResultIndex <= 0}
+							onClick={() => navigateToSearchResult(searchResultIndex - 1)}
 						>
 							&#9654;
 						</button>
