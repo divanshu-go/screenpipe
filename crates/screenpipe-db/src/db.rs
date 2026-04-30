@@ -7715,27 +7715,81 @@ pub fn find_matching_positions(blocks: &[OcrTextBlock], query: &str) -> Vec<Text
         .filter_map(|block| {
             let text_lower = block.text.to_lowercase();
 
-            // Check for exact match or any word match
-            let matches = text_lower.contains(&query_lower)
-                || query_words.iter().any(|&word| text_lower.contains(word));
-
-            if matches {
-                // Stored coords are already screen space (top-left origin); use as-is.
-                Some(TextPosition {
-                    text: block.text.clone(),
-                    confidence: block.conf.parse::<f32>().unwrap_or(0.0),
-                    bounds: TextBounds {
-                        left: block.left.parse::<f32>().unwrap_or(0.0),
-                        top: block.top.parse::<f32>().unwrap_or(0.0),
-                        width: block.width.parse::<f32>().unwrap_or(0.0),
-                        height: block.height.parse::<f32>().unwrap_or(0.0),
-                    },
-                })
+            // Pick the needle that's actually in the text (full query or first matching word)
+            // so legacy paragraph-level OCR rows can be narrowed to where the term appears.
+            let needle = if text_lower.contains(&query_lower) {
+                Some(query_lower.as_str())
             } else {
-                None
-            }
+                query_words
+                    .iter()
+                    .copied()
+                    .find(|w| text_lower.contains(*w))
+            }?;
+
+            // Stored coords are already screen space (top-left origin); use as-is.
+            let left = block.left.parse::<f32>().unwrap_or(0.0);
+            let top = block.top.parse::<f32>().unwrap_or(0.0);
+            let width = block.width.parse::<f32>().unwrap_or(0.0);
+            let height = block.height.parse::<f32>().unwrap_or(0.0);
+
+            let (n_left, n_width) =
+                narrow_bbox_to_needle(&block.text, &text_lower, needle, left, width, height);
+
+            Some(TextPosition {
+                text: block.text.clone(),
+                confidence: block.conf.parse::<f32>().unwrap_or(0.0),
+                bounds: TextBounds {
+                    left: n_left,
+                    top,
+                    width: n_width,
+                    height,
+                },
+            })
         })
         .collect()
+}
+
+/// Narrow a single-line-ish bbox to the sub-rect where `needle` appears within `text`.
+/// Returns (new_left, new_width). Falls back to the original bbox when the element
+/// looks multi-line (text doesn't fit within a single line at the bbox's aspect ratio),
+/// because proportional narrowing only makes sense for single-line elements.
+fn narrow_bbox_to_needle(
+    text: &str,
+    text_lower: &str,
+    needle: &str,
+    left: f32,
+    width: f32,
+    height: f32,
+) -> (f32, f32) {
+    let text_len = text.chars().count();
+    if text_len == 0 || height <= 0.0 {
+        return (left, width);
+    }
+    // Estimate single-line capacity from aspect ratio: avg proportional-font char width
+    // is ~0.55 * line height. With 1.6x slack to tolerate variable fonts/spacing.
+    let aspect = width / height;
+    let chars_per_line_est = (aspect / 0.55) * 1.6;
+    if (text_len as f32) > chars_per_line_est {
+        // Likely multi-line — leave bbox alone, otherwise we'd draw a thin sliver
+        // across all lines which is more confusing than a full element rect.
+        return (left, width);
+    }
+
+    let Some(byte_offset) = text_lower.find(needle) else {
+        return (left, width);
+    };
+    let char_offset = text_lower[..byte_offset].chars().count();
+    let needle_chars = needle.chars().count();
+    if needle_chars == 0 {
+        return (left, width);
+    }
+    let frac_start = char_offset as f32 / text_len as f32;
+    let frac_width = needle_chars as f32 / text_len as f32;
+    let new_left = left + frac_start * width;
+    // Floor at half the line height so very short queries (single chars) still draw.
+    let min_w = (height * 0.5).min(width);
+    let new_width = (frac_width * width).max(min_w);
+    (new_left, new_width)
 }
 
 /// Search accessibility tree JSON nodes for a query and return matching positions.
@@ -7757,11 +7811,18 @@ pub fn find_matching_a11y_positions(tree_json: &str, query: &str) -> Vec<TextPos
                 return None;
             }
             let text_lower = text.to_lowercase();
-            let is_match = text_lower.contains(&query_lower)
-                || query_words.iter().any(|&word| text_lower.contains(word));
-            if !is_match {
-                return None;
-            }
+            // Find which needle (full query or first matching word) is present, so we can
+            // narrow the bbox to roughly where it appears in the element's text instead of
+            // highlighting the whole AX element rect.
+            let needle = if text_lower.contains(&query_lower) {
+                Some(query_lower.as_str())
+            } else {
+                query_words
+                    .iter()
+                    .copied()
+                    .find(|w| text_lower.contains(*w))
+            };
+            let needle = needle?;
             let b = n.get("bounds")?;
             let left = b.get("left")?.as_f64()? as f32;
             let top = b.get("top")?.as_f64()? as f32;
@@ -7771,13 +7832,16 @@ pub fn find_matching_a11y_positions(tree_json: &str, query: &str) -> Vec<TextPos
             if width <= 0.001 || height <= 0.001 {
                 return None;
             }
+
+            let (n_left, n_width) = narrow_bbox_to_needle(text, &text_lower, needle, left, width, height);
+
             Some(TextPosition {
                 text: text.to_string(),
                 confidence: 1.0,
                 bounds: TextBounds {
-                    left,
+                    left: n_left,
                     top,
-                    width,
+                    width: n_width,
                     height,
                 },
             })
