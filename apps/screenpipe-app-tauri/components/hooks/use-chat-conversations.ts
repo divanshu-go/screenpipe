@@ -198,6 +198,26 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       })()),
     };
 
+    // Mirror the final messages into the in-memory chat-store BEFORE
+    // writing disk. The pi-event-router's persistBackgroundSession runs
+    // for any session that's no longer foregrounded when agent_end fires
+    // (user navigated away during/after the reply) and overwrites this
+    // same disk file using whatever the store currently has. Without
+    // this mirror the store still holds the "Processing..." placeholder
+    // (the router skipped events while we were foreground; the panel's
+    // streaming deltas only updated React state, not the store), so the
+    // router's save would clobber a freshly-written full conversation
+    // with the placeholder — which is the user-visible bug "navigate
+    // away, come back, the assistant message is gone."
+    try {
+      const { useChatStore } = await import("@/lib/stores/chat-store");
+      if (useChatStore.getState().sessions[convId]) {
+        useChatStore.getState().actions.setMessages(convId, conversation.messages as any);
+      }
+    } catch (e) {
+      console.warn("[chat] failed to mirror messages to store before save:", e);
+    }
+
     await saveConversationFile(conversation);
     await refreshFileConversations();
 
