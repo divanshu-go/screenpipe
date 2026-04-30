@@ -15,7 +15,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { openSettingsWindow } from "@/lib/utils/window";
+import { useRouter } from "next/navigation";
 import { showChatWithPrefill } from "@/lib/chat-utils";
 
 interface NotificationEntry {
@@ -68,6 +68,7 @@ export function NotificationBell() {
   const [history, setHistory] = useState<NotificationEntry[]>([]);
   const [open, setOpen] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const router = useRouter();
 
   const loadHistory = useCallback(async () => {
     try {
@@ -329,7 +330,7 @@ export function NotificationBell() {
           <button
             onClick={() => {
               setOpen(false);
-              openSettingsWindow("notifications");
+              router.push("/settings?section=notifications");
             }}
             className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
           >
