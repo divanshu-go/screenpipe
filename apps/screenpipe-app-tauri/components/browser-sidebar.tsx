@@ -54,16 +54,12 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
     [conversationId],
   );
 
-  // Push the current placeholder rect to Tauri so the top-level webview
-  // window lines up. The Rust side positions a *top-level* WebviewWindow,
-  // so the bounds must be in **screen coordinates** (origin = primary
-  // display top-left), not viewport-relative.
-  //
-  // Translation: screen = active-window-inner-position + placeholder
-  // viewport rect. `innerPosition()` returns physical pixels; divide by
-  // scaleFactor() to get logical CSS pixels (which is what
-  // `getBoundingClientRect()` returns and what Tauri's
-  // LogicalPosition/LogicalSize expects).
+  // Push the current placeholder rect to Tauri. The Rust side positions
+  // a *top-level* WebviewWindow over the placeholder; we send
+  // viewport-relative bounds (CSS pixels, what `getBoundingClientRect()`
+  // gives us) plus the label of the host window so Rust can resolve the
+  // screen position from its own `inner_position()` — keeping all
+  // coordinate-space math on one side.
   const pushBounds = useCallback(async () => {
     const el = placeholderRef.current;
     if (!el) return;
@@ -74,15 +70,10 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
     }
     try {
       const w = getCurrentWindow();
-      const [innerPos, scale] = await Promise.all([
-        w.innerPosition(),
-        w.scaleFactor(),
-      ]);
-      const logicalInnerX = innerPos.x / scale;
-      const logicalInnerY = innerPos.y / scale;
       await invoke("owned_browser_set_bounds", {
-        x: logicalInnerX + r.left,
-        y: logicalInnerY + r.top,
+        parent: w.label,
+        x: r.left,
+        y: r.top,
         width: r.width,
         height: r.height,
       });

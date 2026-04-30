@@ -349,14 +349,18 @@ pub async fn install(
 // Tauri commands — sidebar controls (frontend → child webview)
 // ---------------------------------------------------------------------------
 
-/// Position and size the embedded webview window in **screen
-/// coordinates** (logical pixels, origin = top-left of the primary
-/// display). The frontend computes these from the active window's
-/// inner-position + the placeholder's viewport rect; see
-/// `<BrowserSidebar />`. Call with width/height = 0 to hide.
+/// Position and size the embedded webview window. The frontend sends
+/// viewport-relative coords (the placeholder's `getBoundingClientRect()`)
+/// plus the label of the parent window that hosts the placeholder. Rust
+/// resolves the parent's screen position and adds the rect offsets — this
+/// keeps the conversion logic on one side (Rust's `inner_position()` is
+/// the authoritative source) and avoids JS↔Rust unit-mismatch bugs that
+/// caused the webview to land off-screen on monitors where JS-side math
+/// disagreed with the OS. Call with width/height = 0 to hide.
 #[tauri::command]
 pub async fn owned_browser_set_bounds(
     app: AppHandle,
+    parent: String,
     x: f64,
     y: f64,
     width: f64,
@@ -371,8 +375,24 @@ pub async fn owned_browser_set_bounds(
         return Ok(());
     }
 
+    let parent_w = app
+        .get_webview_window(&parent)
+        .ok_or_else(|| format!("parent window {parent:?} not found"))?;
+    let scale = parent_w.scale_factor().map_err(|e| e.to_string())?;
+    let inner_pos_phys = parent_w.inner_position().map_err(|e| e.to_string())?;
+    let inner_pos = inner_pos_phys.to_logical::<f64>(scale);
+
+    let screen_x = inner_pos.x + x;
+    let screen_y = inner_pos.y + y;
+
+    tracing::debug!(
+        "owned-browser set_bounds: parent={parent} inner=({:.0},{:.0}) rect=({x:.0},{y:.0},{width:.0}x{height:.0}) -> screen=({screen_x:.0},{screen_y:.0})",
+        inner_pos.x,
+        inner_pos.y
+    );
+
     webview_window
-        .set_position(LogicalPosition::new(x, y))
+        .set_position(LogicalPosition::new(screen_x, screen_y))
         .map_err(|e| e.to_string())?;
     webview_window
         .set_size(LogicalSize::new(width, height))
