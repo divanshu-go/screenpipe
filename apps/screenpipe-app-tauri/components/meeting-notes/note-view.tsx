@@ -20,13 +20,19 @@ import { useToast } from "@/components/ui/use-toast";
 import { localFetch } from "@/lib/api";
 import { showChatWithPrefill } from "@/lib/chat-utils";
 import {
-  buildSummarizePrompt,
   formatClock,
   formatDuration,
   formatTime,
   type MeetingRecord,
 } from "@/lib/utils/meeting-format";
+import {
+  buildEnrichedSummarizePrompt,
+  fetchMeetingContext,
+  type MeetingContext,
+} from "@/lib/utils/meeting-context";
 import { cn } from "@/lib/utils";
+import { Receipts } from "./receipts";
+import { ReplayStrip } from "./replay-strip";
 
 const AUTOSAVE_DEBOUNCE_MS = 800;
 
@@ -62,6 +68,7 @@ export function NoteView({
   const [saveState, setSaveState] = useState<SaveState>({ kind: "idle" });
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [summarizing, setSummarizing] = useState(false);
+  const [meetingCtx, setMeetingCtx] = useState<MeetingContext | null>(null);
 
   const lastSavedRef = useRef({
     title: meeting.title ?? "",
@@ -76,12 +83,40 @@ export function NoteView({
     setNote(meeting.note ?? "");
     setSaveState({ kind: "idle" });
     setConfirmDelete(false);
+    setMeetingCtx(null);
     lastSavedRef.current = {
       title: meeting.title ?? "",
       attendees: meeting.attendees ?? "",
       note: meeting.note ?? "",
     };
   }, [meeting.id]);
+
+  // Fetch screen-context bundle (apps used, browser tabs, audio segments,
+  // clipboard count) for the meeting time range. Refetches when the meeting
+  // is live so receipts/transcript stay current.
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      const ctx = await fetchMeetingContext(meeting);
+      if (!cancelled) setMeetingCtx(ctx);
+    };
+    void load();
+    if (isLive) {
+      const handle = setInterval(load, 30_000);
+      return () => {
+        cancelled = true;
+        clearInterval(handle);
+      };
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    meeting.id,
+    isLive,
+    meeting.meeting_start,
+    meeting.meeting_end,
+  ]);
 
   // Accept upstream updates only for fields the user hasn't touched locally
   useEffect(() => {
@@ -176,9 +211,14 @@ export function NoteView({
         attendees: attendees || null,
         note: note || null,
       };
+      // Re-fetch context just before summarize so the bundle reflects
+      // anything that happened in the last 30s (especially for ongoing
+      // meetings where the cached snapshot can be stale).
+      const ctx = await fetchMeetingContext(fresh);
+      setMeetingCtx(ctx);
       await showChatWithPrefill({
         context: "",
-        prompt: buildSummarizePrompt(fresh),
+        prompt: buildEnrichedSummarizePrompt({ meeting: fresh, context: ctx }),
         autoSend: true,
         source: "meeting-summarize",
         useHomeChat: true,
@@ -282,6 +322,15 @@ export function NoteView({
             "text-sm leading-relaxed text-foreground placeholder:text-muted-foreground/40",
           )}
         />
+
+        {meetingCtx?.activity && (
+          <div className="mt-8 space-y-6">
+            <Receipts activity={meetingCtx.activity} />
+            <ReplayStrip
+              segments={meetingCtx.activity.audio_summary.top_transcriptions}
+            />
+          </div>
+        )}
       </div>
 
       <footer className="sticky bottom-0 bg-background/90 backdrop-blur border-t border-border">
