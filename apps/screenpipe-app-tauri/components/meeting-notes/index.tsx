@@ -5,16 +5,14 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
-import { useToast } from "@/components/ui/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
 import { localFetch } from "@/lib/api";
 import type { MeetingStatusResponse } from "@/lib/utils/meeting-state";
 import type { MeetingRecord } from "@/lib/utils/meeting-format";
-import { MeetingNotesEmptyState } from "./empty-state";
-import { MeetingList } from "./meeting-list";
-import { Notepad } from "./notepad";
+import { ListView } from "./list-view";
+import { NoteView } from "./note-view";
 
-const PAGE_SIZE = 20;
+const PAGE_SIZE = 30;
 
 interface MeetingNotesSectionProps {
   meetingState: MeetingStatusResponse & { manualActive: boolean };
@@ -27,14 +25,12 @@ export function MeetingNotesSection({
   meetingLoading,
   onToggleMeeting,
 }: MeetingNotesSectionProps) {
-  const { toast } = useToast();
   const [meetings, setMeetings] = useState<MeetingRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
-  const [offline, setOffline] = useState(false);
+  const [errorText, setErrorText] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const userOverrodeRef = useRef(false);
 
   const fetchPage = useCallback(
     async (offset: number, append: boolean) => {
@@ -44,32 +40,23 @@ export function MeetingNotesSection({
         const res = await localFetch(
           `/meetings?limit=${PAGE_SIZE}&offset=${offset}`,
         );
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          throw new Error(`HTTP ${res.status}${body ? ` — ${body.slice(0, 160)}` : ""}`);
+        }
         const data: MeetingRecord[] = await res.json();
         if (data.length < PAGE_SIZE) setHasMore(false);
         setMeetings((prev) => (append ? [...prev, ...data] : data));
-        setOffline(false);
+        setErrorText(null);
       } catch (err) {
-        if (offset === 0) {
-          setOffline(true);
-          if (!loading) {
-            // Only toast on subsequent failures; the initial empty state
-            // already explains the offline condition.
-            toast({
-              title: "couldn't load meetings",
-              description: String(err),
-              variant: "destructive",
-            });
-          }
-        }
+        if (offset === 0) setErrorText(String(err));
+        console.error("meeting notes: failed to fetch /meetings", err);
       } finally {
         setLoading(false);
         setLoadingMore(false);
       }
     },
-    // intentionally exclude `loading` to avoid refetch loops
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [toast],
+    [],
   );
 
   // Initial load
@@ -77,45 +64,34 @@ export function MeetingNotesSection({
     void fetchPage(0, false);
   }, [fetchPage]);
 
-  // Refresh when active meeting transitions (start / stop). The websocket
-  // lives one level up in HomeContent — we react to the resulting prop.
+  // Refetch on visibility change — picks up changes made elsewhere
+  useEffect(() => {
+    const handler = () => {
+      if (document.visibilityState === "visible") void fetchPage(0, false);
+    };
+    document.addEventListener("visibilitychange", handler);
+    return () => document.removeEventListener("visibilitychange", handler);
+  }, [fetchPage]);
+
+  // Refresh when active meeting transitions (start / stop)
   const lastActiveIdRef = useRef<number | null>(null);
   useEffect(() => {
     const active = meetingState.activeMeetingId ?? null;
     if (active !== lastActiveIdRef.current) {
       lastActiveIdRef.current = active;
-      // First page refresh — picks up new live meeting + reflects ended ones.
       void fetchPage(0, false);
-      // Auto-select the live meeting unless user already chose another.
-      if (active !== null && !userOverrodeRef.current) {
-        setSelectedId(active);
-      }
     }
   }, [meetingState.activeMeetingId, fetchPage]);
 
-  // Auto-select the most recent meeting on first load if nothing selected
-  useEffect(() => {
-    if (selectedId !== null) return;
-    if (meetings.length === 0) return;
-    setSelectedId(meetings[0].id);
-  }, [meetings, selectedId]);
-
-  // If the selected meeting got deleted (e.g. removed from another window),
-  // fall back to the top of the list.
+  // If selection vanishes (deleted elsewhere), drop selection
   useEffect(() => {
     if (selectedId === null) return;
     if (meetings.some((m) => m.id === selectedId)) return;
-    setSelectedId(meetings[0]?.id ?? null);
+    setSelectedId(null);
   }, [meetings, selectedId]);
-
-  const handleSelect = useCallback((id: number) => {
-    userOverrodeRef.current = true;
-    setSelectedId(id);
-  }, []);
 
   const handleStart = useCallback(async () => {
     if (meetingState.active) return;
-    userOverrodeRef.current = false;
     await onToggleMeeting();
   }, [meetingState.active, onToggleMeeting]);
 
@@ -139,6 +115,11 @@ export function MeetingNotesSection({
     void fetchPage(meetings.length, true);
   }, [meetings.length, fetchPage]);
 
+  const handleRetry = useCallback(() => {
+    setErrorText(null);
+    void fetchPage(0, false);
+  }, [fetchPage]);
+
   const selected = useMemo(
     () => meetings.find((m) => m.id === selectedId) ?? null,
     [meetings, selectedId],
@@ -148,67 +129,60 @@ export function MeetingNotesSection({
   const isLive =
     selected !== null && selected.id === activeId && meetingState.active === true;
 
-  // Render
   if (loading) {
     return (
-      <div className="flex h-full">
-        <aside className="w-[280px] shrink-0 border-r border-border p-4 space-y-2">
-          {[80, 60, 70, 50, 65].map((w, i) => (
-            <Skeleton key={i} className="h-12" style={{ width: `${w}%` }} />
-          ))}
-        </aside>
-        <div className="flex-1 p-6 space-y-4">
-          <Skeleton className="h-5 w-1/3" />
-          <Skeleton className="h-8 w-2/3" />
-          <Skeleton className="h-3 w-1/4" />
-          <div className="pt-4 space-y-2">
-            <Skeleton className="h-3 w-full" />
-            <Skeleton className="h-3 w-5/6" />
-            <Skeleton className="h-3 w-4/5" />
+      <div className="h-full overflow-y-auto">
+        <div className="max-w-3xl mx-auto px-12 py-12">
+          <Skeleton className="h-3 w-24 mb-3" />
+          <Skeleton className="h-9 w-40 mb-10" />
+          <div className="space-y-10">
+            {[0, 1].map((i) => (
+              <div key={i} className="grid grid-cols-[88px_1fr] gap-6">
+                <div className="space-y-2 text-right">
+                  <Skeleton className="h-7 w-10 ml-auto" />
+                  <Skeleton className="h-3 w-8 ml-auto" />
+                </div>
+                <div className="space-y-3">
+                  <Skeleton className="h-5 w-2/3" />
+                  <Skeleton className="h-3 w-1/2" />
+                  <Skeleton className="h-5 w-3/4 mt-4" />
+                  <Skeleton className="h-3 w-2/5" />
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       </div>
     );
   }
 
-  if (meetings.length === 0) {
+  if (selected) {
     return (
-      <MeetingNotesEmptyState
-        onStart={handleStart}
-        starting={meetingLoading}
-        offline={offline}
+      <NoteView
+        key={selected.id}
+        meeting={selected}
+        isLive={isLive}
+        stopping={meetingLoading && isLive}
+        onBack={() => setSelectedId(null)}
+        onStop={handleStop}
+        onSaved={handleSaved}
+        onDeleted={handleDeleted}
       />
     );
   }
 
   return (
-    <div className="flex h-full min-h-0">
-      <MeetingList
-        meetings={meetings}
-        selectedId={selectedId}
-        activeId={activeId}
-        loadingMore={loadingMore}
-        hasMore={hasMore}
-        onSelect={handleSelect}
-        onLoadMore={handleLoadMore}
-        onStart={handleStart}
-        starting={meetingLoading}
-      />
-      {selected ? (
-        <Notepad
-          key={selected.id}
-          meeting={selected}
-          isLive={isLive}
-          stopping={meetingLoading && isLive}
-          onStop={handleStop}
-          onSaved={handleSaved}
-          onDeleted={handleDeleted}
-        />
-      ) : (
-        <section className="flex-1 flex items-center justify-center text-sm text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" />
-        </section>
-      )}
-    </div>
+    <ListView
+      meetings={meetings}
+      activeId={activeId}
+      onSelect={setSelectedId}
+      onStart={handleStart}
+      starting={meetingLoading}
+      loadingMore={loadingMore}
+      hasMore={hasMore}
+      onLoadMore={handleLoadMore}
+      errorText={errorText}
+      onRetry={handleRetry}
+    />
   );
 }

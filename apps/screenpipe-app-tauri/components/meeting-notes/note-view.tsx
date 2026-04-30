@@ -5,11 +5,15 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
+  ArrowLeft,
   ArrowUpRight,
+  Calendar,
+  Check,
+  Clock,
   Loader2,
   Square,
   Trash2,
-  Check,
+  Users,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/use-toast";
@@ -26,10 +30,11 @@ import { cn } from "@/lib/utils";
 
 const AUTOSAVE_DEBOUNCE_MS = 800;
 
-interface NotepadProps {
+interface NoteViewProps {
   meeting: MeetingRecord;
   isLive: boolean;
   stopping: boolean;
+  onBack: () => void;
   onStop: () => void | Promise<void>;
   onSaved: (meeting: MeetingRecord) => void;
   onDeleted: (id: number) => void;
@@ -41,20 +46,16 @@ type SaveState =
   | { kind: "saved"; at: number }
   | { kind: "error"; reason: string };
 
-export function Notepad({
+export function NoteView({
   meeting,
   isLive,
   stopping,
+  onBack,
   onStop,
   onSaved,
   onDeleted,
-}: NotepadProps) {
+}: NoteViewProps) {
   const { toast } = useToast();
-
-  // Local "draft" state for the three editable fields. We treat the meeting
-  // prop as the source of truth on mount/switch; subsequent prop updates
-  // should not stomp the user's in-flight edits, so we sync only when the
-  // meeting id changes.
   const [title, setTitle] = useState(meeting.title ?? "");
   const [attendees, setAttendees] = useState(meeting.attendees ?? "");
   const [note, setNote] = useState(meeting.note ?? "");
@@ -68,7 +69,7 @@ export function Notepad({
     note: meeting.note ?? "",
   });
 
-  // Reset draft when the selected meeting changes
+  // Reset draft when meeting changes
   useEffect(() => {
     setTitle(meeting.title ?? "");
     setAttendees(meeting.attendees ?? "");
@@ -82,8 +83,7 @@ export function Notepad({
     };
   }, [meeting.id]);
 
-  // If the upstream record updates (e.g. websocket-driven refresh), only
-  // accept fields the user hasn't touched locally — preserves in-flight edits.
+  // Accept upstream updates only for fields the user hasn't touched locally
   useEffect(() => {
     const last = lastSavedRef.current;
     if (last.title === title) {
@@ -134,7 +134,7 @@ export function Notepad({
     [meeting, onSaved],
   );
 
-  // Debounced autosave on any of the three fields
+  // Debounced autosave
   useEffect(() => {
     const last = lastSavedRef.current;
     if (
@@ -150,7 +150,7 @@ export function Notepad({
     return () => clearTimeout(handle);
   }, [title, attendees, note, save]);
 
-  // Periodic retry while in error state — picks up when the daemon is back
+  // Periodic retry while errored
   useEffect(() => {
     if (saveState.kind !== "error") return;
     const handle = setInterval(() => {
@@ -162,8 +162,6 @@ export function Notepad({
   const handleSummarize = async () => {
     setSummarizing(true);
     try {
-      // Flush pending edits before launching the chat so the prompt has
-      // the latest notes.
       const last = lastSavedRef.current;
       if (
         title !== last.title ||
@@ -172,7 +170,6 @@ export function Notepad({
       ) {
         await save({ title, attendees, note });
       }
-
       const fresh: MeetingRecord = {
         ...meeting,
         title: title || null,
@@ -205,6 +202,7 @@ export function Notepad({
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       onDeleted(meeting.id);
+      onBack();
     } catch (err) {
       toast({
         title: "couldn't delete meeting",
@@ -214,129 +212,214 @@ export function Notepad({
     }
   };
 
+  const attendeeCount = attendees
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean).length;
+
   return (
-    <section className="flex-1 min-w-0 flex flex-col h-full">
-      <header className="px-6 pt-6 pb-3 border-b border-border">
-        <div className="flex items-center gap-2 mb-2 text-xs font-mono uppercase tracking-wider text-muted-foreground">
-          {isLive ? (
-            <span className="flex items-center gap-1.5 text-foreground">
+    <div className="h-full overflow-y-auto flex flex-col">
+      <div className="flex-1 max-w-3xl w-full mx-auto px-12 pt-10 pb-6">
+        <div className="flex items-center justify-between mb-8">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onBack}
+            className="gap-2 normal-case tracking-normal -ml-3"
+          >
+            <ArrowLeft className="h-3.5 w-3.5" />
+            meetings
+          </Button>
+          {isLive && (
+            <span className="flex items-center gap-2 text-xs uppercase tracking-[0.15em] text-foreground">
               <span className="h-1.5 w-1.5 rounded-full bg-foreground animate-pulse" />
               recording
             </span>
-          ) : (
-            <span>{formatTime(meeting.meeting_start)}</span>
-          )}
-          <span aria-hidden>·</span>
-          <span>{formatClock(meeting.meeting_start)}</span>
-          <span aria-hidden>·</span>
-          <span>{formatDuration(meeting.meeting_start, meeting.meeting_end)}</span>
-          {meeting.meeting_app && meeting.meeting_app !== "manual" && (
-            <>
-              <span aria-hidden>·</span>
-              <span>{meeting.meeting_app}</span>
-            </>
           )}
         </div>
+
         <input
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           placeholder="untitled meeting"
-          className="w-full bg-transparent text-2xl font-semibold focus:outline-none placeholder:text-muted-foreground/50"
+          spellCheck={false}
+          className="w-full bg-transparent text-4xl font-medium tracking-tight focus:outline-none placeholder:text-muted-foreground/40"
         />
-        <input
-          value={attendees}
-          onChange={(e) => setAttendees(e.target.value)}
-          placeholder="attendees, comma separated"
-          className="mt-1 w-full bg-transparent text-xs font-mono text-muted-foreground focus:outline-none placeholder:text-muted-foreground/40"
-        />
-      </header>
 
-      <textarea
-        value={note}
-        onChange={(e) => setNote(e.target.value)}
-        placeholder={
-          isLive
-            ? "take notes here. they'll save automatically."
-            : "add notes for this meeting…"
-        }
-        spellCheck
-        className={cn(
-          "flex-1 w-full px-6 py-4 bg-transparent resize-none focus:outline-none",
-          "text-sm leading-relaxed font-mono text-foreground placeholder:text-muted-foreground/40",
-        )}
-      />
-
-      <footer className="px-6 py-3 border-t border-border flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2 text-[11px] font-mono text-muted-foreground/80 min-w-0">
-          <SaveIndicator state={saveState} />
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          {!isLive &&
-            (confirmDelete ? (
-              <div className="flex items-center gap-1">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleDelete}
-                  className="h-8 px-2 text-destructive hover:text-destructive normal-case tracking-normal"
-                >
-                  delete?
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setConfirmDelete(false)}
-                  className="h-8 px-2 normal-case tracking-normal"
-                >
-                  cancel
-                </Button>
-              </div>
-            ) : (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setConfirmDelete(true)}
-                title="delete this meeting"
-                className="h-8 w-8 p-0"
-              >
-                <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
-              </Button>
-            ))}
-
-          {isLive ? (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void onStop()}
-              disabled={stopping}
-              className="gap-2"
-            >
-              {stopping ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Square className="h-3.5 w-3.5" />
-              )}
-              stop meeting
-            </Button>
-          ) : (
-            <Button
-              variant="default"
-              size="sm"
-              onClick={handleSummarize}
-              disabled={summarizing}
-              className="gap-2"
-            >
-              {summarizing ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <ArrowUpRight className="h-3.5 w-3.5" />
-              )}
-              summarize
-            </Button>
+        <div className="mt-4 flex flex-wrap items-center gap-1.5">
+          <Pill icon={<Calendar className="h-3 w-3" />}>
+            {formatTime(meeting.meeting_start)}
+          </Pill>
+          <Pill icon={<Clock className="h-3 w-3" />}>
+            {formatClock(meeting.meeting_start)}
+            {meeting.meeting_end && ` — ${formatClock(meeting.meeting_end)}`}
+            {" · "}
+            {formatDuration(meeting.meeting_start, meeting.meeting_end)}
+          </Pill>
+          <AttendeesPill
+            value={attendees}
+            count={attendeeCount}
+            onChange={setAttendees}
+          />
+          {meeting.meeting_app && meeting.meeting_app !== "manual" && (
+            <Pill>{meeting.meeting_app.toLowerCase()}</Pill>
           )}
         </div>
+
+        <div className="my-6 border-t border-border" />
+
+        <textarea
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder={
+            isLive
+              ? "take notes here. they save automatically."
+              : "write your notes here…"
+          }
+          spellCheck
+          className={cn(
+            "w-full min-h-[40vh] bg-transparent resize-none focus:outline-none",
+            "text-sm leading-relaxed text-foreground placeholder:text-muted-foreground/40",
+          )}
+        />
+      </div>
+
+      <footer className="sticky bottom-0 bg-background/90 backdrop-blur border-t border-border">
+        <div className="max-w-3xl mx-auto px-12 py-3 flex items-center justify-between gap-3">
+          <div className="text-[11px] text-muted-foreground/80 min-w-0">
+            <SaveIndicator state={saveState} />
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {!isLive &&
+              (confirmDelete ? (
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleDelete}
+                    className="h-8 px-2 text-destructive hover:text-destructive normal-case tracking-normal"
+                  >
+                    delete?
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setConfirmDelete(false)}
+                    className="h-8 px-2 normal-case tracking-normal"
+                  >
+                    cancel
+                  </Button>
+                </div>
+              ) : (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setConfirmDelete(true)}
+                  title="delete this meeting"
+                  className="h-8 w-8 p-0"
+                >
+                  <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
+                </Button>
+              ))}
+
+            {isLive ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void onStop()}
+                disabled={stopping}
+                className="gap-2"
+              >
+                {stopping ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Square className="h-3.5 w-3.5" />
+                )}
+                stop meeting
+              </Button>
+            ) : (
+              <Button
+                variant="default"
+                size="sm"
+                onClick={handleSummarize}
+                disabled={summarizing}
+                className="gap-2"
+              >
+                {summarizing ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <ArrowUpRight className="h-3.5 w-3.5" />
+                )}
+                summarize
+              </Button>
+            )}
+          </div>
+        </div>
       </footer>
-    </section>
+    </div>
+  );
+}
+
+function Pill({
+  icon,
+  children,
+}: {
+  icon?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <span className="inline-flex items-center gap-1.5 border border-border px-2.5 py-1 text-xs text-muted-foreground">
+      {icon}
+      {children}
+    </span>
+  );
+}
+
+function AttendeesPill({
+  value,
+  count,
+  onChange,
+}: {
+  value: string;
+  count: number;
+  onChange: (v: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (editing) inputRef.current?.focus();
+  }, [editing]);
+
+  if (editing) {
+    return (
+      <span className="inline-flex items-center gap-1.5 border border-foreground px-2.5 py-1 text-xs">
+        <Users className="h-3 w-3" />
+        <input
+          ref={inputRef}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onBlur={() => setEditing(false)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === "Escape") setEditing(false);
+          }}
+          placeholder="comma separated"
+          className="bg-transparent focus:outline-none text-xs min-w-[180px]"
+        />
+      </span>
+    );
+  }
+
+  return (
+    <button
+      onClick={() => setEditing(true)}
+      className="inline-flex items-center gap-1.5 border border-border px-2.5 py-1 text-xs text-muted-foreground hover:border-foreground hover:text-foreground transition-colors"
+    >
+      <Users className="h-3 w-3" />
+      {count === 0
+        ? "add attendees"
+        : `${count} ${count === 1 ? "attendee" : "attendees"}`}
+    </button>
   );
 }
 
@@ -358,9 +441,7 @@ function SaveIndicator({ state }: { state: SaveState }) {
     );
   }
   if (state.kind === "error") {
-    return (
-      <span className="text-destructive">offline — will retry</span>
-    );
+    return <span className="text-destructive">offline — will retry</span>;
   }
   return <span aria-hidden>&nbsp;</span>;
 }
