@@ -43,6 +43,7 @@ import { commands } from "@/lib/utils/tauri";
 import { emit } from "@tauri-apps/api/event";
 import { useChatConversations } from "@/components/hooks/use-chat-conversations";
 import { useChatStore } from "@/lib/stores/chat-store";
+import { statusForEvent } from "@/lib/stores/pi-event-router";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { usePlatform } from "@/lib/hooks/use-platform";
@@ -2681,6 +2682,29 @@ export function StandaloneChat({
     };
 
     const handlePiEventData = (data: any) => {
+
+        // Mirror status into the chat-store so the sidebar dot reflects what
+        // Pi is actually doing. The bus routes foreground events exclusively
+        // to this listener, so the router (default subscriber) never sees
+        // them — without this mirror, session.status stays at whatever was
+        // set last time the chat was on the background path (usually
+        // "idle"), and the sidebar shows a hollow gray ring while the
+        // chat is mid-stream. Mirroring covers all of: streaming /
+        // thinking / tool / idle / error per `statusForEvent`.
+        try {
+          const sid = piSessionIdRef.current;
+          const next = sid ? statusForEvent(data) : null;
+          if (sid && next) {
+            const store = useChatStore.getState();
+            const cur = store.sessions[sid]?.status;
+            if (cur !== next) {
+              store.actions.patch(sid, { status: next });
+            }
+          }
+        } catch {
+          /* defensive — never let a status-mirror failure break the
+             foreground event handler */
+        }
 
         if (data.type === "message_update" && data.assistantMessageEvent) {
           const evt = data.assistantMessageEvent;

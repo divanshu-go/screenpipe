@@ -79,8 +79,17 @@ type PiInnerEvent = AgentInnerEvent;
 /** Map a raw event type to a SessionStatus. Returns null when the event
  *  doesn't carry a status signal (e.g. `tool_execution_end` is ambiguous —
  *  could go back to streaming or end the turn entirely; we wait for the
- *  next definitive event). */
-function statusForEvent(evt: PiInnerEvent): SessionStatus | null {
+ *  next definitive event).
+ *
+ *  Exported so the foreground chat panel can mirror status updates into
+ *  the store on its own — the bus routes foreground events exclusively
+ *  to the panel listener (see `bus.ts:dispatchEvent`), so the router
+ *  never sees them and never gets a chance to patch the store. Without
+ *  this mirror the sidebar dot stays at whatever status was set last
+ *  time the session was on the background path (usually `idle`),
+ *  causing the user-visible bug "I'm in the chat and it's gray instead
+ *  of pulsing while streaming". */
+export function statusForEvent(evt: PiInnerEvent): SessionStatus | null {
   switch (evt.type) {
     case "agent_start":
     case "turn_start":
