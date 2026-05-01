@@ -9726,7 +9726,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.4.118"
+version = "2.4.119"
 dependencies = [
  "anyhow",
  "arboard",
@@ -9879,7 +9879,6 @@ dependencies = [
  "symphonia",
  "sysinfo",
  "tokio",
- "toml 0.8.2",
  "tracing",
  "vad-rs",
  "webrtc-vad",

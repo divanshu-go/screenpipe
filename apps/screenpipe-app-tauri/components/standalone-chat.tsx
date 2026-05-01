@@ -4400,7 +4400,12 @@ export function StandaloneChat({
         <div
           ref={scrollContainerRef}
           onScroll={handleMessagesScroll}
-          className="relative flex-1 overflow-y-auto overflow-x-hidden"
+          // min-w-0 lets this flex child shrink when the BrowserSidebar
+          // opens. Without it, flex's default `min-width: auto` keeps the
+          // chat content at content-width and the sidebar overflows past
+          // the right edge of the window — the native webview faithfully
+          // follows the placeholder rect off-screen.
+          className="relative flex-1 min-w-0 overflow-y-auto overflow-x-hidden"
           onContextMenu={(e) => {
             if (messages.length === 0) return;
             e.preventDefault();

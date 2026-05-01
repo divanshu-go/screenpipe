@@ -187,7 +187,10 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
           animate={{ width: 480, opacity: 1 }}
           exit={{ width: 0, opacity: 0 }}
           transition={{ duration: 0.2 }}
-          className="border-l border-border/50 bg-muted/30 flex flex-col overflow-hidden"
+          // max-w-[40vw] clamps the panel on narrow windows so it can't push
+          // the chat content off-screen. The placeholder's getBoundingClientRect
+          // reflects the clamped width, so the native webview follows.
+          className="border-l border-border/50 bg-muted/30 flex flex-col overflow-hidden shrink-0 max-w-[40vw]"
         >
           <div className="flex items-center gap-2 px-3 h-10 border-b border-border/50 bg-background/60">
             <div className="flex-1 min-w-0 text-xs text-muted-foreground truncate">
