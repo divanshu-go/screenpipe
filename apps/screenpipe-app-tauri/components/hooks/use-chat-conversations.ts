@@ -297,6 +297,57 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoading, messages]);
 
+  // ---- Debounced auto-save during streaming ----
+  // Without this, the assistant message is only persisted on the
+  // isLoading: true → false edge above. Quitting the app mid-stream lost
+  // the partial assistant reply (the user still saw their question on
+  // reload, but the model's response was gone). Save every ~1.5 s while
+  // a response is streaming so a crash/quit drops at most a second of
+  // tokens. Pipe-watch conversations are still skipped — same rule as
+  // the edge save: only persist if at least one message is user-typed.
+  const streamingSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Snapshot of last-saved content length per message id so we don't
+  // rewrite the file when only React re-rendered (e.g. cursor blink).
+  const lastSavedSigRef = useRef<string>("");
+  useEffect(() => {
+    if (!isLoading || messages.length === 0) {
+      // Stream finished (or never started); the edge-trigger save above
+      // owns the final write. Make sure no stale timer fires after.
+      if (streamingSaveTimerRef.current) {
+        clearTimeout(streamingSaveTimerRef.current);
+        streamingSaveTimerRef.current = null;
+      }
+      return;
+    }
+    const allPipe = messages.every((m) => m.id?.startsWith("pipe-"));
+    if (allPipe) return;
+
+    // Cheap signature: total length of all message content + last id.
+    // If neither moved, no point re-serialising the whole transcript.
+    const sig = `${messages.length}|${messages[messages.length - 1]?.id ?? ""}|${
+      messages.reduce((n, m) => n + (m.content?.length ?? 0), 0)
+    }`;
+    if (sig === lastSavedSigRef.current) return;
+    lastSavedSigRef.current = sig;
+
+    if (streamingSaveTimerRef.current) {
+      clearTimeout(streamingSaveTimerRef.current);
+    }
+    streamingSaveTimerRef.current = setTimeout(() => {
+      streamingSaveTimerRef.current = null;
+      // Snapshot inside the timeout so we save the latest, not stale closure.
+      saveConversation(messages);
+    }, 1500);
+
+    return () => {
+      if (streamingSaveTimerRef.current) {
+        clearTimeout(streamingSaveTimerRef.current);
+        streamingSaveTimerRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoading, messages]);
+
   // ---- renameConversation ----
   const renameConversation = async (convId: string, newTitle: string) => {
     const trimmed = newTitle.trim();
