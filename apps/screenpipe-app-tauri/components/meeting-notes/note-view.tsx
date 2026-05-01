@@ -327,6 +327,7 @@ export function NoteView({
           <div className="mt-8 space-y-6">
             <ReplayStrip
               segments={meetingCtx.activity.audio_summary.top_transcriptions}
+              timeRange={meetingCtx.activity.time_range}
             />
             <Receipts activity={meetingCtx.activity} />
           </div>

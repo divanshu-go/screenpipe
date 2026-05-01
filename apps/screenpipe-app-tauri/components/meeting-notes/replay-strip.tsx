@@ -7,7 +7,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Loader2, Rewind, ExternalLink } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { emit } from "@tauri-apps/api/event";
-import { getApiBaseUrl } from "@/lib/api";
+import { getApiBaseUrl, appendAuthToken } from "@/lib/api";
 import { commands } from "@/lib/utils/tauri";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
 import { SpeakerAssignPopover } from "@/components/speaker-assign-popover";
@@ -23,11 +23,16 @@ interface ReplayStripProps {
   /** "Notable quotes" sample from the activity summary — used purely to
    * derive the meeting time bounds when the full transcript is empty. */
   segments: AudioSegment[];
+  /** The meeting's actual [start, end] from /meetings, padded for any
+   * post-meeting silence. Authoritative bound for the scrubber — the
+   * notable-quotes sample is truncated to 20 longest, so its min/max
+   * doesn't cover the real meeting span. */
+  timeRange?: { start: string; end: string };
 }
 
 const THUMB_COUNT = 12;
 
-export function ReplayStrip({ segments }: ReplayStripProps) {
+export function ReplayStrip({ segments, timeRange }: ReplayStripProps) {
   // Bounds from notable-quotes sample (cheap, already loaded).
   const sampleSorted = useMemo(
     () =>
@@ -63,8 +68,22 @@ export function ReplayStrip({ segments }: ReplayStripProps) {
 
   const enrichedChunks = useMemo(() => chunks.map(applyOverride), [chunks, applyOverride]);
 
-  // Meeting time bounds.
+  // Meeting time bounds. Prefer the authoritative time_range from
+  // /meetings (full meeting span); fall back to chunk/sample min-max.
   const { rangeStartMs, rangeEndMs, durationMs } = useMemo(() => {
+    const trStart = timeRange?.start
+      ? new Date(timeRange.start).getTime()
+      : NaN;
+    const trEnd = timeRange?.end
+      ? new Date(timeRange.end).getTime()
+      : NaN;
+    if (!Number.isNaN(trStart) && !Number.isNaN(trEnd) && trEnd > trStart) {
+      return {
+        rangeStartMs: trStart,
+        rangeEndMs: trEnd,
+        durationMs: Math.max(trEnd - trStart, 1),
+      };
+    }
     const candidates: number[] = [];
     if (enrichedChunks.length > 0) {
       candidates.push(new Date(enrichedChunks[0].timestamp).getTime());
@@ -81,7 +100,7 @@ export function ReplayStrip({ segments }: ReplayStripProps) {
     const start = Math.min(...candidates) - 30_000;
     const end = Math.max(...candidates) + 30_000;
     return { rangeStartMs: start, rangeEndMs: end, durationMs: Math.max(end - start, 1) };
-  }, [enrichedChunks, sampleSorted]);
+  }, [timeRange?.start, timeRange?.end, enrichedChunks, sampleSorted]);
 
   const [cursorMs, setCursorMs] = useState<number>(rangeStartMs);
   const cursorInitialised = useRef(false);
@@ -92,18 +111,12 @@ export function ReplayStrip({ segments }: ReplayStripProps) {
     }
   }, [enrichedChunks]);
 
-  // Load full meeting transcript.
+  // Load full meeting transcript across the authoritative time_range.
   useEffect(() => {
-    if (sampleSorted.length === 0) {
-      setChunksLoading(false);
-      return;
-    }
     let cancelled = false;
     setChunksLoading(true);
-    const start = new Date(new Date(sampleSorted[0].timestamp).getTime() - 30_000).toISOString();
-    const end = new Date(
-      new Date(sampleSorted[sampleSorted.length - 1].timestamp).getTime() + 30_000,
-    ).toISOString();
+    const start = new Date(rangeStartMs).toISOString();
+    const end = new Date(rangeEndMs).toISOString();
     void fetchMeetingAudio(start, end, 1000).then((rows) => {
       if (cancelled) return;
       setChunks(rows);
@@ -112,7 +125,7 @@ export function ReplayStrip({ segments }: ReplayStripProps) {
     return () => {
       cancelled = true;
     };
-  }, [sampleSorted]);
+  }, [rangeStartMs, rangeEndMs]);
 
   // Frames across the meeting span.
   const [frames, setFrames] = useState<FrameSample[]>([]);
@@ -286,7 +299,7 @@ export function ReplayStrip({ segments }: ReplayStripProps) {
           ) : activeFrame ? (
             <img
               key={activeFrame.frameId}
-              src={`${getApiBaseUrl()}/frames/${activeFrame.frameId}`}
+              src={appendAuthToken(`${getApiBaseUrl()}/frames/${activeFrame.frameId}`)}
               alt={`screen at ${formatClock(new Date(cursorMs).toISOString())}`}
               className="max-w-full max-h-full object-contain"
             />
@@ -358,7 +371,7 @@ export function ReplayStrip({ segments }: ReplayStripProps) {
                   <div key={f.frameId} className="border-r border-border last:border-r-0 overflow-hidden">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
-                      src={`${getApiBaseUrl()}/frames/${f.frameId}`}
+                      src={appendAuthToken(`${getApiBaseUrl()}/frames/${f.frameId}`)}
                       alt=""
                       className="w-full h-full object-cover opacity-80"
                       draggable={false}
