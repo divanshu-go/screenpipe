@@ -34,8 +34,11 @@ export async function ensureChatsDir(): Promise<string> {
   return dir;
 }
 
+// Pipe-run session ids are `pipe:<name>:<execId>`. The colons are illegal on
+// NTFS (reserved for alternate data streams), so saves silently fail on
+// Windows. Same set as Win32's invalid-filename chars; safe no-op for UUIDs.
 function conversationFilename(id: string): string {
-  return `${id}.json`;
+  return `${id.replace(/[<>:"/\\|?*]/g, "_")}.json`;
 }
 
 export async function saveConversationFile(
