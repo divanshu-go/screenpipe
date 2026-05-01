@@ -47,14 +47,24 @@ export async function saveConversationFile(
 ): Promise<void> {
   const dir = await ensureChatsDir();
   const filePath = `${dir}/${conversationFilename(conv.id)}`;
-  // Atomic write: stage to a sibling .tmp, then rename. A crash or quit
-  // mid-write leaves either the previous file intact OR an orphan .tmp
-  // (cleaned up by the next save), never a half-written .json that
-  // loadConversationFile would silently treat as "missing" via its
-  // try/catch → return null path. listConversations would then drop the
-  // row from the sidebar — the user-visible "chat history disappeared"
-  // bug. rename() is atomic on POSIX and same-volume NTFS.
-  const tmpPath = `${filePath}.tmp`;
+  // Atomic write: stage to a unique sibling .tmp, then rename onto the
+  // final path. A crash or quit mid-write leaves either the previous
+  // file intact OR an orphan .tmp (cleaned up by the next save), never
+  // a half-written .json that loadConversationFile would silently
+  // treat as "missing" via its try/catch → return null path. rename()
+  // is atomic on POSIX and same-volume NTFS.
+  //
+  // Tmp name MUST be unique per call. Two concurrent saves for the
+  // same conversation (panel autosave + browser-sidebar's
+  // updateConversationFlags, or two router-driven background saves
+  // racing the panel) would otherwise both write to `<file>.json.tmp`,
+  // the first rename would consume it, the second would fail with
+  // ENOENT and fall back to the catch path. We've seen this in the
+  // wild — see the "[webview] persist browserState failed: rename ...
+  // .tmp ... No such file or directory" error log.
+  const tmpPath = `${filePath}.${Date.now()}.${Math.random()
+    .toString(36)
+    .slice(2, 10)}.tmp`;
   const body = JSON.stringify(conv, null, 2);
   await writeTextFile(tmpPath, body);
   try {
