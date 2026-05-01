@@ -1449,12 +1449,22 @@ async fn browser_get_status(
 }
 
 /// POST /connections/browsers/:id/navigate — open `url` in the named browser.
-/// High-level intent verb so the agent doesn't have to know that under the
-/// hood this is `eval(code: "return location.href", url: <target>)`.
-/// Returns `{ "ok": true, "url": <final-url> }` on success.
+///
+/// Fire-and-forget: returns `{ok: true, dispatched: true, url}` as soon as
+/// the navigation has been kicked off, NOT when the page has loaded. We
+/// previously did a `eval("return location.href", ...)` round-trip with a
+/// 30s timeout; the eval polled `document.title` for a result marker that
+/// real-world pages clobbered with their own titles, so the handler hung
+/// for the full timeout while the navigation had actually succeeded. The
+/// agent should follow up with `/snapshot` (which has its own readyState
+/// wait) to read the loaded page.
 #[derive(Deserialize)]
 struct BrowserNavigateBody {
     url: String,
+    /// Accepted but ignored — kept so existing pipes that pass it don't
+    /// break. Navigation is now fire-and-forget; if you need to wait for
+    /// the page, call `/snapshot` afterwards.
+    #[allow(dead_code)]
     #[serde(default)]
     timeout_secs: Option<u64>,
 }
@@ -1465,8 +1475,7 @@ async fn browser_run_navigate(
     Json(body): Json<BrowserNavigateBody>,
 ) -> (StatusCode, Json<Value>) {
     // Validate the URL up front so a malformed input returns 400 (client
-    // error), not 502 (the upstream eval transport's catch-all). Same
-    // parser the Tauri shell uses internally — keeps semantics consistent.
+    // error), not 502 (the upstream transport's catch-all).
     if let Err(e) = url::Url::parse(&body.url) {
         return (
             StatusCode::BAD_REQUEST,
@@ -1484,27 +1493,14 @@ async fn browser_run_navigate(
         }
     };
 
-    let timeout = std::time::Duration::from_secs(body.timeout_secs.unwrap_or(30).min(120));
-    // We pass `return location.href` so the response includes the URL the
-    // page actually settled on (after redirects). The user-visible side
-    // effect — the navigation itself — is driven by the `url` argument.
-    // The Tauri eval impl already waits for the page to start loading
-    // before reading; further redirect-stability detection would need a
-    // mutation observer in the page and isn't worth the complexity here.
-    match browser
-        .eval("return location.href", Some(&body.url), timeout)
-        .await
-    {
-        Ok(r) if r.ok => (
+    match browser.navigate(&body.url).await {
+        Ok(()) => (
             StatusCode::OK,
             Json(json!({
                 "ok": true,
-                "url": r.result,
+                "dispatched": true,
+                "url": body.url,
             })),
-        ),
-        Ok(r) => (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(json!({ "ok": false, "error": r.error })),
         ),
         Err(EvalError::NotConnected) => (
             StatusCode::SERVICE_UNAVAILABLE,

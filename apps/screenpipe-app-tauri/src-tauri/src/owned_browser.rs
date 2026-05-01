@@ -255,6 +255,37 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
             error: parsed.error,
         })
     }
+
+    /// Native fire-and-forget navigate. Bypasses the eval round-trip so
+    /// the HTTP caller doesn't sit in a 30s polling loop waiting for a
+    /// `document.title` marker that real-world pages clobber with their
+    /// own titles. The frontend sidebar listens for `NAVIGATE_EVENT` and
+    /// reveals/positions the webview itself.
+    async fn navigate(&self, url: &str) -> Result<(), String> {
+        let webview_window = self
+            .app
+            .get_webview_window(WEBVIEW_LABEL)
+            .ok_or_else(|| "owned-browser webview window not found".to_string())?;
+
+        let parsed: url::Url = url
+            .parse()
+            .map_err(|e: url::ParseError| format!("invalid url: {e}"))?;
+
+        // Make the webview live before navigating — a hidden WebView2
+        // window can silently drop the navigate call. We do NOT hold the
+        // eval_lock here; navigate is independent of in-flight evals so
+        // a long-running snapshot can't queue behind it.
+        if !webview_window.is_visible().unwrap_or(false) {
+            let _ = webview_window.show();
+        }
+
+        let _ = self.app.emit(NAVIGATE_EVENT, parsed.as_str());
+        webview_window
+            .navigate(parsed)
+            .map_err(|e| format!("webview.navigate failed: {e}"))?;
+
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------

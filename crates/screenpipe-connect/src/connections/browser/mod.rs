@@ -75,6 +75,31 @@ pub trait Browser: Send + Sync {
         url: Option<&str>,
         timeout: Duration,
     ) -> Result<EvalResult, EvalError>;
+
+    /// Navigate the browser to `url`. Fire-and-forget: returns as soon as
+    /// the navigation has been dispatched, NOT when the page has loaded.
+    /// Callers that need to wait for content to be ready should follow up
+    /// with `eval` (e.g. snapshot) which already handles its own
+    /// readyState wait.
+    ///
+    /// Default impl delegates to `eval("location.href = ...")` with a
+    /// short timeout — the round-trip just confirms the JS executed,
+    /// not that the new page finished loading. Browsers with a native
+    /// navigation primitive (the owned webview) override this so the
+    /// HTTP caller doesn't sit in a 30s polling loop racing the page's
+    /// own `document.title` setters. See `crates/screenpipe-connect`
+    /// docs for the full incident write-up.
+    async fn navigate(&self, url: &str) -> Result<(), EvalError> {
+        let escaped = serde_json::to_string(url)
+            .map_err(|e| EvalError::SendFailed(format!("encode url: {e}")))?;
+        self.eval(
+            &format!("location.href = {escaped}"),
+            None,
+            Duration::from_secs(5),
+        )
+        .await
+        .map(|_| ())
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -105,7 +105,27 @@ async fn open_secret_store(data_dir: &Path) -> Result<screenpipe_secrets::Secret
     let db_path = data_dir.join("db.sqlite");
     let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
     let pool = sqlx::SqlitePool::connect(&db_url).await?;
-    let store = screenpipe_secrets::SecretStore::new(pool, None).await?;
+    // Load the keychain encryption key if the user has opted into encryption,
+    // otherwise pass None (plaintext mode). Without this, the previous code
+    // ALWAYS opened the store unkeyed — so as soon as the user toggled
+    // encryption on the existing api_auth_key entry (now encrypted with a
+    // non-zero nonce) became unreadable, `get()` returned an Err that the
+    // resolver swallowed, and the chain fell through to "auto-generate".
+    // The new auto-generated key was persisted as a fresh plaintext row,
+    // overwriting the encrypted one and silently rotating the API key out
+    // from under every consumer that had cached the prior value (the
+    // desktop frontend, the running engine's in-memory token, the tray
+    // menu, the embedded WebSocket clients) — ⇒ "unauthorized API access"
+    // on the next request the user issued (e.g. "Delete last 5 minutes").
+    let key = if screenpipe_secrets::is_encryption_requested(data_dir) {
+        match screenpipe_secrets::keychain::get_key() {
+            screenpipe_secrets::keychain::KeyResult::Found(k) => Some(k),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    let store = screenpipe_secrets::SecretStore::new(pool, key).await?;
     Ok(store)
 }
 

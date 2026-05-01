@@ -39,6 +39,23 @@ pub trait OwnedWebviewHandle: Send + Sync {
         url: Option<&str>,
         timeout: Duration,
     ) -> Result<EvalResult, String>;
+
+    /// Fire-and-forget navigation. Default impl falls back to `eval` so
+    /// existing transports keep working unchanged; the Tauri impl
+    /// overrides it with `WebviewWindow::navigate(...)` so we don't pay
+    /// the eval round-trip (which polls `document.title` and races the
+    /// page's own title setters — see incident notes in the parent crate).
+    async fn navigate(&self, url: &str) -> Result<(), String> {
+        let escaped =
+            serde_json::to_string(url).map_err(|e| format!("encode url: {e}"))?;
+        self.eval(
+            &format!("location.href = {escaped}"),
+            None,
+            Duration::from_secs(5),
+        )
+        .await
+        .map(|_| ())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -122,6 +139,13 @@ impl Browser for OwnedBrowser {
             .eval(code, url, timeout)
             .await
             .map_err(EvalError::SendFailed)
+    }
+    async fn navigate(&self, url: &str) -> Result<(), EvalError> {
+        let handle = {
+            let guard = self.handle.read().await;
+            guard.as_ref().cloned().ok_or(EvalError::NotConnected)?
+        };
+        handle.navigate(url).await.map_err(EvalError::SendFailed)
     }
 }
 
