@@ -197,7 +197,10 @@ pub async fn get_activity_summary(
          GROUP BY at.speaker_id ORDER BY 2 DESC LIMIT 10"
     );
 
-    // Top transcriptions by length (most substantial speech segments)
+    // Top transcriptions by length (most substantial speech segments).
+    // The meeting-notes scrubber loads the FULL transcript separately via
+    // /search?content_type=audio — this list is only used by the AI summary
+    // prompt as a "notable quotes" sample.
     let audio_transcripts_query = format!(
         "SELECT at.transcription, \
          COALESCE(s.name, 'Unknown') as speaker, \

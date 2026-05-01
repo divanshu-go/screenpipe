@@ -30,6 +30,17 @@ export interface AudioSegment {
   timestamp: string;
 }
 
+/** Raw audio chunk pulled from /search?content_type=audio — full transcript
+ * for a meeting time range, with the metadata SpeakerAssignPopover needs. */
+export interface MeetingAudioChunk {
+  audioChunkId: number;
+  audioFilePath: string;
+  speakerId: number | null;
+  speakerName: string;
+  transcription: string;
+  timestamp: string;
+}
+
 export interface SpeakerSummary {
   name: string;
   segment_count: number;
@@ -313,24 +324,26 @@ interface SearchOcrItem {
 }
 
 /**
- * Find the frame_id closest to a given timestamp by querying the
- * screen content search with a small ±5s window.
+ * Find the frame_id closest to a given timestamp.
+ * Uses content_type=all (so it picks up frames anchored by OCR, UI events
+ * or audio chunks — not just OCR) and a ±60 s window. Visual-change dedup
+ * regularly skips OCR for unchanged screens, so the old ±5 s/OCR-only
+ * lookup returned "no frame" for most quiet moments.
  */
 export async function findNearestFrameId(
   timestampIso: string,
 ): Promise<number | null> {
   const t = new Date(timestampIso);
   if (Number.isNaN(t.getTime())) return null;
-  const before = new Date(t.getTime() - 5_000).toISOString();
-  const after = new Date(t.getTime() + 5_000).toISOString();
+  const before = new Date(t.getTime() - 60_000).toISOString();
+  const after = new Date(t.getTime() + 60_000).toISOString();
   try {
     const res = await localFetch(
-      `/search?content_type=ocr&start_time=${encodeURIComponent(before)}&end_time=${encodeURIComponent(after)}&limit=3`,
+      `/search?content_type=all&start_time=${encodeURIComponent(before)}&end_time=${encodeURIComponent(after)}&limit=20`,
     );
     if (!res.ok) return null;
     const body = (await res.json()) as { data?: SearchOcrItem[] };
     const items = body.data ?? [];
-    // Pick the result whose timestamp is closest to t.
     let best: { id: number; delta: number } | null = null;
     const targetMs = t.getTime();
     for (const item of items) {
@@ -343,5 +356,107 @@ export async function findNearestFrameId(
     return best?.id ?? null;
   } catch {
     return null;
+  }
+}
+
+export interface FrameSample {
+  frameId: number;
+  timestamp: string;
+}
+
+interface SearchAudioItem {
+  type?: string;
+  content?: {
+    /** /search?content_type=audio returns this as `chunk_id`, NOT
+     * `audio_chunk_id`. SpeakerAssignPopover wants the audio-chunks PK,
+     * which `chunk_id` already is. */
+    chunk_id?: number;
+    transcription?: string;
+    timestamp?: string;
+    file_path?: string;
+    speaker?: { id?: number; name?: string } | null;
+  };
+}
+
+/**
+ * Fetch every audio chunk between [start, end] — used by the meeting-notes
+ * scrubber to render the full transcript and to back inline speaker
+ * reassignment via SpeakerAssignPopover (needs audio_chunk_id + file_path).
+ * Pages until exhausted (or until `cap` is reached) since /search?limit is
+ * per-request and a long meeting can easily exceed the default 50.
+ */
+export async function fetchMeetingAudio(
+  startIso: string,
+  endIso: string,
+  cap = 1000,
+): Promise<MeetingAudioChunk[]> {
+  const out: MeetingAudioChunk[] = [];
+  const seen = new Set<number>();
+  const pageSize = 200;
+  let offset = 0;
+  for (let page = 0; page < 10 && out.length < cap; page++) {
+    try {
+      const res = await localFetch(
+        `/search?content_type=audio&start_time=${encodeURIComponent(startIso)}&end_time=${encodeURIComponent(endIso)}&limit=${pageSize}&offset=${offset}`,
+      );
+      if (!res.ok) break;
+      const body = (await res.json()) as { data?: SearchAudioItem[] };
+      const items = body.data ?? [];
+      if (items.length === 0) break;
+      for (const item of items) {
+        const c = item.content;
+        if (!c) continue;
+        const id = c.chunk_id;
+        if (typeof id !== "number" || seen.has(id)) continue;
+        if (!c.transcription || !c.timestamp || !c.file_path) continue;
+        seen.add(id);
+        out.push({
+          audioChunkId: id,
+          audioFilePath: c.file_path,
+          speakerId: c.speaker?.id ?? null,
+          speakerName: c.speaker?.name ?? "unknown",
+          transcription: c.transcription,
+          timestamp: c.timestamp,
+        });
+      }
+      if (items.length < pageSize) break;
+      offset += pageSize;
+    } catch {
+      break;
+    }
+  }
+  out.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  return out;
+}
+
+/**
+ * Pull frames anchored anywhere across [start, end] for the meeting timeline
+ * scrubber. Returns a deduped, time-sorted list of {frameId, timestamp}.
+ * The caller decides how many to actually render as thumbnails.
+ */
+export async function fetchFrameSamples(
+  startIso: string,
+  endIso: string,
+  limit = 200,
+): Promise<FrameSample[]> {
+  try {
+    const res = await localFetch(
+      `/search?content_type=all&start_time=${encodeURIComponent(startIso)}&end_time=${encodeURIComponent(endIso)}&limit=${limit}`,
+    );
+    if (!res.ok) return [];
+    const body = (await res.json()) as { data?: SearchOcrItem[] };
+    const seen = new Set<number>();
+    const out: FrameSample[] = [];
+    for (const item of body.data ?? []) {
+      const fid = item.content?.frame_id;
+      const ts = item.content?.timestamp;
+      if (typeof fid !== "number" || !ts || seen.has(fid)) continue;
+      seen.add(fid);
+      out.push({ frameId: fid, timestamp: ts });
+    }
+    out.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+    return out;
+  } catch {
+    return [];
   }
 }
