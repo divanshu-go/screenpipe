@@ -8,7 +8,6 @@ import { Loader2, Rewind, ExternalLink } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { emit } from "@tauri-apps/api/event";
 import { getApiBaseUrl, appendAuthToken } from "@/lib/api";
-import { commands } from "@/lib/utils/tauri";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
 import { SpeakerAssignPopover } from "@/components/speaker-assign-popover";
 import {
@@ -241,7 +240,13 @@ export function ReplayStrip({ segments, timeRange }: ReplayStripProps) {
       // while the user is on the meetings tab — only one ?section= renders).
       setPendingNavigation({ timestamp: iso });
       router.push("/home?section=timeline");
-      try { await commands.showWindow("Main"); } catch {}
+      // Note: we used to also call `commands.showWindow("Main")` here as a
+      // belt-and-suspenders for the case where the user invoked this from
+      // the floating overlay. That popped the separate NSPanel rewind
+      // window in addition to the embedded timeline → two surfaces open
+      // for the same action. Meeting notes only live inside the home
+      // window today, so the embedded timeline is sufficient and the
+      // overlay-pop was a regression vector.
       // Belt-and-suspenders for already-mounted Timeline (e.g. tab swap).
       setTimeout(() => { void emit("navigate-to-timestamp", iso); }, 250);
     } catch (e) {

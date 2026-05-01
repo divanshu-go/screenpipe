@@ -6,7 +6,14 @@
 
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+// PrismAsyncLight lazy-loads each language pack only when a code block
+// in that language is actually rendered — keeps the initial viewer
+// bundle small. The Prism build (root export) eager-imports every
+// language definition; first-paint after window-create grew to ~10s in
+// `bun tauri dev` because every language module went through the dev
+// server. Async-light cuts that to a small base bundle plus per-language
+// chunks fetched on demand.
+import { PrismAsyncLight as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coldarkDark, coldarkCold } from "react-syntax-highlighter/dist/cjs/styles/prism";
 import { MemoizedReactMarkdown } from "@/components/markdown";
 import remarkGfm from "remark-gfm";
@@ -197,6 +204,7 @@ export default function ViewerPage() {
   const [content, setContent] = useState<ViewerContent | null>(null);
   const [path, setPath] = useState<string>("");
   const [copyToast, setCopyToast] = useState(false);
+  const [copyContentToast, setCopyContentToast] = useState(false);
   const isDark = useDarkMode();
   const mainRef = useRef<HTMLElement | null>(null);
 
@@ -258,6 +266,22 @@ export default function ViewerPage() {
     }
   }, [path]);
 
+  // Copy file CONTENT (not the path). For text files we copy the rendered
+  // text (JSON gets prettified, others as-is). Disabled for image/binary/
+  // error states; the button hides itself when there's nothing to copy.
+  const copyContent = useCallback(async () => {
+    if (!content || content.kind !== "text" || !content.text) return;
+    const text =
+      detection?.kind === "json" ? prettifyJson(content.text) : content.text;
+    try {
+      await invoke("copy_text_to_clipboard", { text });
+      setCopyContentToast(true);
+      setTimeout(() => setCopyContentToast(false), 1200);
+    } catch (e) {
+      console.error("copy content failed:", e);
+    }
+  }, [content, detection]);
+
   const closeWindow = useCallback(async () => {
     try {
       const w = await import("@tauri-apps/api/webviewWindow");
@@ -281,10 +305,14 @@ export default function ViewerPage() {
       if (k === "e") { e.preventDefault(); void openInDefault(); }
       else if (k === "r") { e.preventDefault(); void revealInFinder(); }
       else if (k === "l") { e.preventDefault(); void copyPath(); }
+      // ⇧⌘C copies file content. Plain ⌘C is reserved for the OS-level
+      // copy of the user's selection (text they highlighted) — overriding
+      // it would steal the natural "select then copy" gesture.
+      else if (k === "c" && e.shiftKey) { e.preventDefault(); void copyContent(); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [openInDefault, revealInFinder, copyPath, closeWindow]);
+  }, [openInDefault, revealInFinder, copyPath, copyContent, closeWindow]);
 
   const fileName = content && "name" in content ? content.name : path.split("/").pop() || path;
   const breadcrumb = useMemo(() => pathBreadcrumb(path), [path]);
@@ -322,6 +350,16 @@ export default function ViewerPage() {
         </div>
         <ToolbarButton label="open" shortcut="⌘E" onClick={openInDefault} primary />
         <ToolbarButton label="reveal" shortcut="⌘R" onClick={revealInFinder} />
+        {/* Copy file CONTENT (only meaningful for text files; hidden for
+            images / binaries / errors). ⇧⌘C avoids stealing the OS-level
+            ⌘C the user expects on their text selection. */}
+        {content?.kind === "text" && content.text !== "" && (
+          <ToolbarButton
+            label={copyContentToast ? "copied" : "copy"}
+            shortcut="⇧⌘C"
+            onClick={copyContent}
+          />
+        )}
         <ToolbarButton
           label={copyToast ? "copied" : "copy path"}
           shortcut="⌘L"
