@@ -25,10 +25,3 @@ pub fn get_key_if_encryption_enabled() -> KeyResult {
     get_key()
 }
 
-/// Create-if-missing keychain key, gated on opt-in.
-pub fn get_or_create_key_if_encryption_enabled() -> Option<[u8; 32]> {
-    if !is_encryption_enabled() {
-        return None;
-    }
-    get_or_create_key()
-}

@@ -2158,13 +2158,16 @@ pub(crate) fn unregister_window_shortcuts_if_generation_unchanged(
 
 /// True if any Tauri webview in this process currently holds keyboard focus.
 /// Used on Windows/Linux to tell "focus left Main for another app" from
-/// "focus moved to Home while overlay stays visible".
+/// "focus moved to Home while overlay stays visible". macOS uses NSPanel
+/// ordering instead and doesn't need this.
+#[cfg(not(target_os = "macos"))]
 pub(crate) fn any_screenpipe_webview_has_focus(app: &tauri::AppHandle) -> bool {
     app.webview_windows()
         .values()
         .any(|w| w.is_focused().unwrap_or(false))
 }
 
+#[cfg(not(target_os = "macos"))]
 pub(crate) fn main_overlay_is_visible(app: &tauri::AppHandle) -> bool {
     for label in [RewindWindowId::Main.label(), "main-window"] {
         if let Some(w) = app.get_webview_window(label) {
@@ -2179,6 +2182,7 @@ pub(crate) fn main_overlay_is_visible(app: &tauri::AppHandle) -> bool {
 /// Re-register Escape when a non-Main window (e.g. Home) gains focus while the
 /// overlay is still shown — otherwise Main's blur path unregisters Escape and
 /// Esc stops working until Main is focused again.
+#[cfg(not(target_os = "macos"))]
 pub(crate) fn register_window_shortcuts_if_main_visible(app: tauri::AppHandle) {
     if is_main_close_in_progress() {
         info!("shortcut-sync: skip register_if_visible (reason=main_close_in_progress)");
