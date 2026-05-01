@@ -124,6 +124,14 @@
           "requireLiteralLeadingDot": false
         },
         {
+          "path": "$DOWNLOAD",
+          "requireLiteralLeadingDot": false
+        },
+        {
+          "path": "$DOWNLOAD/*",
+          "requireLiteralLeadingDot": false
+        },
+        {
           "path": "$HOME/.screenpipe/*",
           "requireLiteralLeadingDot": false
         },

@@ -23,8 +23,10 @@ import {
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { writeFile } from "@tauri-apps/plugin-fs";
+import { writeTextFile, BaseDirectory } from "@tauri-apps/plugin-fs";
 import { downloadDir, join } from "@tauri-apps/api/path";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { toast } from "@/components/ui/use-toast";
 import posthog from "posthog-js";
 import { useSettings } from "@/lib/hooks/use-settings";
 
@@ -142,6 +144,7 @@ function SkillSection({ name, skill }: { name: string; skill: AgentCardProps["sk
   const [copied, setCopied] = useState(false);
   const [savedPath, setSavedPath] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
   const [cmdCopied, setCmdCopied] = useState(false);
 
   const copyMd = useCallback(async () => {
@@ -149,7 +152,10 @@ function SkillSection({ name, skill }: { name: string; skill: AgentCardProps["sk
       await navigator.clipboard.writeText(SCREENPIPE_SKILL_MD);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    } catch {}
+      toast({ title: "copied SKILL.md to clipboard" });
+    } catch (e) {
+      toast({ title: "copy failed", description: String(e), variant: "destructive" });
+    }
   }, []);
 
   const copyCmd = useCallback(async () => {
@@ -158,21 +164,42 @@ function SkillSection({ name, skill }: { name: string; skill: AgentCardProps["sk
       await navigator.clipboard.writeText(skill.cliInstall);
       setCmdCopied(true);
       setTimeout(() => setCmdCopied(false), 2000);
-    } catch {}
+      toast({ title: "copied install command" });
+    } catch (e) {
+      toast({ title: "copy failed", description: String(e), variant: "destructive" });
+    }
   }, [skill.cliInstall]);
 
   const saveToDownloads = useCallback(async () => {
     setSaveError(null);
     setSavedPath(null);
+    setIsSaving(true);
     try {
+      await writeTextFile("screenpipe-SKILL.md", SCREENPIPE_SKILL_MD, {
+        baseDir: BaseDirectory.Download,
+      });
       const dir = await downloadDir();
       const filePath = await join(dir, "screenpipe-SKILL.md");
-      await writeFile(filePath, new TextEncoder().encode(SCREENPIPE_SKILL_MD));
       setSavedPath(filePath);
+      toast({ title: "saved to Downloads", description: filePath });
     } catch (e) {
-      setSaveError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error("[skill] save failed", e);
+      setSaveError(msg);
+      toast({ title: "save failed", description: msg, variant: "destructive" });
+    } finally {
+      setIsSaving(false);
     }
   }, []);
+
+  const revealSaved = useCallback(async () => {
+    if (!savedPath) return;
+    try {
+      await revealItemInDir(savedPath);
+    } catch (e) {
+      toast({ title: "could not open Finder", description: String(e), variant: "destructive" });
+    }
+  }, [savedPath]);
 
   return (
     <div className="space-y-3">
@@ -209,11 +236,29 @@ function SkillSection({ name, skill }: { name: string; skill: AgentCardProps["sk
           </div>
         )}
 
-        <div className="flex items-start gap-2">
-          <Button variant="outline" size="sm" onClick={saveToDownloads} className="text-xs h-7">
-            <Download className="h-3 w-3 mr-1.5" />
-            Save SKILL.md to Downloads
+        <div className="flex items-start gap-2 flex-wrap">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={saveToDownloads}
+            disabled={isSaving}
+            className="text-xs h-7"
+          >
+            {isSaving ? (
+              <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+            ) : savedPath ? (
+              <Check className="h-3 w-3 mr-1.5" />
+            ) : (
+              <Download className="h-3 w-3 mr-1.5" />
+            )}
+            {isSaving ? "saving…" : savedPath ? "saved" : "Save SKILL.md to Downloads"}
           </Button>
+          {savedPath && (
+            <Button variant="ghost" size="sm" onClick={revealSaved} className="text-xs h-7">
+              <ExternalLink className="h-3 w-3 mr-1.5" />
+              show in Finder
+            </Button>
+          )}
           <Button variant="ghost" size="sm" onClick={copyMd} className="text-xs h-7">
             {copied ? <Check className="h-3 w-3 mr-1.5" /> : <Copy className="h-3 w-3 mr-1.5" />}
             Copy file contents
