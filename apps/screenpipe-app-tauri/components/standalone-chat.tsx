@@ -2896,6 +2896,32 @@ export function StandaloneChat({
               );
             }
           }
+        } else if (data.type === "message_start" && data.message?.role === "user") {
+          // pi-mono fires `message_start` for a user message at the start of
+          // every turn that introduces one — i.e. (a) the original prompt
+          // and (b) each queued followUp processed inside the SAME agent run
+          // (only one `agent_end` fires for the whole run, after all
+          // followUps drain). If we relied on `agent_end` to close out the
+          // current assistant message, the followUp's text_delta would land
+          // on the previous turn's assistant bubble (the user saw responses
+          // mashed together: "...Which?Hey. What do you need?").
+          //
+          // Clear the streaming refs here so the next text_delta lazily
+          // creates a fresh assistant placeholder via `ensureAssistantPlaceholder`.
+          // Skip the very first `message_start (user)` of a run — at that
+          // point `sendPiMessage` has just created an empty placeholder and
+          // there's nothing streamed yet (clearing would orphan the
+          // placeholder and re-create a duplicate on the first delta).
+          const hasStreamedContent =
+            piStreamingTextRef.current.length > 0 ||
+            piContentBlocksRef.current.length > 0;
+          if (hasStreamedContent) {
+            piStreamingTextRef.current = "";
+            piMessageIdRef.current = null;
+            piContentBlocksRef.current = [];
+            // Don't touch isLoading/isStreaming — pi-mono is still busy
+            // processing the followUp turn.
+          }
         } else if ((data.type === "message_start" || data.type === "message_end") &&
                    data.message?.role === "assistant" && data.message?.stopReason === "error") {
           // LLM returned an error (credits_exhausted, rate limit, provider error, etc.)
@@ -4300,6 +4326,15 @@ export function StandaloneChat({
           the floating overlay window. Home page hides this entirely
           (`hideInlineHistory`) and the same list is rendered in the
           main AppSidebar instead. */}
+
+      {/* Horizontal split: chat column on the left, BrowserSidebar on the
+          right. The browser panel is a sibling of the *whole* chat
+          column (messages + input), so when it opens it pushes both the
+          message scroller and the input bar — instead of the prior
+          structure where it sat next to messages only and the input bar
+          extended underneath it. */}
+      <div className="flex-1 flex min-h-0" data-browser-panel-host>
+      <div className="flex-1 flex flex-col min-w-0">
       <div className="flex-1 flex overflow-hidden">
         <AnimatePresence>
           {!hideInlineHistory && showHistory && (
@@ -4856,11 +4891,6 @@ export function StandaloneChat({
       )}
       </div>
 
-      {/* Agent-controlled embedded browser. Slides in from the right when the
-          agent navigates (or when restoring a chat that has saved state).
-          The actual page is rendered by a Tauri child Webview positioned
-          on top of the placeholder div. */}
-      <BrowserSidebar conversationId={conversationId} />
       </div> {/* End of main content area with history sidebar */}
 
       {/* Input */}
@@ -5485,6 +5515,14 @@ export function StandaloneChat({
         </form>
       </div> {/* End of max-w-4xl input wrapper */}
       </div>
+      </div> {/* End of chat column */}
+
+      {/* Agent-controlled embedded browser. Slides in from the right when
+          the agent navigates (or when restoring a chat that has saved
+          state). The actual page is rendered by a Tauri WebviewWindow
+          positioned over the placeholder div inside this component. */}
+      <BrowserSidebar conversationId={conversationId} />
+      </div> {/* End of horizontal chat+browser split */}
 
 
       {scheduleDialogMessage && (

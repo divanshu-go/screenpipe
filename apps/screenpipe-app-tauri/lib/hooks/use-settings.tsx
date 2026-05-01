@@ -140,7 +140,16 @@ export interface ChatConversation {
 	 *  Drives the right-side `<BrowserSidebar />` panel: when the user
 	 *  re-opens this conversation the panel restores to this URL.
 	 *  Cleared (set to undefined) when the user closes the sidebar. */
-	browserState?: { url: string; updatedAt: number };
+	browserState?: {
+		url: string;
+		updatedAt: number;
+		/** User-chosen panel width in CSS pixels. Defaults to 480 if unset.
+		 *  Persisted so re-opening the chat restores the same layout. */
+		width?: number;
+		/** User has hidden the panel (still has a saved URL — a small
+		 *  "re-open" button is shown in the chat header). */
+		collapsed?: boolean;
+	};
 }
 
 export interface ChatHistoryStore {

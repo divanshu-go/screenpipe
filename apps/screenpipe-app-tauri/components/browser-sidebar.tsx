@@ -6,18 +6,22 @@
 /**
  * BrowserSidebar — a right-side panel inside the chat layout that hosts the
  * agent-controlled embedded browser. The actual page is rendered by a
- * Tauri child `Webview` (label: "owned-browser") created in
- * `src-tauri/src/owned_browser.rs`. This component just owns layout: it
- * measures its placeholder div and pushes those bounds to Tauri so the
- * native webview tracks the panel's position.
+ * Tauri *top-level* `WebviewWindow` (label: "owned-browser") created in
+ * `src-tauri/src/owned_browser.rs`. This component owns:
+ *   1. Layout: measures its placeholder div and pushes those bounds to Tauri
+ *      so the native webview tracks the panel's position.
+ *   2. Width: a JS-clamped state — never relies on CSS flex/max-width, since
+ *      Tailwind class changes via HMR are unreliable and flex-shrink behavior
+ *      drifted in practice. We compute `effectiveWidth = clamp(width, MIN,
+ *      viewport - MIN_CHAT)` on every render and on window resize, so the
+ *      panel physically can't push the chat off-screen.
+ *   3. Resize: drag-handle on the panel's left edge.
+ *   4. Collapse: hide/show toggle. The webview survives in the background
+ *      (cookies + page state preserved) — only the panel is hidden.
  *
  * The agent triggers navigation via
- * `POST /connections/browsers/owned-default/eval` (or the
- * `owned_browser_navigate` Tauri command). Both paths emit a
- * `owned-browser:navigate` event the sidebar listens to — that's how the
- * panel knows to slide in. Per-chat state (`{ url, updatedAt }`) is
- * persisted to the chat JSON via `onUrlChange` so the panel restores when
- * the user revisits the conversation.
+ * `POST /connections/browsers/owned-default/eval`. That emits a
+ * `owned-browser:navigate` event the sidebar listens to.
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
@@ -25,46 +29,108 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, RotateCw } from "lucide-react";
+import { RotateCw, PanelRightClose, PanelRightOpen } from "lucide-react";
 import {
   loadConversationFile,
   updateConversationFlags,
 } from "@/lib/chat-storage";
 
 const NAVIGATE_EVENT = "owned-browser:navigate";
+const DEFAULT_WIDTH = 480;
+const MIN_WIDTH = 320;
+const MIN_CHAT_WIDTH = 360;
 
 interface BrowserSidebarProps {
   conversationId: string | null;
 }
 
+/** Clamp the panel width so it can never push the chat below MIN_CHAT_WIDTH
+ *  in the *available* horizontal area (the chat layout's split host, not
+ *  the whole window — AppSidebar / history sidebar can eat into it).
+ *  Returns at least MIN_WIDTH when there's room, otherwise 0 (panel can't
+ *  fit — caller should hide it). */
+function clampWidth(want: number, available: number): number {
+  const max = Math.max(0, available - MIN_CHAT_WIDTH);
+  if (max < MIN_WIDTH) return 0;
+  return Math.max(MIN_WIDTH, Math.min(want, max));
+}
+
 export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
   const [visible, setVisible] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
   const [currentUrl, setCurrentUrl] = useState<string | null>(null);
+  const [requestedWidth, setRequestedWidth] = useState(DEFAULT_WIDTH);
+  // `availableW` = the width of the panel's flex parent (the host marked
+  // with data-browser-panel-host in standalone-chat.tsx). That's the real
+  // budget the panel competes with the chat column for — using
+  // window.innerWidth is wrong because AppSidebar / inline-history sidebar
+  // eat into it, and on a non-fullscreen window the panel kept overshooting
+  // the visible area.
+  const [availableW, setAvailableW] = useState(
+    typeof window !== "undefined" ? window.innerWidth : 1200,
+  );
   const placeholderRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const dragStateRef = useRef<{ startX: number; startWidth: number } | null>(
+    null,
+  );
 
-  // Persist {url, updatedAt} on the conversation file. No-ops if the chat
-  // isn't on disk yet (the user may not have typed a first message).
-  const persistUrl = useCallback(
-    (url: string | null) => {
+  const effectiveWidth = clampWidth(requestedWidth, availableW);
+  const panelOpen = visible && !collapsed && effectiveWidth > 0;
+
+  // ---------------------------------------------------------------------------
+  // Persistence
+  // ---------------------------------------------------------------------------
+
+  const persistState = useCallback(
+    (patch: { url?: string | null; width?: number; collapsed?: boolean }) => {
       if (!conversationId) return;
-      updateConversationFlags(conversationId, {
-        browserState: url ? { url, updatedAt: Date.now() } : undefined,
-      }).catch((e) => console.error("persist browserState failed", e));
+      // Read-then-write is intentional: we only patch the fields we know
+      // about, leaving the others (e.g. `url` when only width changed) intact.
+      (async () => {
+        try {
+          const conv = await loadConversationFile(conversationId);
+          const prev = conv?.browserState;
+          if (patch.url === null) {
+            await updateConversationFlags(conversationId, {
+              browserState: undefined,
+            });
+            return;
+          }
+          const url = patch.url ?? prev?.url;
+          if (!url) return; // can't have a panel state without a URL
+          await updateConversationFlags(conversationId, {
+            browserState: {
+              url,
+              updatedAt: Date.now(),
+              width: patch.width ?? prev?.width,
+              collapsed: patch.collapsed ?? prev?.collapsed,
+            },
+          });
+        } catch (e) {
+          console.error("persist browserState failed", e);
+        }
+      })();
     },
     [conversationId],
   );
 
-  // Push the current placeholder rect to Tauri. The Rust side positions
-  // a *top-level* WebviewWindow over the placeholder; we send
-  // viewport-relative bounds (CSS pixels, what `getBoundingClientRect()`
-  // gives us) plus the label of the host window so Rust can resolve the
-  // screen position from its own `inner_position()` — keeping all
-  // coordinate-space math on one side.
+  // ---------------------------------------------------------------------------
+  // Bounds push (CSS rect → Rust → screen position)
+  // ---------------------------------------------------------------------------
+
   const pushBounds = useCallback(async () => {
     const el = placeholderRef.current;
     if (!el) return;
+    // offsetParent === null when any ancestor is display:none. That's how
+    // the home page hides the always-mounted chat layer when the user
+    // switches to Memories / Settings / Timeline / etc. Without checking
+    // this the native webview would linger on top of the new section,
+    // because zero-rect detection alone isn't always reliable across
+    // browser engines.
+    const hidden = el.offsetParent === null;
     const r = el.getBoundingClientRect();
-    if (r.width <= 0 || r.height <= 0) {
+    if (hidden || r.width <= 0 || r.height <= 0) {
       await invoke("owned_browser_hide").catch(() => {});
       return;
     }
@@ -82,42 +148,60 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
     }
   }, []);
 
-  // Close: hide the webview, clear chat state. The webview itself stays
-  // alive (cookies persist) — only the panel is gone.
-  const close = useCallback(async () => {
-    setVisible(false);
-    setCurrentUrl(null);
-    persistUrl(null);
-    try {
-      await invoke("owned_browser_hide");
-    } catch (e) {
-      console.error("owned_browser_hide failed", e);
-    }
-  }, [persistUrl]);
+  // ---------------------------------------------------------------------------
+  // Viewport resize tracking — drives both the JS clamp and re-pushing bounds
+  // ---------------------------------------------------------------------------
 
-  // Listen for agent-driven navigations.
+  // Track the host element's width via ResizeObserver. The host is the
+  // panel's flex parent (data-browser-panel-host in standalone-chat.tsx) —
+  // that's the layout-level budget shared between chat column and panel.
+  // Window resize is implicitly covered because the host re-measures on
+  // every parent resize.
+  useEffect(() => {
+    const host =
+      panelRef.current?.parentElement ??
+      document.querySelector<HTMLElement>("[data-browser-panel-host]") ??
+      null;
+    if (!host) {
+      setAvailableW(window.innerWidth);
+      return;
+    }
+    const measure = () => setAvailableW(host.getBoundingClientRect().width);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(host);
+    return () => ro.disconnect();
+  }, [panelOpen]);
+
+  // ---------------------------------------------------------------------------
+  // Agent-driven navigation
+  // ---------------------------------------------------------------------------
+
   useEffect(() => {
     const unlistenPromise = listen<string>(NAVIGATE_EVENT, (e) => {
       const url = typeof e.payload === "string" ? e.payload : null;
       if (!url) return;
       setVisible(true);
+      setCollapsed(false);
       setCurrentUrl(url);
-      persistUrl(url);
+      persistState({ url, collapsed: false });
     });
     return () => {
       unlistenPromise.then((fn) => fn()).catch(() => {});
     };
-  }, [persistUrl]);
+  }, [persistState]);
 
-  // When the conversation changes, load its browserState from disk and
-  // restore the panel (or hide it). The webview itself is a singleton so
-  // we always nav to the saved URL — the prior chat's URL would otherwise
-  // bleed through visually.
+  // ---------------------------------------------------------------------------
+  // Per-conversation restore
+  // ---------------------------------------------------------------------------
+
   useEffect(() => {
     let cancelled = false;
     if (!conversationId) {
       setVisible(false);
+      setCollapsed(false);
       setCurrentUrl(null);
+      setRequestedWidth(DEFAULT_WIDTH);
       invoke("owned_browser_hide").catch(() => {});
       return () => {
         cancelled = true;
@@ -126,13 +210,22 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
     (async () => {
       const conv = await loadConversationFile(conversationId).catch(() => null);
       if (cancelled) return;
-      const url = conv?.browserState?.url;
+      const state = conv?.browserState;
+      const url = state?.url;
+      const width = state?.width ?? DEFAULT_WIDTH;
+      const wasCollapsed = state?.collapsed === true;
+      setRequestedWidth(width);
       if (url) {
         setVisible(true);
+        setCollapsed(wasCollapsed);
         setCurrentUrl(url);
         invoke("owned_browser_navigate", { url }).catch(() => {});
+        // If collapsed, hide the webview right away — pushBounds wouldn't
+        // run because the placeholder isn't mounted.
+        if (wasCollapsed) invoke("owned_browser_hide").catch(() => {});
       } else {
         setVisible(false);
+        setCollapsed(false);
         setCurrentUrl(null);
         invoke("owned_browser_hide").catch(() => {});
       }
@@ -142,33 +235,104 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
     };
   }, [conversationId]);
 
-  // Track placeholder rect — covers panel slide-in, window resize,
-  // window *move* (top-level webview windows live in screen coords so
-  // they don't follow parent moves automatically), and chat-history
-  // sidebar collapse/expand.
+  // ---------------------------------------------------------------------------
+  // Bounds tracking — covers slide-in, window resize, drag-resize,
+  // chat-history toggle, window move (top-level webview lives in screen
+  // coords, doesn't follow parent moves automatically).
+  // ---------------------------------------------------------------------------
+
   useEffect(() => {
-    if (!visible) return;
+    if (!panelOpen) return;
     const el = placeholderRef.current;
     if (!el) return;
     pushBounds();
     const ro = new ResizeObserver(() => pushBounds());
     ro.observe(el);
-    const onResize = () => pushBounds();
-    window.addEventListener("resize", onResize);
 
-    // Window-moved + window-resized fire on the active Tauri window.
-    // Both translate to a re-push of bounds in screen coordinates.
     const w = getCurrentWindow();
     const unlistenMovedP = w.listen("tauri://move", () => pushBounds());
     const unlistenResizedP = w.listen("tauri://resize", () => pushBounds());
 
+    // ResizeObserver only fires on *size* changes — position changes (e.g.
+    // a sibling's flex-basis growing, the chat history sidebar collapsing,
+    // a JSX restructure landing via HMR) leave the native webview stuck at
+    // stale screen coords. Poll the rect each animation frame and re-push
+    // only when something actually moved. Cheap (single getBoundingClientRect
+    // per RAF) and bulletproof against any layout-tree change we don't
+    // explicitly subscribe to.
+    let raf = 0;
+    let last = { x: 0, y: 0, w: 0, h: 0 };
+    const tick = () => {
+      const r = el.getBoundingClientRect();
+      if (
+        r.left !== last.x ||
+        r.top !== last.y ||
+        r.width !== last.w ||
+        r.height !== last.h
+      ) {
+        last = { x: r.left, y: r.top, w: r.width, h: r.height };
+        pushBounds();
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+
     return () => {
       ro.disconnect();
-      window.removeEventListener("resize", onResize);
+      cancelAnimationFrame(raf);
       unlistenMovedP.then((fn) => fn()).catch(() => {});
       unlistenResizedP.then((fn) => fn()).catch(() => {});
     };
-  }, [visible, pushBounds]);
+  }, [panelOpen, pushBounds]);
+
+  // ---------------------------------------------------------------------------
+  // Drag-resize
+  // ---------------------------------------------------------------------------
+
+  const onDragMove = useCallback(
+    (e: MouseEvent) => {
+      const s = dragStateRef.current;
+      if (!s) return;
+      // Dragging the handle LEFT widens the panel (it sits on the right of
+      // the screen). startX - currentX = pixels grown.
+      const next = s.startWidth + (s.startX - e.clientX);
+      setRequestedWidth(next);
+    },
+    [],
+  );
+
+  const onDragEnd = useCallback(() => {
+    const s = dragStateRef.current;
+    dragStateRef.current = null;
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+    window.removeEventListener("mousemove", onDragMove);
+    window.removeEventListener("mouseup", onDragEnd);
+    if (s) {
+      // Persist the final width (clamped). Don't persist intermediate values
+      // — they'd flood the chat JSON with disk writes during a drag.
+      persistState({ width: clampWidth(requestedWidth, availableW) });
+    }
+  }, [onDragMove, persistState, requestedWidth, availableW]);
+
+  const onDragStart = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      dragStateRef.current = {
+        startX: e.clientX,
+        startWidth: effectiveWidth,
+      };
+      document.body.style.cursor = "ew-resize";
+      document.body.style.userSelect = "none";
+      window.addEventListener("mousemove", onDragMove);
+      window.addEventListener("mouseup", onDragEnd);
+    },
+    [effectiveWidth, onDragMove, onDragEnd],
+  );
+
+  // ---------------------------------------------------------------------------
+  // Toggle handlers
+  // ---------------------------------------------------------------------------
 
   const reload = useCallback(async () => {
     if (!currentUrl) return;
@@ -179,49 +343,94 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
     }
   }, [currentUrl]);
 
+  const collapse = useCallback(() => {
+    setCollapsed(true);
+    persistState({ collapsed: true });
+    invoke("owned_browser_hide").catch(() => {});
+  }, [persistState]);
+
+  const expand = useCallback(() => {
+    setCollapsed(false);
+    persistState({ collapsed: false });
+  }, [persistState]);
+
+  // ---------------------------------------------------------------------------
+  // Render
+  // ---------------------------------------------------------------------------
+
   return (
-    <AnimatePresence>
-      {visible && (
-        <motion.div
-          initial={{ width: 0, opacity: 0 }}
-          animate={{ width: 480, opacity: 1 }}
-          exit={{ width: 0, opacity: 0 }}
-          transition={{ duration: 0.2 }}
-          // max-w-[40vw] clamps the panel on narrow windows so it can't push
-          // the chat content off-screen. The placeholder's getBoundingClientRect
-          // reflects the clamped width, so the native webview follows.
-          className="border-l border-border/50 bg-muted/30 flex flex-col overflow-hidden shrink-0 max-w-[40vw]"
-        >
-          <div className="flex items-center gap-2 px-3 h-10 border-b border-border/50 bg-background/60">
-            <div className="flex-1 min-w-0 text-xs text-muted-foreground truncate">
-              {currentUrl ?? "about:blank"}
-            </div>
-            <button
-              onClick={reload}
-              title="Reload"
-              className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
-            >
-              <RotateCw className="h-3.5 w-3.5" />
-            </button>
-            <button
-              onClick={close}
-              title="Close"
-              className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          </div>
-          {/* Placeholder — the native webview is positioned over this rect.
-              The fallback text only flashes during the slide-in animation
-              before the webview appears on top. */}
-          <div
-            ref={placeholderRef}
-            className="flex-1 bg-background relative flex items-center justify-center text-xs text-muted-foreground"
+    <>
+      <AnimatePresence>
+        {panelOpen && (
+          <motion.div
+            ref={panelRef}
+            initial={{ width: 0, opacity: 0 }}
+            animate={{ width: effectiveWidth, opacity: 1 }}
+            exit={{ width: 0, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            // Inline flex item — sits *beside* the chat, doesn't overlay
+            // it. shrink-0 keeps us at effectiveWidth; the chat content
+            // (flex-1 min-w-0) gives way. The JS clamp on effectiveWidth
+            // guarantees viewport - chat ≥ 360px so the chat is never
+            // crushed below readable width.
+            style={{ width: effectiveWidth, flexBasis: effectiveWidth }}
+            className="border-l border-border/50 bg-muted/30 flex flex-col overflow-hidden shrink-0 relative"
           >
-            loading…
-          </div>
-        </motion.div>
+            {/* Drag handle — 10px hot zone on the left edge with a thicker
+                visible grip in the vertical center. The 1px border
+                reads as the panel's edge; the 32px tall grip bar is the
+                discoverable affordance. */}
+            <div
+              onMouseDown={onDragStart}
+              className="absolute top-0 left-0 h-full w-2.5 cursor-ew-resize z-10 group/resize -translate-x-1/2"
+              title="Drag to resize"
+            >
+              <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-px bg-border/60 group-hover/resize:bg-foreground/40 transition-colors" />
+              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 h-10 w-1 rounded-full bg-border group-hover/resize:bg-foreground/60 group-hover/resize:w-1.5 transition-all" />
+            </div>
+
+            <div className="flex items-center gap-2 px-3 h-10 border-b border-border/50 bg-background/60 pl-4">
+              <div className="flex-1 min-w-0 text-xs text-muted-foreground truncate">
+                {currentUrl ?? "about:blank"}
+              </div>
+              <button
+                onClick={reload}
+                title="Reload"
+                className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+              >
+                <RotateCw className="h-3.5 w-3.5" />
+              </button>
+              <button
+                onClick={collapse}
+                title="Hide panel"
+                className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+              >
+                <PanelRightClose className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            {/* Placeholder — the native webview is positioned over this rect. */}
+            <div
+              ref={placeholderRef}
+              className="flex-1 bg-background relative flex items-center justify-center text-xs text-muted-foreground"
+            >
+              loading…
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Floating re-open affordance: shown when a URL is saved but the
+          panel is collapsed. Pinned to the viewport's top-right corner so
+          it's discoverable regardless of the chat layout state. */}
+      {visible && collapsed && currentUrl && (
+        <button
+          onClick={expand}
+          title={`Show browser (${currentUrl})`}
+          className="fixed right-3 top-14 z-20 p-1.5 rounded border border-border/50 bg-background/80 backdrop-blur text-muted-foreground hover:text-foreground hover:bg-muted/60 shadow-sm"
+        >
+          <PanelRightOpen className="h-4 w-4" />
+        </button>
       )}
-    </AnimatePresence>
+    </>
   );
 }
