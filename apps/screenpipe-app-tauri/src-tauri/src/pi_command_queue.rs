@@ -22,6 +22,7 @@ use serde_json::{json, Value};
 use specta::Type;
 use std::io::Write;
 use std::process::ChildStdin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, watch, Mutex, Notify};
 use tracing::{debug, error, info, warn};
@@ -62,10 +63,15 @@ pub struct PiCommand {
 /// How the queue waits after writing a command to stdin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WaitMode {
-    /// Write to stdin, reply immediately, but don't dequeue the next command until
-    /// the SDK emits `done`. Used for `prompt` — the frontend needs streaming events
-    /// to start flowing immediately.
-    StreamThenWaitDone,
+    /// Write to stdin, reply Ok, advance immediately. Used for `prompt`
+    /// commands that include `streamingBehavior: "followUp"` — pi-mono owns
+    /// prompt serialization (its internal followUp queue handles back-to-back
+    /// prompts during streaming AND during auto-retry's mid-prompt agent_end
+    /// gap). The Rust queue must NOT block on `agent_end`, because pi-mono
+    /// fires that event mid-prompt during auto-retry and our drain loop would
+    /// race the still-running turn. The "queued" UI rail is cleared by the
+    /// stdout reader when pi-mono fires `message_start` for the user message.
+    WriteOnly,
     /// Write to stdin, wait for `done`, then reply and dequeue. Used for `new_session`
     /// and `abort` where the caller must know the SDK is fully idle before proceeding.
     WaitDone,
@@ -112,6 +118,15 @@ pub struct PiQueueState {
     /// can't pluck a specific entry out of it — instead the drain loop
     /// checks this set when popping and skips the write.
     cancelled: std::sync::Mutex<std::collections::HashSet<String>>,
+    /// True between `agent_start` and `agent_end` — i.e. while the SDK is
+    /// actively processing a `prompt`. Read by the stdout reader to suppress
+    /// the `response → 500ms → signal_done` fallback on prompt ACKs (those
+    /// fire mid-stream and would unblock the drain loop early, causing the
+    /// next queued prompt to race the still-running one and trip the SDK's
+    /// "already processing" error). For prompts, `agent_end` is the
+    /// authoritative done signal; the response-fallback only matters for
+    /// new_session/abort, which never fire agent_start.
+    agent_active: AtomicBool,
 }
 
 impl PiQueueState {
@@ -124,12 +139,29 @@ impl PiQueueState {
             alive: alive_tx,
             queued: queued_tx,
             cancelled: std::sync::Mutex::new(std::collections::HashSet::new()),
+            agent_active: AtomicBool::new(false),
         })
     }
 
     /// Called by the stdout reader when a `done` event is received.
     pub fn signal_done(&self) {
         self.done_notify.notify_one();
+    }
+
+    /// Called by the stdout reader on `agent_start` (a prompt has begun streaming).
+    pub fn mark_agent_active(&self) {
+        self.agent_active.store(true, Ordering::SeqCst);
+    }
+
+    /// Called by the stdout reader on `agent_end` (a prompt has finished).
+    pub fn mark_agent_idle(&self) {
+        self.agent_active.store(false, Ordering::SeqCst);
+    }
+
+    /// Whether a prompt is currently mid-stream. Used by the stdout reader to
+    /// decide whether to fire the `response → 500ms → signal_done` fallback.
+    pub fn is_agent_active(&self) -> bool {
+        self.agent_active.load(Ordering::SeqCst)
     }
 
     /// Called by the stdout reader when the process terminates (EOF).
@@ -140,6 +172,9 @@ impl PiQueueState {
         self.done_notify.notify_waiters();
         // Drop any queued prompts so subscribers stop showing them — Pi died.
         self.queued.send_modify(|v| v.clear());
+        // Clear the agent-active flag so a future restart doesn't start out
+        // in a stuck "active" state if the process died mid-stream.
+        self.agent_active.store(false, Ordering::SeqCst);
     }
 
     /// Subscribe to queue-pending changes. Each receive yields the current
@@ -163,6 +198,30 @@ impl PiQueueState {
                 v.remove(pos);
             }
         });
+    }
+
+    /// Remove the first queued entry whose preview matches the given user
+    /// message text. Called by the stdout reader when pi-mono fires
+    /// `message_start` with a user message — that's the moment a prompt
+    /// transitions from "waiting in pi-mono's followUp queue" to "in-flight",
+    /// and is the right moment to clear the UI rail entry. Returns whether a
+    /// match was found and removed.
+    ///
+    /// Matching is by preview text (truncated to 200 chars at enqueue time).
+    /// Pi-mono uses the same FIFO match-by-text strategy in its own queue, so
+    /// this stays consistent: if the user enqueues two identical prompts, the
+    /// first message_start dequeues the first entry, the second dequeues the
+    /// second.
+    pub fn dequeue_first_matching_text(&self, text: &str) -> bool {
+        let preview: String = text.chars().take(200).collect();
+        let mut removed = false;
+        self.queued.send_modify(|v| {
+            if let Some(pos) = v.iter().position(|p| p.preview == preview) {
+                v.remove(pos);
+                removed = true;
+            }
+        });
+        removed
     }
 
     /// Mark a prompt id as cancelled so the drain loop drops it on dequeue
@@ -245,9 +304,15 @@ impl PiQueueHandle {
             .await
             .map_err(|_| "Pi command queue closed".to_string())?;
 
-        // mpsc accepted the command — make it visible to subscribers. The
-        // drain loop will remove this entry the moment it pulls + writes.
-        self.state.enqueue_prompt(meta);
+        // Only surface in the "queued · waiting for current reply" UI rail
+        // when the agent is actually mid-stream. For a first prompt to an
+        // idle agent, pi-mono fires `message_start` within milliseconds and
+        // showing it as "queued" briefly is confusing — skip the rail entry.
+        // The stdout reader's `message_start` handler is a no-op when the
+        // entry isn't present (it dequeues by text match).
+        if self.state.is_agent_active() {
+            self.state.enqueue_prompt(meta);
+        }
         Ok((id, rx))
     }
 
@@ -371,20 +436,24 @@ pub fn spawn_queue(
                         continue;
                     }
 
-                    // Successful write — the prompt is now in-flight, no longer
-                    // "queued" from the UI's perspective.
-                    if let Some(pid) = &prompt_id {
-                        state.dequeue_prompt(pid);
-                    }
-
                     match cmd.wait_mode {
-                        WaitMode::StreamThenWaitDone => {
-                            // Reply immediately so streaming events start flowing to frontend
+                        WaitMode::WriteOnly => {
+                            // Pi-mono owns serialization for prompts via its
+                            // internal followUp queue. We don't wait for done
+                            // and we don't dequeue from the UI rail here —
+                            // the entry stays visible until pi-mono fires
+                            // `message_start` for the user message, at which
+                            // point the stdout reader removes it.
                             let _ = cmd.reply.send(Ok(()));
-                            // But block the queue until done
-                            wait_for_done_or_terminated(&state, &mut alive_rx, &cmd_type).await;
                         }
                         WaitMode::WaitDone => {
+                            // Successful write — for blocking commands the
+                            // entry should be removed from the queued rail
+                            // immediately (it's now in-flight, not waiting).
+                            // Prompts use WriteOnly and skip this branch.
+                            if let Some(pid) = &prompt_id {
+                                state.dequeue_prompt(pid);
+                            }
                             // Block until done, then reply
                             let ok =
                                 wait_for_done_or_terminated(&state, &mut alive_rx, &cmd_type).await;
@@ -421,6 +490,11 @@ pub fn spawn_queue(
                     // queued-prompt list. The drain above should cover them
                     // but a paranoid clear is cheap and correct.
                     state.queued.send_modify(|v| v.clear());
+                    // Abort halts the agent loop. Clear the active flag so
+                    // the abort's `response` ACK is allowed to fire the
+                    // done-fallback (otherwise the wait below hangs until
+                    // the 300s safety timeout — abort would never reply).
+                    state.mark_agent_idle();
                     if cancelled > 0 {
                         info!(
                             "pi_command_queue: abort cancelled {} pending commands",
@@ -553,7 +627,7 @@ mod tests {
         // Send a command in the background
         let h = tokio::spawn(async move {
             let result = handle
-                .send(json!({"type": "prompt"}), WaitMode::StreamThenWaitDone)
+                .send(json!({"type": "prompt"}), WaitMode::WriteOnly)
                 .await;
             assert!(result.is_ok());
             // The receiver should work
@@ -563,7 +637,7 @@ mod tests {
 
         // Receive from the channel and complete it
         if let Some(QueueMessage::Command(cmd)) = rx.recv().await {
-            assert_eq!(cmd.wait_mode, WaitMode::StreamThenWaitDone);
+            assert_eq!(cmd.wait_mode, WaitMode::WriteOnly);
             let _ = cmd.reply.send(Ok(()));
         }
 
@@ -581,7 +655,7 @@ mod tests {
         let h1 = {
             let h = handle.clone();
             tokio::spawn(async move {
-                h.send(json!({"type": "prompt"}), WaitMode::StreamThenWaitDone)
+                h.send(json!({"type": "prompt"}), WaitMode::WriteOnly)
                     .await
             })
         };

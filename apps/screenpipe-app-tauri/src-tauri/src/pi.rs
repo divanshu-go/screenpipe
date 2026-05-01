@@ -523,6 +523,34 @@ fn find_local_pi_entrypoint() -> Option<String> {
     }
 }
 
+/// Extract the plain-text content from a pi-mono `message` JSON value (the
+/// shape that ships in `message_start`/`message_end` events). pi-mono encodes
+/// user messages as either `content: "string"` or
+/// `content: [{type: "text", text: "..."}, ...]`. We concatenate all text
+/// parts in order. Used to match an incoming user message against the queued
+/// prompt rail's preview text.
+fn extract_user_message_text(msg: &serde_json::Value) -> String {
+    let content = match msg.get("content") {
+        Some(c) => c,
+        None => return String::new(),
+    };
+    if let Some(s) = content.as_str() {
+        return s.to_string();
+    }
+    if let Some(arr) = content.as_array() {
+        let mut out = String::new();
+        for part in arr {
+            if part.get("type").and_then(|t| t.as_str()) == Some("text") {
+                if let Some(t) = part.get("text").and_then(|v| v.as_str()) {
+                    out.push_str(t);
+                }
+            }
+        }
+        return out;
+    }
+    String::new()
+}
+
 fn find_pi_executable() -> Option<String> {
     // 1. Check screenpipe-managed local install first (preferred — we control the deps)
     if let Some(js) = find_local_pi_entrypoint() {
@@ -1537,21 +1565,59 @@ pub async fn pi_start_inner(
             // prompt was sent while the first was still running.
             if let Some(ref qs) = queue_state_for_reader {
                 match event_type.as_deref() {
+                    Some("agent_start") => {
+                        // A prompt has begun streaming. Suppress the
+                        // response→done fallback below so the prompt's
+                        // mid-stream `response` ACK doesn't unblock the
+                        // queue early.
+                        qs.mark_agent_active();
+                    }
                     Some("agent_end") => {
-                        // Agent fully done — unblock the queue immediately.
+                        // Note: pi-mono fires `agent_end` mid-prompt during
+                        // its auto-retry path. Only `mark_agent_idle` here —
+                        // pi-mono's followUp queue (engaged via
+                        // `streamingBehavior: "followUp"` on prompt commands)
+                        // is what serializes back-to-back prompts now, so we
+                        // don't need `signal_done` to gate the next prompt.
+                        // The done_notify is still fired so WaitDone callers
+                        // (new_session/abort) advance.
+                        qs.mark_agent_idle();
                         qs.signal_done();
                     }
+                    Some("message_start") => {
+                        // Pi-mono just started processing a message. If it's
+                        // a user message, find the matching entry in the
+                        // queued-prompt rail and remove it — this is the
+                        // moment the prompt transitions from "queued in
+                        // pi-mono's followUp queue" to in-flight.
+                        if let Some(parsed_v) = parsed.as_ref() {
+                            if let Some(msg) = parsed_v.get("message") {
+                                let role = msg.get("role").and_then(|r| r.as_str());
+                                if role == Some("user") {
+                                    let text = extract_user_message_text(msg);
+                                    if !text.is_empty() {
+                                        qs.dequeue_first_matching_text(&text);
+                                    }
+                                }
+                            }
+                        }
+                    }
                     Some("response") => {
-                        // Fallback for new_session/abort when no active prompt is
-                        // running (no agent_end fires in that case). Also covers the
-                        // prompt ACK path as a safety net.
-                        // Note: this runs on a std::thread (not tokio), so use
-                        // std::thread::spawn + std::thread::sleep.
-                        let qs = qs.clone();
-                        std::thread::spawn(move || {
-                            std::thread::sleep(std::time::Duration::from_millis(500));
-                            qs.signal_done();
-                        });
+                        // Only meaningful for new_session/abort — those don't
+                        // fire agent_start/agent_end. For prompts (which use
+                        // WriteOnly and rely on pi-mono's internal queue),
+                        // firing done here is unnecessary; suppress while a
+                        // prompt is mid-stream so we don't race the active
+                        // turn for any blocking caller.
+                        if !qs.is_agent_active() {
+                            // Note: this runs on a std::thread (not tokio),
+                            // so use std::thread::spawn + std::thread::sleep.
+                            let qs = qs.clone();
+                            std::thread::spawn(move || {
+                                std::thread::sleep(std::time::Duration::from_millis(500));
+                                qs.signal_done();
+                            });
+                        }
                     }
                     _ => {}
                 }
@@ -1737,9 +1803,16 @@ pub async fn pi_prompt(
             .ok_or("Pi command queue not initialized")?
     };
 
+    // `streamingBehavior: "followUp"` tells pi-mono to internally queue this
+    // prompt when its agent is mid-stream (instead of throwing "Agent is
+    // already processing"). pi-mono ignores this option when idle, so it's
+    // safe to set unconditionally. This is the SDK-blessed way to handle
+    // back-to-back prompts and is robust against pi-mono's auto-retry path,
+    // which otherwise fires `agent_end` mid-prompt and would race our queue.
     let mut cmd = json!({
         "type": "prompt",
-        "message": message
+        "message": message,
+        "streamingBehavior": "followUp",
     });
     if let Some(imgs) = images {
         if !imgs.is_empty() {
@@ -1747,12 +1820,17 @@ pub async fn pi_prompt(
         }
     }
 
-    // Send through the prompt-aware path so the queue UI shows it as queued
-    // until the drain loop pulls and writes it to stdin.
+    // Send through the prompt-aware path so the queue UI surfaces this entry
+    // until pi-mono confirms it's started processing (via message_start).
+    // WriteOnly mode: the drain loop writes to stdin and advances immediately
+    // — pi-mono's followUp queue handles serialization with any in-flight
+    // prompt. Combined with `streamingBehavior: "followUp"` on the command,
+    // this avoids the "already processing" race that fires when the agent
+    // momentarily idles between auto-retries.
     let (_queue_id, rx) = queue
         .send_prompt(
             cmd,
-            crate::pi_command_queue::WaitMode::StreamThenWaitDone,
+            crate::pi_command_queue::WaitMode::WriteOnly,
             message.clone(),
         )
         .await?;
