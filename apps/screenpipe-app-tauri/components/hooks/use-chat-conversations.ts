@@ -144,7 +144,12 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     const conversation: ChatConversation = {
       id: convId,
       title,
-      messages: msgs.slice(-100).map(m => {
+      // Persist the full transcript. The previous slice(-100) was silently
+      // dropping the oldest messages on every save, so any chat that grew
+      // past 100 messages walked forward and lost its early history. If
+      // file size becomes a problem for power users we cap at the render
+      // layer, never on disk.
+      messages: msgs.map(m => {
         // For tool-only responses, content may be empty but contentBlocks has the data.
         let content = m.content;
         if (!content && m.contentBlocks?.length) {

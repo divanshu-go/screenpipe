@@ -349,6 +349,38 @@ export async function mountPiEventRouter(): Promise<() => void> {
     const offTerminated = onTerminated((p) => handleTerminated(p));
     const offEvicted = onEvicted((p) => handleSessionEvicted(p));
     unregistrations.push(offDefault, offTerminated, offEvicted);
+
+    // Flush pending saves on app quit. Without this, a Cmd+Q during an
+    // active stream — or any time agent_end hasn't fired yet — leaves
+    // the partial transcript only in the in-memory store; the next
+    // launch reads stale disk and the latest exchanges silently
+    // disappear. We prevent the default close, await the flush, then
+    // destroy the window. Foreground sessions whose tokens live only
+    // in the panel's local React state aren't fully covered here —
+    // those rely on the panel's own snapshot-on-switch — but anything
+    // that's reached the store does get persisted.
+    try {
+      const { getCurrentWindow } = await import("@tauri-apps/api/window");
+      const win = getCurrentWindow();
+      const offClose = await win.onCloseRequested(async (event) => {
+        event.preventDefault();
+        try {
+          await flushPendingSaves();
+        } catch (e) {
+          console.warn("[router] flush on close failed:", e);
+        }
+        try {
+          await win.destroy();
+        } catch {
+          /* window already gone */
+        }
+      });
+      unregistrations.push(offClose);
+    } catch (e) {
+      // Non-Tauri context (tests, ssr) — skip silently.
+      console.debug("[router] close-flush hook not available:", e);
+    }
+
     mounted = true;
     return unmountPiEventRouter;
   })();
@@ -565,6 +597,22 @@ function applyEventToSessionContent(sid: string, payload: PiInnerEvent) {
 // race on the same file; we chain them through a per-id promise queue.
 const saveQueue = new Map<string, Promise<void>>();
 
+/** Persist every in-store session that has unsaved messages. Awaits the
+ *  saveQueue tail for each id so already-running saves finish before
+ *  the window closes. Used by the close-on-quit hook in
+ *  `mountPiEventRouter`. */
+async function flushPendingSaves(): Promise<void> {
+  const sessions = useChatStore.getState().sessions;
+  const ids = Object.keys(sessions).filter((id) => {
+    const s = sessions[id];
+    return !!s.messages && s.messages.length > 0;
+  });
+  await Promise.all(ids.map((id) => persistBackgroundSession(id)));
+  // Await the entire saveQueue tail so any in-flight save (queued
+  // before flush) also completes. persistBackgroundSession returns the
+  // promise it just appended, so the previous await covers the tail.
+}
+
 /**
  * Persist a backgrounded session's accumulated state to disk. Called from
  * the router when agent_end fires for a session that isn't currently
@@ -620,7 +668,10 @@ async function persistBackgroundSession(sid: string): Promise<void> {
         id: sid,
         title,
         ...(lastUserMessageAt ? { lastUserMessageAt } : {}),
-        messages: messages.slice(-100).map((m: any) => {
+        // Full transcript — see comment in use-chat-conversations.ts
+        // saveConversation. The slice(-100) here was silently truncating
+        // long backgrounded chats on every agent_end save.
+        messages: messages.map((m: any) => {
           let content: string = m.content || "";
           if (!content && m.contentBlocks?.length) {
             content =

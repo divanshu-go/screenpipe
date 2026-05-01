@@ -9,6 +9,7 @@ import {
   readDir,
   mkdir,
   remove,
+  rename,
   exists,
 } from "@tauri-apps/plugin-fs";
 import type {
@@ -46,7 +47,25 @@ export async function saveConversationFile(
 ): Promise<void> {
   const dir = await ensureChatsDir();
   const filePath = `${dir}/${conversationFilename(conv.id)}`;
-  await writeTextFile(filePath, JSON.stringify(conv, null, 2));
+  // Atomic write: stage to a sibling .tmp, then rename. A crash or quit
+  // mid-write leaves either the previous file intact OR an orphan .tmp
+  // (cleaned up by the next save), never a half-written .json that
+  // loadConversationFile would silently treat as "missing" via its
+  // try/catch → return null path. listConversations would then drop the
+  // row from the sidebar — the user-visible "chat history disappeared"
+  // bug. rename() is atomic on POSIX and same-volume NTFS.
+  const tmpPath = `${filePath}.tmp`;
+  const body = JSON.stringify(conv, null, 2);
+  await writeTextFile(tmpPath, body);
+  try {
+    await rename(tmpPath, filePath);
+  } catch (e) {
+    // Best-effort cleanup so a stale .tmp doesn't accumulate on the rare
+    // path where rename fails (cross-device, permission). Re-throw so
+    // callers don't think the save succeeded.
+    try { await remove(tmpPath); } catch { /* ignore */ }
+    throw e;
+  }
 }
 
 export async function loadConversationFile(
