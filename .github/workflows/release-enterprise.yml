@@ -194,6 +194,11 @@ jobs:
           retryAttempts: 3
 
       - name: Sign installer with SSL.com EV certificate
+        # Final NSIS installer is built after Tauri's signCommand runs,
+        # so we sign it here. Reuses sign-ssl.ps1 to inherit its retry-with-
+        # backoff logic against transient SSL.com / CSC API failures
+        # (the "Unexpected character (<) at position 0" HTML-instead-of-JSON
+        # symptom that took out enterprise build 25196389570 on 2026-05-01).
         shell: powershell
         env:
           ESIGNER_USERNAME: ${{ secrets.ESIGNER_USERNAME }}
@@ -203,37 +208,12 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         run: |
-          $cstDest = $env:CODESIGNTOOL_PATH
-          $jarFile = Get-ChildItem $cstDest -Recurse -Filter "code_sign_tool*.jar" | Select-Object -First 1
-          $javaFile = Get-ChildItem $cstDest -Recurse -Filter "java.exe" | Select-Object -First 1
-          if (-not $jarFile) { throw "CodeSignTool jar not found" }
-          if (-not $javaFile) { throw "Java not found in CodeSignTool" }
-
           $nsisDir = "apps/screenpipe-app-tauri/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis"
           $exe = Get-ChildItem "$nsisDir/*.exe" | Select-Object -First 1
           if (-not $exe) { throw "No installer exe found in $nsisDir" }
-          Write-Host "Signing installer: $($exe.Name)"
 
-          $signedDir = Join-Path $cstDest "signed_installer"
-          if (Test-Path $signedDir) { Remove-Item $signedDir -Recurse -Force }
-          New-Item -ItemType Directory -Force -Path $signedDir | Out-Null
-
-          Push-Location $cstDest
-          & $javaFile.FullName -jar $jarFile.FullName sign `
-            "-username=$env:ESIGNER_USERNAME" `
-            "-password=$env:ESIGNER_PASSWORD" `
-            "-totp_secret=$env:ESIGNER_TOTP_SECRET" `
-            "-credential_id=$env:ESIGNER_CREDENTIAL_ID" `
-            "-input_file_path=$($exe.FullName)" `
-            "-output_dir_path=$signedDir"
-          Pop-Location
-
+          & apps/screenpipe-app-tauri/src-tauri/sign-ssl.ps1 $exe.FullName
           if ($LASTEXITCODE -ne 0) { throw "Code signing failed with exit code $LASTEXITCODE" }
-
-          $signedExe = Join-Path $signedDir $exe.Name
-          if (-not (Test-Path $signedExe)) { throw "Signed file not found at $signedExe" }
-          Copy-Item $signedExe $exe.FullName -Force
-          Write-Host "Installer signed: $($exe.Name)"
 
           $sigFile = "$($exe.FullName).sig"
           if (Test-Path $sigFile) {
