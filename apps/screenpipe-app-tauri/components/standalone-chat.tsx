@@ -2065,6 +2065,35 @@ export function StandaloneChat({
     if (pipeWatchIsStreaming !== undefined) setIsStreaming(pipeWatchIsStreaming);
   }, [pipeWatchIsLoading, pipeWatchIsStreaming]);
 
+  // Self-heal a stuck "writing…" indicator on regular chat sessions.
+  // The router (background) and the panel's foreground listener both set
+  // store.isStreaming/isLoading to false on agent_end. Local React
+  // state is also cleared by the foreground listener — but if that
+  // listener missed the event for any reason (race during section
+  // change, mountedRef brief flicker, bus dispatch landing on default
+  // instead of foreground), local can drift `true` while the store
+  // says `false`. Returning to the panel from Settings then shows
+  // "writing…" forever even though the turn is over.
+  // One-way: only sync false→false. The forward direction (true) is
+  // owned by the panel itself when the user sends, so we never want to
+  // reach in and turn the indicator off mid-typing.
+  const storeChatIsStreaming = useChatStore((s) => {
+    if (!conversationId) return undefined;
+    const sess = s.sessions[conversationId];
+    if (!sess || sess.kind === "pipe-watch") return undefined;
+    return !!sess.isStreaming;
+  });
+  const storeChatIsLoading = useChatStore((s) => {
+    if (!conversationId) return undefined;
+    const sess = s.sessions[conversationId];
+    if (!sess || sess.kind === "pipe-watch") return undefined;
+    return !!sess.isLoading;
+  });
+  useEffect(() => {
+    if (storeChatIsStreaming === false) setIsStreaming(false);
+    if (storeChatIsLoading === false) setIsLoading(false);
+  }, [storeChatIsStreaming, storeChatIsLoading]);
+
   // Keep the pipe-context banner in sync with the current session.
   // When the panel switches AWAY from a pipe-watch session (user
   // clicks a chat), `activePipeExecution` would otherwise stay set
