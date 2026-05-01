@@ -1542,6 +1542,13 @@ ignoreIncognitoWindows: boolean;
  */
 pauseOnDrmContent?: boolean; 
 /**
+ * Skip clipboard capture in the UI recorder. Off by default; recommended
+ * when piping ~/.screenpipe data into a remote LLM or sharing it,
+ * since passwords / API keys / private keys often pass through the
+ * clipboard.
+ */
+disableClipboardCapture?: boolean; 
+/**
  * Continue recording audio when the screen is locked.
  * Default: false (audio pauses when screen is locked to save resources).
  */
