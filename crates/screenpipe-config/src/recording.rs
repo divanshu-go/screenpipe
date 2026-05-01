@@ -166,6 +166,13 @@ pub struct RecordingSettings {
     #[serde(rename = "pauseOnDrmContent", default)]
     pub pause_on_drm_content: bool,
 
+    /// Skip clipboard capture in the UI recorder. Off by default; recommended
+    /// when piping ~/.screenpipe data into a remote LLM or sharing it,
+    /// since passwords / API keys / private keys often pass through the
+    /// clipboard.
+    #[serde(rename = "disableClipboardCapture", default)]
+    pub disable_clipboard_capture: bool,
+
     /// Continue recording audio when the screen is locked.
     /// Default: false (audio pauses when screen is locked to save resources).
     #[serde(rename = "recordWhileLocked", default)]
@@ -347,6 +354,7 @@ impl Default for RecordingSettings {
             ignored_urls: vec![],
             ignore_incognito_windows: true,
             pause_on_drm_content: false,
+            disable_clipboard_capture: false,
             record_while_locked: false,
             append_typed_text_to_meeting_notes: true,
             languages: vec![],

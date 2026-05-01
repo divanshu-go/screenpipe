@@ -20,6 +20,7 @@ import {
   Tv,
   Lock,
   Copy,
+  ClipboardX,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -312,6 +313,12 @@ export function PrivacySection() {
 
   const handleDrmPauseToggle = (checked: boolean) => {
     handleSettingsChange({ pauseOnDrmContent: checked }, true);
+  };
+
+  const handleClipboardCaptureToggle = (checked: boolean) => {
+    // UI is "Capture clipboard" on/off. Settings store inverts to match
+    // the CLI flag name (--disable-clipboard-capture).
+    handleSettingsChange({ disableClipboardCapture: !checked }, true);
   };
 
   const handleRecordWhileLockedToggle = (checked: boolean) => {
@@ -756,6 +763,32 @@ export function PrivacySection() {
               id="pauseOnDrmContent"
               checked={Boolean(settings.pauseOnDrmContent ?? false)}
               onCheckedChange={handleDrmPauseToggle}
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Clipboard capture toggle */}
+      <Card>
+        <CardContent className="px-3 py-2.5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2.5">
+              <ClipboardX className="h-4 w-4 text-muted-foreground shrink-0" />
+              <div>
+                <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                  Capture clipboard
+                  <HelpTooltip text="when on, screenpipe records clipboard copy/paste events and contents. turn off if you ship ~/.screenpipe to a remote LLM or share it — passwords, API keys, and private keys frequently pass through the clipboard." />
+                </h3>
+                <p className="text-xs text-muted-foreground">
+                  Skip if your data leaves the machine (passwords, keys often
+                  pass through copy/paste).
+                </p>
+              </div>
+            </div>
+            <Switch
+              id="captureClipboard"
+              checked={!Boolean(settings.disableClipboardCapture ?? false)}
+              onCheckedChange={handleClipboardCaptureToggle}
             />
           </div>
         </CardContent>

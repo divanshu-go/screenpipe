@@ -110,6 +110,9 @@ export function CliCommandDialog({ settings }: CliCommandDialogProps) {
     if (settings.disableAudio) {
       args.push("--disable-audio");
     }
+    if (settings.disableClipboardCapture) {
+      args.push("--disable-clipboard-capture");
+    }
     settings.ignoredWindows.forEach((window) =>
       args.push(`--ignored-windows "${window}"`)
     );

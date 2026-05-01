@@ -393,6 +393,13 @@ pub struct RecordArgs {
     #[arg(long, default_value_t = false)]
     pub pause_on_drm_content: bool,
 
+    /// Disable clipboard capture entirely. The UI recorder will not record
+    /// clipboard copy/paste events or contents — useful when piping
+    /// ~/.screenpipe data into a remote LLM (passwords, keys, secrets often
+    /// pass through the clipboard).
+    #[arg(long, default_value_t = false)]
+    pub disable_clipboard_capture: bool,
+
     /// Require authentication for remote API access. When enabled, non-localhost
     /// requests must include Authorization: Bearer <SCREENPIPE_API_KEY>.
     /// Localhost requests are always allowed.
@@ -445,6 +452,10 @@ impl RecordArgs {
             excluded_windows: self.ignored_windows.clone(),
             ignored_windows: self.ignored_windows.clone(),
             included_windows: self.included_windows.clone(),
+            // --disable-clipboard-capture flips both flags off. Defaults are
+            // `true` for both, so opting out has to be explicit.
+            capture_clipboard: !self.disable_clipboard_capture,
+            capture_clipboard_content: !self.disable_clipboard_capture,
             ..Default::default()
         }
     }
@@ -492,6 +503,7 @@ impl RecordArgs {
             analytics_enabled: !self.disable_telemetry,
             ignore_incognito_windows: true,
             pause_on_drm_content: self.pause_on_drm_content,
+            disable_clipboard_capture: self.disable_clipboard_capture,
             listen_on_lan: self.listen_on_lan,
             ..screenpipe_config::RecordingSettings::default()
         }

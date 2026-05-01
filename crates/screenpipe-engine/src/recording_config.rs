@@ -53,6 +53,11 @@ pub struct RecordingConfig {
     pub ignore_incognito_windows: bool,
     /// Pause all screen capture when a DRM streaming app (Netflix, etc.) is focused.
     pub pause_on_drm_content: bool,
+    /// Skip clipboard capture in the UI recorder (events + content). Useful
+    /// when piping ~/.screenpipe data into a remote LLM or shipping it off
+    /// the box — passwords / api keys / private keys frequently flow
+    /// through the clipboard.
+    pub disable_clipboard_capture: bool,
     pub languages: Vec<Language>,
 
     // Cloud/auth
@@ -178,6 +183,7 @@ impl RecordingConfig {
             ignored_urls: settings.ignored_urls.clone(),
             ignore_incognito_windows: settings.ignore_incognito_windows,
             pause_on_drm_content: settings.pause_on_drm_content,
+            disable_clipboard_capture: settings.disable_clipboard_capture,
             languages: settings
                 .languages
                 .iter()
@@ -247,6 +253,8 @@ impl RecordingConfig {
             excluded_windows: self.ignored_windows.clone(),
             ignored_windows: self.ignored_windows.clone(),
             included_windows: self.included_windows.clone(),
+            capture_clipboard: !self.disable_clipboard_capture,
+            capture_clipboard_content: !self.disable_clipboard_capture,
             ..Default::default()
         }
     }
