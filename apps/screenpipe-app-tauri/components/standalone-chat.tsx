@@ -18,7 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { useSettings, ChatMessage, ChatConversation } from "@/lib/hooks/use-settings";
 import { cn } from "@/lib/utils";
-import { Loader2, Send, Square, User, Settings, ExternalLink, X, ImageIcon, History, Search, Trash2, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Plus, Copy, Check, Clock, Paperclip, Filter, RefreshCw, GitBranch, MoreHorizontal, Pencil, Pin, Shield, ShieldCheck } from "lucide-react";
+import { Loader2, Send, Square, User, Settings, ExternalLink, X, ImageIcon, History, Search, Trash2, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Plus, Copy, Check, Clock, Paperclip, Filter, RefreshCw, GitBranch, MoreHorizontal, Pencil, Pin, Shield, ShieldCheck, Sparkles } from "lucide-react";
 import { SchedulePromptDialog } from "@/components/chat/schedule-prompt-dialog";
 import { PipeContextBanner } from "@/components/chat/pipe-context-banner";
 import { BrowserSidebar } from "@/components/browser-sidebar";
@@ -548,8 +548,8 @@ function ToolCallRailItem({ toolCall, isLast }: { toolCall: ToolCall; isLast: bo
   );
 }
 
-function ThinkingBlock({ text, isThinking, durationMs }: { text: string; isThinking: boolean; durationMs?: number }) {
-  const [expanded, setExpanded] = useState(false);
+function ThinkingBlock({ text, isThinking, durationMs, defaultExpanded = false }: { text: string; isThinking: boolean; durationMs?: number; defaultExpanded?: boolean }) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
   const [elapsed, setElapsed] = useState(0);
   const startRef = useRef(Date.now());
 
@@ -901,7 +901,7 @@ function buildToolSummary(toolCalls: ToolCall[]): string {
   return parts.join(", ");
 }
 
-function ToolCallGroup({ toolCalls }: { toolCalls: ToolCall[] }) {
+function ToolCallGroup({ toolCalls, defaultExpanded = false }: { toolCalls: ToolCall[]; defaultExpanded?: boolean }) {
   const [manualExpand, setManualExpand] = useState<boolean | null>(null);
 
   const hasRunning = toolCalls.some((tc) => tc.isRunning);
@@ -911,8 +911,11 @@ function ToolCallGroup({ toolCalls }: { toolCalls: ToolCall[] }) {
   const total = toolCalls.length;
   const summary = allDone ? buildToolSummary(toolCalls) : "";
 
-  // Auto-expand while running, auto-collapse when done (user can override)
-  const isExpanded = manualExpand !== null ? manualExpand : hasRunning;
+  // Auto-expand while running, auto-collapse when done (user can override).
+  // `defaultExpanded` keeps the group open even when done — used for
+  // messages whose entire output is tool calls (typical pipe-runs)
+  // where the tool result is the whole story.
+  const isExpanded = manualExpand !== null ? manualExpand : (hasRunning || defaultExpanded);
 
   return (
     <div className="w-full min-w-0">
@@ -1008,6 +1011,13 @@ function MessageContent({ message, onImageClick, onRetry }: { message: Message; 
   // Group consecutive tool blocks into collapsible containers
   if (message.contentBlocks && message.contentBlocks.length > 0) {
     const grouped = groupContentBlocks(message.contentBlocks);
+    // When the message has no rendered prose (no text block — common for
+    // pipe-run executions whose entire output is thinking + tool calls),
+    // expand thinking blocks by default. Otherwise the collapsed
+    // "thought for 0s" pill is the only visible thing on the message
+    // and the chat panel reads as empty even though there's real
+    // content to see.
+    const hasText = grouped.some((g) => g.type === "text");
     return (
       <div className="space-y-2 min-w-0 w-full overflow-hidden">
         {grouped.map((group) => {
@@ -1015,10 +1025,10 @@ function MessageContent({ message, onImageClick, onRetry }: { message: Message; 
             return <MarkdownBlock key={`text-${group.key}`} text={group.text} isUser={isUser} />;
           }
           if (group.type === "thinking") {
-            return <ThinkingBlock key={`thinking-${group.key}`} text={group.text} isThinking={group.isThinking} durationMs={group.durationMs} />;
+            return <ThinkingBlock key={`thinking-${group.key}`} text={group.text} isThinking={group.isThinking} durationMs={group.durationMs} defaultExpanded={!hasText} />;
           }
           if (group.type === "tool-group") {
-            return <ToolCallGroup key={`tools-${group.key}`} toolCalls={group.toolCalls} />;
+            return <ToolCallGroup key={`tools-${group.key}`} toolCalls={group.toolCalls} defaultExpanded={!hasText} />;
           }
           return null;
         })}
@@ -1277,6 +1287,18 @@ export function StandaloneChat({
   const [connections, setConnections] = useState<
     Array<{ id: string; name: string; category?: string }>
   >([]);
+  // Watch the input section's width so suggestion chips can collapse into
+  // a popover on narrow chat columns.
+  useEffect(() => {
+    const el = inputSectionRef.current;
+    if (!el) return;
+    const measure = () => setInputSectionWidth(el.getBoundingClientRect().width);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -1409,6 +1431,12 @@ export function StandaloneChat({
   const abortControllerRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  // Tracks the input section's width so we can collapse the auto-suggestion
+  // chips into a popover when the chat column is narrow (e.g. when the
+  // BrowserSidebar opens and squeezes the chat). Updated by a ResizeObserver
+  // attached to the input wrapper.
+  const inputSectionRef = useRef<HTMLDivElement>(null);
+  const [inputSectionWidth, setInputSectionWidth] = useState(800);
   const [isUserScrolledUp, setIsUserScrolledUp] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -4894,7 +4922,7 @@ export function StandaloneChat({
       </div> {/* End of main content area with history sidebar */}
 
       {/* Input */}
-      <div className="relative border-t border-border/50 bg-gradient-to-t from-muted/20 to-transparent">
+      <div ref={inputSectionRef} className="relative border-t border-border/50 bg-gradient-to-t from-muted/20 to-transparent">
         <div className="max-w-4xl mx-auto w-full">
         {/* Prefill, filters, suggestions first; then attached images in gap; then agent bar; then form */}
         {/* Prefill context indicator from search */}
@@ -5022,29 +5050,79 @@ export function StandaloneChat({
           )}
         </AnimatePresence>
 
-        {/* Persistent auto-suggestions above input */}
+        {/* Persistent auto-suggestions above input. Inline chips when the
+            input is wide enough; collapses to a single trigger button that
+            opens a popover when narrow (e.g. BrowserSidebar squeezed the
+            chat column). 520px is the rough threshold below which 4 chips
+            wrap to multiple rows and eat too much vertical space. */}
         {messages.length > 0 && !isLoading && autoSuggestions.length > 0 && (
-          <div className="px-3 pt-2 flex flex-wrap gap-1.5 items-center">
-            {autoSuggestions.slice(0, 4).map((s, i) => (
+          inputSectionWidth >= 520 ? (
+            <div className="px-3 pt-2 flex flex-wrap gap-1.5 items-center">
+              {autoSuggestions.slice(0, 4).map((s, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => sendMessage(s.text)}
+                  className="px-2.5 py-1 text-[11px] font-mono bg-muted/20 hover:bg-foreground hover:text-background border border-border/20 hover:border-foreground text-muted-foreground transition-all duration-150 cursor-pointer max-w-[280px] truncate"
+                  title={s.preview ? `${s.text} — ${s.preview}` : s.text}
+                >
+                  {s.text}
+                </button>
+              ))}
               <button
-                key={i}
-                type="button"
-                onClick={() => sendMessage(s.text)}
-                className="px-2.5 py-1 text-[11px] font-mono bg-muted/20 hover:bg-foreground hover:text-background border border-border/20 hover:border-foreground text-muted-foreground transition-all duration-150 cursor-pointer max-w-[280px] truncate"
-                title={s.preview ? `${s.text} — ${s.preview}` : s.text}
+                onClick={refreshSuggestions}
+                disabled={suggestionsRefreshing}
+                className="p-0.5 text-muted-foreground/30 hover:text-foreground transition-colors duration-150 disabled:opacity-30 cursor-pointer"
+                title="refresh suggestions"
               >
-                {s.text}
+                <RefreshCw className={`w-3 h-3 ${suggestionsRefreshing ? 'animate-spin' : ''}`} strokeWidth={1.5} />
               </button>
-            ))}
-            <button
-              onClick={refreshSuggestions}
-              disabled={suggestionsRefreshing}
-              className="p-0.5 text-muted-foreground/30 hover:text-foreground transition-colors duration-150 disabled:opacity-30 cursor-pointer"
-              title="refresh suggestions"
-            >
-              <RefreshCw className={`w-3 h-3 ${suggestionsRefreshing ? 'animate-spin' : ''}`} strokeWidth={1.5} />
-            </button>
-          </div>
+            </div>
+          ) : (
+            <div className="px-3 pt-2 flex items-center gap-1.5">
+              <Popover>
+                <PopoverTrigger asChild>
+                  <button
+                    type="button"
+                    className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-mono bg-muted/20 hover:bg-foreground hover:text-background border border-border/20 hover:border-foreground text-muted-foreground transition-all duration-150 cursor-pointer"
+                    title="Suggested prompts"
+                  >
+                    <Sparkles className="w-3 h-3" strokeWidth={1.5} />
+                    <span>suggestions</span>
+                    <ChevronDown className="w-3 h-3" strokeWidth={1.5} />
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent
+                  className="w-72 p-1"
+                  align="start"
+                  side="top"
+                  sideOffset={6}
+                >
+                  <div className="flex flex-col gap-0.5">
+                    {autoSuggestions.slice(0, 4).map((s, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        onClick={() => sendMessage(s.text)}
+                        className="text-left px-2 py-1.5 text-[11px] font-mono rounded-sm hover:bg-muted text-muted-foreground hover:text-foreground transition-colors line-clamp-2"
+                        title={s.preview ? `${s.text} — ${s.preview}` : s.text}
+                      >
+                        {s.text}
+                      </button>
+                    ))}
+                  </div>
+                </PopoverContent>
+              </Popover>
+              <button
+                onClick={refreshSuggestions}
+                disabled={suggestionsRefreshing}
+                className="p-0.5 text-muted-foreground/30 hover:text-foreground transition-colors duration-150 disabled:opacity-30 cursor-pointer"
+                title="refresh suggestions"
+              >
+                <RefreshCw className={`w-3 h-3 ${suggestionsRefreshing ? 'animate-spin' : ''}`} strokeWidth={1.5} />
+              </button>
+            </div>
+          )
         )}
 
         {/* Attached images in the gap (above agent bar, like reference); click to open full-screen viewer */}
