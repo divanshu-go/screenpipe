@@ -787,7 +787,7 @@ export function PrivacySection() {
             </div>
             <Switch
               id="captureClipboard"
-              checked={!Boolean(settings.disableClipboardCapture ?? false)}
+              checked={!(settings.disableClipboardCapture ?? false)}
               onCheckedChange={handleClipboardCaptureToggle}
             />
           </div>

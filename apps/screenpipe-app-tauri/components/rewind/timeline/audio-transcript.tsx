@@ -442,7 +442,7 @@ export function AudioTranscript({
 
 	// Copy full transcript to clipboard (nearby or meeting depending on active tab)
 	const handleCopyTranscript = useCallback(() => {
-		const data = !!activeMeeting ? meetingConversationData : conversationData;
+		const data = activeMeeting ? meetingConversationData : conversationData;
 		if (!data.items.length) return;
 
 		const lines = data.items.map((item) => {
@@ -460,7 +460,7 @@ export function AudioTranscript({
 
 	// Retranscribe: open AI chat with a retranscribe prompt
 	const handleRetranscribe = useCallback(async () => {
-		const data = !!activeMeeting ? meetingConversationData : conversationData;
+		const data = activeMeeting ? meetingConversationData : conversationData;
 		if (!data.items.length) return;
 
 		const timeRange = data.timeRange
@@ -476,7 +476,7 @@ export function AudioTranscript({
 	}, [activeMeeting, meetingConversationData, conversationData]);
 
 	const handleSendToChat = useCallback(async () => {
-		const data = !!activeMeeting ? meetingConversationData : conversationData;
+		const data = activeMeeting ? meetingConversationData : conversationData;
 		if (!data.items.length) {
 			toast({ title: "no transcript data to send", variant: "destructive" });
 			return;
@@ -493,7 +493,7 @@ export function AudioTranscript({
 			? `${data.timeRange.start.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} – ${data.timeRange.end.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
 			: "";
 
-		const label = !!activeMeeting
+		const label = activeMeeting
 			? `meeting transcript (${timeRange})`
 			: `nearby audio (${timeRange})`;
 
@@ -741,7 +741,7 @@ export function AudioTranscript({
 
 			{/* Participants summary */}
 			{(() => {
-				const activeData = !!activeMeeting ? meetingConversationData : conversationData;
+				const activeData = activeMeeting ? meetingConversationData : conversationData;
 				const showSummary = activeData.participants.length > 0 && activeData.timeRange;
 				return showSummary && activeData.timeRange ? (
 					<ParticipantsSummary
@@ -762,7 +762,7 @@ export function AudioTranscript({
 				style={{
 					height: `calc(100% - ${
 						(() => {
-							const activeData = !!activeMeeting ? meetingConversationData : conversationData;
+							const activeData = activeMeeting ? meetingConversationData : conversationData;
 							const hasSummary = activeData.participants.length > 0;
 							if (!hasSummary) return "45px";
 							// Extra space when unnamed speakers exist (hint banner)

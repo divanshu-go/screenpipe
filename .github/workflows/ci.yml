@@ -73,7 +73,11 @@ jobs:
         run: cargo test
 
   test-windows:
-    runs-on: windows-2019
+    # windows-2019 reached end-of-life on the GitHub-hosted runner fleet
+    # (deprecation message in CI logs since mid-2025). Stay on a supported
+    # image so we keep getting security patches and can pin a stable build
+    # toolchain.
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
       - uses: actions/cache@v4

@@ -512,10 +512,6 @@ const AISection = ({
         newModel = "gpt-5.4";
         break;
       case "anthropic":
-        newUrl = "";
-        newModel = "claude-sonnet-4-6";
-        break;
-      case "anthropic":
         newUrl = "https://api.anthropic.com";
         newModel = "claude-sonnet-4-6";
         break;
@@ -955,16 +951,6 @@ const AISection = ({
               { id: "claude-haiku-4-5-20251001", name: "Claude Haiku 4.5", provider: "anthropic" },
             ]);
           }
-          break;
-        }
-
-        case "anthropic": {
-          // Hardcoded model list — Anthropic API models
-          setModels([
-            { id: "claude-opus-4-6", name: "Claude Opus 4.6", provider: "anthropic" },
-            { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.5", provider: "anthropic" },
-            { id: "claude-haiku-4-5-20251001", name: "Claude Haiku 4.5", provider: "anthropic" },
-          ]);
           break;
         }
 

@@ -3,9 +3,12 @@
   "private": true,
   "scripts": {
     "dev": "next dev -p 1420",
-    "test": "bunx vitest run --config vitest.config.ts",
+    "test": "bun run test:vitest && bun run test:bun",
+    "test:vitest": "bunx vitest run --config vitest.config.ts",
+    "test:bun": "bun test lib/utils/redact-pii.test.ts lib/utils/meeting-state.test.ts lib/__tests__/team-crypto.test.ts lib/__tests__/team-api-contract.test.ts components/__tests__/url-detection-benchmark.test.ts lib/hooks/__tests__/timeline-reconnection.test.ts lib/hooks/__tests__/timeline-store-logic.test.ts lib/hooks/__tests__/server-push-old-frames.test.ts lib/hooks/__tests__/window-focus-refresh.test.ts lib/hooks/__tests__/timeline-ui-issues.test.ts lib/events/__tests__/types.test.ts lib/hooks/__tests__/server-poll-logic.test.ts lib/events/__tests__/bus.test.ts",
     "test:watch": "bunx vitest --config vitest.config.ts",
     "test:e2e": "bun run wdio run e2e/wdio.conf.ts",
+    "typecheck": "bunx tsc --noEmit",
     "build": "next build",
     "predev": "bun scripts/pre_build.js",
     "prebuild": "bun scripts/pre_build.js",
