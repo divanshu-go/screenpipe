@@ -93,6 +93,15 @@ pub(crate) async fn delete_time_range_handler(
         }
     }
 
+    // Evict the range from the in-memory hot frame cache. Without this the
+    // /stream/frames WS keeps re-emitting cached entries that point at
+    // mp4/jpeg files we just unlinked — which made the timeline "jump
+    // backward" right after the user clicked delete-last-15-min.
+    state
+        .hot_frame_cache
+        .evict_range(payload.start, payload.end)
+        .await;
+
     Ok(JsonResponse(DeleteTimeRangeResponse {
         frames_deleted: result.frames_deleted,
         ocr_deleted: result.ocr_deleted,
@@ -205,6 +214,13 @@ pub(crate) async fn evict_media_handler(
             }
         }
     }
+
+    // Hot cache holds frame metadata that points at the evicted media files;
+    // drop those entries so streaming consumers don't get 404s on /frames/:id.
+    state
+        .hot_frame_cache
+        .evict_range(payload.start, payload.end)
+        .await;
 
     Ok(JsonResponse(EvictMediaResponse {
         video_chunks_evicted: result.video_chunks_evicted,
