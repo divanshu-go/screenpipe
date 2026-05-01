@@ -148,6 +148,22 @@ export function parsePipeNdjsonToMessages(raw: string): ChatMessage[] {
   function flushAssistant() {
     if (!inAssistantTurn) return;
     const text = currentText.trim();
+    // Trailing prose that arrived after the last toolcall_start (or
+    // when no tool call ever fired) is still sitting in currentText
+    // and was never converted into a content-block. The chat renderer
+    // iterates contentBlocks exclusively when blocks exist, so a
+    // message with content="<long response>" + blocks=[thinking] would
+    // render as just the thinking pill — the prose was on disk but
+    // invisible. Promote the trailing text to a final text block here
+    // so the renderer actually shows it.
+    if (text) {
+      const last = currentBlocks[currentBlocks.length - 1];
+      if (last?.type === "text") {
+        last.text = ((last.text ?? "") + (last.text ? "\n" : "") + text).trim();
+      } else {
+        currentBlocks.push({ type: "text", text });
+      }
+    }
     if (text || currentBlocks.length > 0) {
       messages.push({
         id: `pipe-msg-${messageCounter++}`,
