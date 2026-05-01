@@ -305,17 +305,13 @@ struct BrowsersResponse {
 }
 
 async fn fetch_running_browsers() -> Vec<BrowserSummaryWire> {
-    // Honor the same auth knobs as the rest of the CLI plus the names the
-    // pi-agent's bash sandbox exports. The agent injects
-    // `SCREENPIPE_LOCAL_API_KEY` (and `SCREENPIPE_API_AUTH_KEY` historically),
-    // not `SCREENPIPE_API_KEY` — checking only the latter silently dropped
-    // the auth header for agent-driven `connection list` calls, so the
-    // engine returned 403 and we appended zero browser rows.
-    let auth_token = std::env::var("SCREENPIPE_API_KEY")
-        .ok()
-        .or_else(|| std::env::var("SCREENPIPE_LOCAL_API_KEY").ok())
-        .or_else(|| std::env::var("SCREENPIPE_API_AUTH_KEY").ok())
-        .or_else(read_auth_key_file);
+    // Auth lookup goes through `crate::auth_key::find_api_auth_key` —
+    // the single read-only resolver that knows about the encrypted
+    // SecretStore in db.sqlite, the env-var aliases pi-agent injects,
+    // and the legacy auth.json. Don't open-code another priority chain
+    // here; that's how this query started silently 403'ing in the first
+    // place.
+    let auth_token = crate::auth_key::find_api_auth_key().await;
 
     let client = reqwest::Client::new();
     let mut req = client
@@ -332,13 +328,4 @@ async fn fetch_running_browsers() -> Vec<BrowserSummaryWire> {
         },
         _ => Vec::new(),
     }
-}
-
-fn read_auth_key_file() -> Option<String> {
-    let path = screenpipe_core::paths::default_screenpipe_data_dir().join("auth.json");
-    let body = std::fs::read_to_string(path).ok()?;
-    let v: serde_json::Value = serde_json::from_str(&body).ok()?;
-    v.get("api_key")
-        .and_then(|s| s.as_str())
-        .map(|s| s.to_string())
 }

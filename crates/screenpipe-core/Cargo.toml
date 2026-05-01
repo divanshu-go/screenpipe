@@ -58,6 +58,10 @@ tempfile = "3"
 
 [features]
 default = ["security"]
+# objc's msg_send! emits #[cfg(feature = "cargo-clippy")] gates internally;
+# declaring the feature silences "unexpected cfg" warnings in macOS builds
+# without changing behavior (it's never enabled at compile time).
+cargo-clippy = []
 security = ["dep:regex", "dep:lazy_static"]
 secrets = ["dep:screenpipe-secrets", "dep:sqlx"]
 cloud-sync = [

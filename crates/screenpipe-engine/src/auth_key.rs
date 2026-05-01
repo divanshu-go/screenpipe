@@ -118,3 +118,44 @@ fn read_legacy_auth_json() -> Option<String> {
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
 }
+
+/// Read-only counterpart to `resolve_api_auth_key`. Same priority chain
+/// (env → encrypted SecretStore → legacy file) but does NOT auto-generate
+/// or persist anything when no key is found — returns `None` instead.
+///
+/// Use this from CLI callers that need to *find* the running server's key,
+/// not mint a fresh one. The full resolver auto-generates on miss, which is
+/// correct for the server's startup path but would silently produce a key
+/// that doesn't match the running server's in-memory value when called from
+/// a sibling process.
+pub async fn find_api_auth_key() -> Option<String> {
+    if let Ok(k) = std::env::var("SCREENPIPE_API_KEY") {
+        if !k.is_empty() {
+            return Some(k);
+        }
+    }
+    // Tauri sidecar processes (pi-agent shelling into bash) inherit the
+    // app's env under different names. Honor those too — without this the
+    // agent's `connection list` couldn't authenticate even though the key
+    // was right there.
+    for var in ["SCREENPIPE_LOCAL_API_KEY", "SCREENPIPE_API_AUTH_KEY"] {
+        if let Ok(k) = std::env::var(var) {
+            if !k.is_empty() {
+                return Some(k);
+            }
+        }
+    }
+
+    let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
+    if let Ok(store) = open_secret_store(&data_dir).await {
+        if let Ok(Some(bytes)) = store.get("api_auth_key").await {
+            if let Ok(s) = String::from_utf8(bytes) {
+                if !s.is_empty() {
+                    return Some(s);
+                }
+            }
+        }
+    }
+
+    read_legacy_auth_json()
+}

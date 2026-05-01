@@ -41,8 +41,7 @@ use screenpipe_screen::monitor::list_monitors;
 use serde_json::json;
 use std::{
     env, fs,
-    net::SocketAddr,
-    net::{IpAddr, Ipv4Addr},
+    net::{IpAddr, SocketAddr},
     ops::Deref,
     path::PathBuf,
     sync::Arc,
