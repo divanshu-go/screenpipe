@@ -10,7 +10,7 @@ use screenpipe_db::DatabaseManager;
 
 use screenpipe_audio::audio_manager::AudioManager;
 use screenpipe_core::sync::SyncServiceHandle;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     analytics,
@@ -968,7 +968,12 @@ impl SCServer {
                                     .map(|s| s.eq_ignore_ascii_case("websocket"))
                                     .unwrap_or(false);
                                 if upgrade {
-                                    warn!(
+                                    // Browser extensions / MCP clients reconnect on a fixed
+                                    // interval without holding the auth token, so this fires
+                                    // ~2 880×/day in steady state. The 403 response already
+                                    // tells the caller what's wrong — keep the log line
+                                    // available for debugging but not at WARN.
+                                    debug!(
                                         path = %path,
                                         "api auth: rejected WebSocket upgrade (missing/invalid token; use Cookie screenpipe_auth, Authorization Bearer, or ?token=)"
                                     );
