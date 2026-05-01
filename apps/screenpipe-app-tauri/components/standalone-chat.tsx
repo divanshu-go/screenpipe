@@ -300,6 +300,11 @@ interface Message {
   model?: string;
   provider?: string;
   retryPrompt?: string; // when set, renders a retry CTA on error messages
+  /** True between optimistic enqueue and the moment Pi's drain loop picks
+   *  the prompt up (`agent_start` for this turn). Drives a lighter visual
+   *  treatment so the user can tell at-a-glance which messages are still
+   *  waiting in line vs. already in-flight. Cleared by handleAgentStart. */
+  queued?: boolean;
 }
 
 // Tool icons by name
@@ -1025,7 +1030,12 @@ function MessageContent({ message, onImageClick, onRetry }: { message: Message; 
             return <MarkdownBlock key={`text-${group.key}`} text={group.text} isUser={isUser} />;
           }
           if (group.type === "thinking") {
-            return <ThinkingBlock key={`thinking-${group.key}`} text={group.text} isThinking={group.isThinking} durationMs={group.durationMs} defaultExpanded={!hasText} />;
+            // Always start collapsed. The "thought for Xs" pill is enough
+            // signal that the assistant did chain-of-thought work — auto-
+            // expanding it (the c092166e0 behavior) drew the eye to the
+            // raw reasoning text instead of the actual response and felt
+            // noisy on every message. Click to expand if you want detail.
+            return <ThinkingBlock key={`thinking-${group.key}`} text={group.text} isThinking={group.isThinking} durationMs={group.durationMs} />;
           }
           if (group.type === "tool-group") {
             return <ToolCallGroup key={`tools-${group.key}`} toolCalls={group.toolCalls} defaultExpanded={!hasText} />;
@@ -2950,6 +2960,36 @@ export function StandaloneChat({
             // Don't touch isLoading/isStreaming — pi-mono is still busy
             // processing the followUp turn.
           }
+
+          // The user message tied to this turn just left the queue and is
+          // now in-flight — clear the `queued` flag so the bubble drops
+          // its muted treatment. We match on content text since pi-mono
+          // doesn't echo our optimistic message id back.
+          {
+            const text = (() => {
+              const c = data.message?.content;
+              if (typeof c === "string") return c;
+              if (Array.isArray(c)) {
+                return c
+                  .filter((p: any) => p?.type === "text" && typeof p.text === "string")
+                  .map((p: any) => p.text)
+                  .join("");
+              }
+              return "";
+            })();
+            if (text) {
+              setMessages((prev) => {
+                let cleared = false;
+                return prev.map((m) => {
+                  if (cleared || !m.queued || m.role !== "user" || m.content !== text) {
+                    return m;
+                  }
+                  cleared = true;
+                  return { ...m, queued: false };
+                });
+              });
+            }
+          }
         } else if ((data.type === "message_start" || data.type === "message_end") &&
                    data.message?.role === "assistant" && data.message?.stopReason === "error") {
           // LLM returned an error (credits_exhausted, rate limit, provider error, etc.)
@@ -3682,6 +3722,8 @@ export function StandaloneChat({
     // Local optimistic message + chat-store mirror. Skips assistant placeholder
     // entirely; the new turn's `agent_start` (downstream from the rust queue
     // dequeue) will create one through the existing event flow.
+    // Mark queued=true so the bubble renders with a muted/lighter treatment
+    // until Pi actually starts streaming this turn (cleared in handleAgentStart).
     const newUserMessage: Message = {
       id: Date.now().toString(),
       role: "user",
@@ -3689,6 +3731,7 @@ export function StandaloneChat({
       ...(displayLabel ? { displayContent: displayLabel } : {}),
       ...(pastedImages.length > 0 ? { images: [...pastedImages] } : {}),
       timestamp: Date.now(),
+      queued: true,
     };
     setMessages((prev) => [...prev, newUserMessage]);
     setInput("");
@@ -4662,11 +4705,15 @@ export function StandaloneChat({
                   setEditingMessageId(message.id);
                 }}
                 className={cn(
-                  "relative rounded-xl px-4 py-3 text-sm border overflow-hidden max-w-full",
+                  "relative rounded-xl px-4 py-3 text-sm border overflow-hidden max-w-full transition-opacity",
                   message.role === "user"
                     ? "bg-foreground text-background border-foreground"
                     : "bg-muted/30 border-border/50",
-                  message.role === "user" && !isLoading && editingMessageId !== message.id && "cursor-text"
+                  message.role === "user" && !isLoading && editingMessageId !== message.id && "cursor-text",
+                  // Queued user messages — visually de-emphasised so the eye stays on
+                  // the active turn. Cleared when pi-mono fires message_start for
+                  // this turn (see handler above).
+                  message.queued && "opacity-50 border-dashed"
                 )}
               >
                 {editingMessageId === message.id ? (
@@ -4872,10 +4919,11 @@ export function StandaloneChat({
                   key={p.id}
                   layout
                   initial={{ opacity: 0, x: -6 }}
-                  animate={{ opacity: 0.85, x: 0 }}
+                  animate={{ opacity: 0.55, x: 0 }}
                   exit={{ opacity: 0, x: 6, scale: 0.96 }}
                   transition={{ duration: 0.18 }}
-                  className="group/qcard flex items-center gap-2 px-3 py-2 rounded-md border border-dashed border-border/60 bg-muted/30 text-sm text-muted-foreground hover:border-border hover:bg-muted/50 transition-colors"
+                  whileHover={{ opacity: 0.85 }}
+                  className="group/qcard flex items-center gap-2 px-3 py-2 rounded-md border border-dashed border-border/40 bg-transparent text-sm text-muted-foreground/80 hover:border-border hover:bg-muted/30 transition-colors"
                   title={p.preview.length > 80 ? p.preview : undefined}
                 >
                   <span className="font-mono text-[10px] text-muted-foreground/50 shrink-0 w-4 text-right">
