@@ -139,16 +139,24 @@ export function MeetingNotesSection({
   }, [meetingState.activeMeetingId, fetchPage]);
 
   // Notify host of focus-mode transitions so it can collapse the sidebar.
+  // Only fire on the actual selection edge — depending on
+  // `onFocusModeChange` re-fires this whenever the host's callback
+  // identity changes (e.g. after the user expands the sidebar by hand,
+  // which is exactly the wrong moment to re-collapse it).
+  const onFocusModeChangeRef = useRef(onFocusModeChange);
   useEffect(() => {
-    onFocusModeChange?.(selectedId !== null);
-  }, [selectedId, onFocusModeChange]);
+    onFocusModeChangeRef.current = onFocusModeChange;
+  }, [onFocusModeChange]);
+  useEffect(() => {
+    onFocusModeChangeRef.current?.(selectedId !== null);
+  }, [selectedId]);
 
   // Ensure we exit focus mode if the user navigates away entirely.
   useEffect(() => {
     return () => {
-      onFocusModeChange?.(false);
+      onFocusModeChangeRef.current?.(false);
     };
-  }, [onFocusModeChange]);
+  }, []);
 
   // If selection vanishes (deleted elsewhere), drop selection
   useEffect(() => {

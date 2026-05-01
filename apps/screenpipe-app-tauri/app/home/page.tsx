@@ -196,12 +196,23 @@ function HomeContent() {
   // Ephemeral collapse for focused workflows (e.g. taking notes during
   // a meeting). Captures the user's prior sidebar state on enter and
   // restores it on exit — never persisted to localStorage.
+  //
+  // Stable identity (no deps) so this callback doesn't re-fire the
+  // child's notify-effect every time `sidebarCollapsed` flips. The prior
+  // version had `[sidebarCollapsed]` in its deps, which meant: user
+  // hits Cmd+B in focused-meeting mode → setSidebarCollapsed(false) →
+  // callback recreated → child's "notify on selectedId/onFocusModeChange"
+  // effect re-ran with selectedId still set → setSidebarCollapsed(true).
+  // Net effect: the sidebar slammed shut every time the user tried to
+  // open it during a meeting.
   const sidebarPrevCollapsedRef = useRef<boolean | null>(null);
+  const sidebarCollapsedRef = useRef(sidebarCollapsed);
+  useEffect(() => { sidebarCollapsedRef.current = sidebarCollapsed; }, [sidebarCollapsed]);
   const handleMeetingFocusModeChange = useCallback(
     (focused: boolean) => {
       if (focused) {
         if (sidebarPrevCollapsedRef.current === null) {
-          sidebarPrevCollapsedRef.current = sidebarCollapsed;
+          sidebarPrevCollapsedRef.current = sidebarCollapsedRef.current;
         }
         setSidebarCollapsed(true);
       } else if (sidebarPrevCollapsedRef.current !== null) {
@@ -210,7 +221,7 @@ function HomeContent() {
         setSidebarCollapsed(prev);
       }
     },
-    [sidebarCollapsed],
+    [],
   );
 
   // Cmd+B / Ctrl+B to toggle sidebar
