@@ -78,9 +78,8 @@ impl OwnedBrowser {
              sessions. Use this for: scraping, signups under screenpipe's \
              own accounts, scheduled background tasks, navigating to a public \
              URL the user asked you to open. \
-             Calling eval with a `url` field auto-opens the embedded sidebar \
-             in the user's chat — no separate show/hide call. The `code` field \
-             is JS run in the page; use `return <expr>` to send a value back.",
+             Navigating auto-opens the embedded sidebar in the user's chat — \
+             no separate show/hide call.",
         )
     }
 

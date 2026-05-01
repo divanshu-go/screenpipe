@@ -467,7 +467,7 @@ let DEFAULT_SETTINGS: Settings = {
 			experimentalCoreaudioSystemAudio: false,
 			recordWhileLocked: false,
 			appendTypedTextToMeetingNotes: true,
-			localRetentionEnabled: true,
+			localRetentionEnabled: false,
 			localRetentionDays: 14,
 			localRetentionMode: "media",
 		};

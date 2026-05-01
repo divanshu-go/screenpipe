@@ -9726,7 +9726,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.4.119"
+version = "2.4.120"
 dependencies = [
  "anyhow",
  "arboard",
@@ -10064,6 +10064,7 @@ dependencies = [
  "tracing-appender",
  "tracing-oslog",
  "tracing-subscriber",
+ "url",
  "uuid",
  "windows 0.58.0",
 ]

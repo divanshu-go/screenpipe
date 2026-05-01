@@ -91,6 +91,11 @@ base64 = "0.22.1"
 
 uuid = { version = "1.5.0", features = ["v4"] }
 
+# Used by /connections/browsers/:id/navigate to validate URLs up-front so
+# clients get 400 (client error) on malformed input rather than 502 from
+# the upstream eval transport.
+url = "2"
+
 # Cloud sync utilities
 hostname = "0.4"
 md5 = "0.7"

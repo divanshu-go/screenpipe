@@ -122,13 +122,7 @@ async fn list_connections(State(state): State<ConnectionsState>) -> Json<Value> 
                 "name": b.name(),
                 "icon": b.id(),
                 "category": "browser",
-                "description": format!(
-                    "{}\n\nControl: GET /connections/browsers/{}/status, \
-                     POST /connections/browsers/{}/eval {{\"code\":\"...\",\"url\":\"...\"}}.",
-                    b.description(),
-                    b.id(),
-                    b.id(),
-                ),
+                "description": format_browser_description(b.description(), b.id()),
                 "fields": [],
                 "connected": b.is_ready().await,
             }));
@@ -160,13 +154,7 @@ async fn get_connection(
                 "name": b.name(),
                 "category": "browser",
                 "connected": b.is_ready().await,
-                "description": format!(
-                    "{}\n\nControl: GET /connections/browsers/{}/status, \
-                     POST /connections/browsers/{}/eval {{\"code\":\"...\",\"url\":\"...\"}}.",
-                    b.description(),
-                    b.id(),
-                    b.id(),
-                ),
+                "description": format_browser_description(b.description(), b.id()),
             });
             return (StatusCode::OK, Json(body)).into_response();
         }
@@ -1394,10 +1382,25 @@ async fn browser_status(
 // ---------------------------------------------------------------------------
 // Browser registry — uniform API for every kind of browser the agent can
 // drive. The agent reads `GET /connections/browsers`, picks one by id, and
-// calls `POST /connections/browsers/:id/eval`. Same shape regardless of
+// calls `/navigate`, `/snapshot`, or `/eval`. Same shape regardless of
 // whether the underlying browser is the user's real Chrome (via the
 // extension) or an app-managed owned webview.
 // ---------------------------------------------------------------------------
+
+/// Compose the LLM-facing description for a browser registry entry. Leads
+/// with the high-intent verbs (navigate, snapshot) so an agent reading a
+/// `GET /connections` listing reaches for them before /eval — the
+/// transcript-eaten failure mode of a model writing JS by hand.
+fn format_browser_description(natural_desc: &str, id: &str) -> String {
+    format!(
+        "{natural_desc}\n\n\
+         Control:\n\
+         - POST /connections/browsers/{id}/navigate {{\"url\": \"https://...\"}}  → open a URL.\n\
+         - GET  /connections/browsers/{id}/snapshot                              → accessibility outline of the page (title, url, headings, links, buttons, form fields). Use this to read the page; almost always preferable to writing your own JS.\n\
+         - GET  /connections/browsers/{id}/status                                → ready check.\n\
+         - POST /connections/browsers/{id}/eval     {{\"code\": \"...\"}}            → escape hatch: run JS when navigate + snapshot aren't enough."
+    )
+}
 
 #[derive(Deserialize)]
 struct BrowserEvalBody {
@@ -1441,6 +1444,243 @@ async fn browser_get_status(
         None => (
             StatusCode::NOT_FOUND,
             Json(json!({ "error": format!("no browser registered with id '{id}'") })),
+        ),
+    }
+}
+
+/// POST /connections/browsers/:id/navigate — open `url` in the named browser.
+/// High-level intent verb so the agent doesn't have to know that under the
+/// hood this is `eval(code: "return location.href", url: <target>)`.
+/// Returns `{ "ok": true, "url": <final-url> }` on success.
+#[derive(Deserialize)]
+struct BrowserNavigateBody {
+    url: String,
+    #[serde(default)]
+    timeout_secs: Option<u64>,
+}
+
+async fn browser_run_navigate(
+    State(state): State<ConnectionsState>,
+    Path(id): Path<String>,
+    Json(body): Json<BrowserNavigateBody>,
+) -> (StatusCode, Json<Value>) {
+    // Validate the URL up front so a malformed input returns 400 (client
+    // error), not 502 (the upstream eval transport's catch-all). Same
+    // parser the Tauri shell uses internally — keeps semantics consistent.
+    if let Err(e) = url::Url::parse(&body.url) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "ok": false, "error": format!("invalid url: {e}") })),
+        );
+    }
+
+    let browser = match state.browser_registry.get(&id).await {
+        Some(b) => b,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": format!("no browser registered with id '{id}'") })),
+            );
+        }
+    };
+
+    let timeout = std::time::Duration::from_secs(body.timeout_secs.unwrap_or(30).min(120));
+    // We pass `return location.href` so the response includes the URL the
+    // page actually settled on (after redirects). The user-visible side
+    // effect — the navigation itself — is driven by the `url` argument.
+    // The Tauri eval impl already waits for the page to start loading
+    // before reading; further redirect-stability detection would need a
+    // mutation observer in the page and isn't worth the complexity here.
+    match browser
+        .eval("return location.href", Some(&body.url), timeout)
+        .await
+    {
+        Ok(r) if r.ok => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "url": r.result,
+            })),
+        ),
+        Ok(r) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({ "ok": false, "error": r.error })),
+        ),
+        Err(EvalError::NotConnected) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "ok": false, "error": EvalError::NotConnected.to_string() })),
+        ),
+        Err(e @ EvalError::SendFailed(_)) | Err(e @ EvalError::Disconnected) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({ "ok": false, "error": e.to_string() })),
+        ),
+        Err(e @ EvalError::Timeout(_)) => (
+            StatusCode::GATEWAY_TIMEOUT,
+            Json(json!({ "ok": false, "error": e.to_string() })),
+        ),
+    }
+}
+
+/// JS injected by /snapshot. Walks the live DOM and produces a compact,
+/// accessibility-style outline of the page — the kind of thing the agent
+/// can reason about without writing its own selector-based scraper.
+///
+/// Output: `{ title, url, tree, truncated }`. `tree` is plain text, capped
+/// at MAX_LINES so a giant page doesn't blow the agent's context.
+///
+/// Skip rules: hidden elements (display:none / visibility:hidden / aria-
+/// hidden), script/style/noscript, presentation-only roles, password
+/// inputs (the value field would leak the user's secret), `<label>` (its
+/// text gets duplicated on the associated input — extra noise), anchors
+/// with non-navigable hrefs (`javascript:`, empty, `#`).
+///
+/// Page-load race: if the user calls /snapshot right after /navigate,
+/// `document.readyState` may still be `loading`; we wait up to 5s for it
+/// to flip to interactive/complete before walking the DOM, so the agent
+/// gets the new page's outline rather than `about:blank`.
+const SNAPSHOT_SCRIPT: &str = r#"
+async function waitReady(maxMs) {
+    if (document.readyState !== 'loading') return;
+    await new Promise((resolve) => {
+        let done = false;
+        const finish = () => { if (!done) { done = true; resolve(); } };
+        document.addEventListener('DOMContentLoaded', finish, { once: true });
+        setTimeout(finish, maxMs);
+    });
+}
+await waitReady(5000);
+
+const MAX_LINES = 250;
+const MAX_DEPTH = 8;
+const out = [];
+const interesting = new Set([
+    'h1','h2','h3','h4','h5','h6','a','button','input','textarea','select',
+    'nav','main','article','section','form','fieldset','legend',
+    'summary','dialog','header','footer','aside'
+]);
+const interactiveRoles = new Set([
+    'button','link','checkbox','menuitem','option','radio','switch','tab','textbox','combobox'
+]);
+
+function clip(s, n) {
+    s = (s || '').replace(/\s+/g, ' ').trim();
+    return s.length > n ? s.slice(0, n) + '…' : s;
+}
+
+function navigableHref(el) {
+    const h = el.getAttribute('href');
+    if (!h) return '';
+    const trimmed = h.trim();
+    if (!trimmed) return '';
+    if (trimmed === '#') return '';
+    if (trimmed.toLowerCase().startsWith('javascript:')) return '';
+    return h;
+}
+
+function walk(el, depth) {
+    if (out.length >= MAX_LINES) return true; // signal: caller can stop
+    if (!el || el.nodeType !== 1) return false;
+    const tag = el.tagName.toLowerCase();
+    if (tag === 'script' || tag === 'style' || tag === 'noscript' || tag === 'template') return false;
+    if (el.getAttribute('aria-hidden') === 'true') return false;
+    let style;
+    try { style = getComputedStyle(el); } catch (_) { style = null; }
+    if (style && (style.display === 'none' || style.visibility === 'hidden')) return false;
+    const role = el.getAttribute('role');
+    if (role === 'presentation' || role === 'none') return false;
+    // Password inputs: a row with a value would leak the user's secret.
+    // Skip the input entirely — even an empty-value row implies "there's a
+    // password field here" which is fine, but emitting `el.value` is not.
+    if (tag === 'input' && (el.type === 'password' || el.type === 'hidden')) return false;
+    // <label> duplicates its associated input's text; the input row already
+    // surfaces it via aria-labelledby/innerText. Drop the label rows to
+    // keep the tree compact.
+    if (tag === 'label') {
+        for (const child of el.children) {
+            if (walk(child, depth)) return true;
+        }
+        return false;
+    }
+    const aria = el.getAttribute('aria-label');
+    const isInteractive = interactiveRoles.has(role) || aria;
+    const include = interesting.has(tag) || isInteractive;
+    if (include) {
+        // Anchors without a navigable href aren't useful as links — but
+        // they CAN be interactive (onclick handlers). Surface them as
+        // [button] in that case so the agent knows they're clickable.
+        let tagOrRole;
+        if (tag === 'a') {
+            const h = navigableHref(el);
+            tagOrRole = role || (h ? 'a' : 'button');
+        } else {
+            tagOrRole = role || tag;
+        }
+        let label = aria || '';
+        if (!label) {
+            if (tag === 'input') label = el.getAttribute('placeholder') || el.type || 'input';
+            else if (tag === 'a' || tag === 'button') label = clip(el.innerText, 80);
+            else if (/^h[1-6]$/.test(tag)) label = clip(el.innerText, 120);
+            else label = clip(el.getAttribute('name') || el.getAttribute('title') || '', 60);
+        }
+        const href = tag === 'a' ? navigableHref(el) : '';
+        const isFormField = tag === 'input' || tag === 'textarea' || tag === 'select';
+        const value = isFormField ? clip(el.value, 60) : '';
+        let line = '  '.repeat(Math.min(depth, MAX_DEPTH)) + '[' + tagOrRole + ']';
+        if (label) line += ' ' + clip(label, 100);
+        if (href) line += ' → ' + clip(href, 80);
+        if (value) line += ' = ' + value;
+        out.push(line);
+    }
+    for (const child of el.children) {
+        if (walk(child, depth + 1)) return true; // bubble the stop-signal up
+    }
+    return false;
+}
+walk(document.body, 0);
+
+return {
+    title: document.title || '',
+    url: location.href,
+    tree: out.join('\n'),
+    truncated: out.length >= MAX_LINES
+};
+"#;
+
+/// GET /connections/browsers/:id/snapshot — return a compact accessibility
+/// outline of the current page. Lets the agent answer "what's on the page?"
+/// without writing JS. See SNAPSHOT_SCRIPT for the output shape.
+async fn browser_run_snapshot(
+    State(state): State<ConnectionsState>,
+    Path(id): Path<String>,
+) -> (StatusCode, Json<Value>) {
+    let browser = match state.browser_registry.get(&id).await {
+        Some(b) => b,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": format!("no browser registered with id '{id}'") })),
+            );
+        }
+    };
+
+    let timeout = std::time::Duration::from_secs(15);
+    match browser.eval(SNAPSHOT_SCRIPT, None, timeout).await {
+        Ok(r) if r.ok => (StatusCode::OK, Json(r.result.unwrap_or(json!({})))),
+        Ok(r) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({ "error": r.error })),
+        ),
+        Err(EvalError::NotConnected) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": EvalError::NotConnected.to_string() })),
+        ),
+        Err(e @ EvalError::SendFailed(_)) | Err(e @ EvalError::Disconnected) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({ "error": e.to_string() })),
+        ),
+        Err(e @ EvalError::Timeout(_)) => (
+            StatusCode::GATEWAY_TIMEOUT,
+            Json(json!({ "error": e.to_string() })),
         ),
     }
 }
@@ -1516,6 +1756,8 @@ where
         // (Must be before /:id to avoid conflict with generic integration routes.)
         .route("/browsers", get(list_browsers))
         .route("/browsers/:id/status", get(browser_get_status))
+        .route("/browsers/:id/navigate", post(browser_run_navigate))
+        .route("/browsers/:id/snapshot", get(browser_run_snapshot))
         .route("/browsers/:id/eval", post(browser_run_eval))
         // Legacy single-instance browser routes — deployed extensions
         // (Chrome v0.2.x and v0.3.0) hardcode these. Keep until usage drops.
@@ -1787,6 +2029,119 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    // -- format_browser_description ----------------------------------------
+    //
+    // The description text is the LLM-facing surface that determines whether
+    // the agent reaches for /navigate or open-codes a JS eval. The earlier
+    // version led with /eval and the agents we observed defaulted to writing
+    // JS by hand, then giving up. These tests pin the order and content so a
+    // refactor doesn't silently regress the wording.
+
+    #[test]
+    fn browser_description_leads_with_navigate() {
+        let s = format_browser_description("base", "owned-default");
+        let nav = s.find("/navigate").expect("navigate must appear");
+        let snap = s.find("/snapshot").expect("snapshot must appear");
+        let eval_pos = s.find("/eval").expect("eval must appear");
+        assert!(
+            nav < snap && snap < eval_pos,
+            "navigate → snapshot → eval order regressed: {s}"
+        );
+    }
+
+    #[test]
+    fn browser_description_includes_natural_prefix() {
+        let s = format_browser_description("isolated webview", "x");
+        assert!(s.starts_with("isolated webview"));
+    }
+
+    #[test]
+    fn browser_description_calls_eval_an_escape_hatch() {
+        // If the agent reads /eval as just another option it's free to skip
+        // straight to JS; "escape hatch" makes it explicit that snapshot is
+        // the default for reading the page.
+        let s = format_browser_description("x", "y");
+        assert!(s.contains("escape hatch"), "lost escape-hatch framing: {s}");
+    }
+
+    // -- BrowserNavigateBody URL validation --------------------------------
+
+    #[test]
+    fn navigate_rejects_malformed_url() {
+        // Status code semantics: 400 client error, not 502 from upstream.
+        // Test the parser directly since the route is async + needs state.
+        assert!(url::Url::parse("not a url").is_err());
+        assert!(url::Url::parse("").is_err());
+    }
+
+    #[test]
+    fn navigate_accepts_normal_https_url() {
+        assert!(url::Url::parse("https://en.wikipedia.org/wiki/Giraffe").is_ok());
+    }
+
+    // -- SNAPSHOT_SCRIPT invariants ----------------------------------------
+    //
+    // The script runs in untrusted page context, so it has to be defensive.
+    // We don't have a JS runtime in test, but we can verify the script
+    // text for the safety properties we care about.
+
+    #[test]
+    fn snapshot_script_strips_password_inputs() {
+        // If this regresses, an agent calling /snapshot on a login page
+        // would see the user's password in the response.
+        assert!(
+            SNAPSHOT_SCRIPT.contains("type === 'password'"),
+            "snapshot script no longer guards against password inputs"
+        );
+    }
+
+    #[test]
+    fn snapshot_script_waits_for_dom_ready() {
+        // Snapshot called right after navigate races against the page load.
+        // The script must wait for `DOMContentLoaded` (or readyState change)
+        // before walking the DOM.
+        assert!(
+            SNAPSHOT_SCRIPT.contains("waitReady"),
+            "snapshot script lost the readyState-wait shim"
+        );
+        assert!(SNAPSHOT_SCRIPT.contains("DOMContentLoaded"));
+    }
+
+    #[test]
+    fn snapshot_script_caps_output_size() {
+        // Large pages (e.g. Wikipedia category indexes) would otherwise
+        // blow the agent's context. The cap + truncated flag are part of
+        // the contract.
+        assert!(SNAPSHOT_SCRIPT.contains("MAX_LINES"));
+        assert!(SNAPSHOT_SCRIPT.contains("truncated"));
+    }
+
+    #[test]
+    fn snapshot_script_skips_javascript_hrefs() {
+        // `javascript:` and `#` hrefs aren't navigable; emitting them as
+        // links misleads the agent.
+        assert!(SNAPSHOT_SCRIPT.contains("javascript:"));
+    }
+
+    #[test]
+    fn snapshot_script_skips_aria_hidden() {
+        // ARIA-hidden subtrees are explicitly not part of the accessible
+        // tree — surfacing them defeats the point of the snapshot.
+        assert!(SNAPSHOT_SCRIPT.contains("aria-hidden"));
+    }
+
+    #[test]
+    fn snapshot_script_returns_structured_payload() {
+        // Contract with the agent: { title, url, tree, truncated }. The
+        // SKILL.md examples and any pipe code rely on these field names.
+        for field in ["title", "url", "tree", "truncated"] {
+            assert!(
+                SNAPSHOT_SCRIPT.contains(field),
+                "snapshot script lost field '{field}' from return shape"
+            );
         }
     }
 }

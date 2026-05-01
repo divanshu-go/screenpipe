@@ -731,13 +731,17 @@ pub async fn auto_start_retention(app: &AppHandle) {
         _ => return,
     };
 
-    // Default to enabled+media for users on stores that haven't seen the
-    // setting yet — matches the default in createDefaultSettingsObject.
+    // Off until explicitly enabled. Legacy stores that pre-date this field
+    // must NOT silently start deleting media — the retention-settings UI
+    // reads `localRetentionEnabled ?? false`, so the toggle visibly shows
+    // "off" for those users; defaulting to `true` here would run retention
+    // behind their back. Users who want auto-delete enable it via Settings →
+    // Storage, which writes the field to the store.
     let enabled = settings
         .extra
         .get("localRetentionEnabled")
         .and_then(|v| v.as_bool())
-        .unwrap_or(true);
+        .unwrap_or(false);
 
     if !enabled {
         return;
