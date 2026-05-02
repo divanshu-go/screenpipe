@@ -7,10 +7,16 @@
 
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "linux")]
+mod linux_lines;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "macos")]
+mod macos_lines;
 #[cfg(target_os = "windows")]
 mod windows;
+#[cfg(target_os = "windows")]
+mod windows_lines;
 
 pub mod cache;
 pub mod enhanced_mode_cache;
@@ -33,6 +39,25 @@ pub struct NodeBounds {
     pub top: f32,
     pub width: f32,
     pub height: f32,
+}
+
+/// One visual line within a multi-line text node.
+///
+/// Stored alongside [`AccessibilityTreeNode::lines`] when the platform AX
+/// implementation can resolve per-line geometry (macOS `AXBoundsForRange`,
+/// Windows UIA `TextRange.GetBoundingRectangles`, Linux AT-SPI
+/// `getRangeExtents` over `BOUNDARY_LINE_START` segments).
+///
+/// `char_start` / `char_count` index into [`AccessibilityTreeNode::text`]
+/// using **char counts** (Unicode scalar values), not byte offsets — the same
+/// units `narrow_bbox_to_needle` uses on the search side. Bounds use the same
+/// 0-1 normalized monitor-relative coords as the parent node's bounds, so the
+/// frontend overlay can render line rects directly without re-projection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LineSpan {
+    pub char_start: u32,
+    pub char_count: u32,
+    pub bounds: NodeBounds,
 }
 
 /// A single node extracted from the accessibility tree, preserving role and hierarchy.
@@ -66,6 +91,20 @@ pub struct AccessibilityTreeNode {
     /// is the proper fix for those cases — see issue #2436.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub on_screen: Option<bool>,
+
+    /// Per-visual-line bounds for multi-line text nodes (paragraphs).
+    ///
+    /// Populated only when the platform walker resolves line-level geometry
+    /// AND the node looks multi-line (height > ~1.5× a single text line).
+    /// `None` for single-line nodes, narrow runs of text, or platforms that
+    /// don't expose the underlying AX text-range APIs.
+    ///
+    /// Search uses these to highlight a tight rect around the matching word
+    /// instead of painting the whole paragraph yellow — `narrow_bbox_to_needle`
+    /// can safely narrow within a single-line LineSpan but not within a
+    /// multi-line block bbox.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub lines: Option<Vec<LineSpan>>,
 
     // --- Automation properties (all Optional, filled per-platform) ---
     /// Stable unique identifier for targeting elements.
@@ -144,6 +183,7 @@ impl AccessibilityTreeNode {
             is_keyboard_focusable: None,
             accelerator_key: None,
             access_key: None,
+            lines: None,
         }
     }
 }
@@ -187,6 +227,70 @@ pub fn rects_intersect(
     let elem_right = elem_x + elem_w;
     let elem_bot = elem_y + elem_h;
     elem_x < win_right && elem_right > win_x && elem_y < win_bot && elem_bot > win_y
+}
+
+/// Decide whether a node's text-shape warrants per-line bbox capture.
+///
+/// Mirrors the heuristic in `find_matching_a11y_positions::narrow_bbox_to_needle`:
+/// a node is "multi-line" when its character count exceeds the single-line
+/// capacity implied by the bounds aspect ratio. `min_height_ratio ≥ 1.0`
+/// adds a safety factor — `1.5` requires text to be ~1.5× wider than one
+/// line worth, which excludes borderline single-line wraps.
+///
+/// Returns `false` for empty text, zero-area bounds, or single-line content.
+pub fn node_looks_multiline(text: &str, bounds: &NodeBounds, min_height_ratio: f32) -> bool {
+    let text_len = text.chars().count();
+    if text_len == 0 || bounds.width <= 0.0 || bounds.height <= 0.0 {
+        return false;
+    }
+    // Same constants as `narrow_bbox_to_needle`: avg proportional-font char
+    // width ≈ 0.55 × line height, with 1.6× slack for variable fonts.
+    let aspect = bounds.width / bounds.height;
+    let chars_per_line_est = (aspect / 0.55) * 1.6;
+    if chars_per_line_est <= 0.0 {
+        return false;
+    }
+    (text_len as f32) > chars_per_line_est * min_height_ratio.max(1.0)
+}
+
+/// Per-frame budget tracker for parameterized AX calls during line capture.
+///
+/// Platform walkers call `try_consume(n)` before issuing each batch of n calls;
+/// the tracker returns `false` once the time or call budget is exhausted, at
+/// which point the walker bails out and stores paragraph-only bbox for the
+/// remaining nodes (graceful fallback, not an error).
+pub struct LineBudget {
+    calls_used: usize,
+    calls_max: usize,
+    deadline: std::time::Instant,
+}
+
+impl LineBudget {
+    pub fn new(calls_max: usize, time_budget: Duration) -> Self {
+        Self {
+            calls_used: 0,
+            calls_max,
+            deadline: std::time::Instant::now() + time_budget,
+        }
+    }
+
+    /// Check whether `n` more calls fit in both the per-frame call cap and
+    /// the time budget. Returns `true` and reserves the calls; returns
+    /// `false` if the budget is exhausted.
+    pub fn try_consume(&mut self, n: usize) -> bool {
+        if self.calls_used.saturating_add(n) > self.calls_max {
+            return false;
+        }
+        if std::time::Instant::now() >= self.deadline {
+            return false;
+        }
+        self.calls_used += n;
+        true
+    }
+
+    pub fn calls_used(&self) -> usize {
+        self.calls_used
+    }
 }
 
 /// Why the tree walk stopped early (if it did).
@@ -310,6 +414,24 @@ pub struct TreeWalkerConfig {
     pub max_nodes_override: Option<usize>,
     /// Per-walk override for `walk_timeout` (set by adaptive budget, takes precedence).
     pub walk_timeout_override: Option<Duration>,
+
+    /// Capture per-line geometry for multi-line text nodes (paragraphs).
+    /// Disable to skip the extra parameterized AX calls and fall back to
+    /// paragraph-only bbox capture (the pre-2026-05 behavior).
+    pub enable_line_bounds: bool,
+    /// Cap on parameterized AX calls per multi-line node — prevents pathological
+    /// long paragraphs (terminal scrollback, generated content) from blowing the
+    /// per-frame budget. Default: 30 lines per paragraph.
+    pub line_bounds_max_calls_per_node: usize,
+    /// Cap on parameterized AX calls across the whole walk. Once hit, line
+    /// capture aborts; remaining nodes get paragraph-only bbox. Default: 300.
+    pub line_bounds_max_calls_per_frame: usize,
+    /// Wall-clock budget for line capture across the whole walk. Default: 400ms.
+    pub line_bounds_time_budget: Duration,
+    /// A node's height must exceed this multiple of `line_height_est = width × 0.55 / 1.6`
+    /// before line capture runs — single-line text already highlights tightly via
+    /// the existing `narrow_bbox_to_needle` path. Default: 1.5.
+    pub line_bounds_min_height_ratio: f32,
 }
 
 impl Default for TreeWalkerConfig {
@@ -330,6 +452,11 @@ impl Default for TreeWalkerConfig {
             ignore_incognito_windows: true,
             max_nodes_override: None,
             walk_timeout_override: None,
+            enable_line_bounds: true,
+            line_bounds_max_calls_per_node: 30,
+            line_bounds_max_calls_per_frame: 300,
+            line_bounds_time_budget: Duration::from_millis(400),
+            line_bounds_min_height_ratio: 1.5,
         }
     }
 }
@@ -604,5 +731,187 @@ mod tests {
         // Real-world: AXScrollArea reporting its full content extent
         // larger than its visible viewport.
         assert!(rects_intersect(0.0, 0.0, 5000.0, 5000.0, wx, wy, ww, wh));
+    }
+
+    // ---------------------------------------------------------------
+    // node_looks_multiline — capture-time gate for per-line geometry
+    // ---------------------------------------------------------------
+
+    /// Build a NodeBounds at (0, 0) with the given width and height — the
+    /// position doesn't affect aspect-ratio reasoning so we keep it constant.
+    fn bb(w: f32, h: f32) -> NodeBounds {
+        NodeBounds {
+            left: 0.0,
+            top: 0.0,
+            width: w,
+            height: h,
+        }
+    }
+
+    #[test]
+    fn multiline_short_label_in_wide_box_is_single_line() {
+        // "ok" in a 100×20 box: width / 0.55 * 1.6 ≈ 14.5 chars per line. 2 chars fits.
+        assert!(!node_looks_multiline("ok", &bb(0.1, 0.02), 1.5));
+    }
+
+    #[test]
+    fn multiline_paragraph_in_narrow_tall_box_is_multiline() {
+        // Long paragraph: ~400 chars in a near-square bounds → clearly multi-line.
+        let para = "a".repeat(400);
+        assert!(node_looks_multiline(&para, &bb(0.5, 0.4), 1.5));
+    }
+
+    #[test]
+    fn multiline_borderline_at_safety_factor_1_5() {
+        // Aspect 5.0 → chars_per_line_est ≈ 14.5. With ratio 1.5 → threshold ≈ 21.7.
+        // 22 chars: just over → multi-line. 18 chars: under → single.
+        let bounds = bb(0.5, 0.1); // aspect = 5
+        assert!(node_looks_multiline(&"x".repeat(22), &bounds, 1.5));
+        assert!(!node_looks_multiline(&"x".repeat(18), &bounds, 1.5));
+    }
+
+    #[test]
+    fn multiline_empty_text_returns_false() {
+        assert!(!node_looks_multiline("", &bb(0.5, 0.1), 1.5));
+    }
+
+    #[test]
+    fn multiline_zero_size_bounds_returns_false() {
+        assert!(!node_looks_multiline("hello world", &bb(0.0, 0.1), 1.5));
+        assert!(!node_looks_multiline("hello world", &bb(0.5, 0.0), 1.5));
+    }
+
+    #[test]
+    fn multiline_min_ratio_clamped_to_one() {
+        // ratio of 0.5 doesn't make sense; should clamp to 1.0 so threshold
+        // becomes the bare aspect-ratio capacity.
+        let bounds = bb(0.5, 0.1); // chars_per_line_est ≈ 14.5
+        // 16 chars > 14.5 → should be multi-line even with ratio < 1.
+        assert!(node_looks_multiline(&"x".repeat(16), &bounds, 0.5));
+    }
+
+    #[test]
+    fn multiline_cjk_no_whitespace_still_evaluated() {
+        // CJK chars count via Unicode scalar values; a long paragraph of kanji
+        // with no whitespace should still be detected as multi-line.
+        let cjk: String = "漢字".repeat(50); // 100 chars total
+        assert!(node_looks_multiline(&cjk, &bb(0.4, 0.4), 1.5));
+    }
+
+    // ---------------------------------------------------------------
+    // LineBudget — per-frame call/time budget for line capture
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn budget_consumes_calls_until_cap() {
+        let mut b = LineBudget::new(10, Duration::from_secs(1));
+        assert!(b.try_consume(3));
+        assert!(b.try_consume(5));
+        // 8 used, requesting 5 more → over cap, denied
+        assert!(!b.try_consume(5));
+        // Smaller request still under cap should succeed
+        assert!(b.try_consume(2));
+        assert_eq!(b.calls_used(), 10);
+    }
+
+    #[test]
+    fn budget_zero_calls_always_fits_until_time_out() {
+        let mut b = LineBudget::new(100, Duration::from_secs(1));
+        // Zero-call requests don't consume — but they still pass the deadline check.
+        assert!(b.try_consume(0));
+        assert_eq!(b.calls_used(), 0);
+    }
+
+    #[test]
+    fn budget_denies_after_deadline() {
+        let mut b = LineBudget::new(1000, Duration::from_millis(5));
+        std::thread::sleep(Duration::from_millis(10));
+        // Clock has passed; even a tiny request should be denied.
+        assert!(!b.try_consume(1));
+    }
+
+    #[test]
+    fn budget_exact_cap_succeeds_then_denies_one_more() {
+        let mut b = LineBudget::new(10, Duration::from_secs(1));
+        assert!(b.try_consume(10));
+        assert!(!b.try_consume(1));
+    }
+
+    // ---------------------------------------------------------------
+    // LineSpan / AccessibilityTreeNode — serde round-trip and back-compat
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn node_without_lines_round_trips_as_before() {
+        // Old frames captured before line-bounds shipped: the JSON has no
+        // "lines" key. Deserializing must succeed and `lines` must be None.
+        let json = r#"{"role":"AXStaticText","text":"hello","depth":3}"#;
+        let node: AccessibilityTreeNode = serde_json::from_str(json).expect("parse legacy node");
+        assert_eq!(node.role, "AXStaticText");
+        assert_eq!(node.text, "hello");
+        assert!(node.lines.is_none());
+    }
+
+    #[test]
+    fn node_with_lines_round_trips() {
+        let mut node = AccessibilityTreeNode::new(
+            "AXStaticText".into(),
+            "two\nlines".into(),
+            0,
+            Some(NodeBounds {
+                left: 0.0,
+                top: 0.0,
+                width: 0.5,
+                height: 0.1,
+            }),
+        );
+        node.lines = Some(vec![
+            LineSpan {
+                char_start: 0,
+                char_count: 3,
+                bounds: NodeBounds {
+                    left: 0.0,
+                    top: 0.0,
+                    width: 0.5,
+                    height: 0.05,
+                },
+            },
+            LineSpan {
+                char_start: 4,
+                char_count: 5,
+                bounds: NodeBounds {
+                    left: 0.0,
+                    top: 0.05,
+                    width: 0.5,
+                    height: 0.05,
+                },
+            },
+        ]);
+        let json = serde_json::to_string(&node).expect("serialize");
+        assert!(json.contains("\"lines\""));
+        let back: AccessibilityTreeNode = serde_json::from_str(&json).expect("deserialize");
+        let lines = back.lines.expect("lines preserved");
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].char_start, 0);
+        assert_eq!(lines[1].char_count, 5);
+    }
+
+    #[test]
+    fn node_lines_omitted_from_json_when_none() {
+        // skip_serializing_if = "Option::is_none" should keep the field out
+        // of the wire format for legacy single-line nodes.
+        let node = AccessibilityTreeNode::new(
+            "AXStaticText".into(),
+            "hello".into(),
+            0,
+            Some(NodeBounds {
+                left: 0.0,
+                top: 0.0,
+                width: 0.5,
+                height: 0.05,
+            }),
+        );
+        let json = serde_json::to_string(&node).expect("serialize");
+        assert!(!json.contains("\"lines\""));
     }
 }

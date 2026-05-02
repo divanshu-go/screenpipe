@@ -588,6 +588,7 @@ fn extract_text_from_tree(
                             trimmed,
                             depth,
                             norm_bounds.clone(),
+                            on_screen,
                         ));
                     }
                 }

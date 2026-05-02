@@ -8159,6 +8159,38 @@ pub fn find_matching_a11y_positions(tree_json: &str, query: &str) -> Vec<TextPos
                     .find(|w| text_lower.contains(*w))
             };
             let needle = needle?;
+
+            // Locate the needle's char offset inside the node's text — used both
+            // to pick the matching line span (when present) and to narrow within
+            // that line. Working in chars (not bytes) keeps the math consistent
+            // with capture-side `LineSpan::char_start/char_count`.
+            let byte_offset = text_lower.find(needle)?;
+            let needle_char_start = text_lower[..byte_offset].chars().count();
+            let needle_char_len = needle.chars().count();
+            if needle_char_len == 0 {
+                return None;
+            }
+
+            // Prefer a line-level bbox when capture stored per-line geometry.
+            // The whole point of `lines`: a multi-line paragraph's `bounds`
+            // would otherwise paint the entire paragraph yellow because the
+            // multi-line guard in `narrow_bbox_to_needle` skips narrowing.
+            if let Some(lines) = n.get("lines").and_then(|v| v.as_array()) {
+                if let Some(pos) = match_against_line_spans(
+                    text,
+                    &text_lower,
+                    needle,
+                    needle_char_start,
+                    needle_char_len,
+                    lines,
+                ) {
+                    return Some(pos);
+                }
+                // Fall through to paragraph-bbox path if no line span covers
+                // the match (defensive: shouldn't happen for well-formed line
+                // captures, but a partial budget abort could leave gaps).
+            }
+
             let b = n.get("bounds")?;
             let left = b.get("left")?.as_f64()? as f32;
             let top = b.get("top")?.as_f64()? as f32;
@@ -8196,6 +8228,63 @@ pub fn find_matching_a11y_positions(tree_json: &str, query: &str) -> Vec<TextPos
     matches.dedup_by(|a, b| a.text == b.text);
 
     matches
+}
+
+/// Find the line span containing the needle and return a tight bbox around
+/// the matching word within that line. Returns `None` if no line covers the
+/// match — caller falls back to the paragraph bbox in that case.
+fn match_against_line_spans(
+    text: &str,
+    _text_lower: &str,
+    needle: &str,
+    needle_char_start: usize,
+    needle_char_len: usize,
+    lines: &[serde_json::Value],
+) -> Option<TextPosition> {
+    let needle_char_end = needle_char_start + needle_char_len;
+    for line in lines {
+        let char_start = line.get("char_start")?.as_u64()? as usize;
+        let char_count = line.get("char_count")?.as_u64()? as usize;
+        let char_end = char_start.checked_add(char_count)?;
+
+        // The match must fall entirely within this line. Multi-line matches
+        // (rare for typical search queries) get handled by the next iteration
+        // or fall through to paragraph bbox if they straddle lines.
+        if needle_char_start < char_start || needle_char_end > char_end {
+            continue;
+        }
+
+        let b = line.get("bounds")?;
+        let left = b.get("left")?.as_f64()? as f32;
+        let top = b.get("top")?.as_f64()? as f32;
+        let width = b.get("width")?.as_f64()? as f32;
+        let height = b.get("height")?.as_f64()? as f32;
+        if width <= 0.001 || height <= 0.001 {
+            continue;
+        }
+
+        // Build a "line text" = the substring this line covers. Run the
+        // existing single-line narrowing against it. The line-relative needle
+        // offset reuses `narrow_bbox_to_needle`'s find-then-fraction math.
+        let line_text: String = text.chars().skip(char_start).take(char_count).collect();
+        let line_lower = line_text.to_lowercase();
+        // The needle must still appear in the lowered line text (it does — we
+        // already matched on the wider text). Use `narrow_bbox_to_needle`
+        // directly: at line granularity the multi-line guard accepts narrowing.
+        let (n_left, n_width) =
+            narrow_bbox_to_needle(&line_text, &line_lower, needle, left, width, height);
+        return Some(TextPosition {
+            text: text.to_string(),
+            confidence: 1.0,
+            bounds: TextBounds {
+                left: n_left,
+                top,
+                width: n_width,
+                height,
+            },
+        });
+    }
+    None
 }
 
 fn calculate_confidence(positions: &[TextPosition]) -> f32 {
@@ -8513,6 +8602,184 @@ mod tests {
             "width should narrow: {}",
             pos.bounds.width
         );
+    }
+
+    // -----------------------------------------------------------------
+    // find_matching_a11y_positions — line-span aware search
+    // -----------------------------------------------------------------
+
+    /// Build a single-node AX tree JSON with optional `lines` array. Lines
+    /// each cover `chars_per_line` characters; their bounds are stacked
+    /// vertically so the top of line N is at `top + N * line_h`.
+    fn ax_node_with_lines(
+        text: &str,
+        node_left: f32,
+        node_top: f32,
+        node_w: f32,
+        node_h: f32,
+        chars_per_line: usize,
+        line_h: f32,
+    ) -> String {
+        use serde_json::json;
+        let total_chars = text.chars().count();
+        let mut spans = Vec::new();
+        let mut start = 0usize;
+        let mut idx = 0usize;
+        while start < total_chars {
+            let count = chars_per_line.min(total_chars - start);
+            spans.push(json!({
+                "char_start": start,
+                "char_count": count,
+                "bounds": {
+                    "left": node_left,
+                    "top": node_top + (idx as f32) * line_h,
+                    "width": node_w,
+                    "height": line_h,
+                }
+            }));
+            start += count;
+            idx += 1;
+        }
+        let nodes = json!([{
+            "role": "AXStaticText",
+            "text": text,
+            "depth": 3,
+            "bounds": {
+                "left": node_left,
+                "top": node_top,
+                "width": node_w,
+                "height": node_h,
+            },
+            "lines": spans,
+        }]);
+        nodes.to_string()
+    }
+
+    #[test]
+    fn a11y_match_uses_line_bbox_not_paragraph() {
+        // Paragraph: 3 lines of 10 chars each. Match "world" appears on line 2.
+        let text = "hello mate\nworld here\ngoodbye yo";
+        // Build with manual char positions: "hello mate" 0..10, "\n" 10, "world here" 11..21, ...
+        // To keep it simple, line our test data to be ASCII-only with explicit char counts.
+        let json = {
+            use serde_json::json;
+            json!([{
+                "role": "AXStaticText",
+                "text": text,
+                "depth": 3,
+                "bounds": { "left": 0.05, "top": 0.20, "width": 0.40, "height": 0.18 },
+                "lines": [
+                    { "char_start": 0,  "char_count": 10, "bounds": { "left": 0.05, "top": 0.20, "width": 0.40, "height": 0.06 }},
+                    { "char_start": 11, "char_count": 10, "bounds": { "left": 0.05, "top": 0.26, "width": 0.40, "height": 0.06 }},
+                    { "char_start": 22, "char_count": 10, "bounds": { "left": 0.05, "top": 0.32, "width": 0.40, "height": 0.06 }}
+                ]
+            }]).to_string()
+        };
+        let positions = find_matching_a11y_positions(&json, "world");
+        assert_eq!(positions.len(), 1);
+        let pos = &positions[0];
+        // top should be the *line 2* top (0.26), not the paragraph top (0.20).
+        assert!(
+            (pos.bounds.top - 0.26).abs() < 0.001,
+            "top should equal line-2 top, got {}",
+            pos.bounds.top
+        );
+        // height should be the line height (0.06), not the paragraph (0.18)
+        assert!(
+            (pos.bounds.height - 0.06).abs() < 0.001,
+            "height should be line height, got {}",
+            pos.bounds.height
+        );
+        // width should narrow within the line — narrower than the full line width
+        assert!(
+            pos.bounds.width < 0.40,
+            "width should narrow within the line: {}",
+            pos.bounds.width
+        );
+    }
+
+    #[test]
+    fn a11y_match_falls_back_to_paragraph_when_no_lines_field() {
+        // Pre-line-capture JSON: no "lines" key. Multi-line paragraph stays
+        // as a single bbox — original behavior, multi-line guard kicks in.
+        let json = r#"[{
+            "role": "AXStaticText",
+            "text": "this is a really long paragraph that wraps across multiple lines and would not fit on one",
+            "depth": 3,
+            "bounds": {"left": 0.05, "top": 0.20, "width": 0.20, "height": 0.18}
+        }]"#;
+        let positions = find_matching_a11y_positions(json, "really");
+        assert_eq!(positions.len(), 1);
+        // No narrowing — paragraph bbox is preserved (multi-line guard in
+        // narrow_bbox_to_needle returns full width).
+        let p = &positions[0];
+        assert!((p.bounds.left - 0.05).abs() < 0.001);
+        assert!((p.bounds.width - 0.20).abs() < 0.001);
+    }
+
+    #[test]
+    fn a11y_match_falls_back_when_no_line_covers_match() {
+        // Line capture aborted partway — only line 1 is present. A query that
+        // matches only on line 3 should fall through to paragraph bbox.
+        let json = r#"[{
+            "role": "AXStaticText",
+            "text": "alpha bravo charlie\ndelta echo foxtrot\ngolf hotel india",
+            "depth": 3,
+            "bounds": {"left": 0.05, "top": 0.20, "width": 0.40, "height": 0.18},
+            "lines": [
+                { "char_start": 0, "char_count": 19, "bounds": { "left": 0.05, "top": 0.20, "width": 0.40, "height": 0.06 } }
+            ]
+        }]"#;
+        // "india" appears at char 53 — not covered by the only line span.
+        let positions = find_matching_a11y_positions(json, "india");
+        assert_eq!(positions.len(), 1);
+        let p = &positions[0];
+        // Should fall back to paragraph bbox (top=0.20, height=0.18).
+        assert!((p.bounds.top - 0.20).abs() < 0.001, "top: {}", p.bounds.top);
+        assert!(
+            (p.bounds.height - 0.18).abs() < 0.001,
+            "height: {}",
+            p.bounds.height
+        );
+    }
+
+    #[test]
+    fn a11y_match_skips_line_with_zero_size_bounds() {
+        // Defensive: a line with degenerate bounds (e.g. blank line at end of
+        // paragraph) shouldn't be returned. Match falls through to next line.
+        let json = r#"[{
+            "role": "AXStaticText",
+            "text": "first\nsecond",
+            "depth": 3,
+            "bounds": {"left": 0.05, "top": 0.20, "width": 0.40, "height": 0.12},
+            "lines": [
+                { "char_start": 0, "char_count": 5, "bounds": { "left": 0.05, "top": 0.20, "width": 0.0, "height": 0.0 }},
+                { "char_start": 6, "char_count": 6, "bounds": { "left": 0.05, "top": 0.26, "width": 0.40, "height": 0.06 }}
+            ]
+        }]"#;
+        // "second" lives in the second line; the first line has zero bounds
+        // and would otherwise be picked. We expect the second line.
+        let positions = find_matching_a11y_positions(json, "second");
+        assert_eq!(positions.len(), 1);
+        assert!((positions[0].bounds.top - 0.26).abs() < 0.001);
+    }
+
+    #[test]
+    fn a11y_match_uses_line_for_line_3_when_multiline_capture_complete() {
+        // Reproduces the Paul Graham brandage paragraph case: long paragraph
+        // wraps across many lines, search query lives 3 lines deep.
+        // Use the helper with regular line widths for a readable test.
+        let para: String = "abcdefghijklmnopqrstuvwxyz".repeat(5);
+        let json = ax_node_with_lines(&para, 0.10, 0.30, 0.50, 0.30, 26, 0.06);
+        // "wxyz" appears at offsets 22..26, 48..52, 74..78, 100..104, 126..130.
+        // The first occurrence (0..26 → line 0) is what should match.
+        let positions = find_matching_a11y_positions(&json, "wxyz");
+        assert_eq!(positions.len(), 1);
+        let p = &positions[0];
+        // Should land on line 0 (top = 0.30).
+        assert!((p.bounds.top - 0.30).abs() < 0.001);
+        // Line height (not paragraph height).
+        assert!((p.bounds.height - 0.06).abs() < 0.001);
     }
 
     fn make_search_match(

@@ -16,9 +16,10 @@
 //! - Enable with: `gsettings set org.gnome.desktop.interface toolkit-accessibility true`
 
 use super::{
-    AccessibilityTreeNode, NodeBounds, SkipReason, TreeSnapshot, TreeWalkResult, TreeWalkerConfig,
-    TreeWalkerPlatform, TruncationReason,
+    AccessibilityTreeNode, LineBudget, LineSpan, NodeBounds, SkipReason, TreeSnapshot,
+    TreeWalkResult, TreeWalkerConfig, TreeWalkerPlatform, TruncationReason,
 };
+use crate::tree::linux_lines::{self, AtspiRef, NormalizeRefs};
 use anyhow::{Context, Result};
 use chrono::Utc;
 use std::cell::UnsafeCell;
@@ -473,11 +474,20 @@ struct WalkState {
     window_y: f64,
     window_w: f64,
     window_h: f64,
+    /// Monitor-relative coords for normalizing per-line bounds.
+    monitor_x: f64,
+    monitor_y: f64,
+    monitor_w: f64,
+    monitor_h: f64,
     /// User-configured ignored window patterns (lowercase) for filtering browser
     /// extension popups whose DocumentWeb name matches an ignored keyword.
     ignored_windows_lower: Vec<String>,
     /// Set to true when a browser extension popup matching an ignored pattern is detected.
     hit_ignored_extension: bool,
+    /// Per-frame budget for AT-SPI Text-interface calls used by line capture.
+    line_budget: Option<LineBudget>,
+    line_max_calls_per_node: usize,
+    line_min_height_ratio: f32,
 }
 
 impl WalkState {
@@ -497,12 +507,40 @@ impl WalkState {
             window_y: 0.0,
             window_w: 0.0,
             window_h: 0.0,
+            monitor_x: config.monitor_x,
+            monitor_y: config.monitor_y,
+            monitor_w: config.monitor_width,
+            monitor_h: config.monitor_height,
             ignored_windows_lower: config
                 .ignored_windows
                 .iter()
                 .map(|s| s.to_lowercase())
                 .collect(),
             hit_ignored_extension: false,
+            line_budget: if config.enable_line_bounds {
+                Some(LineBudget::new(
+                    config.line_bounds_max_calls_per_frame,
+                    config.line_bounds_time_budget,
+                ))
+            } else {
+                None
+            },
+            line_max_calls_per_node: config.line_bounds_max_calls_per_node,
+            line_min_height_ratio: config.line_bounds_min_height_ratio,
+        }
+    }
+
+    /// Snapshot the geometry refs needed to normalize per-line extents.
+    fn normalize_refs(&self) -> NormalizeRefs {
+        NormalizeRefs {
+            monitor_x: self.monitor_x,
+            monitor_y: self.monitor_y,
+            monitor_w: self.monitor_w,
+            monitor_h: self.monitor_h,
+            window_x: self.window_x,
+            window_y: self.window_y,
+            window_w: self.window_w,
+            window_h: self.window_h,
         }
     }
 
@@ -635,14 +673,20 @@ fn extract_text(
         }
         if let Some(text) = get_text_content(conn, aref) {
             append_text(&mut state.text_buffer, &text);
+            let trimmed = text.trim().to_string();
             let mut node = AccessibilityTreeNode::new(
                 role_str.to_string(),
-                text.trim().to_string(),
+                trimmed.clone(),
                 depth.min(255) as u8,
-                bounds,
+                bounds.clone(),
             );
             node.on_screen = on_screen;
             fill_atspi_state(&mut node, conn, aref);
+            // Multi-line Entry / Text widgets (textareas, code editors) get
+            // per-line bounds so search highlights pinpoint the matched word.
+            // ROLE_TEXT (61) is the typical multi-line case; ROLE_ENTRY (79)
+            // is usually single-line but harmless to gate via the heuristic.
+            node.lines = capture_lines_for_node(conn, aref, &trimmed, &bounds, on_screen, state);
             state.nodes.push(node);
             return;
         }
@@ -652,14 +696,16 @@ fn extract_text(
     if matches!(role, 29 | 73 | 116) {
         if let Some(text) = get_text_content(conn, aref) {
             append_text(&mut state.text_buffer, &text);
+            let trimmed = text.trim().to_string();
             let mut node = AccessibilityTreeNode::new(
                 role_str.to_string(),
-                text.trim().to_string(),
+                trimmed.clone(),
                 depth.min(255) as u8,
-                bounds,
+                bounds.clone(),
             );
             node.on_screen = on_screen;
             fill_atspi_state(&mut node, conn, aref);
+            node.lines = capture_lines_for_node(conn, aref, &trimmed, &bounds, on_screen, state);
             state.nodes.push(node);
             return;
         }
@@ -695,6 +741,36 @@ fn extract_text(
         fill_atspi_state(&mut node, conn, aref);
         state.nodes.push(node);
     }
+}
+
+/// Capture per-visual-line bounds for an AT-SPI text node when the node
+/// looks multi-line and the per-frame budget still has headroom. Mirrors the
+/// macOS helper of the same name — see `tree/macos.rs::capture_lines_for_node`
+/// for the rationale.
+fn capture_lines_for_node(
+    conn: &Connection,
+    aref: &AccessibleRef,
+    text: &str,
+    bounds: &Option<NodeBounds>,
+    on_screen: Option<bool>,
+    state: &mut WalkState,
+) -> Option<Vec<LineSpan>> {
+    if on_screen != Some(true) {
+        return None;
+    }
+    let bounds_ref = bounds.as_ref()?;
+    if !super::node_looks_multiline(text, bounds_ref, state.line_min_height_ratio) {
+        return None;
+    }
+
+    let refs = state.normalize_refs();
+    let max_per_node = state.line_max_calls_per_node;
+    let atspi_ref = AtspiRef {
+        bus_name: &aref.bus_name,
+        path: &aref.path,
+    };
+    let budget = state.line_budget.as_mut()?;
+    linux_lines::capture_line_spans(conn, atspi_ref, text, &refs, budget, max_per_node)
 }
 
 /// True iff the element's screen-absolute frame intersects the focused

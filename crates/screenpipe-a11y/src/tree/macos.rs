@@ -5,9 +5,10 @@
 //! macOS accessibility tree walker using cidre AX APIs.
 
 use super::{
-    AccessibilityTreeNode, SkipReason, TreeSnapshot, TreeWalkResult, TreeWalkerConfig,
+    AccessibilityTreeNode, LineBudget, SkipReason, TreeSnapshot, TreeWalkResult, TreeWalkerConfig,
     TreeWalkerPlatform,
 };
+use crate::tree::macos_lines::{self, NormalizeRefs};
 use anyhow::Result;
 use chrono::Utc;
 use cidre::{ax, cf, ns};
@@ -441,6 +442,13 @@ struct WalkState {
     /// Set to true when a browser extension popup matching an ignored pattern is
     /// detected. Signals the caller to skip the entire capture (including screenshot).
     hit_ignored_extension: bool,
+    /// Per-frame budget for parameterized AX calls used by line-bounds capture.
+    /// `None` when line capture is disabled — see `TreeWalkerConfig::enable_line_bounds`.
+    line_budget: Option<LineBudget>,
+    /// Cap on parameterized AX calls per multi-line node (see config field).
+    line_max_calls_per_node: usize,
+    /// Multi-line safety factor — same field as `TreeWalkerConfig::line_bounds_min_height_ratio`.
+    line_min_height_ratio: f32,
 }
 
 impl WalkState {
@@ -471,6 +479,30 @@ impl WalkState {
                 .map(|s| s.to_lowercase())
                 .collect(),
             hit_ignored_extension: false,
+            line_budget: if config.enable_line_bounds {
+                Some(LineBudget::new(
+                    config.line_bounds_max_calls_per_frame,
+                    config.line_bounds_time_budget,
+                ))
+            } else {
+                None
+            },
+            line_max_calls_per_node: config.line_bounds_max_calls_per_node,
+            line_min_height_ratio: config.line_bounds_min_height_ratio,
+        }
+    }
+
+    /// Snapshot the geometry refs needed to normalize per-line CGRects.
+    fn normalize_refs(&self) -> NormalizeRefs {
+        NormalizeRefs {
+            monitor_x: self.monitor_x,
+            monitor_y: self.monitor_y,
+            monitor_w: self.monitor_w,
+            monitor_h: self.monitor_h,
+            window_x: self.window_x,
+            window_y: self.window_y,
+            window_w: self.window_w,
+            window_h: self.window_h,
         }
     }
 
@@ -636,15 +668,21 @@ fn extract_text(elem: &ax::UiElement, role_str: &str, depth: usize, state: &mut 
         if let Some(val) = get_string_attr(elem, ax::attr::value()) {
             if !val.is_empty() {
                 append_text(&mut state.text_buffer, &val);
+                let trimmed = val.trim().to_string();
                 let mut node = AccessibilityTreeNode::new(
                     role_str.to_string(),
-                    val.trim().to_string(),
+                    trimmed.clone(),
                     depth.min(255) as u8,
-                    bounds,
+                    bounds.clone(),
                 );
                 node.on_screen = on_screen;
-                node.value = Some(val.trim().to_string());
+                node.value = Some(trimmed.clone());
                 fill_ax_props(&mut node, elem, role_str);
+                // AXTextArea is the multi-line case (textarea, rich text views);
+                // the gate naturally skips single-line AXTextField/AXComboBox.
+                if role_str == "AXTextArea" {
+                    node.lines = capture_lines_for_node(elem, &trimmed, &bounds, on_screen, state);
+                }
                 state.nodes.push(node);
                 return;
             }
@@ -656,14 +694,16 @@ fn extract_text(elem: &ax::UiElement, role_str: &str, depth: usize, state: &mut 
         if let Some(val) = get_string_attr(elem, ax::attr::value()) {
             if !val.is_empty() {
                 append_text(&mut state.text_buffer, &val);
+                let trimmed = val.trim().to_string();
                 let mut node = AccessibilityTreeNode::new(
                     role_str.to_string(),
-                    val.trim().to_string(),
+                    trimmed.clone(),
                     depth.min(255) as u8,
-                    bounds,
+                    bounds.clone(),
                 );
                 node.on_screen = on_screen;
                 fill_ax_props(&mut node, elem, role_str);
+                node.lines = capture_lines_for_node(elem, &trimmed, &bounds, on_screen, state);
                 state.nodes.push(node);
                 return;
             }
@@ -864,6 +904,40 @@ fn is_interactive_role(role_str: &str) -> bool {
             | "AXDisclosureTriangle"
             | "AXTab"
     )
+}
+
+/// Capture per-visual-line bounds for an AX text node when the node looks
+/// multi-line and the per-frame budget still has headroom. Returns `None`
+/// when:
+///   - line capture is disabled in config (`state.line_budget == None`)
+///   - the node is off-screen (no point spending IPC on invisible content)
+///   - the node fits on a single line at its current bounds
+///   - the per-frame call/time budget is exhausted
+///   - the element doesn't expose `AXBoundsForRange` (some custom text views)
+fn capture_lines_for_node(
+    elem: &ax::UiElement,
+    text: &str,
+    bounds: &Option<super::NodeBounds>,
+    on_screen: Option<bool>,
+    state: &mut WalkState,
+) -> Option<Vec<super::LineSpan>> {
+    // Only spend IPC on visually-present text — off-screen scroll-buffer
+    // content can't be highlighted by the user anyway (issue #2436's premise).
+    if on_screen != Some(true) {
+        return None;
+    }
+    let bounds_ref = bounds.as_ref()?;
+    if !super::node_looks_multiline(text, bounds_ref, state.line_min_height_ratio) {
+        return None;
+    }
+
+    // Snapshot non-budget state up-front so we can take an exclusive mutable
+    // borrow on `line_budget` afterwards without re-borrowing `state`.
+    let refs = state.normalize_refs();
+    let max_per_node = state.line_max_calls_per_node;
+
+    let budget = state.line_budget.as_mut()?;
+    macos_lines::capture_line_spans(elem, text, &refs, budget, max_per_node)
 }
 
 /// Fill automation properties on an AccessibilityTreeNode from an AX element.
