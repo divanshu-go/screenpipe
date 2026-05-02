@@ -103,6 +103,12 @@ fn line_for_index(elem: &ax::UiElement, char_index: cf::Index) -> Option<cf::Ind
 /// `AXRangeForLine(lineIndex: Int) -> CFRange` — returns the UTF-16 range
 /// covered by the given visual line. Returns `None` for out-of-range or
 /// zero-length lines (blank lines between paragraphs).
+///
+/// **Browser caveat**: Chromium-based browsers (Arc, Chrome, Brave, Edge)
+/// implement `AXLineForIndex` but not `AXRangeForLine` — calls fail with
+/// `kAXErrorNoValue` (-25212). The walker falls through to
+/// [`find_line_start_via_search`] for those apps.
+#[allow(dead_code)] // kept around for non-Chromium hosts that do support it
 fn range_for_line(elem: &ax::UiElement, line_index: cf::Index) -> Option<cf::Range> {
     let param = cf::Number::from_i64(line_index as i64);
     let result = copy_param_attr(elem, ax::param_attr::range_for_line(), &param)?;
@@ -115,6 +121,39 @@ fn range_for_line(elem: &ax::UiElement, line_index: cf::Index) -> Option<cf::Ran
         return None;
     }
     Some(range)
+}
+
+/// Binary-search for the smallest UTF-16 offset whose `AXLineForIndex`
+/// returns a value `>= target_line`. The result is the start offset of
+/// `target_line`. Used as a fallback when `AXRangeForLine` is unsupported
+/// (Chromium browsers).
+///
+/// `lo`/`hi` are the search window in UTF-16 units; pass `0..total_utf16`
+/// for a full search. Returns `None` and consumes 0 budget if any AX call
+/// inside fails — caller bails to paragraph bbox.
+///
+/// Caller is expected to budget `ceil(log2(hi - lo))` AX calls before
+/// invoking this. Each loop iteration consumes 1 budget unit.
+fn find_line_start_via_search(
+    elem: &ax::UiElement,
+    target_line: cf::Index,
+    mut lo: cf::Index,
+    mut hi: cf::Index,
+    budget: &mut LineBudget,
+) -> Option<cf::Index> {
+    while lo < hi {
+        if !budget.try_consume(1) {
+            return None;
+        }
+        let mid = lo + (hi - lo) / 2;
+        let line = line_for_index(elem, mid)?;
+        if line < target_line {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    Some(lo)
 }
 
 /// `AXBoundsForRange(range: CFRange) -> CGRect` — returns the screen-absolute
@@ -231,8 +270,19 @@ impl NormalizeRefs {
 /// `None` if the element doesn't expose AXBoundsForRange, the budget is
 /// exhausted, or the text fits on a single line.
 ///
-/// Caller is responsible for the multi-line gate (`node_looks_multiline`)
-/// — this function trusts the caller and just runs the AX queries.
+/// ## Algorithm
+///
+/// AX exposes three relevant parameterized attributes:
+/// - `AXLineForIndex(charIdx) -> Int`     ← supported by Chromium + AppKit
+/// - `AXRangeForLine(lineIdx) -> CFRange` ← **not** supported by Chromium
+/// - `AXBoundsForRange(CFRange) -> CGRect` ← supported by both
+///
+/// Since `AXRangeForLine` is unreliable in browsers, we recover line
+/// boundaries via binary search on `AXLineForIndex` instead: for line N,
+/// search for the smallest offset whose line index is `>= N`. That gives
+/// the line's start offset; the line's length is the next line's start
+/// minus this one's. Cost: `O(log2(total_utf16))` calls per line boundary,
+/// or roughly `(N+1) * log2(total)` calls per paragraph.
 pub(crate) fn capture_line_spans(
     elem: &ax::UiElement,
     text: &str,
@@ -250,38 +300,78 @@ pub(crate) fn capture_line_spans(
     if total_utf16 == 0 {
         return None;
     }
+    let total_utf16 = total_utf16 as cf::Index;
 
-    // Reserve 1 call for the last-line lookup; if we can't afford even that,
-    // skip the node entirely. Subsequent per-line work goes through try_consume(2).
+    // 1. Find the last line index by querying line_for_index on the last
+    //    char. Reserves 1 budget unit. Single-line content (last_line == 0)
+    //    bails immediately — caller's heuristic was over-eager.
     if !budget.try_consume(1) {
         return None;
     }
-    let last_line_idx = line_for_index(elem, (total_utf16 as cf::Index) - 1)?;
-    if last_line_idx <= 0 {
-        // Single visual line — caller's heuristic was wrong, or AX disagrees.
-        // Either way: no line capture needed.
+    let last_line = line_for_index(elem, total_utf16 - 1)?;
+    if last_line <= 0 {
+        return None;
+    }
+    let target_lines = (last_line as usize + 1).min(max_calls_per_node);
+
+    // 2. For each line N in 1..=last_line, binary-search the start offset.
+    //    Line 0 always starts at offset 0. We collect line_starts in order
+    //    so each successive search can clip its `lo` to the previous start
+    //    (line N's start ≥ line N-1's start).
+    let mut line_starts: Vec<cf::Index> = Vec::with_capacity(target_lines + 1);
+    line_starts.push(0);
+    let mut lo = 0;
+    for n in 1..target_lines as cf::Index {
+        let Some(start) = find_line_start_via_search(elem, n, lo, total_utf16, budget) else {
+            // Budget hit or AX call failed mid-search. Use what we have.
+            break;
+        };
+        // Defensive: if AX returns the same offset twice (shouldn't happen
+        // for distinct lines), drop the duplicate to avoid zero-length spans.
+        if start <= *line_starts.last().unwrap_or(&0) {
+            break;
+        }
+        line_starts.push(start);
+        lo = start;
+    }
+    // Sentinel for the last line's end.
+    line_starts.push(total_utf16);
+
+    if line_starts.len() < 3 {
+        // Need at least one line start + sentinel + one more boundary to
+        // produce > 1 span; otherwise there's no real multi-line geometry.
         return None;
     }
 
-    let target_lines = (last_line_idx as usize + 1).min(max_calls_per_node);
-    let mut spans: Vec<LineSpan> = Vec::with_capacity(target_lines);
-
-    for line_idx in 0..target_lines as cf::Index {
-        if !budget.try_consume(2) {
+    // 3. For each [line_starts[i], line_starts[i+1]) range, fetch bounds.
+    let mut spans: Vec<LineSpan> = Vec::with_capacity(line_starts.len() - 1);
+    for window in line_starts.windows(2) {
+        let line_start = window[0];
+        let line_end = window[1];
+        let len = line_end - line_start;
+        if len <= 0 {
+            continue;
+        }
+        if !budget.try_consume(1) {
             break;
         }
-        let Some(range) = range_for_line(elem, line_idx) else {
-            continue;
+        let range = cf::Range {
+            loc: line_start,
+            len,
         };
         let Some(rect) = bounds_for_range(elem, range) else {
             continue;
         };
-        let Some((char_start, char_count)) =
-            utf16_range_to_char_range(text, range.loc, range.len)
+        let Some((char_start, char_count)) = utf16_range_to_char_range(text, range.loc, range.len)
         else {
             continue;
         };
-        let Some(bounds) = refs.normalize(rect.origin.x, rect.origin.y, rect.size.width, rect.size.height) else {
+        let Some(bounds) = refs.normalize(
+            rect.origin.x,
+            rect.origin.y,
+            rect.size.width,
+            rect.size.height,
+        ) else {
             continue;
         };
         spans.push(LineSpan {
@@ -291,7 +381,9 @@ pub(crate) fn capture_line_spans(
         });
     }
 
-    if spans.is_empty() {
+    if spans.len() < 2 {
+        // Need ≥2 spans for line-aware highlighting to be useful — if we
+        // only resolved one line, paragraph bbox is just as good.
         None
     } else {
         Some(spans)
