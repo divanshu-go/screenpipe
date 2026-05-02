@@ -284,6 +284,19 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
             .navigate(parsed)
             .map_err(|e| format!("webview.navigate failed: {e}"))?;
 
+        // Brief wait so the navigation has time to *commit* before we
+        // return — `webview.navigate()` only schedules the load. If we
+        // return immediately and the agent calls `/snapshot` right after,
+        // the eval can run while the webview is still on the previous
+        // document (often `about:blank`), which has `readyState=complete`
+        // and so the snapshot script's wait-for-ready short-circuits and
+        // captures an empty page. 150ms covers commit on WebView2 and
+        // WKWebView in the common case without feeling slow. The proper
+        // fix is to subscribe to a "navigation started" event from the
+        // platform webview — that belongs in the bidirectional-bridge
+        // work, not here.
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
         Ok(())
     }
 }

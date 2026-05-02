@@ -17,6 +17,7 @@ import { PrismAsyncLight as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coldarkDark, coldarkCold } from "react-syntax-highlighter/dist/cjs/styles/prism";
 import { MemoizedReactMarkdown } from "@/components/markdown";
 import remarkGfm from "remark-gfm";
+import { useIsFullscreen } from "@/lib/hooks/use-is-fullscreen";
 
 // Mirror of MAX_VIEWER_FILE_BYTES in src-tauri/src/viewer.rs. Kept inline
 // (not imported) to avoid coupling the bundled JS to Rust constants.
@@ -206,6 +207,7 @@ export default function ViewerPage() {
   const [copyToast, setCopyToast] = useState(false);
   const [copyContentToast, setCopyContentToast] = useState(false);
   const isDark = useDarkMode();
+  const isFullscreen = useIsFullscreen();
   const mainRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
@@ -318,8 +320,11 @@ export default function ViewerPage() {
   const breadcrumb = useMemo(() => pathBreadcrumb(path), [path]);
   const codeStyle = isDark ? coldarkDark : coldarkCold;
   // Reserve space for macOS traffic lights so the filename doesn't sit
-  // under them. Other platforms get standard left padding.
-  const headerLeftPad = isMacPlatform() ? "pl-[78px]" : "pl-3";
+  // under them — but only when the window isn't fullscreen (macOS hides
+  // the traffic lights in fullscreen, so the reservation becomes a
+  // useless dead zone). Other platforms get standard left padding.
+  const headerLeftPad =
+    isMacPlatform() && !isFullscreen ? "pl-[78px]" : "pl-3";
 
   const isMarkdown = detection?.kind === "markdown";
   const isCode = detection?.kind === "code" || detection?.kind === "json";

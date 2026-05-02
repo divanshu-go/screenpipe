@@ -47,6 +47,7 @@ import { statusForEvent } from "@/lib/stores/pi-event-router";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { usePlatform } from "@/lib/hooks/use-platform";
+import { useIsFullscreen } from "@/lib/hooks/use-is-fullscreen";
 import { useSqlAutocomplete } from "@/lib/hooks/use-sql-autocomplete";
 import { homeDir, join } from "@tauri-apps/api/path";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
@@ -1288,6 +1289,10 @@ export function StandaloneChat({
 } = {}) {
   const { settings, updateSettings, isSettingsLoaded, reloadStore } = useSettings();
   const { isMac } = usePlatform();
+  // Drop the macOS traffic-light reservation when the window is fullscreen
+  // (the buttons hide). Only relevant in standalone mode (no parent
+  // className) — the embedded variant is below the host's chrome anyway.
+  const isFullscreen = useIsFullscreen();
   const { items: appItems } = useSqlAutocomplete("app");
   const { suggestions: autoSuggestions, refreshing: suggestionsRefreshing, forceRefresh: refreshSuggestions } = useAutoSuggestions();
   const { templatePipes, loading: pipesLoading } = usePipes();
@@ -4321,7 +4326,7 @@ export function StandaloneChat({
         className={cn(
           "relative flex items-center gap-3 px-4 py-3 border-b border-border/50 bg-gradient-to-r from-background to-muted/30",
           !className && "cursor-grab active:cursor-grabbing",
-          isMac && !className && "pl-[72px]"
+          isMac && !className && !isFullscreen && "pl-[72px]"
         )}
         onMouseDown={async (e) => {
           if (className) return; // embedded — don't drag

@@ -46,8 +46,7 @@ pub trait OwnedWebviewHandle: Send + Sync {
     /// the eval round-trip (which polls `document.title` and races the
     /// page's own title setters — see incident notes in the parent crate).
     async fn navigate(&self, url: &str) -> Result<(), String> {
-        let escaped =
-            serde_json::to_string(url).map_err(|e| format!("encode url: {e}"))?;
+        let escaped = serde_json::to_string(url).map_err(|e| format!("encode url: {e}"))?;
         self.eval(
             &format!("location.href = {escaped}"),
             None,
@@ -204,6 +203,34 @@ mod tests {
         assert_eq!(
             handle.last_code.lock().await.clone(),
             Some("doStuff()".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn unattached_owned_navigate_returns_not_connected() {
+        let owned = OwnedBrowser::default_instance();
+        let result = owned.navigate("https://example.com").await;
+        assert!(matches!(result, Err(EvalError::NotConnected)));
+    }
+
+    #[tokio::test]
+    async fn attached_owned_navigate_falls_back_to_eval_on_default_handle() {
+        // StubHandle doesn't override `navigate`, so it inherits the
+        // trait's default impl which compiles to
+        // `eval("location.href = \"<url>\"")`. This locks that contract:
+        // any handle that doesn't natively support navigate must still
+        // produce a working location.href assignment.
+        let owned = OwnedBrowser::default_instance();
+        let handle = Arc::new(StubHandle {
+            last_code: Mutex::new(None),
+        });
+        owned.attach(handle.clone()).await;
+
+        owned.navigate("https://example.com").await.unwrap();
+
+        assert_eq!(
+            handle.last_code.lock().await.clone(),
+            Some(r#"location.href = "https://example.com""#.into())
         );
     }
 }

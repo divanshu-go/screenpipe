@@ -1451,13 +1451,18 @@ async fn browser_get_status(
 /// POST /connections/browsers/:id/navigate — open `url` in the named browser.
 ///
 /// Fire-and-forget: returns `{ok: true, dispatched: true, url}` as soon as
-/// the navigation has been kicked off, NOT when the page has loaded. We
-/// previously did a `eval("return location.href", ...)` round-trip with a
-/// 30s timeout; the eval polled `document.title` for a result marker that
-/// real-world pages clobbered with their own titles, so the handler hung
-/// for the full timeout while the navigation had actually succeeded. The
-/// agent should follow up with `/snapshot` (which has its own readyState
-/// wait) to read the loaded page.
+/// the navigation has been kicked off (and committed — see the 150ms wait
+/// in `TauriOwnedHandle::navigate`), NOT when the page has finished
+/// loading. We previously did a `eval("return location.href", ...)`
+/// round-trip with a 30s timeout; the eval polled `document.title` for a
+/// result marker that real-world pages clobbered with their own titles, so
+/// the handler hung for the full timeout while the navigation had
+/// actually succeeded. The agent should follow up with `/snapshot` (which
+/// has its own readyState wait) to read the loaded page.
+///
+/// Response-shape note: the `url` field echoes the *requested* URL, not
+/// the final URL after redirects. Previously it returned the post-redirect
+/// `location.href` — that information is now obtained via `/snapshot`.
 #[derive(Deserialize)]
 struct BrowserNavigateBody {
     url: String,

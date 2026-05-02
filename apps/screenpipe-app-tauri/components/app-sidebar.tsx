@@ -6,6 +6,7 @@
 import React, { createContext, useContext, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { useSettings } from "@/lib/hooks/use-settings";
+import { useIsFullscreen } from "@/lib/hooks/use-is-fullscreen";
 
 // ─── Context ─────────────────────────────────────────────────────────────────
 // Provides `isTranslucent` to any descendant without prop-drilling.
@@ -75,6 +76,11 @@ interface AppSidebarProps {
 
 export function AppSidebar({ children, collapsed = false, className }: AppSidebarProps) {
   const { isTranslucent } = useSidebarContext();
+  // macOS hides the traffic-light buttons in fullscreen, so the 32px top
+  // reservation we kept for them becomes awkward dead space at the corner.
+  // Drop it down to a small breathing-room pad whenever the window is
+  // fullscreen — content shifts to where the traffic lights used to be.
+  const fullscreen = useIsFullscreen();
 
   return (
     <div
@@ -82,7 +88,8 @@ export function AppSidebar({ children, collapsed = false, className }: AppSideba
         // `relative` so callers can absolutely-position items into the
         // top reservation area (e.g. the sidebar collapse icon next to
         // the macOS traffic lights — Claude-style).
-        "relative border-r flex flex-col min-h-0 transition-all duration-300 overflow-x-hidden overflow-y-auto flex-shrink-0 pt-8",
+        "relative border-r flex flex-col min-h-0 transition-all duration-300 overflow-x-hidden overflow-y-auto flex-shrink-0",
+        fullscreen ? "pt-2" : "pt-8",
         isTranslucent ? "vibrant-sidebar" : "bg-background",
         isTranslucent ? "vibrant-sidebar-border" : "border-border",
         collapsed ? SIDEBAR_WIDTH_COLLAPSED : SIDEBAR_WIDTH_EXPANDED,
