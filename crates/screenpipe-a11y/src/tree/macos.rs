@@ -924,10 +924,20 @@ fn capture_lines_for_node(
     // Only spend IPC on visually-present text — off-screen scroll-buffer
     // content can't be highlighted by the user anyway (issue #2436's premise).
     if on_screen != Some(true) {
+        debug!(
+            "lines: skip (off-screen) text_chars={} on_screen={:?}",
+            text.chars().count(),
+            on_screen
+        );
         return None;
     }
     let bounds_ref = bounds.as_ref()?;
     if !super::node_looks_multiline(text, bounds_ref, state.line_min_height_ratio) {
+        debug!(
+            "lines: skip (single-line) text_chars={} aspect={:.2}",
+            text.chars().count(),
+            bounds_ref.width / bounds_ref.height.max(1e-6),
+        );
         return None;
     }
 
@@ -937,7 +947,19 @@ fn capture_lines_for_node(
     let max_per_node = state.line_max_calls_per_node;
 
     let budget = state.line_budget.as_mut()?;
-    macos_lines::capture_line_spans(elem, text, &refs, budget, max_per_node)
+    let calls_before = budget.calls_used();
+    let result = macos_lines::capture_line_spans(elem, text, &refs, budget, max_per_node);
+    let calls_after = budget.calls_used();
+    debug!(
+        "lines: capture text_chars={} calls={} result={}",
+        text.chars().count(),
+        calls_after - calls_before,
+        match &result {
+            Some(v) => format!("Some({} lines)", v.len()),
+            None => "None".to_string(),
+        }
+    );
+    result
 }
 
 /// Fill automation properties on an AccessibilityTreeNode from an AX element.

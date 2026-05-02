@@ -34,6 +34,8 @@
 use super::{LineBudget, LineSpan, NodeBounds};
 use cidre::{arc, ax, cf, cg};
 use std::ffi::c_void;
+use std::sync::atomic::{AtomicBool, Ordering};
+use tracing::warn;
 
 // ---------------------------------------------------------------------------
 // FFI shim — `AXUIElementCopyParameterizedAttributeValue` is in
@@ -61,7 +63,25 @@ fn copy_param_attr(
     let status = unsafe {
         AXUIElementCopyParameterizedAttributeValue(elem, attr_name, parameter, &mut out)
     };
-    if status.is_ok() { out } else { None }
+    if status.is_ok() {
+        out
+    } else {
+        // Surface the AX status code once per process so we can tell whether
+        // browsers/apps support these param attrs. Once-only because a busy
+        // page can hit this thousands of times — the first failure already
+        // tells us whether to keep trying or fall back to a different path.
+        static WARNED: AtomicBool = AtomicBool::new(false);
+        if !WARNED.swap(true, Ordering::Relaxed) {
+            warn!(
+                "lines: AXUIElementCopyParameterizedAttributeValue({}) failed status={:?} \
+                 — first failure (further failures suppressed); search highlights will fall \
+                 back to paragraph bbox on this app",
+                attr_name.to_string(),
+                status,
+            );
+        }
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------
