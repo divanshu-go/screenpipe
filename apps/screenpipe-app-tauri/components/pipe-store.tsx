@@ -335,6 +335,15 @@ export function PipeStoreView() {
 
   const [activeTab, setActiveTab] = useState<"discover" | "my-pipes">("my-pipes");
 
+  // listen for tab switch events from empty state button
+  useEffect(() => {
+    const handler = ((e: CustomEvent<{ tab: "discover" | "my-pipes" }>) => {
+      setActiveTab(e.detail.tab);
+    }) as EventListener;
+    window.addEventListener('switch-pipes-tab', handler);
+    return () => window.removeEventListener('switch-pipes-tab', handler);
+  }, []);
+
   // Read ?tab= from URL after mount, then strip it so it doesn't persist
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);

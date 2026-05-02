@@ -1642,12 +1642,16 @@ export function PipesSection() {
                     <span><strong>focus assistant</strong> — notifies you when you get distracted</span>
                   </div>
                 </div>
-                <a
-                  href="?section=pipes&tab=discover"
+                <button
+                  onClick={() => {
+                    window.dispatchEvent(new CustomEvent('switch-pipes-tab', { 
+                      detail: { tab: 'discover' }
+                    }));
+                  }}
                   className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-foreground text-background text-sm font-medium hover:bg-foreground/90 transition-colors"
                 >
                   browse the pipe store →
-                </a>
+                </button>
               </div>
             ) : pipeFilter === "team" ? (
               <p>no pipes shared with team yet</p>
