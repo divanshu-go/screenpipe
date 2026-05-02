@@ -162,6 +162,26 @@ impl PipelineMetrics {
         self.frames_video_written.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Record that the capture pipeline cycled successfully but content
+    /// dedup decided no DB write was needed (frame hash matched the
+    /// previous one — typical for a static screen, video call, slide
+    /// deck). Advances `last_db_write_ts` so the health-check stall
+    /// detector treats "nothing new to write" as healthy. Does NOT bump
+    /// the `frames_db_written` counter or record latency — those still
+    /// reflect actual writes.
+    ///
+    /// Without this, a static screen for >60s causes the health check
+    /// to log "vision DB writes stalled" even though the pipeline is
+    /// running fine; on Louis's machine that produced 8–14 false
+    /// alarms/day with single stretches of up to 28 minutes.
+    pub fn record_dedup_skip(&self) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        self.last_db_write_ts.store(now, Ordering::Relaxed);
+    }
+
     /// Record a frame inserted into DB.
     pub fn record_db_write(&self, latency: std::time::Duration) {
         let count = self.frames_db_written.fetch_add(1, Ordering::Relaxed);
