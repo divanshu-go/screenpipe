@@ -308,22 +308,7 @@ pub(crate) fn capture_line_spans(
     if !budget.try_consume(1) {
         return None;
     }
-    let last_line_opt = line_for_index(elem, total_utf16 - 1);
-    {
-        // DIAGNOSTIC: log the first few AXLineForIndex results per process so
-        // we can see what browsers are actually returning. Once-only to avoid
-        // log spam on busy pages.
-        static LOGGED: AtomicBool = AtomicBool::new(false);
-        if !LOGGED.swap(true, Ordering::Relaxed) {
-            warn!(
-                "lines: probe — total_chars={} total_utf16={} AXLineForIndex(last)={:?}",
-                text.chars().count(),
-                total_utf16,
-                last_line_opt,
-            );
-        }
-    }
-    let last_line = last_line_opt?;
+    let last_line = line_for_index(elem, total_utf16 - 1)?;
     if last_line <= 0 {
         return None;
     }
