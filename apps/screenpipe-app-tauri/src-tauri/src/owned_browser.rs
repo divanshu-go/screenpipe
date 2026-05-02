@@ -383,6 +383,15 @@ pub async fn install(
                 .shadow(false)
                 .inner_size(1.0, 1.0)
                 .position(0.0, 0.0)
+                // Spoof a real Safari UA so anti-WebView gates (notably
+                // x.com, which hangs forever on the splash with the default
+                // WKWebView UA) serve us the normal site. No measured impact
+                // on other domains we render here.
+                .user_agent(
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) \
+                     AppleWebKit/605.1.15 (KHTML, like Gecko) \
+                     Version/17.5 Safari/605.1.15",
+                )
                 .initialization_script(BRIDGE_INIT_SCRIPT);
 
         #[cfg(target_os = "windows")]
