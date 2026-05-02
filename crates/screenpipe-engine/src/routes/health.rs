@@ -295,12 +295,19 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
             if now_ts.saturating_sub(prev) >= 60 {
                 LAST_VISION_STALL_LOG.store(now_ts, Ordering::Relaxed);
                 let (rs, ri, ws, wi) = state.db.pool_stats();
+                // last_db_write_ts only advances when a UNIQUE frame is
+                // actually inserted; dedup-skipped captures don't update it.
+                // So a long delta here typically means the screen is static
+                // (idle user, slide deck, video call, IDE waiting) — NOT a
+                // stuck pipeline. Phrase it that way to stop the false-alarm
+                // panic, and keep the pool stats inline since they're still
+                // useful when the cause IS real backpressure.
                 warn!(
-                    "health_check: vision DB writes stalled — capture heartbeat {}s ago but last DB write {}s ago ({}) | pool: read={}/{} idle, write={}/{} idle",
-                    now_ts.saturating_sub(vision_snap.last_capture_attempt_ts),
+                    "health_check: no unique vision frame in {}s (capture heartbeat {}s ago — usually means a static screen / idle user, not a pipeline stall) | pool: read={}/{} idle, write={}/{} idle | suspected: {}",
                     now_ts.saturating_sub(vision_snap.last_db_write_ts),
-                    suspected_stall_cause(ri, wi),
+                    now_ts.saturating_sub(vision_snap.last_capture_attempt_ts),
                     ri, rs, wi, ws,
+                    suspected_stall_cause(ri, wi),
                 );
             }
         }
