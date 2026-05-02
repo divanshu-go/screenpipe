@@ -28,9 +28,8 @@ uuid = { version = "1.5.0", features = ["v4"] }
 thiserror = "1"
 lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "tokio1-rustls-tls", "builder"] }
 mdns-sd = "0.13"
-
-[dev-dependencies]
 sqlx = { version = "0.7", features = ["sqlite", "runtime-tokio-rustls"] }
+libsqlite3-sys = { version = "0.26", features = ["bundled"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 eventkit-rs = "0.1"

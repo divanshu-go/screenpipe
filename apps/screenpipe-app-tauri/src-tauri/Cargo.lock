@@ -9726,7 +9726,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.4.124"
+version = "2.4.126"
 dependencies = [
  "anyhow",
  "arboard",
@@ -9910,6 +9910,7 @@ dependencies = [
  "eventkit-rs",
  "image 0.25.10",
  "lettre",
+ "libsqlite3-sys",
  "log",
  "mdns-sd",
  "objc2 0.6.4",
@@ -9923,6 +9924,7 @@ dependencies = [
  "screenpipe-secrets",
  "serde",
  "serde_json",
+ "sqlx",
  "thiserror 1.0.69",
  "tokio",
  "tracing",

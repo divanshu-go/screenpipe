@@ -6968,6 +6968,7 @@ dependencies = [
  "eventkit-rs",
  "image",
  "lettre",
+ "libsqlite3-sys",
  "log",
  "mdns-sd",
  "objc2",
