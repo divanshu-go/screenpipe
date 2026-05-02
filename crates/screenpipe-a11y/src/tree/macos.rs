@@ -623,9 +623,13 @@ fn walk_element(elem: &ax::UiElement, depth: usize, state: &mut WalkState) {
 
 /// Extract text attributes from an element, append to the buffer, and collect a structured node.
 fn extract_text(elem: &ax::UiElement, role_str: &str, depth: usize, state: &mut WalkState) {
-    // Read element bounds once (used for all text extraction paths)
-    let bounds =
-        get_element_frame(elem).and_then(|(x, y, w, h)| normalize_bounds(x, y, w, h, state));
+    // Read element bounds once (used for all text extraction paths). The
+    // raw screen-absolute frame is also passed to is_on_screen() so we
+    // know whether the captured screenshot actually shows this element —
+    // see issue #2436 for the search-hits-off-screen-text bug this fixes.
+    let frame = get_element_frame(elem);
+    let bounds = frame.and_then(|(x, y, w, h)| normalize_bounds(x, y, w, h, state));
+    let on_screen = frame.and_then(|(x, y, w, h)| is_on_screen(x, y, w, h, state));
 
     // For text fields / text areas, prefer value (the actual content)
     if role_str == "AXTextField" || role_str == "AXTextArea" || role_str == "AXComboBox" {
@@ -638,6 +642,7 @@ fn extract_text(elem: &ax::UiElement, role_str: &str, depth: usize, state: &mut 
                     depth.min(255) as u8,
                     bounds,
                 );
+                node.on_screen = on_screen;
                 node.value = Some(val.trim().to_string());
                 fill_ax_props(&mut node, elem, role_str);
                 state.nodes.push(node);
@@ -657,6 +662,7 @@ fn extract_text(elem: &ax::UiElement, role_str: &str, depth: usize, state: &mut 
                     depth.min(255) as u8,
                     bounds,
                 );
+                node.on_screen = on_screen;
                 fill_ax_props(&mut node, elem, role_str);
                 state.nodes.push(node);
                 return;
@@ -674,6 +680,7 @@ fn extract_text(elem: &ax::UiElement, role_str: &str, depth: usize, state: &mut 
                 depth.min(255) as u8,
                 bounds,
             );
+            node.on_screen = on_screen;
             fill_ax_props(&mut node, elem, role_str);
             state.nodes.push(node);
             return;
@@ -690,6 +697,7 @@ fn extract_text(elem: &ax::UiElement, role_str: &str, depth: usize, state: &mut 
                 depth.min(255) as u8,
                 bounds,
             );
+            node.on_screen = on_screen;
             fill_ax_props(&mut node, elem, role_str);
             state.nodes.push(node);
         }
@@ -727,6 +735,45 @@ fn get_element_frame(elem: &ax::UiElement) -> Option<(f64, f64, f64, f64)> {
         }
     })?;
     Some((pos.0, pos.1, size.0, size.1))
+}
+
+/// True iff the element's screen-absolute frame intersects the focused
+/// window's screen rect. This is the "is the element actually visible
+/// in the captured pixels?" test that issue #2436 needs to filter
+/// search hits to on-screen text only.
+///
+/// Returns `None` when window bounds aren't populated (early in the
+/// walk, or for tools that don't set them) — the AX walker would still
+/// emit the node, callers see the unknown state and treat it as
+/// "no information" rather than assuming on-screen.
+///
+/// Note: this is a window-level check, not a scroll-container-level
+/// check. Text inside a fully-on-screen scroll viewport but past its
+/// visible region (e.g. terminal scroll buffer in iTerm) will still
+/// report `Some(true)` if iTerm returns frame coords inside the
+/// window. The proper second-pass clip walks up to the nearest
+/// `AXScrollArea` ancestor and intersects with its visible rect —
+/// follow-up.
+fn is_on_screen(
+    elem_x: f64,
+    elem_y: f64,
+    elem_w: f64,
+    elem_h: f64,
+    state: &WalkState,
+) -> Option<bool> {
+    if state.window_w <= 0.0 || state.window_h <= 0.0 {
+        return None;
+    }
+    Some(super::rects_intersect(
+        elem_x,
+        elem_y,
+        elem_w,
+        elem_h,
+        state.window_x,
+        state.window_y,
+        state.window_w,
+        state.window_h,
+    ))
 }
 
 /// Normalize an element's screen-absolute frame to 0-1 coordinates.

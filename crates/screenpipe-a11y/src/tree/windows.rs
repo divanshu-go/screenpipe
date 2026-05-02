@@ -239,6 +239,10 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
 
         // Get monitor dimensions for normalizing element bounds to 0-1 coords
         let monitor_rect = get_monitor_rect(hwnd);
+        // Window rect for the on-screen visibility check (issue #2436).
+        // Stored once per walk — GetWindowRect is cheap and the focused
+        // window doesn't move during the sub-second walk in practice.
+        let window_rect = get_window_rect(hwnd);
 
         // Extract text from the tree (matching macOS text extraction behavior)
         let mut text_buffer = String::with_capacity(4096);
@@ -259,6 +263,7 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
             &mut nodes,
             &mut browser_url,
             &monitor_rect,
+            &window_rect,
             &ignored_lower,
             &mut hit_ignored_extension,
         );
@@ -325,6 +330,58 @@ struct MonitorRect {
     height: f64,
 }
 
+/// Focused-window rectangle in screen coordinates. Used for the "is the
+/// element actually visible in the captured pixels?" check (issue #2436)
+/// — distinct from `MonitorRect` because we need the *window* clip, not
+/// the monitor's full extent (UIA can report element bounds inside the
+/// monitor but outside the window's visible area for scrolled-off
+/// terminal/editor content).
+struct WindowRect {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+/// Get the focused window's screen rectangle via Win32 GetWindowRect.
+/// Returns None if the call fails or the rect is degenerate; callers
+/// fall back to `on_screen = None` (unknown) in that case rather than
+/// guessing.
+fn get_window_rect(hwnd: HWND) -> Option<WindowRect> {
+    unsafe {
+        let mut r = RECT::default();
+        if GetWindowRect(hwnd, &mut r).as_bool() {
+            let w = (r.right - r.left) as f64;
+            let h = (r.bottom - r.top) as f64;
+            if w > 0.0 && h > 0.0 {
+                return Some(WindowRect {
+                    x: r.left as f64,
+                    y: r.top as f64,
+                    width: w,
+                    height: h,
+                });
+            }
+        }
+        None
+    }
+}
+
+/// True iff the element's screen-absolute frame intersects the focused
+/// window's rect — the on-screen visibility test for issue #2436.
+/// Delegates to the shared pure-geometry helper.
+fn is_on_screen(bounds: &crate::events::ElementBounds, window: &WindowRect) -> bool {
+    super::rects_intersect(
+        bounds.x,
+        bounds.y,
+        bounds.width,
+        bounds.height,
+        window.x,
+        window.y,
+        window.width,
+        window.height,
+    )
+}
+
 /// Get the monitor rectangle containing the given window.
 fn get_monitor_rect(hwnd: HWND) -> Option<MonitorRect> {
     unsafe {
@@ -385,6 +442,7 @@ fn make_tree_node(
     text: &str,
     depth: usize,
     bounds: Option<NodeBounds>,
+    on_screen: Option<bool>,
 ) -> AccessibilityTreeNode {
     let mut n = AccessibilityTreeNode::new(
         role.to_string(),
@@ -392,6 +450,7 @@ fn make_tree_node(
         depth.min(255) as u8,
         bounds,
     );
+    n.on_screen = on_screen;
     n.automation_id = uia_node.automation_id.clone();
     n.class_name = uia_node.class_name.clone();
     n.value = uia_node.value.clone();
@@ -410,6 +469,7 @@ fn make_tree_node(
 
 /// Recursively extract text from the accessibility tree.
 /// Mirrors the macOS walker's text extraction strategy.
+#[allow(clippy::too_many_arguments)]
 fn extract_text_from_tree(
     node: &AccessibilityNode,
     depth: usize,
@@ -418,6 +478,7 @@ fn extract_text_from_tree(
     nodes: &mut Vec<AccessibilityTreeNode>,
     browser_url: &mut Option<String>,
     monitor_rect: &Option<MonitorRect>,
+    window_rect: &Option<WindowRect>,
     ignored_windows_lower: &[String],
     hit_ignored_extension: &mut bool,
 ) {
@@ -436,6 +497,13 @@ fn extract_text_from_tree(
     let norm_bounds = monitor_rect
         .as_ref()
         .and_then(|mr| node.bounds.as_ref().and_then(|b| normalize_bounds(b, mr)));
+    // On-screen check (issue #2436): does the element's screen-absolute
+    // bounds intersect the focused window's rect? `None` when window
+    // bounds aren't available — caller's filter logic must treat that
+    // as "unknown" rather than implicitly true/false.
+    let on_screen = window_rect
+        .as_ref()
+        .and_then(|wr| node.bounds.as_ref().map(|b| is_on_screen(b, wr)));
 
     // Extract text from text-bearing elements
     if TEXT_TYPES.iter().any(|&t| ct.eq_ignore_ascii_case(t)) {
@@ -456,6 +524,7 @@ fn extract_text_from_tree(
                         val.trim(),
                         depth,
                         norm_bounds.clone(),
+                        on_screen,
                     ));
                     // Don't recurse into text controls — their children are sub-elements of the same text
                     return;
@@ -535,6 +604,7 @@ fn extract_text_from_tree(
                         name.trim(),
                         depth,
                         norm_bounds.clone(),
+                        on_screen,
                     ));
                 }
             }
@@ -554,6 +624,7 @@ fn extract_text_from_tree(
                     val.trim(),
                     depth,
                     norm_bounds.clone(),
+                    on_screen,
                 ));
             }
         } else if ct.eq_ignore_ascii_case("Custom") {
@@ -561,7 +632,14 @@ fn extract_text_from_tree(
             if let Some(ref name) = node.name {
                 if !name.trim().is_empty() {
                     append_text(buffer, name);
-                    nodes.push(make_tree_node(node, ct, name.trim(), depth, norm_bounds));
+                    nodes.push(make_tree_node(
+                        node,
+                        ct,
+                        name.trim(),
+                        depth,
+                        norm_bounds,
+                        on_screen,
+                    ));
                 }
             }
         }
@@ -577,6 +655,7 @@ fn extract_text_from_tree(
             nodes,
             browser_url,
             monitor_rect,
+            window_rect,
             ignored_windows_lower,
             hit_ignored_extension,
         );

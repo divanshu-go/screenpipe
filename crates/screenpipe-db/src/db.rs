@@ -2084,7 +2084,7 @@ impl DatabaseManager {
         frame_id: i64,
         tree_json: &str,
     ) {
-        // AccessibilityTreeNode: { role, text, depth, bounds?, automation props... }
+        // AccessibilityTreeNode: { role, text, depth, bounds?, on_screen?, automation props... }
         #[derive(serde::Deserialize, serde::Serialize)]
         struct AxNode {
             role: String,
@@ -2092,6 +2092,12 @@ impl DatabaseManager {
             depth: u8,
             #[serde(skip_serializing_if = "Option::is_none")]
             bounds: Option<AxBounds>,
+            /// True when the element is visually present on the captured
+            /// frame (its rect intersects the focused window's rect).
+            /// Persisted to `elements.on_screen` so search can filter
+            /// out off-screen accessibility text — see issue #2436.
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            on_screen: Option<bool>,
             #[serde(skip_serializing_if = "Option::is_none")]
             automation_id: Option<String>,
             #[serde(skip_serializing_if = "Option::is_none")]
@@ -2242,8 +2248,13 @@ impl DatabaseManager {
                 }
             };
 
+            // SQLite stores BOOLEAN as INTEGER. Map None→NULL, Some(true)→1,
+            // Some(false)→0 so the partial index from
+            // 20260502000000_add_elements_on_screen.sql skips legacy rows.
+            let on_screen_int: Option<i64> = node.on_screen.map(|b| if b { 1 } else { 0 });
+
             let result = sqlx::query_scalar::<_, i64>(
-                "INSERT INTO elements (frame_id, source, role, text, parent_id, depth, left_bound, top_bound, width_bound, height_bound, confidence, sort_order, properties) VALUES (?1, 'accessibility', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, ?10, ?11) RETURNING id",
+                "INSERT INTO elements (frame_id, source, role, text, parent_id, depth, left_bound, top_bound, width_bound, height_bound, confidence, sort_order, properties, on_screen) VALUES (?1, 'accessibility', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, ?10, ?11, ?12) RETURNING id",
             )
             .bind(frame_id)
             .bind(&node.role)
@@ -2256,6 +2267,7 @@ impl DatabaseManager {
             .bind(height)
             .bind(sort_order)
             .bind(&properties)
+            .bind(on_screen_int)
             .fetch_one(&mut **tx)
             .await;
 
@@ -2675,6 +2687,7 @@ impl DatabaseManager {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub async fn search(
         &self,
         query: &str,
@@ -2694,6 +2707,11 @@ impl DatabaseManager {
         speaker_name: Option<&str>,
         device_name: Option<&str>,
         machine_id: Option<&str>,
+        // Issue #2436: when set, accessibility hits are restricted to
+        // elements visually present (true) or off-screen (false) on the
+        // captured frame. Falls through to the legacy frames_fts path
+        // when None, preserving current behavior for unaware callers.
+        on_screen: Option<bool>,
     ) -> Result<Vec<SearchResult>, sqlx::Error> {
         let mut results = Vec::new();
 
@@ -2742,15 +2760,38 @@ impl DatabaseManager {
                                 device_name,
                                 machine_id,
                             ),
-                            self.search_accessibility(
-                                query,
-                                app_name,
-                                window_name,
-                                start_time,
-                                end_time,
-                                fetch_limit,
-                                0,
-                            )
+                            // Issue #2436: branch the accessibility plan
+                            // on the on_screen filter — see the dispatch
+                            // in ContentType::Accessibility above.
+                            async {
+                                match on_screen {
+                                    Some(v) => {
+                                        self.search_accessibility_visible(
+                                            query,
+                                            v,
+                                            app_name,
+                                            window_name,
+                                            start_time,
+                                            end_time,
+                                            fetch_limit,
+                                            0,
+                                        )
+                                        .await
+                                    }
+                                    None => {
+                                        self.search_accessibility(
+                                            query,
+                                            app_name,
+                                            window_name,
+                                            start_time,
+                                            end_time,
+                                            fetch_limit,
+                                            0,
+                                        )
+                                        .await
+                                    }
+                                }
+                            }
                         )?;
                         (ocr, Some(audio), ui)
                     } else {
@@ -2772,15 +2813,35 @@ impl DatabaseManager {
                                 device_name,
                                 machine_id,
                             ),
-                            self.search_accessibility(
-                                query,
-                                app_name,
-                                window_name,
-                                start_time,
-                                end_time,
-                                fetch_limit,
-                                0,
-                            )
+                            async {
+                                match on_screen {
+                                    Some(v) => {
+                                        self.search_accessibility_visible(
+                                            query,
+                                            v,
+                                            app_name,
+                                            window_name,
+                                            start_time,
+                                            end_time,
+                                            fetch_limit,
+                                            0,
+                                        )
+                                        .await
+                                    }
+                                    None => {
+                                        self.search_accessibility(
+                                            query,
+                                            app_name,
+                                            window_name,
+                                            start_time,
+                                            end_time,
+                                            fetch_limit,
+                                            0,
+                                        )
+                                        .await
+                                    }
+                                }
+                            }
                         )?;
                         (ocr, None, ui)
                     };
@@ -2833,17 +2894,37 @@ impl DatabaseManager {
                 }
             }
             ContentType::Accessibility => {
-                let ui_results = self
-                    .search_accessibility(
-                        query,
-                        app_name,
-                        window_name,
-                        start_time,
-                        end_time,
-                        limit,
-                        offset,
-                    )
-                    .await?;
+                // Issue #2436: when on_screen is set, the agent wants
+                // pixel-actually-visible matches only — switch to the
+                // per-element index path. Otherwise stick with the
+                // existing per-frame plan (faster, broader recall).
+                let ui_results = match on_screen {
+                    Some(visible) => {
+                        self.search_accessibility_visible(
+                            query,
+                            visible,
+                            app_name,
+                            window_name,
+                            start_time,
+                            end_time,
+                            limit,
+                            offset,
+                        )
+                        .await?
+                    }
+                    None => {
+                        self.search_accessibility(
+                            query,
+                            app_name,
+                            window_name,
+                            start_time,
+                            end_time,
+                            limit,
+                            offset,
+                        )
+                        .await?
+                    }
+                };
                 results.extend(ui_results.into_iter().map(SearchResult::UI));
             }
             ContentType::Input => {
@@ -3405,6 +3486,7 @@ impl DatabaseManager {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub async fn count_search_results(
         &self,
         query: &str,
@@ -3420,10 +3502,71 @@ impl DatabaseManager {
         browser_url: Option<&str>,
         focused: Option<bool>,
         speaker_name: Option<&str>,
+        // Mirror of `db::search`'s on_screen — must agree or pagination
+        // breaks (`total` no longer matches the visible page). Issue #2436.
+        on_screen: Option<bool>,
     ) -> Result<usize, sqlx::Error> {
         // if focused or browser_url is present, we run only on OCR
         if focused.is_some() || browser_url.is_some() {
             content_type = ContentType::OCR;
+        }
+
+        // on_screen filter is meaningful only for accessibility-bearing
+        // content. Short-circuit it through the per-element count path so
+        // the total matches what `search()` actually returns. For
+        // ContentType::All with on_screen set, we count visible
+        // accessibility frames + audio (no OCR, since OCR matches don't
+        // have an on-screen concept distinct from the screenshot itself).
+        if let Some(visible) = on_screen {
+            match content_type {
+                ContentType::Accessibility => {
+                    return self
+                        .count_accessibility_visible(
+                            query,
+                            visible,
+                            app_name,
+                            window_name,
+                            start_time,
+                            end_time,
+                        )
+                        .await;
+                }
+                ContentType::All => {
+                    let ax_fut = self.count_accessibility_visible(
+                        query,
+                        visible,
+                        app_name,
+                        window_name,
+                        start_time,
+                        end_time,
+                    );
+                    if app_name.is_none() && window_name.is_none() {
+                        let audio_future = Box::pin(self.count_search_results(
+                            query,
+                            ContentType::Audio,
+                            start_time,
+                            end_time,
+                            None,
+                            None,
+                            min_length,
+                            max_length,
+                            speaker_ids,
+                            None,
+                            None,
+                            None,
+                            speaker_name,
+                            None,
+                        ));
+                        let (ax, audio) = tokio::try_join!(ax_fut, audio_future)?;
+                        return Ok(ax + audio);
+                    } else {
+                        return ax_fut.await;
+                    }
+                }
+                // OCR / Audio / Input / Memory: on_screen doesn't apply,
+                // fall through to the legacy count.
+                _ => {}
+            }
         }
 
         if content_type == ContentType::All {
@@ -3443,6 +3586,7 @@ impl DatabaseManager {
                 browser_url,
                 focused,
                 None,
+                None,
             ));
 
             if app_name.is_none() && window_name.is_none() {
@@ -3460,6 +3604,7 @@ impl DatabaseManager {
                     None,
                     None,
                     speaker_name,
+                    None,
                 ));
 
                 let (frames_count, audio_count) = tokio::try_join!(frames_future, audio_future)?;
@@ -4242,6 +4387,147 @@ impl DatabaseManager {
             .bind(offset)
             .fetch_all(&self.pool)
             .await
+    }
+
+    /// Search accessibility text restricted to elements visually present on
+    /// the captured frame (or explicitly off-screen). Sister of
+    /// `search_accessibility` — same return shape, different plan.
+    ///
+    /// Why a separate method: the default `search_accessibility` matches via
+    /// `frames_fts.full_text`, which concatenates every text element on the
+    /// frame. That index can't tell which specific element matched, so it
+    /// can't enforce the on-screen constraint without false positives. This
+    /// method matches via `elements_fts` (per-element FTS) joined with the
+    /// `elements.on_screen` flag, then collapses to one row per frame to
+    /// preserve the existing API contract.
+    ///
+    /// Filter semantics: `on_screen = true` matches only elements with the
+    /// `1` flag; `false` matches `0`; the function isn't called for `None`
+    /// (caller should fall through to `search_accessibility`). NULL rows
+    /// (legacy data captured before the on-screen detector landed) are
+    /// excluded by the equality comparison — this is intentional. Issue #2436.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn search_accessibility_visible(
+        &self,
+        query: &str,
+        on_screen: bool,
+        app_name: Option<&str>,
+        window_name: Option<&str>,
+        start_time: Option<DateTime<Utc>>,
+        end_time: Option<DateTime<Utc>>,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<UiContent>, sqlx::Error> {
+        let has_query = !query.trim().is_empty();
+        // Empty query is supported — drops the FTS join entirely so the
+        // filter is purely "show me on-screen accessibility elements in
+        // this time range / app." The window_name filter is LIKE-based
+        // because window titles aren't a stable enum.
+        let sql = format!(
+            r#"
+            SELECT
+                f.id,
+                COALESCE(f.full_text, f.accessibility_text, '') AS text_output,
+                f.timestamp,
+                COALESCE(f.app_name, '') as app_name,
+                COALESCE(f.window_name, '') as window_name,
+                NULL as initial_traversal_at,
+                COALESCE(vc.file_path, '') as file_path,
+                COALESCE(f.offset_index, 0) as offset_index,
+                f.name as frame_name,
+                f.browser_url
+            FROM elements e
+            {fts_join}
+            JOIN frames f ON f.id = e.frame_id
+            LEFT JOIN video_chunks vc ON f.video_chunk_id = vc.id
+            WHERE e.source = 'accessibility'
+              AND e.on_screen = ?1
+              {fts_match}
+              AND (?2 IS NULL OR f.timestamp >= ?2)
+              AND (?3 IS NULL OR f.timestamp <= ?3)
+              AND (?4 IS NULL OR f.app_name = ?4)
+              AND (?5 IS NULL OR f.window_name LIKE '%' || ?5 || '%')
+            GROUP BY f.id
+            ORDER BY f.timestamp DESC
+            LIMIT ?6 OFFSET ?7
+            "#,
+            fts_join = if has_query {
+                "JOIN elements_fts ef ON ef.rowid = e.id"
+            } else {
+                ""
+            },
+            fts_match = if has_query {
+                "AND ef.text MATCH ?8"
+            } else {
+                ""
+            },
+        );
+
+        let on_screen_int: i64 = if on_screen { 1 } else { 0 };
+        let mut q = sqlx::query_as(&sql)
+            .bind(on_screen_int)
+            .bind(start_time)
+            .bind(end_time)
+            .bind(app_name)
+            .bind(window_name)
+            .bind(limit)
+            .bind(offset);
+        if has_query {
+            q = q.bind(crate::text_normalizer::sanitize_fts5_query(query));
+        }
+        q.fetch_all(&self.pool).await
+    }
+
+    /// Count of distinct frames returned by `search_accessibility_visible`,
+    /// used by the search route to report `total` for pagination.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn count_accessibility_visible(
+        &self,
+        query: &str,
+        on_screen: bool,
+        app_name: Option<&str>,
+        window_name: Option<&str>,
+        start_time: Option<DateTime<Utc>>,
+        end_time: Option<DateTime<Utc>>,
+    ) -> Result<usize, sqlx::Error> {
+        let has_query = !query.trim().is_empty();
+        let sql = format!(
+            r#"
+            SELECT COUNT(DISTINCT f.id) FROM elements e
+            {fts_join}
+            JOIN frames f ON f.id = e.frame_id
+            WHERE e.source = 'accessibility'
+              AND e.on_screen = ?1
+              {fts_match}
+              AND (?2 IS NULL OR f.timestamp >= ?2)
+              AND (?3 IS NULL OR f.timestamp <= ?3)
+              AND (?4 IS NULL OR f.app_name = ?4)
+              AND (?5 IS NULL OR f.window_name LIKE '%' || ?5 || '%')
+            "#,
+            fts_join = if has_query {
+                "JOIN elements_fts ef ON ef.rowid = e.id"
+            } else {
+                ""
+            },
+            fts_match = if has_query {
+                "AND ef.text MATCH ?6"
+            } else {
+                ""
+            },
+        );
+
+        let on_screen_int: i64 = if on_screen { 1 } else { 0 };
+        let mut q = sqlx::query_scalar::<_, i64>(&sql)
+            .bind(on_screen_int)
+            .bind(start_time)
+            .bind(end_time)
+            .bind(app_name)
+            .bind(window_name);
+        if has_query {
+            q = q.bind(crate::text_normalizer::sanitize_fts5_query(query));
+        }
+        let n: i64 = q.fetch_one(&self.pool).await?;
+        Ok(n.max(0) as usize)
     }
 
     /// Search UI events (user input actions)
@@ -6108,6 +6394,12 @@ LIMIT ? OFFSET ?
         start_time: Option<DateTime<Utc>>,
         end_time: Option<DateTime<Utc>>,
         app_name: Option<&str>,
+        // Optional on-screen filter (issue #2436). Some(true) keeps only
+        // elements visually present in the captured screenshot;
+        // Some(false) keeps only off-screen elements (rare — useful for
+        // debugging or "what was scrolled off?" queries); None preserves
+        // current behavior and matches all rows including legacy NULL.
+        on_screen: Option<bool>,
         limit: u32,
         offset: u32,
     ) -> Result<(Vec<Element>, i64), sqlx::Error> {
@@ -6135,6 +6427,12 @@ LIMIT ? OFFSET ?
         if app_name.is_some() {
             conditions.push("f.app_name = ?".to_string());
         }
+        if on_screen.is_some() {
+            // `e.on_screen = ?` is intentional — does NOT match NULL rows.
+            // Legacy elements have NULL because the a11y walker didn't
+            // report it before; pre-fix they cannot be classified.
+            conditions.push("e.on_screen = ?".to_string());
+        }
 
         let where_clause = if conditions.is_empty() {
             String::new()
@@ -6151,7 +6449,7 @@ LIMIT ? OFFSET ?
         let sql = format!(
             r#"SELECT e.id, e.frame_id, e.source, e.role, e.text, e.parent_id,
                       e.depth, e.left_bound, e.top_bound, e.width_bound, e.height_bound,
-                      e.confidence, e.sort_order
+                      e.confidence, e.sort_order, e.on_screen
                FROM elements e
                JOIN frames f ON f.id = e.frame_id
                {}
@@ -6203,6 +6501,14 @@ LIMIT ? OFFSET ?
             data_query = data_query.bind(app.to_string());
             count_query = count_query.bind(app.to_string());
         }
+        if let Some(os) = on_screen {
+            // SQLite stores BOOLEAN as INTEGER. Bind as i64 explicitly so
+            // the comparison hits the partial index from
+            // 20260502000000_add_elements_on_screen.sql.
+            let v: i64 = if os { 1 } else { 0 };
+            data_query = data_query.bind(v);
+            count_query = count_query.bind(v);
+        }
 
         data_query = data_query.bind(limit as i64).bind(offset as i64);
 
@@ -6235,9 +6541,9 @@ LIMIT ? OFFSET ?
         .unwrap_or(frame_id);
 
         let sql = if source.is_some() {
-            "SELECT id, frame_id, source, role, text, parent_id, depth, left_bound, top_bound, width_bound, height_bound, confidence, sort_order FROM elements WHERE frame_id = ?1 AND source = ?2 ORDER BY sort_order"
+            "SELECT id, frame_id, source, role, text, parent_id, depth, left_bound, top_bound, width_bound, height_bound, confidence, sort_order, on_screen FROM elements WHERE frame_id = ?1 AND source = ?2 ORDER BY sort_order"
         } else {
-            "SELECT id, frame_id, source, role, text, parent_id, depth, left_bound, top_bound, width_bound, height_bound, confidence, sort_order FROM elements WHERE frame_id = ?1 ORDER BY sort_order"
+            "SELECT id, frame_id, source, role, text, parent_id, depth, left_bound, top_bound, width_bound, height_bound, confidence, sort_order, on_screen FROM elements WHERE frame_id = ?1 ORDER BY sort_order"
         };
 
         let mut query = sqlx::query_as::<_, ElementRow>(sql).bind(effective_frame_id);

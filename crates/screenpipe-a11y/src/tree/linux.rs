@@ -615,8 +615,14 @@ fn extract_text(
     depth: usize,
     state: &mut WalkState,
 ) {
-    let bounds = get_component_extents(conn, aref)
+    // Element extents in screen-absolute coords; bounds are normalized
+    // for storage, on_screen is the focused-window intersection used by
+    // the search filter — see issue #2436.
+    let extents = get_component_extents(conn, aref);
+    let bounds = extents
         .and_then(|(x, y, w, h)| normalize_bounds(x as f64, y as f64, w as f64, h as f64, state));
+    let on_screen = extents
+        .and_then(|(x, y, w, h)| is_on_screen(x as f64, y as f64, w as f64, h as f64, state));
 
     let role_str = role_name(role);
 
@@ -635,6 +641,7 @@ fn extract_text(
                 depth.min(255) as u8,
                 bounds,
             );
+            node.on_screen = on_screen;
             fill_atspi_state(&mut node, conn, aref);
             state.nodes.push(node);
             return;
@@ -651,6 +658,7 @@ fn extract_text(
                 depth.min(255) as u8,
                 bounds,
             );
+            node.on_screen = on_screen;
             fill_atspi_state(&mut node, conn, aref);
             state.nodes.push(node);
             return;
@@ -667,6 +675,7 @@ fn extract_text(
             depth.min(255) as u8,
             bounds,
         );
+        node.on_screen = on_screen;
         fill_atspi_state(&mut node, conn, aref);
         state.nodes.push(node);
         return;
@@ -682,9 +691,35 @@ fn extract_text(
             depth.min(255) as u8,
             bounds,
         );
+        node.on_screen = on_screen;
         fill_atspi_state(&mut node, conn, aref);
         state.nodes.push(node);
     }
+}
+
+/// True iff the element's screen-absolute frame intersects the focused
+/// window's screen rect — see issue #2436. Delegates to the shared
+/// pure-geometry helper in `super::rects_intersect`.
+fn is_on_screen(
+    elem_x: f64,
+    elem_y: f64,
+    elem_w: f64,
+    elem_h: f64,
+    state: &WalkState,
+) -> Option<bool> {
+    if state.window_w <= 0.0 || state.window_h <= 0.0 {
+        return None;
+    }
+    Some(super::rects_intersect(
+        elem_x,
+        elem_y,
+        elem_w,
+        elem_h,
+        state.window_x,
+        state.window_y,
+        state.window_w,
+        state.window_h,
+    ))
 }
 
 /// Append text to buffer with newline separator.

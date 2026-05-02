@@ -45,6 +45,27 @@ pub struct AccessibilityTreeNode {
     /// None if the element doesn't expose AXPosition/AXSize.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bounds: Option<NodeBounds>,
+    /// Whether this element is **visually present on the screenshot** at
+    /// capture time, computed from `element_rect ∩ focused_window_rect`.
+    ///
+    /// Why: the AX tree captures off-screen text — terminal scroll buffers,
+    /// scrolled-off lines in IDE editors, hidden/clipped overflow regions
+    /// — that the user can't actually see in the captured image. Without
+    /// this flag, search returns frames whose only match is text the user
+    /// never saw. With it, callers can pass `on_screen=true` to restrict
+    /// to pixels-actually-visible matches.
+    ///
+    /// `None` = unknown (window bounds unavailable on this platform / capture).
+    /// `Some(true)` = element bounds intersect the focused-window rect.
+    /// `Some(false)` = element exists in the AX tree but is outside the
+    ///                 visible window (e.g. scroll-buffer content).
+    ///
+    /// Limitation: this catches text outside the WINDOW frame. It does NOT
+    /// catch text inside an inner-scroll container (e.g. a scroll viewport
+    /// inside a window). A second-pass clip to the nearest scroll ancestor
+    /// is the proper fix for those cases — see issue #2436.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub on_screen: Option<bool>,
 
     // --- Automation properties (all Optional, filled per-platform) ---
     /// Stable unique identifier for targeting elements.
@@ -106,6 +127,7 @@ impl AccessibilityTreeNode {
             text,
             depth,
             bounds,
+            on_screen: None,
             automation_id: None,
             class_name: None,
             value: None,
@@ -124,6 +146,47 @@ impl AccessibilityTreeNode {
             access_key: None,
         }
     }
+}
+
+/// Pure-geometry on-screen check shared by the macOS / Linux / Windows
+/// walkers. Returns `true` iff the element rect intersects the focused
+/// window's rect — the visibility test for issue #2436.
+///
+/// All inputs are screen-absolute pixels (or any consistent coordinate
+/// space; the function only cares about relative geometry). Caller is
+/// responsible for handling "window rect unavailable" by returning
+/// `Option::None` rather than calling this with a zero-size window —
+/// passing a degenerate window rect here would always return `false`,
+/// silently dropping every element.
+///
+/// Edge case (intentional): partial overlap counts as on-screen. If any
+/// pixel of the element overlaps the window, it's "visible enough" to
+/// match the user's intent ("did I see this on the screenshot?"). The
+/// alternative — strict containment — would drop edge-clipped text the
+/// user clearly saw.
+#[doc(hidden)] // Public so it can be unit-tested from this module's tests; not part of the stable surface.
+pub fn rects_intersect(
+    elem_x: f64,
+    elem_y: f64,
+    elem_w: f64,
+    elem_h: f64,
+    win_x: f64,
+    win_y: f64,
+    win_w: f64,
+    win_h: f64,
+) -> bool {
+    // Zero-area rects render no pixel — they cannot be visible. AX trees
+    // contain plenty of these (separators, value-indicator parents,
+    // hidden controls) so the early return matters for both correctness
+    // and a small perf win.
+    if elem_w <= 0.0 || elem_h <= 0.0 || win_w <= 0.0 || win_h <= 0.0 {
+        return false;
+    }
+    let win_right = win_x + win_w;
+    let win_bot = win_y + win_h;
+    let elem_right = elem_x + elem_w;
+    let elem_bot = elem_y + elem_h;
+    elem_x < win_right && elem_right > win_x && elem_y < win_bot && elem_bot > win_y
 }
 
 /// Why the tree walk stopped early (if it did).
@@ -469,5 +532,77 @@ mod tests {
         assert_eq!(hamming_distance(0, 0), 0);
         assert_eq!(hamming_distance(0b1111, 0b0000), 4);
         assert_eq!(hamming_distance(u64::MAX, 0), 64);
+    }
+
+    // ---------------------------------------------------------------
+    // rects_intersect — issue #2436 visibility geometry
+    // ---------------------------------------------------------------
+
+    /// Window at (100, 200) of size 800×600 — used as the reference frame
+    /// for every test below so each one only varies the element rect.
+    fn win() -> (f64, f64, f64, f64) {
+        (100.0, 200.0, 800.0, 600.0)
+    }
+
+    #[test]
+    fn rects_intersect_element_fully_inside_window() {
+        let (wx, wy, ww, wh) = win();
+        // Centered 100×100 element clearly inside the window.
+        assert!(rects_intersect(450.0, 450.0, 100.0, 100.0, wx, wy, ww, wh));
+    }
+
+    #[test]
+    fn rects_intersect_element_fully_outside_window_below() {
+        let (wx, wy, ww, wh) = win();
+        // Element below the window — common case for terminal scroll
+        // buffer where AX returns coords past the window's bottom edge.
+        assert!(!rects_intersect(
+            450.0, 1000.0, 100.0, 100.0, wx, wy, ww, wh
+        ));
+    }
+
+    #[test]
+    fn rects_intersect_element_fully_outside_window_right() {
+        let (wx, wy, ww, wh) = win();
+        // Element to the right of window — horizontal scroll-buffer case.
+        assert!(!rects_intersect(
+            2000.0, 450.0, 100.0, 100.0, wx, wy, ww, wh
+        ));
+    }
+
+    #[test]
+    fn rects_intersect_element_partially_overlapping() {
+        let (wx, wy, ww, wh) = win();
+        // Element clipped at the bottom edge — partial visibility counts
+        // as on-screen (intentional: any visible pixel = include).
+        assert!(rects_intersect(450.0, 750.0, 100.0, 100.0, wx, wy, ww, wh));
+    }
+
+    #[test]
+    fn rects_intersect_element_just_above_window() {
+        let (wx, wy, ww, wh) = win();
+        // Element that ends exactly at window top — no overlap (`<` is
+        // strict). This is the boundary case for "element ends at the
+        // pixel-row above the window's first visible row".
+        assert!(!rects_intersect(450.0, 100.0, 100.0, 100.0, wx, wy, ww, wh));
+    }
+
+    #[test]
+    fn rects_intersect_zero_size_element() {
+        let (wx, wy, ww, wh) = win();
+        // Degenerate element with zero width — no rendered pixel, so
+        // it's not visible by definition (the strict `<` does the right
+        // thing here without special-casing).
+        assert!(!rects_intersect(450.0, 450.0, 0.0, 0.0, wx, wy, ww, wh));
+    }
+
+    #[test]
+    fn rects_intersect_element_around_window() {
+        let (wx, wy, ww, wh) = win();
+        // Element bigger than (and containing) the window — every window
+        // pixel is "inside" the element, so the intersection is non-empty.
+        // Real-world: AXScrollArea reporting its full content extent
+        // larger than its visible viewport.
+        assert!(rects_intersect(0.0, 0.0, 5000.0, 5000.0, wx, wy, ww, wh));
     }
 }

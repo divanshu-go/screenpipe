@@ -722,6 +722,12 @@ pub struct Element {
     pub bounds: Option<ElementBounds>,
     pub confidence: Option<f64>,
     pub sort_order: i32,
+    /// True when this element was visually present on the captured frame.
+    /// `None` for elements captured before the on-screen check landed
+    /// (legacy rows) — search filters treat that as "unknown" rather than
+    /// implicitly true/false. See issue #2436.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_screen: Option<bool>,
 }
 
 /// Flat row for bulk insert (parent_id assigned after insert)
@@ -753,6 +759,10 @@ pub struct ElementRow {
     pub height_bound: Option<f64>,
     pub confidence: Option<f64>,
     pub sort_order: i32,
+    /// SQLite INTEGER (1/0/NULL) decoded as Option<bool>. NULL = unknown
+    /// (legacy rows pre-issue-#2436 fix); search treats unknown as
+    /// neither on- nor off-screen.
+    pub on_screen: Option<bool>,
 }
 
 impl From<ElementRow> for Element {
@@ -782,6 +792,7 @@ impl From<ElementRow> for Element {
             bounds,
             confidence: row.confidence,
             sort_order: row.sort_order,
+            on_screen: row.on_screen,
         }
     }
 }
