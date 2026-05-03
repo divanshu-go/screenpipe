@@ -135,15 +135,18 @@ Replace `SCREENPIPE_IP` with the IP of the machine running screenpipe. If the ma
 
 Use screenpipe's built-in **remote sync** to push your `~/.screenpipe/` directory to the OpenClaw machine over SFTP. No screenpipe-cloud account needed — just SSH access to your server.
 
+> **⚠️ clipboard sensitivity:** Remote sync includes clipboard events and content by default. If you're syncing to a less-trusted machine (VPS, shared server), disable clipboard capture first with `--disable-clipboard-capture` to avoid syncing passwords, API keys, or other sensitive data that flows through your clipboard.
+
 On the laptop (or any machine recording):
 
 ```bash
-# one-shot push
+# one-shot push (excludes clipboard)
 screenpipe sync remote now \
   --host openclaw.example.com \
   --user ubuntu \
   --key-path ~/.ssh/id_ed25519 \
-  --remote-path /home/ubuntu/.screenpipe
+  --remote-path /home/ubuntu/.screenpipe \
+  --disable-clipboard-capture
 
 # verify SSH first if you want
 screenpipe sync remote test --host ... --user ... --key-path ... --remote-path ...
@@ -155,10 +158,11 @@ screenpipe sync remote discover
 Run that on a cron / launchd / systemd timer for continuous sync:
 
 ```bash
-# crontab -e — every 15 minutes
+# crontab -e — every 15 minutes (without clipboard)
 */15 * * * * /usr/local/bin/screenpipe sync remote now \
   --host openclaw.example.com --user ubuntu \
-  --key-path /home/me/.ssh/id_ed25519 --remote-path /home/ubuntu/.screenpipe
+  --key-path /home/me/.ssh/id_ed25519 --remote-path /home/ubuntu/.screenpipe \
+  --disable-clipboard-capture
 ```
 
 Or set env vars instead of flags: `SCREENPIPE_REMOTE_HOST`, `SCREENPIPE_REMOTE_USER`, `SCREENPIPE_REMOTE_KEY`, `SCREENPIPE_REMOTE_PATH`.
