@@ -117,6 +117,12 @@
           "$HOME/.screenpipe/**"
         ]
       },
+      "pattern": {
+        "use": "isolation",
+        "options": {
+          "dir": "../dist-isolation"
+        }
+      },
       "csp": null
     },
     "macOSPrivateApi": true

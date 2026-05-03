@@ -8,6 +8,7 @@ use crate::{
     updates::is_enterprise_build,
     window::{RewindWindowId, ShowRewindWindow},
 };
+use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
 use tracing::{debug, error, info, warn};
 
@@ -2406,16 +2407,14 @@ pub fn set_native_theme(app_handle: tauri::AppHandle, theme: String) -> Result<(
     Ok(())
 }
 
-#[derive(serde::Serialize, specta::Type)]
+#[derive(Debug, serde::Serialize, serde::Deserialize, specta::Type, Clone)]
 pub struct CacheFile {
     pub path: String,
     pub label: String,
     pub size_bytes: u64,
 }
 
-#[tauri::command]
-#[specta::specta]
-pub async fn list_cache_files() -> Result<Vec<CacheFile>, String> {
+async fn list_cache_files() -> Result<Vec<CacheFile>, String> {
     let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
     let home_dir = dirs::home_dir().ok_or("no home directory")?;
     let mut files = Vec::new();
@@ -2525,35 +2524,121 @@ pub async fn list_cache_files() -> Result<Vec<CacheFile>, String> {
     Ok(files)
 }
 
+#[derive(Debug, Serialize, Deserialize, specta::Type)]
+pub struct DeleteCacheResult {
+    pub freed: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, specta::Type)]
+pub struct CacheDeletionPreview {
+    pub deletion_key: String,
+    pub files_to_delete: Vec<CacheFile>,
+    pub total_size_bytes: u64,
+}
+
+struct PendingDeletion {
+    files: Vec<String>,
+    created_at: std::time::Instant,
+}
+
+static PENDING_DELETIONS: once_cell::sync::Lazy<std::sync::Mutex<std::collections::HashMap<String, PendingDeletion>>> =
+    once_cell::sync::Lazy::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+/// Prepare cache deletion: returns idempotent key + preview of files to be deleted.
+/// Frontend shows this preview to user before final confirmation.
+/// Security: Rust commits to specific files; frontend can only confirm with the key.
 #[tauri::command]
 #[specta::specta]
-pub async fn delete_cache_files(paths: Vec<String>) -> Result<u64, String> {
-    let mut freed = 0u64;
-    for p in &paths {
-        let path = std::path::Path::new(p);
+pub async fn prepare_cache_deletion() -> Result<CacheDeletionPreview, String> {
+    let cache_files = list_cache_files().await?;
+
+    if cache_files.is_empty() {
+        return Err("No cache files to delete".to_string());
+    }
+
+    let total_size = cache_files.iter().map(|f| f.size_bytes).sum();
+    let deletion_key = uuid::Uuid::new_v4().to_string();
+
+    let file_paths: Vec<String> = cache_files.iter().map(|f| f.path.clone()).collect();
+
+    let mut deletions = PENDING_DELETIONS.lock().map_err(|_| "Failed to acquire lock")?;
+    deletions.insert(
+        deletion_key.clone(),
+        PendingDeletion {
+            files: file_paths,
+            created_at: std::time::Instant::now(),
+        },
+    );
+
+    Ok(CacheDeletionPreview {
+        deletion_key,
+        files_to_delete: cache_files,
+        total_size_bytes: total_size,
+    })
+}
+
+/// Execute cache deletion using idempotent key from prepare_cache_deletion.
+/// Security: Only deletes files that Rust committed to in the preparation phase.
+/// Frontend cannot pass arbitrary paths; it only passes the key Rust generated.
+#[tauri::command]
+#[specta::specta]
+pub async fn execute_cache_deletion(deletion_key: String) -> Result<DeleteCacheResult, String> {
+    let mut deletions = PENDING_DELETIONS.lock().map_err(|_| "Failed to acquire lock")?;
+
+    let pending = deletions
+        .remove(&deletion_key)
+        .ok_or("Invalid or expired deletion key")?;
+
+    // Security: Only delete files committed in prepare_cache_deletion
+    // Reject keys older than 5 minutes
+    if pending.created_at.elapsed().as_secs() > 300 {
+        return Err("Deletion key expired (older than 5 minutes)".to_string());
+    }
+
+    let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
+    let home_dir = dirs::home_dir().ok_or("no home directory")?;
+
+    let mut total_freed = 0u64;
+
+    for path_str in pending.files {
+        let path = std::path::PathBuf::from(&path_str);
+
+        // Security: verify path is within allowed directories
+        let canonical = std::fs::canonicalize(&path)
+            .unwrap_or_else(|_| path.clone());
+
+        if !canonical.starts_with(&data_dir) && !canonical.starts_with(&home_dir) {
+            warn!("Security: attempted to delete path outside allowed directories: {:?}", path);
+            continue;
+        }
+
         if !path.exists() {
             continue;
         }
-        let size = if path.is_dir() {
-            dir_size(path)
-        } else {
-            path.metadata().map(|m| m.len()).unwrap_or(0)
-        };
-        let result = if path.is_dir() {
-            std::fs::remove_dir_all(path)
-        } else {
-            std::fs::remove_file(path)
-        };
-        match result {
-            Ok(_) => {
-                info!("cache cleanup: deleted {}", p);
-                freed += size;
+
+        let freed = if path.is_dir() {
+            let size = dir_size(&path);
+            if let Err(e) = std::fs::remove_dir_all(&path) {
+                warn!("Failed to delete cache directory {:?}: {}", path, e);
+                continue;
             }
-            Err(e) => warn!("cache cleanup: failed to delete {}: {}", p, e),
-        }
+            size
+        } else {
+            let size = path.metadata().map(|m| m.len()).unwrap_or(0);
+            if let Err(e) = std::fs::remove_file(&path) {
+                warn!("Failed to delete cache file {:?}: {}", path, e);
+                continue;
+            }
+            size
+        };
+
+        total_freed += freed;
+        info!("cache cleanup: deleted {:?} ({} bytes)", path, freed);
     }
-    Ok(freed)
+
+    Ok(DeleteCacheResult { freed: total_freed })
 }
+
 
 fn dir_size(path: &std::path::Path) -> u64 {
     let mut total = 0u64;

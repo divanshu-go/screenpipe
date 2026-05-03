@@ -46,7 +46,7 @@ export default function GeneralSettings() {
   const [availableVersions, setAvailableVersions] = useState<string[]>([]);
   const [isRollingBack, setIsRollingBack] = useState(false);
   const [showVersions, setShowVersions] = useState(false);
-  const [cacheFiles, setCacheFiles] = useState<CacheFile[]>([]);
+  const [deletionPreview, setDeletionPreview] = useState<{ deletion_key: string; files_to_delete: CacheFile[]; total_size_bytes: bigint } | null>(null);
   const [showCacheDialog, setShowCacheDialog] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
 
@@ -289,17 +289,21 @@ export default function GeneralSettings() {
                 className="ml-4 h-7 text-xs"
                 disabled={isClearing}
                 onClick={async () => {
+                  setIsClearing(true);
                   try {
-                    const result = await commands.listCacheFiles();
+                    // Prepare deletion: Rust scans, generates key, commits files
+                    const result = await commands.prepareCacheDeletion();
                     if (result.status === "error") throw new Error(result.error);
-                    if (result.data.length === 0) {
+                    if (result.data.files_to_delete.length === 0) {
                       toast({ title: "nothing to clean up" });
                       return;
                     }
-                    setCacheFiles(result.data);
+                    setDeletionPreview(result.data);
                     setShowCacheDialog(true);
                   } catch (e: any) {
                     toast({ title: "failed to scan cache", description: e?.toString(), variant: "destructive" });
+                  } finally {
+                    setIsClearing(false);
                   }
                 }}
               >
@@ -316,9 +320,9 @@ export default function GeneralSettings() {
             <AlertDialogTitle>clear cache?</AlertDialogTitle>
             <AlertDialogDescription asChild>
               <div className="space-y-2">
-                <p>the following files will be deleted ({formatBytes(cacheFiles.reduce((s, f) => s + Number(f.size_bytes), 0))} total):</p>
+                <p>the following files will be deleted ({deletionPreview && formatBytes(Number(deletionPreview.total_size_bytes))} total):</p>
                 <ul className="text-xs space-y-1 max-h-48 overflow-y-auto">
-                  {cacheFiles.map((f) => (
+                  {deletionPreview?.files_to_delete.map((f) => (
                     <li key={f.path} className="flex justify-between gap-2">
                       <span className="truncate">{f.label}</span>
                       <span className="text-muted-foreground shrink-0">{formatBytes(Number(f.size_bytes))}</span>
@@ -335,21 +339,23 @@ export default function GeneralSettings() {
             <AlertDialogCancel>cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={async () => {
+                if (!deletionPreview) return;
                 setIsClearing(true);
-                setShowCacheDialog(false);
                 try {
-                  const paths = cacheFiles.map((f) => f.path);
-                  const result = await commands.deleteCacheFiles(paths);
+                  // Execute deletion using idempotent key from prepare step
+                  const result = await commands.executeCacheDeletion(deletionPreview.deletion_key);
                   if (result.status === "error") throw new Error(result.error);
+
                   toast({
                     title: "cache cleared",
-                    description: `freed ${formatBytes(Number(result.data))}`,
+                    description: `freed ${formatBytes(Number(result.data.freed))}`,
                   });
                 } catch (e: any) {
-                  toast({ title: "failed to clear cache", description: e?.toString(), variant: "destructive" });
+                  toast({ title: "failed to delete cache", description: e?.toString(), variant: "destructive" });
                 } finally {
                   setIsClearing(false);
-                  setCacheFiles([]);
+                  setShowCacheDialog(false);
+                  setDeletionPreview(null);
                 }
               }}
             >

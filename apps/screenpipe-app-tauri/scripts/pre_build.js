@@ -22,6 +22,30 @@ const winArch = platform === 'windows' ? (process.arch === 'arm64' ? 'arm64' : '
 const cwd = process.cwd()
 console.log('cwd', cwd)
 
+/** Copy Tauri isolation iframe assets (see docs/TAURI_ISOLATION_IPC.md). */
+async function syncIsolationDist() {
+	const appDir = path.join(cwd, '..')
+	const srcDir = path.join(appDir, 'isolation')
+	const destDir = path.join(appDir, 'dist-isolation')
+	await fs.rm(destDir, { recursive: true, force: true })
+	await fs.mkdir(destDir, { recursive: true })
+	for (const name of ['index.html', 'index.js']) {
+		const from = path.join(srcDir, name)
+		const to = path.join(destDir, name)
+		await fs.copyFile(from, to)
+	}
+	const jsPath = path.join(destDir, 'index.js')
+	let body = await fs.readFile(jsPath, 'utf8')
+	const enforce = process.env.SCREENPIPE_ISOLATION_ENFORCE === '1'
+	body = body.replace(
+		/var SP_ENFORCE = false;/,
+		`var SP_ENFORCE = ${enforce ? 'true' : 'false'};`,
+	)
+	await fs.writeFile(jsPath, body)
+	console.log(`isolation: synced to dist-isolation (SP_ENFORCE=${enforce})`)
+}
+
+await syncIsolationDist()
 
 const config = {
 	ffmpegRealname: 'ffmpeg',
@@ -557,7 +581,7 @@ await copyBunBinary();
 
 // --dev or --build
 const action = process.argv?.[2]
-if (action?.includes('--build' || action.includes('--dev'))) {
+if (action?.includes('--build') || action?.includes('--dev')) {
 	process.chdir(path.join(cwd, '..'))
 	process.env['FFMPEG_DIR'] = exports.ffmpeg
 	if (platform === 'windows') {

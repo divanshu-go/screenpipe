@@ -106,6 +106,23 @@ export const Providers = forwardRef<
     }
   }, []);
 
+  // Tauri isolation hook posts aggregate IPC stats (no payload PII) — see docs/TAURI_ISOLATION_IPC.md
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const w = window as Window & { __SCREENPIPE_ISOLATION_IPC__?: unknown };
+    if (!(w as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__) return;
+    const onMsg = (e: MessageEvent) => {
+      if (!e.data || typeof e.data !== "object") return;
+      const d = e.data as { type?: string; stats?: unknown };
+      if (d.type !== "screenpipe-isolation-ipc-v1" || !d.stats) {
+        return;
+      }
+      w.__SCREENPIPE_ISOLATION_IPC__ = d.stats;
+    };
+    window.addEventListener("message", onMsg);
+    return () => window.removeEventListener("message", onMsg);
+  }, []);
+
   return (
     <Suspense>
     <NuqsAdapter>
