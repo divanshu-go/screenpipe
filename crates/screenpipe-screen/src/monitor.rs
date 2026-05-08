@@ -55,6 +55,20 @@ impl fmt::Display for MonitorListError {
 #[cfg(target_os = "macos")]
 use sck_rs::Monitor as SckMonitor;
 
+/// Whether to render the mouse cursor into captured frames (macOS ScreenCaptureKit only).
+///
+/// Set to `false` intentionally. Enabling cursor rendering in SCK's `SCStreamConfiguration`
+/// (`set_shows_cursor(true)`) causes measurable input lag on some Macs — the WindowServer has
+/// to composite the cursor into every captured frame in sync with the stream, which steals GPU
+/// time from the normal display pipeline. The effect is subtle on modern hardware but becomes
+/// visibly bad on older machines and under thermal throttling (reported on macOS Sequoia 15.7.4).
+///
+/// The cursor is purely cosmetic in stored frames: OCR, accessibility, and diff-detection all
+/// work on content, not pointer position. There is no functional reason to capture it, and the
+/// performance cost is real. See: https://github.com/screenpipe/screenpipe/issues/3293
+#[cfg(target_os = "macos")]
+const CAPTURE_SHOW_CURSOR: bool = false;
+
 // xcap is used on non-macOS platforms, and as fallback on older macOS
 use xcap::Monitor as XcapMonitor;
 
@@ -258,6 +272,7 @@ impl SafeMonitor {
                     }
 
                     monitor
+                        .with_show_cursor(CAPTURE_SHOW_CURSOR)
                         .capture_image()
                         .map_err(|e| format!("{}", e))
                         .map(DynamicImage::ImageRgba8)
@@ -328,6 +343,7 @@ impl SafeMonitor {
                     }
 
                     monitor
+                        .with_show_cursor(CAPTURE_SHOW_CURSOR)
                         .capture_image_excluding(&ids)
                         .map_err(|e| format!("{}", e))
                         .map(DynamicImage::ImageRgba8)

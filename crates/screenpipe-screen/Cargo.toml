@@ -77,7 +77,7 @@ harness = false
 
 # macOS: sck-rs for 12.3+ (ScreenCaptureKit), xcap as fallback for older versions
 [target.'cfg(target_os = "macos")'.dependencies]
-sck-rs = { git = "https://github.com/screenpipe/sck-rs" }
+sck-rs = { git = "https://github.com/divanshu-go/sck-rs", branch = "feature/disable-cursor-in-capture" }
 xcap = "0.9"
 libc = "0.2.168"
 cidre = { git = "https://github.com/yury/cidre.git", features = ["vn", "cv", "cg", "app"] }
