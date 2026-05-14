@@ -4,27 +4,16 @@
 
 //! Tauri-side glue for the owned-browser instance.
 //!
-//! The owned browser is a **top-level** `WebviewWindow` (its own native
-//! window, decorations off, taskbar/dock skipped). The frontend
-//! `<BrowserSidebar />` measures a placeholder div in whichever app window
-//! it's mounted in, converts that rect into screen coordinates, and pushes
-//! it via `owned_browser_set_bounds`. The webview tracks the placeholder
-//! exactly as if it were embedded.
+//! The owned browser is primarily a native Tauri child `Webview` parented
+//! to whichever app window hosts `<BrowserSidebar />`. The frontend sends a
+//! coalesced placeholder rect in parent-local coordinates, and Rust uses
+//! `Window::add_child`/`Webview::set_bounds` so the OS follows parent
+//! window movement without a per-frame screen-coordinate loop.
 //!
-//! Why a top-level window instead of a child `Webview`:
-//!   - A child webview must be parented to one specific window. The chat
-//!     UI can render in `home`, `main`, `main-window`, or `chat` depending
-//!     on the user's session — and it can switch between them at runtime
-//!     (overlay ↔ window mode, tray-only ↔ home). Whatever window we
-//!     parented to could disappear or become inactive, leaving the browser
-//!     either stuck in the wrong window or rendered off-screen because the
-//!     sidebar's `getBoundingClientRect()` is in a *different* window's
-//!     coordinate space than the parent.
-//!   - A top-level window has no parent. The frontend computes screen
-//!     coords from the active window's `innerPosition() + scaleFactor()`
-//!     plus the placeholder's viewport rect, and the webview lands exactly
-//!     where the placeholder is — regardless of which window is hosting
-//!     the chat UI.
+//! The old top-level `WebviewWindow` implementation is still created as a
+//! hidden fallback. It handles early agent requests before any chat window
+//! has attached a child, and it keeps the browser usable on platforms where
+//! Tauri's unstable child webview path fails.
 //!
 //! [`OwnedWebviewHandle`] is implemented by translating the agent's `eval`
 //! requests into `webview.eval()` + a `document.title` round-trip. We use
@@ -32,7 +21,7 @@
 //! (e.g. wikipedia.org) do not have access to `window.__TAURI__` — the
 //! Tauri IPC bridge is only injected on app-origin pages. Setting
 //! `document.title` works on every origin and the title is observable from
-//! Rust via `WebviewWindow::title()`. We install the bridge via
+//! Rust via `on_document_title_changed`. We install the bridge via
 //! `initialization_script`, which Tauri runs on every page load including
 //! cross-origin navigations.
 //!
@@ -48,8 +37,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{
-    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindow,
-    WebviewWindowBuilder,
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Position, Rect, Size, Webview,
+    WebviewUrl, WebviewWindow, WebviewWindowBuilder, Window, Wry,
 };
 use tokio::sync::{oneshot, Mutex};
 use tracing::{debug, info, warn};
@@ -57,6 +46,10 @@ use uuid::Uuid;
 
 /// WebviewWindow label — also used by the frontend Tauri commands.
 pub const WEBVIEW_LABEL: &str = "owned-browser";
+
+/// Hidden top-level fallback used until a chat window attaches the native child
+/// webview, or when Tauri's unstable child webview path fails on a platform.
+const FALLBACK_WEBVIEW_LABEL: &str = "owned-browser-fallback";
 
 /// Event the Rust handle emits when the agent navigates the browser. The
 /// frontend's `<BrowserSidebar />` listens for this so it can slide in,
@@ -161,11 +154,157 @@ pub async fn owned_browser_resolve_session_access(
 }
 
 // ---------------------------------------------------------------------------
+// Native webview state
+// ---------------------------------------------------------------------------
+
+#[derive(Clone)]
+enum ActiveOwnedWebview {
+    Child(Webview<Wry>),
+    Fallback(WebviewWindow<Wry>),
+}
+
+impl ActiveOwnedWebview {
+    fn eval(&self, js: impl Into<String>) -> tauri::Result<()> {
+        match self {
+            Self::Child(webview) => webview.eval(js),
+            Self::Fallback(window) => window.eval(js),
+        }
+    }
+
+    fn navigate(&self, url: url::Url) -> tauri::Result<()> {
+        match self {
+            Self::Child(webview) => webview.navigate(url),
+            Self::Fallback(window) => window.navigate(url),
+        }
+    }
+
+    fn show(&self) -> tauri::Result<()> {
+        match self {
+            Self::Child(webview) => webview.show(),
+            Self::Fallback(window) => window.show(),
+        }
+    }
+
+    fn hide(&self) -> tauri::Result<()> {
+        match self {
+            Self::Child(webview) => webview.hide(),
+            Self::Fallback(window) => window.hide(),
+        }
+    }
+}
+
+#[derive(Default)]
+struct OwnedBrowserInner {
+    child: Option<Webview<Wry>>,
+    child_parent: Option<String>,
+    fallback: Option<WebviewWindow<Wry>>,
+    pending_url: Option<url::Url>,
+    visible: bool,
+    child_failed: bool,
+}
+
+struct OwnedBrowserState {
+    inner: Mutex<OwnedBrowserInner>,
+    last_title: StdMutex<String>,
+}
+
+impl OwnedBrowserState {
+    fn new() -> Self {
+        Self {
+            inner: Mutex::new(OwnedBrowserInner::default()),
+            last_title: StdMutex::new(String::new()),
+        }
+    }
+
+    fn record_title(&self, title: String) {
+        if let Ok(mut last_title) = self.last_title.lock() {
+            *last_title = title;
+        }
+    }
+
+    fn latest_title(&self) -> String {
+        self.last_title
+            .lock()
+            .map(|title| title.clone())
+            .unwrap_or_default()
+    }
+
+    async fn active(&self) -> Option<ActiveOwnedWebview> {
+        let inner = self.inner.lock().await;
+        inner
+            .child
+            .as_ref()
+            .cloned()
+            .map(ActiveOwnedWebview::Child)
+            .or_else(|| {
+                inner
+                    .fallback
+                    .as_ref()
+                    .cloned()
+                    .map(ActiveOwnedWebview::Fallback)
+            })
+    }
+
+    async fn is_visible(&self) -> bool {
+        self.inner.lock().await.visible
+    }
+
+    async fn set_visible(&self, visible: bool) {
+        self.inner.lock().await.visible = visible;
+    }
+
+    async fn set_fallback(&self, fallback: WebviewWindow<Wry>) {
+        self.inner.lock().await.fallback = Some(fallback);
+    }
+
+    async fn store_pending_url(&self, url: url::Url) {
+        self.inner.lock().await.pending_url = Some(url);
+    }
+}
+
+fn browser_state() -> Arc<OwnedBrowserState> {
+    static STATE: OnceLock<Arc<OwnedBrowserState>> = OnceLock::new();
+    STATE
+        .get_or_init(|| Arc::new(OwnedBrowserState::new()))
+        .clone()
+}
+
+fn child_webview_builder(label: &str, url: WebviewUrl) -> tauri::webview::WebviewBuilder<Wry> {
+    let state_for_title = browser_state();
+    let mut builder = tauri::webview::WebviewBuilder::new(label.to_string(), url)
+        .initialization_script(BRIDGE_INIT_SCRIPT)
+        .on_document_title_changed(move |_webview, title| {
+            state_for_title.record_title(title);
+        });
+
+    #[cfg(target_os = "macos")]
+    {
+        // Keep parity with the old WebviewWindow path. Some sites gate the
+        // default WKWebView UA even though the underlying engine is Safari.
+        builder = builder.user_agent(
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) \
+             AppleWebKit/605.1.15 (KHTML, like Gecko) \
+             Version/17.5 Safari/605.1.15",
+        );
+    }
+
+    builder
+}
+
+fn logical_rect(x: f64, y: f64, width: f64, height: f64) -> Rect {
+    Rect {
+        position: Position::Logical(LogicalPosition::new(x, y)),
+        size: Size::Logical(LogicalSize::new(width, height)),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Handle implementation
 // ---------------------------------------------------------------------------
 
 struct TauriOwnedHandle {
     app: AppHandle,
+    state: Arc<OwnedBrowserState>,
     /// Serialise concurrent eval calls. The result transport
     /// (`document.title`) is a single global slot, so we can only
     /// reliably observe one outstanding eval at a time. Agents very rarely
@@ -184,10 +323,11 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
         // Hold the mutex for the entire eval — see eval_lock comment.
         let _guard = self.eval_lock.lock().await;
 
-        let webview_window = self
-            .app
-            .get_webview_window(WEBVIEW_LABEL)
-            .ok_or_else(|| "owned-browser webview window not found".to_string())?;
+        let active = self
+            .state
+            .active()
+            .await
+            .ok_or_else(|| "owned-browser webview not initialized".to_string())?;
 
         // A hidden WebView2 window can accept `eval()` without actually
         // executing the script. Make sure the native webview is live before
@@ -215,7 +355,8 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
             let _ = self.app.emit(NAVIGATE_EVENT, parsed.as_str());
-            webview_window
+            self.state.store_pending_url(parsed.clone()).await;
+            active
                 .navigate(parsed)
                 .map_err(|e| format!("webview.navigate failed: {e}"))?;
             tokio::time::sleep(Duration::from_millis(1_000)).await;
@@ -223,7 +364,7 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
 
         // Snapshot the current title so we can restore it after we read
         // our marker. Best-effort — we don't fail the eval if this fails.
-        let original_title = webview_window.title().unwrap_or_default();
+        let original_title = self.state.latest_title();
 
         let id = Uuid::new_v4().to_string();
         let id_lit = serde_json::to_string(&id).unwrap();
@@ -258,7 +399,7 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
             id = id_lit
         );
 
-        webview_window
+        active
             .eval(wrapped)
             .map_err(|e| format!("webview.eval failed: {e}"))?;
 
@@ -269,18 +410,18 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
         let result_json = loop {
             if start.elapsed() >= timeout {
                 if !was_visible && url.is_none() {
-                    let _ = webview_window.hide();
+                    let _ = active.hide();
+                    self.state.set_visible(false).await;
                 }
                 return Err(format!(
                     "owned-browser eval timed out after {}s (last title: {:?})",
                     timeout.as_secs(),
-                    webview_window.title().unwrap_or_default()
+                    self.state.latest_title()
                 ));
             }
-            if let Ok(title) = webview_window.title() {
-                if let Some(rest) = title.strip_prefix(RESULT_TITLE_PREFIX) {
-                    break rest.to_string();
-                }
+            let title = self.state.latest_title();
+            if let Some(rest) = title.strip_prefix(RESULT_TITLE_PREFIX) {
+                break rest.to_string();
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         };
@@ -288,9 +429,10 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
         // Restore the page's prior title so user-facing chrome (history,
         // tab labels in any embedding UI) doesn't keep our marker.
         let restore_lit = serde_json::to_string(&original_title).unwrap_or_else(|_| "\"\"".into());
-        let _ = webview_window.eval(format!("document.title = {restore_lit};"));
+        let _ = active.eval(format!("document.title = {restore_lit};"));
         if !was_visible && url.is_none() {
-            let _ = webview_window.hide();
+            let _ = active.hide();
+            self.state.set_visible(false).await;
         }
 
         // Parse the payload our wrapper emitted. We expect the same
@@ -332,11 +474,6 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
     /// own titles. The frontend sidebar listens for `NAVIGATE_EVENT` and
     /// reveals/positions the webview itself.
     async fn navigate(&self, url: &str) -> Result<(), String> {
-        let webview_window = self
-            .app
-            .get_webview_window(WEBVIEW_LABEL)
-            .ok_or_else(|| "owned-browser webview window not found".to_string())?;
-
         let parsed: url::Url = url
             .parse()
             .map_err(|e: url::ParseError| format!("invalid url: {e}"))?;
@@ -360,7 +497,8 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
         }
 
         let _ = self.app.emit(NAVIGATE_EVENT, parsed.as_str());
-        webview_window
+        self.state.store_pending_url(parsed.clone()).await;
+        active
             .navigate(parsed)
             .map_err(|e| format!("webview.navigate failed: {e}"))?;
 
@@ -429,27 +567,30 @@ pub fn spawn_install_when_ready(
     });
 }
 
-/// Create the owned-browser top-level window if it doesn't exist yet, and
+/// Create the owned-browser fallback window if it doesn't exist yet, and
 /// return a ready-to-attach handle. Idempotent.
 ///
-/// The window starts at 1×1 off-screen and hidden; the frontend sidebar
-/// calls `owned_browser_set_bounds` to position and show it once a chat
-/// needs it.
+/// The fallback starts hidden/offscreen; the frontend sidebar calls
+/// `owned_browser_set_bounds` to attach the preferred child webview once a
+/// chat needs it.
 pub async fn install(
     app: &AppHandle,
     screenpipe_dir: PathBuf,
 ) -> Result<Arc<dyn OwnedWebviewHandle>, String> {
     let _ = screenpipe_dir;
 
-    if app.get_webview_window(WEBVIEW_LABEL).is_none() {
+    let state = browser_state();
+
+    if app.get_webview_window(FALLBACK_WEBVIEW_LABEL).is_none() {
         let blank: url::Url = "about:blank"
             .parse()
             .map_err(|e: url::ParseError| e.to_string())?;
 
+        let state_for_title = state.clone();
         #[allow(unused_mut)]
         let mut builder =
-            WebviewWindowBuilder::new(app, WEBVIEW_LABEL, WebviewUrl::External(blank))
-                .title("owned-browser")
+            WebviewWindowBuilder::new(app, FALLBACK_WEBVIEW_LABEL, WebviewUrl::External(blank))
+                .title("owned-browser fallback")
                 .decorations(false)
                 .resizable(false)
                 .skip_taskbar(true)
@@ -463,7 +604,10 @@ pub async fn install(
                 // app focus/hide/minimize now propagate to the browser via
                 // the OS's standard cross-app window ordering.
                 .shadow(false)
-                .initialization_script(BRIDGE_INIT_SCRIPT);
+                .initialization_script(BRIDGE_INIT_SCRIPT)
+                .on_document_title_changed(move |_window, title| {
+                    state_for_title.record_title(title);
+                });
 
         #[cfg(target_os = "macos")]
         {
@@ -502,54 +646,126 @@ pub async fn install(
                 .position(0.0, 0.0);
         }
 
-        builder
+        let fallback = builder
             .build()
             .map(crate::window::finalize_webview_window)
             .map_err(|e| format!("WebviewWindowBuilder::build failed: {e}"))?;
 
-        info!("owned-browser: top-level webview window created");
+        state.set_fallback(fallback).await;
+
+        info!("owned-browser: top-level fallback webview window created");
+    } else if let Some(fallback) = app.get_webview_window(FALLBACK_WEBVIEW_LABEL) {
+        state.set_fallback(fallback).await;
     }
 
     let handle = Arc::new(TauriOwnedHandle {
         app: app.clone(),
+        state,
         eval_lock: Mutex::new(()),
     });
 
     Ok(handle as Arc<dyn OwnedWebviewHandle>)
 }
 
-// ---------------------------------------------------------------------------
-// Tauri commands — sidebar controls (frontend → child webview)
-// ---------------------------------------------------------------------------
+async fn ensure_child_bounds(
+    app: &AppHandle,
+    parent: &str,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<Option<Webview<Wry>>, String> {
+    let state = browser_state();
+    let parent_window: Option<Window<Wry>> = app.get_window(parent);
 
-/// Position and size the embedded webview window. The frontend sends
-/// viewport-relative coords (the placeholder's `getBoundingClientRect()`)
-/// plus the label of the parent window that hosts the placeholder. Rust
-/// resolves the parent's screen position and adds the rect offsets — this
-/// keeps the conversion logic on one side (Rust's `inner_position()` is
-/// the authoritative source) and avoids JS↔Rust unit-mismatch bugs that
-/// caused the webview to land off-screen on monitors where JS-side math
-/// disagreed with the OS. Call with width/height = 0 to hide.
-#[tauri::command]
-pub async fn owned_browser_set_bounds(
-    app: AppHandle,
-    parent: String,
+    let Some(parent_window) = parent_window else {
+        return Ok(None);
+    };
+
+    let mut pending_url = None;
+    let child = {
+        let mut inner = state.inner.lock().await;
+
+        if let Some(child) = inner.child.clone() {
+            if inner.child_parent.as_deref() != Some(parent) {
+                child
+                    .reparent(&parent_window)
+                    .map_err(|e| format!("owned-browser child reparent failed: {e}"))?;
+                inner.child_parent = Some(parent.to_string());
+            }
+            Some(child)
+        } else if inner.child_failed {
+            None
+        } else {
+            let blank: url::Url = "about:blank"
+                .parse()
+                .map_err(|e: url::ParseError| e.to_string())?;
+            let builder = child_webview_builder(WEBVIEW_LABEL, WebviewUrl::External(blank));
+            match parent_window.add_child(
+                builder,
+                LogicalPosition::new(x, y),
+                LogicalSize::new(width, height),
+            ) {
+                Ok(child) => {
+                    pending_url = inner.pending_url.take();
+                    inner.child = Some(child.clone());
+                    inner.child_parent = Some(parent.to_string());
+                    if let Some(fallback) = &inner.fallback {
+                        let _ = fallback.hide();
+                    }
+                    info!(parent, "owned-browser: child webview attached");
+                    Some(child)
+                }
+                Err(e) => {
+                    inner.child_failed = true;
+                    warn!(
+                        parent,
+                        error = %e,
+                        "owned-browser: child webview attach failed; using top-level fallback"
+                    );
+                    None
+                }
+            }
+        }
+    };
+
+    if let Some(child) = &child {
+        child
+            .set_bounds(logical_rect(x, y, width, height))
+            .map_err(|e| format!("owned-browser child set_bounds failed: {e}"))?;
+        child
+            .show()
+            .map_err(|e| format!("owned-browser child show failed: {e}"))?;
+        state.set_visible(true).await;
+
+        if let Some(url) = pending_url {
+            let _ = child.navigate(url);
+        }
+    }
+
+    Ok(child)
+}
+
+async fn set_fallback_bounds(
+    app: &AppHandle,
+    parent: &str,
     x: f64,
     y: f64,
     width: f64,
     height: f64,
 ) -> Result<(), String> {
-    let webview_window = app
-        .get_webview_window(WEBVIEW_LABEL)
-        .ok_or_else(|| "owned-browser not initialized".to_string())?;
-
-    if width <= 0.0 || height <= 0.0 {
-        webview_window.hide().map_err(|e| e.to_string())?;
-        return Ok(());
+    let state = browser_state();
+    let fallback = {
+        let inner = state.inner.lock().await;
+        inner
+            .fallback
+            .clone()
+            .or_else(|| app.get_webview_window(FALLBACK_WEBVIEW_LABEL))
     }
+    .ok_or_else(|| "owned-browser fallback not initialized".to_string())?;
 
     let parent_w = app
-        .get_webview_window(&parent)
+        .get_webview_window(parent)
         .ok_or_else(|| format!("parent window {parent:?} not found"))?;
     let scale = parent_w.scale_factor().map_err(|e| e.to_string())?;
     let inner_pos_phys = parent_w.inner_position().map_err(|e| e.to_string())?;
@@ -559,39 +775,67 @@ pub async fn owned_browser_set_bounds(
     let screen_y = inner_pos.y + y;
 
     tracing::debug!(
-        "owned-browser set_bounds: parent={parent} inner=({:.0},{:.0}) rect=({x:.0},{y:.0},{width:.0}x{height:.0}) -> screen=({screen_x:.0},{screen_y:.0})",
+        "owned-browser fallback set_bounds: parent={parent} inner=({:.0},{:.0}) rect=({x:.0},{y:.0},{width:.0}x{height:.0}) -> screen=({screen_x:.0},{screen_y:.0})",
         inner_pos.x,
         inner_pos.y
     );
 
-    // Bind owned-browser as a child of the host window. macOS then ties
-    // the two together: parent miniaturize / orderOut / app-deactivate
-    // propagate to the child automatically, and `addChildWindow:ordered:`
-    // ensures the child stays *above* the parent in z-order without
-    // floating-globally above other apps' windows. Replaces the old
-    // `always_on_top: true` approach which caused the browser to sit on
-    // top of MT5 / Claude.ai / etc. when the user switched apps.
-    // Switching parents auto-removes from the old one (a window can have
-    // at most one parent in Cocoa). Cache the bound label so we only
-    // call addChildWindow on actual parent change — set_bounds runs on
-    // every frame during slide-in / drag-resize, and re-binding 60×/s
-    // wakes WindowServer + replayd into a feedback loop.
     #[cfg(target_os = "macos")]
     {
         let mut current = bound_parent().lock().await;
-        if current.as_deref() != Some(parent.as_str()) {
-            bind_owned_browser_to_parent(&app, &parent).await?;
-            *current = Some(parent.clone());
+        if current.as_deref() != Some(parent) {
+            bind_owned_browser_to_parent(app, parent, FALLBACK_WEBVIEW_LABEL).await?;
+            *current = Some(parent.to_string());
         }
     }
 
-    webview_window
+    fallback
         .set_position(LogicalPosition::new(screen_x, screen_y))
         .map_err(|e| e.to_string())?;
-    webview_window
+    fallback
         .set_size(LogicalSize::new(width, height))
         .map_err(|e| e.to_string())?;
-    webview_window.show().map_err(|e| e.to_string())
+    fallback.show().map_err(|e| e.to_string())?;
+    state.set_visible(true).await;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Tauri commands — sidebar controls (frontend → child webview)
+// ---------------------------------------------------------------------------
+
+/// Position and size the embedded child webview. The frontend sends
+/// viewport-relative coords from the same window that hosts the child, so
+/// they can be applied as parent-local bounds. If the child path fails,
+/// the hidden top-level fallback uses the legacy screen-coordinate path.
+/// Call with width/height = 0 to hide.
+#[tauri::command]
+pub async fn owned_browser_set_bounds(
+    app: AppHandle,
+    parent: String,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    let state = browser_state();
+
+    if width <= 0.0 || height <= 0.0 {
+        if let Some(active) = state.active().await {
+            active.hide().map_err(|e| e.to_string())?;
+        }
+        state.set_visible(false).await;
+        return Ok(());
+    }
+
+    if ensure_child_bounds(&app, &parent, x, y, width, height)
+        .await?
+        .is_some()
+    {
+        return Ok(());
+    }
+
+    set_fallback_bounds(&app, &parent, x, y, width, height).await
 }
 
 /// macOS only: parent label currently bound via `addChildWindow:`. The
@@ -622,6 +866,7 @@ async fn bind_owned_browser_to_parent(app: &AppHandle, parent_label: &str) -> Re
 
     let app_for_main = app.clone();
     let parent_label = parent_label.to_string();
+    let child_label = child_label.to_string();
     let (tx, rx) = tokio::sync::oneshot::channel::<Result<(), String>>();
 
     app.run_on_main_thread(move || {
@@ -645,11 +890,11 @@ async fn bind_owned_browser_to_parent(app: &AppHandle, parent_label: &str) -> Re
             };
 
             let child_win = app_for_main
-                .get_webview_window(WEBVIEW_LABEL)
-                .ok_or_else(|| "owned-browser not initialized".to_string())?;
+                .get_webview_window(&child_label)
+                .ok_or_else(|| format!("{child_label} not initialized"))?;
             let child_ptr: *mut Object = child_win
                 .ns_window()
-                .map_err(|e| format!("ns_window for owned-browser: {e}"))?
+                .map_err(|e| format!("ns_window for {child_label}: {e}"))?
                 as *mut Object;
 
             if parent_ptr.is_null() || child_ptr.is_null() {
@@ -677,8 +922,10 @@ async fn bind_owned_browser_to_parent(app: &AppHandle, parent_label: &str) -> Re
 /// when restoring per-chat state.
 #[tauri::command]
 pub async fn owned_browser_navigate(app: AppHandle, url: String) -> Result<(), String> {
-    let webview_window = app
-        .get_webview_window(WEBVIEW_LABEL)
+    let state = browser_state();
+    let active = state
+        .active()
+        .await
         .ok_or_else(|| "owned-browser not initialized".to_string())?;
     let parsed: url::Url = url
         .parse()
@@ -687,17 +934,23 @@ pub async fn owned_browser_navigate(app: AppHandle, url: String) -> Result<(), S
     // Inherit the user's logged-in sessions before navigating.
     inject_cookies_for_url(&app, &parsed).await;
     let _ = app.emit(NAVIGATE_EVENT, parsed.as_str());
-    webview_window.navigate(parsed).map_err(|e| e.to_string())
+    state.store_pending_url(parsed.clone()).await;
+    active.navigate(parsed).map_err(|e| e.to_string())
 }
 
 /// Hide the embedded webview without destroying it. Equivalent to calling
 /// `set_bounds` with zero dimensions, but more explicit at the call site.
 #[tauri::command]
 pub async fn owned_browser_hide(app: AppHandle) -> Result<(), String> {
-    let webview_window = app
-        .get_webview_window(WEBVIEW_LABEL)
+    let _ = app;
+    let state = browser_state();
+    let active = state
+        .active()
+        .await
         .ok_or_else(|| "owned-browser not initialized".to_string())?;
-    webview_window.hide().map_err(|e| e.to_string())
+    active.hide().map_err(|e| e.to_string())?;
+    state.set_visible(false).await;
+    Ok(())
 }
 
 /// Cross-platform cookie pre-navigate hook. Resolves the URL's host,
