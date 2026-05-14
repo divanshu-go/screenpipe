@@ -20,9 +20,9 @@
  *   4. Collapse: hide/show toggle. The webview survives in the background
  *      (cookies + page state preserved) — only the panel is hidden.
  *
- * The agent triggers navigation via
- * `POST /connections/browsers/owned-default/eval`. That emits a
- * `owned-browser:navigate` event the sidebar listens to.
+ * The agent triggers navigation via `POST /connections/browsers/owned-default`.
+ * Rust emits requested-navigation and native page-state events; the header
+ * always renders the native state when it is available.
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
@@ -227,6 +227,8 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
       setVisible(true);
       setCollapsed(false);
       setCurrentUrl(url);
+      setCurrentTitle(null);
+      setLoading(true);
       persistState({ url, collapsed: false });
     });
     return () => {
@@ -291,6 +293,8 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
         setVisible(true);
         setCollapsed(wasCollapsed);
         setCurrentUrl(url);
+        setCurrentTitle(null);
+        setLoading(!wasCollapsed);
         // The webview install runs on a background task that retries
         // until the app's Tauri runtime has booted. On cold start a chat
         // with a saved `browserState.url` opens fast enough that this
@@ -316,6 +320,8 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
         setVisible(false);
         setCollapsed(false);
         setCurrentUrl(null);
+        setCurrentTitle(null);
+        setLoading(false);
         invoke("owned_browser_hide").catch(() => {});
       }
     })();
@@ -404,6 +410,7 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
   const reload = useCallback(async () => {
     if (!currentUrl) return;
     try {
+      setLoading(true);
       await invoke("owned_browser_navigate", { url: currentUrl });
     } catch (e) {
       console.error("reload failed", e);
@@ -412,6 +419,7 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
 
   const collapse = useCallback(() => {
     setCollapsed(true);
+    setLoading(false);
     persistState({ collapsed: true });
     invoke("owned_browser_hide").catch(() => {});
   }, [persistState]);
@@ -453,6 +461,8 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
   // Render
   // ---------------------------------------------------------------------------
 
+  const headerTitle = currentTitle ?? currentUrl ?? "about:blank";
+
   return (
     <>
       {panelOpen && (
@@ -480,8 +490,19 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
           </div>
 
           <div className="flex items-center gap-2 px-3 h-10 border-b border-border/50 bg-background/60 pl-4">
-            <div className="flex-1 min-w-0 text-xs text-muted-foreground truncate">
-              {currentUrl ?? "about:blank"}
+            <div
+              className="flex-1 min-w-0 text-muted-foreground"
+              title={currentUrl ?? headerTitle}
+            >
+              <div className="text-xs truncate">
+                {loading ? "loading... " : ""}
+                {headerTitle}
+              </div>
+              {currentTitle && currentUrl && (
+                <div className="text-[10px] leading-3 truncate opacity-70">
+                  {currentUrl}
+                </div>
+              )}
             </div>
             <button
               onClick={reload}

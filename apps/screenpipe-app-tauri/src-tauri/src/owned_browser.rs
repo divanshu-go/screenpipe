@@ -36,6 +36,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
+use tauri::webview::PageLoadEvent;
 use tauri::{
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Position, Rect, Size, Webview,
     WebviewUrl, WebviewWindow, WebviewWindowBuilder, Window, Wry,
@@ -55,6 +56,11 @@ const FALLBACK_WEBVIEW_LABEL: &str = "owned-browser-fallback";
 /// frontend's `<BrowserSidebar />` listens for this so it can slide in,
 /// position the webview, and persist the URL to the active chat.
 const NAVIGATE_EVENT: &str = "owned-browser:navigate";
+
+/// Native webview state updates (real URL/title/load state) for the sidebar
+/// header. This is separate from NAVIGATE_EVENT: that event is a requested
+/// navigation; this one is what the embedded browser actually reports.
+const STATE_EVENT: &str = "owned-browser:state";
 
 /// Emitted to the frontend exactly once when `spawn_install_when_ready`
 /// finishes building the top-level webview and attaching the handle to
@@ -269,12 +275,56 @@ fn browser_state() -> Arc<OwnedBrowserState> {
         .clone()
 }
 
-fn child_webview_builder(label: &str, url: WebviewUrl) -> tauri::webview::WebviewBuilder<Wry> {
+fn emit_state_event(
+    app: &AppHandle,
+    url: Option<String>,
+    title: Option<String>,
+    loading: Option<bool>,
+) {
+    let payload = OwnedBrowserStateEvent {
+        url,
+        title,
+        loading,
+    };
+    if let Err(e) = app.emit(STATE_EVENT, payload) {
+        debug!("owned-browser: failed to emit state event: {e}");
+    }
+}
+
+fn webview_url(webview: &Webview<Wry>) -> Option<String> {
+    webview.url().ok().map(|url| url.to_string())
+}
+
+fn child_webview_builder(
+    app: &AppHandle,
+    label: &str,
+    url: WebviewUrl,
+) -> tauri::webview::WebviewBuilder<Wry> {
     let state_for_title = browser_state();
+    let app_for_title = app.clone();
+    let app_for_nav = app.clone();
+    let app_for_page_load = app.clone();
     let mut builder = tauri::webview::WebviewBuilder::new(label.to_string(), url)
         .initialization_script(BRIDGE_INIT_SCRIPT)
-        .on_document_title_changed(move |_webview, title| {
-            state_for_title.record_title(title);
+        .on_navigation(move |url| {
+            emit_state_event(&app_for_nav, Some(url.to_string()), None, Some(true));
+            true
+        })
+        .on_page_load(move |_webview, payload| {
+            let loading = matches!(payload.event(), PageLoadEvent::Started);
+            emit_state_event(
+                &app_for_page_load,
+                Some(payload.url().to_string()),
+                None,
+                Some(loading),
+            );
+        })
+        .on_document_title_changed(move |webview, title| {
+            state_for_title.record_title(title.clone());
+            if title.starts_with(RESULT_TITLE_PREFIX) {
+                return;
+            }
+            emit_state_event(&app_for_title, webview_url(&webview), Some(title), None);
         });
 
     #[cfg(target_os = "macos")]
@@ -587,6 +637,9 @@ pub async fn install(
             .map_err(|e: url::ParseError| e.to_string())?;
 
         let state_for_title = state.clone();
+        let app_for_title = app.clone();
+        let app_for_nav = app.clone();
+        let app_for_page_load = app.clone();
         #[allow(unused_mut)]
         let mut builder =
             WebviewWindowBuilder::new(app, FALLBACK_WEBVIEW_LABEL, WebviewUrl::External(blank))
@@ -605,8 +658,26 @@ pub async fn install(
                 // the OS's standard cross-app window ordering.
                 .shadow(false)
                 .initialization_script(BRIDGE_INIT_SCRIPT)
-                .on_document_title_changed(move |_window, title| {
-                    state_for_title.record_title(title);
+                .on_navigation(move |url| {
+                    emit_state_event(&app_for_nav, Some(url.to_string()), None, Some(true));
+                    true
+                })
+                .on_page_load(move |_window, payload| {
+                    let loading = matches!(payload.event(), PageLoadEvent::Started);
+                    emit_state_event(
+                        &app_for_page_load,
+                        Some(payload.url().to_string()),
+                        None,
+                        Some(loading),
+                    );
+                })
+                .on_document_title_changed(move |window, title| {
+                    state_for_title.record_title(title.clone());
+                    if title.starts_with(RESULT_TITLE_PREFIX) {
+                        return;
+                    }
+                    let url = window.url().ok().map(|url| url.to_string());
+                    emit_state_event(&app_for_title, url, Some(title), None);
                 });
 
         #[cfg(target_os = "macos")]
@@ -700,7 +771,7 @@ async fn ensure_child_bounds(
             let blank: url::Url = "about:blank"
                 .parse()
                 .map_err(|e: url::ParseError| e.to_string())?;
-            let builder = child_webview_builder(WEBVIEW_LABEL, WebviewUrl::External(blank));
+            let builder = child_webview_builder(app, WEBVIEW_LABEL, WebviewUrl::External(blank));
             match parent_window.add_child(
                 builder,
                 LogicalPosition::new(x, y),
