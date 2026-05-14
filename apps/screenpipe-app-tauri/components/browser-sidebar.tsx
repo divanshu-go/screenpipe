@@ -7,8 +7,7 @@
  * BrowserSidebar — a right-side panel inside the chat layout that hosts the
  * agent-controlled embedded browser. The actual page is rendered by a Tauri
  * child `Webview` (label: "owned-browser") created in
- * `src-tauri/src/owned_browser.rs`, with a top-level fallback in Rust. This
- * component owns:
+ * `src-tauri/src/owned_browser.rs`. This component owns:
  *   1. Layout: coalesces placeholder measurements and pushes parent-local
  *      bounds to Tauri so the native webview tracks the panel.
  *   2. Width: a JS-clamped state — never relies on CSS flex/max-width, since
