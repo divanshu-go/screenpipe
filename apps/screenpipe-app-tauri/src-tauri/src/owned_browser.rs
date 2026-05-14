@@ -44,9 +44,7 @@
 use async_trait::async_trait;
 use screenpipe_connect::connections::browser::{EvalResult, OwnedWebviewHandle};
 use std::path::PathBuf;
-use std::sync::Arc;
-#[cfg(target_os = "macos")]
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindow,
@@ -100,6 +98,106 @@ const BRIDGE_INIT_SCRIPT: &str = r#"
     };
 })();
 "#;
+
+const BOUNDS_EPSILON_PX: f64 = 0.5;
+const BOUNDS_STATS_LOG_INTERVAL: Duration = Duration::from_secs(30);
+
+#[derive(Clone)]
+struct AppliedBounds {
+    parent: String,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+impl AppliedBounds {
+    fn almost_eq(&self, other: &Self) -> bool {
+        self.parent == other.parent
+            && (self.x - other.x).abs() <= BOUNDS_EPSILON_PX
+            && (self.y - other.y).abs() <= BOUNDS_EPSILON_PX
+            && (self.width - other.width).abs() <= BOUNDS_EPSILON_PX
+            && (self.height - other.height).abs() <= BOUNDS_EPSILON_PX
+    }
+}
+
+#[derive(Default)]
+struct OwnedBrowserWindowState {
+    applied_bounds: Option<AppliedBounds>,
+    visible: bool,
+    #[cfg(target_os = "macos")]
+    bound_parent_label: Option<String>,
+    #[cfg(target_os = "macos")]
+    bound_parent_window_id: Option<usize>,
+    bounds_updates: u64,
+    bounds_skips: u64,
+    hide_updates: u64,
+    hide_skips: u64,
+    #[cfg(target_os = "macos")]
+    parent_binds: u64,
+    #[cfg(target_os = "macos")]
+    parent_bind_skips: u64,
+    last_stats_log: Option<Instant>,
+}
+
+fn owned_browser_window_state() -> &'static Mutex<OwnedBrowserWindowState> {
+    static STATE: OnceLock<Mutex<OwnedBrowserWindowState>> = OnceLock::new();
+    STATE.get_or_init(|| Mutex::new(OwnedBrowserWindowState::default()))
+}
+
+fn log_owned_browser_window_stats(state: &mut OwnedBrowserWindowState, reason: &'static str) {
+    if state
+        .last_stats_log
+        .is_some_and(|last| last.elapsed() < BOUNDS_STATS_LOG_INTERVAL)
+    {
+        return;
+    }
+    state.last_stats_log = Some(Instant::now());
+    #[cfg(target_os = "macos")]
+    {
+        debug!(
+            reason,
+            bounds_updates = state.bounds_updates,
+            bounds_skips = state.bounds_skips,
+            hide_updates = state.hide_updates,
+            hide_skips = state.hide_skips,
+            parent_binds = state.parent_binds,
+            parent_bind_skips = state.parent_bind_skips,
+            "owned-browser native window stats"
+        );
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        debug!(
+            reason,
+            bounds_updates = state.bounds_updates,
+            bounds_skips = state.bounds_skips,
+            hide_updates = state.hide_updates,
+            hide_skips = state.hide_skips,
+            "owned-browser native window stats"
+        );
+    }
+}
+
+async fn hide_owned_browser_window(webview_window: &WebviewWindow) -> Result<(), String> {
+    let actual_visible = webview_window.is_visible().unwrap_or(true);
+    {
+        let mut state = owned_browser_window_state().lock().await;
+        if !actual_visible && !state.visible {
+            state.hide_skips += 1;
+            log_owned_browser_window_stats(&mut state, "hide-skip");
+            return Ok(());
+        }
+    }
+
+    webview_window.hide().map_err(|e| e.to_string())?;
+
+    let mut state = owned_browser_window_state().lock().await;
+    state.visible = false;
+    state.hide_updates += 1;
+    log_owned_browser_window_stats(&mut state, "hide");
+    Ok(())
+}
 
 // ---------------------------------------------------------------------------
 // Handle implementation
@@ -482,8 +580,7 @@ pub async fn owned_browser_set_bounds(
         .ok_or_else(|| "owned-browser not initialized".to_string())?;
 
     if width <= 0.0 || height <= 0.0 {
-        webview_window.hide().map_err(|e| e.to_string())?;
-        return Ok(());
+        return hide_owned_browser_window(&webview_window).await;
     }
 
     let parent_w = app
@@ -502,6 +599,14 @@ pub async fn owned_browser_set_bounds(
         inner_pos.y
     );
 
+    let target_bounds = AppliedBounds {
+        parent: parent.clone(),
+        x: screen_x,
+        y: screen_y,
+        width,
+        height,
+    };
+
     // Bind owned-browser as a child of the host window. macOS then ties
     // the two together: parent miniaturize / orderOut / app-deactivate
     // propagate to the child automatically, and `addChildWindow:ordered:`
@@ -516,10 +621,41 @@ pub async fn owned_browser_set_bounds(
     // wakes WindowServer + replayd into a feedback loop.
     #[cfg(target_os = "macos")]
     {
-        let mut current = bound_parent().lock().await;
-        if current.as_deref() != Some(parent.as_str()) {
-            bind_owned_browser_to_parent(&app, &parent).await?;
-            *current = Some(parent.clone());
+        let parent_window_id = resolve_parent_window_id(&app, &parent).await?;
+        let bind_needed = {
+            let mut state = owned_browser_window_state().lock().await;
+            let needed = state.bound_parent_label.as_deref() != Some(parent.as_str())
+                || state.bound_parent_window_id != Some(parent_window_id);
+            if !needed {
+                state.parent_bind_skips += 1;
+                log_owned_browser_window_stats(&mut state, "parent-bind-skip");
+            }
+            needed
+        };
+
+        if bind_needed {
+            let bound_parent_id = bind_owned_browser_to_parent(&app, &parent).await?;
+            let mut state = owned_browser_window_state().lock().await;
+            state.bound_parent_label = Some(parent.clone());
+            state.bound_parent_window_id = Some(bound_parent_id);
+            state.parent_binds += 1;
+            log_owned_browser_window_stats(&mut state, "parent-bind");
+        }
+    }
+
+    let actual_visible = webview_window.is_visible().unwrap_or(false);
+    {
+        let mut state = owned_browser_window_state().lock().await;
+        if actual_visible
+            && state.visible
+            && state
+                .applied_bounds
+                .as_ref()
+                .is_some_and(|applied| applied.almost_eq(&target_bounds))
+        {
+            state.bounds_skips += 1;
+            log_owned_browser_window_stats(&mut state, "bounds-skip");
+            return Ok(());
         }
     }
 
@@ -529,21 +665,56 @@ pub async fn owned_browser_set_bounds(
     webview_window
         .set_size(LogicalSize::new(width, height))
         .map_err(|e| e.to_string())?;
-    webview_window.show().map_err(|e| e.to_string())
+    webview_window.show().map_err(|e| e.to_string())?;
+
+    let mut state = owned_browser_window_state().lock().await;
+    state.applied_bounds = Some(target_bounds);
+    state.visible = true;
+    state.bounds_updates += 1;
+    log_owned_browser_window_stats(&mut state, "bounds");
+    Ok(())
 }
 
-/// macOS only: parent label currently bound via `addChildWindow:`. The
-/// owned-browser is a singleton, so a single global slot is sufficient.
-/// Read/written from `owned_browser_set_bounds` to skip redundant
-/// bind calls — `addChildWindow:` is documented idempotent but each
-/// call still walks NSWindow's child list and fires
-/// runningboard/WindowServer notifications, which under per-frame
-/// invocation drives the SCK audio-filter daemon (replayd) into a
-/// restart loop.
+/// macOS only: resolve the native parent window identity using the same
+/// panel-first lookup as `bind_owned_browser_to_parent`. The label alone is
+/// not enough because a Tauri window can be destroyed and recreated with the
+/// same label while Cocoa requires binding to the new `NSWindow*`.
 #[cfg(target_os = "macos")]
-fn bound_parent() -> &'static Mutex<Option<String>> {
-    static BOUND_PARENT: OnceLock<Mutex<Option<String>>> = OnceLock::new();
-    BOUND_PARENT.get_or_init(|| Mutex::new(None))
+async fn resolve_parent_window_id(app: &AppHandle, parent_label: &str) -> Result<usize, String> {
+    use objc::runtime::Object;
+
+    let app_for_main = app.clone();
+    let parent_label = parent_label.to_string();
+    let (tx, rx) = tokio::sync::oneshot::channel::<Result<usize, String>>();
+
+    app.run_on_main_thread(move || {
+        let result: Result<usize, String> = (|| {
+            let parent_ptr: *mut Object = if let Ok(panel) =
+                <tauri::AppHandle as tauri_nspanel::ManagerExt<_>>::get_webview_panel(
+                    &app_for_main,
+                    &parent_label,
+                ) {
+                &*panel as *const _ as *mut Object
+            } else if let Some(win) = app_for_main.get_webview_window(&parent_label) {
+                let raw = win
+                    .ns_window()
+                    .map_err(|e| format!("ns_window for {parent_label}: {e}"))?;
+                raw as *mut Object
+            } else {
+                return Err(format!("parent window {parent_label:?} not found"));
+            };
+
+            if parent_ptr.is_null() {
+                return Err("null parent NSWindow pointer".to_string());
+            }
+
+            Ok(parent_ptr as usize)
+        })();
+        let _ = tx.send(result);
+    })
+    .map_err(|e| format!("run_on_main_thread: {e}"))?;
+    rx.await
+        .map_err(|_| "main thread channel closed".to_string())?
 }
 
 /// macOS only: make the owned-browser a child of the named host window
@@ -557,16 +728,16 @@ fn bound_parent() -> &'static Mutex<Option<String>> {
 async fn bind_owned_browser_to_parent(
     app: &AppHandle,
     parent_label: &str,
-) -> Result<(), String> {
+) -> Result<usize, String> {
     use objc::runtime::Object;
     use objc::{msg_send, sel, sel_impl};
 
     let app_for_main = app.clone();
     let parent_label = parent_label.to_string();
-    let (tx, rx) = tokio::sync::oneshot::channel::<Result<(), String>>();
+    let (tx, rx) = tokio::sync::oneshot::channel::<Result<usize, String>>();
 
     app.run_on_main_thread(move || {
-        let result: Result<(), String> = (|| {
+        let result: Result<usize, String> = (|| {
             // Resolve parent NSWindow* — host can be either an NSPanel
             // (overlay/window timeline + chat) or a regular WebviewWindow
             // (settings / home in window mode), so try both lookups.
@@ -602,10 +773,9 @@ async fn bind_owned_browser_to_parent(
 
             // NSWindowOrderingMode::NSWindowAbove == 1
             unsafe {
-                let _: () =
-                    msg_send![parent_ptr, addChildWindow: child_ptr ordered: 1i64];
+                let _: () = msg_send![parent_ptr, addChildWindow: child_ptr ordered: 1i64];
             }
-            Ok(())
+            Ok(parent_ptr as usize)
         })();
         let _ = tx.send(result);
     })
@@ -639,7 +809,7 @@ pub async fn owned_browser_hide(app: AppHandle) -> Result<(), String> {
     let webview_window = app
         .get_webview_window(WEBVIEW_LABEL)
         .ok_or_else(|| "owned-browser not initialized".to_string())?;
-    webview_window.hide().map_err(|e| e.to_string())
+    hide_owned_browser_window(&webview_window).await
 }
 
 /// Cross-platform cookie pre-navigate hook. Resolves the URL's host,

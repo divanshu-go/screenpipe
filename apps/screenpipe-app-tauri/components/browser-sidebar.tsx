@@ -44,6 +44,64 @@ interface BrowserSidebarProps {
   conversationId: string | null;
 }
 
+type BrowserBounds = {
+  parent: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+type BoundsDebugCounters = {
+  invokes: number;
+  skips: number;
+  hides: number;
+  bursts: number;
+  lastLogAt: number;
+};
+
+const BOUNDS_EPSILON_PX = 0.5;
+const BOUNDS_DEBUG_INTERVAL_MS = 30_000;
+
+function boundsAlmostEqual(a: BrowserBounds, b: BrowserBounds): boolean {
+  return (
+    a.parent === b.parent &&
+    Math.abs(a.x - b.x) <= BOUNDS_EPSILON_PX &&
+    Math.abs(a.y - b.y) <= BOUNDS_EPSILON_PX &&
+    Math.abs(a.width - b.width) <= BOUNDS_EPSILON_PX &&
+    Math.abs(a.height - b.height) <= BOUNDS_EPSILON_PX
+  );
+}
+
+function shouldDebugOwnedBrowserBounds(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    const flag = window.localStorage.getItem(
+      "screenpipe:debug-owned-browser-bounds",
+    );
+    return flag === "1" || flag === "true";
+  } catch {
+    return false;
+  }
+}
+
+function maybeLogBoundsDebug(
+  counters: BoundsDebugCounters,
+  reason: string,
+): void {
+  if (!shouldDebugOwnedBrowserBounds()) return;
+  const now = Date.now();
+  if (now - counters.lastLogAt < BOUNDS_DEBUG_INTERVAL_MS) return;
+  counters.lastLogAt = now;
+  console.debug("owned-browser bounds", {
+    reason,
+    invokes: counters.invokes,
+    skips: counters.skips,
+    hides: counters.hides,
+    bursts: counters.bursts,
+  });
+}
+
 /** Clamp the panel width so it can never push the chat below MIN_CHAT_WIDTH
  *  in the *available* horizontal area (the chat layout's split host, not
  *  the whole window — AppSidebar / history sidebar can eat into it).
@@ -74,6 +132,15 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
   const dragStateRef = useRef<{ startX: number; startWidth: number } | null>(
     null,
   );
+  const lastSentBoundsRef = useRef<BrowserBounds | null>(null);
+  const webviewHiddenRef = useRef(false);
+  const boundsDebugRef = useRef<BoundsDebugCounters>({
+    invokes: 0,
+    skips: 0,
+    hides: 0,
+    bursts: 0,
+    lastLogAt: 0,
+  });
 
   const effectiveWidth = clampWidth(requestedWidth, availableW);
   const panelOpen = visible && !collapsed && effectiveWidth > 0;
@@ -115,6 +182,13 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
     [conversationId],
   );
 
+  const markOwnedBrowserHidden = useCallback((reason: string) => {
+    webviewHiddenRef.current = true;
+    lastSentBoundsRef.current = null;
+    boundsDebugRef.current.hides += 1;
+    maybeLogBoundsDebug(boundsDebugRef.current, reason);
+  }, []);
+
   // ---------------------------------------------------------------------------
   // Bounds push (CSS rect → Rust → screen position)
   // ---------------------------------------------------------------------------
@@ -131,22 +205,41 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
     const hidden = el.offsetParent === null;
     const r = el.getBoundingClientRect();
     if (hidden || r.width <= 0 || r.height <= 0) {
+      if (webviewHiddenRef.current) {
+        boundsDebugRef.current.skips += 1;
+        maybeLogBoundsDebug(boundsDebugRef.current, "hide-skip");
+        return;
+      }
       await invoke("owned_browser_hide").catch(() => {});
+      markOwnedBrowserHidden("hide");
       return;
     }
     try {
       const w = getCurrentWindow();
-      await invoke("owned_browser_set_bounds", {
+      const bounds: BrowserBounds = {
         parent: w.label,
         x: r.left,
         y: r.top,
         width: r.width,
         height: r.height,
-      });
+      };
+      if (
+        lastSentBoundsRef.current &&
+        boundsAlmostEqual(lastSentBoundsRef.current, bounds)
+      ) {
+        boundsDebugRef.current.skips += 1;
+        maybeLogBoundsDebug(boundsDebugRef.current, "bounds-skip");
+        return;
+      }
+      await invoke("owned_browser_set_bounds", bounds);
+      lastSentBoundsRef.current = bounds;
+      webviewHiddenRef.current = false;
+      boundsDebugRef.current.invokes += 1;
+      maybeLogBoundsDebug(boundsDebugRef.current, "bounds");
     } catch (e) {
       console.error("owned_browser_set_bounds failed", e);
     }
-  }, []);
+  }, [markOwnedBrowserHidden]);
 
   // ---------------------------------------------------------------------------
   // Viewport resize tracking — drives both the JS clamp and re-pushing bounds
@@ -202,6 +295,7 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
       setCollapsed(false);
       setCurrentUrl(null);
       setRequestedWidth(DEFAULT_WIDTH);
+      markOwnedBrowserHidden("hide-command");
       invoke("owned_browser_hide").catch(() => {});
       return () => {
         cancelled = true;
@@ -240,11 +334,15 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
         }
         // If collapsed, hide the webview right away — pushBounds wouldn't
         // run because the placeholder isn't mounted.
-        if (wasCollapsed) invoke("owned_browser_hide").catch(() => {});
+        if (wasCollapsed) {
+          markOwnedBrowserHidden("hide-command");
+          invoke("owned_browser_hide").catch(() => {});
+        }
       } else {
         setVisible(false);
         setCollapsed(false);
         setCurrentUrl(null);
+        markOwnedBrowserHidden("hide-command");
         invoke("owned_browser_hide").catch(() => {});
       }
     })();
@@ -252,7 +350,7 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
       cancelled = true;
       if (unlistenReady) unlistenReady();
     };
-  }, [conversationId]);
+  }, [conversationId, markOwnedBrowserHidden]);
 
   // ---------------------------------------------------------------------------
   // Bounds tracking — covers slide-in, window resize, drag-resize,
@@ -301,8 +399,10 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
 
     const scheduleBurst = () => {
       lastChangeAt = performance.now();
+      boundsDebugRef.current.bursts += 1;
+      maybeLogBoundsDebug(boundsDebugRef.current, "burst");
+      void pushBounds();
       if (!raf) {
-        last = el.getBoundingClientRect();
         raf = requestAnimationFrame(tick);
       }
     };
@@ -393,8 +493,9 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
   const collapse = useCallback(() => {
     setCollapsed(true);
     persistState({ collapsed: true });
+    markOwnedBrowserHidden("hide-command");
     invoke("owned_browser_hide").catch(() => {});
-  }, [persistState]);
+  }, [markOwnedBrowserHidden, persistState]);
 
   const expand = useCallback(() => {
     setCollapsed(false);
