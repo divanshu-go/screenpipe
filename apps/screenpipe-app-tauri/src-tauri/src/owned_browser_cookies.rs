@@ -414,7 +414,7 @@ fn read_cookies(source: &KeychainEntry, host: &str) -> Result<Vec<Cookie>, Strin
     //
     // The is_secure / is_httponly columns are 0/1 ints; same_site is
     // signed (-1..=2). expires_utc is microseconds since 1601 — convert
-    // to seconds-since-1970 in [`row_to_cookie`].
+    // to seconds-since-1970 in [`chromium_micros_to_unix_secs`].
     let host_filters = host_match_clauses(host);
     let where_clause = host_where_clause(&host_filters);
     let sql = format!(
@@ -424,9 +424,8 @@ fn read_cookies(source: &KeychainEntry, host: &str) -> Result<Vec<Cookie>, Strin
     );
 
     let mut stmt = conn.prepare(&sql).map_err(|e| format!("prepare: {e}"))?;
-    let params = rusqlite::params_from_iter(host_filters.iter());
     let rows = stmt
-        .query_map(params, |r| {
+        .query_map(rusqlite::params_from_iter(host_filters.iter()), |r| {
             Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, String>(1)?,

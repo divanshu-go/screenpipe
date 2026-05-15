@@ -155,6 +155,60 @@ pub async fn owned_browser_resolve_session_access(
         .map_err(|_| "session access request was already closed".to_string())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BrowserSessionDecision {
+    UseBrowserSession,
+    ContinueLoggedOut,
+}
+
+#[derive(serde::Serialize, Clone)]
+struct BrowserSessionAccessRequestPayload {
+    request_id: String,
+    url: String,
+    host: String,
+}
+
+static SESSION_ACCESS_PENDING: OnceLock<
+    Mutex<HashMap<String, oneshot::Sender<BrowserSessionDecision>>>,
+> = OnceLock::new();
+static SESSION_ACCESS_DECISIONS: OnceLock<Mutex<HashMap<String, BrowserSessionDecision>>> =
+    OnceLock::new();
+
+fn pending_session_access(
+) -> &'static Mutex<HashMap<String, oneshot::Sender<BrowserSessionDecision>>> {
+    SESSION_ACCESS_PENDING.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn remembered_session_access() -> &'static Mutex<HashMap<String, BrowserSessionDecision>> {
+    SESSION_ACCESS_DECISIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+async fn remember_session_access_decision(host: &str, decision: BrowserSessionDecision) {
+    remembered_session_access()
+        .lock()
+        .await
+        .insert(host.to_ascii_lowercase(), decision);
+}
+
+#[tauri::command]
+pub async fn owned_browser_resolve_session_access(
+    request_id: String,
+    allow: bool,
+) -> Result<(), String> {
+    let decision = if allow {
+        BrowserSessionDecision::UseBrowserSession
+    } else {
+        BrowserSessionDecision::ContinueLoggedOut
+    };
+    let tx = pending_session_access()
+        .lock()
+        .await
+        .remove(&request_id)
+        .ok_or_else(|| "session access request expired".to_string())?;
+    tx.send(decision)
+        .map_err(|_| "session access request was already closed".to_string())
+}
+
 // ---------------------------------------------------------------------------
 // Native webview state
 // ---------------------------------------------------------------------------
@@ -503,6 +557,7 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
         // site even though the Tauri-command-driven sidebar restore
         // path was injecting correctly.
         prepare_navigation(&self.app, &self.state, &parsed).await;
+        inject_cookies_for_url(&self.app, &parsed).await;
 
         // Make the webview live before navigating — a hidden WebView2
         // window can silently drop the navigate call. We do NOT hold the
@@ -657,6 +712,7 @@ async fn ensure_child_bounds(
     state.set_visible(true).await;
 
     if let Some(url) = pending_url {
+        inject_cookies_for_url(app, &url).await;
         let _ = child.navigate(url);
     }
 
@@ -664,7 +720,6 @@ async fn ensure_child_bounds(
 }
 
 async fn prepare_navigation(app: &AppHandle, state: &OwnedBrowserState, parsed: &url::Url) {
-    inject_cookies_for_url(app, parsed).await;
     let _ = app.emit(NAVIGATE_EVENT, parsed.as_str());
     state.store_pending_url(parsed.clone()).await;
 }
@@ -811,9 +866,13 @@ pub async fn owned_browser_navigate(app: AppHandle, url: String) -> Result<(), S
         .parse()
         .map_err(|e: url::ParseError| format!("invalid url: {e}"))?;
 
-    // Inherit the user's logged-in sessions before navigating.
     prepare_navigation(&app, &state, &parsed).await;
+    inject_cookies_for_url(&app, &parsed).await;
     if let Some(active) = state.active().await {
+        if !state.is_visible().await {
+            active.show().map_err(|e| e.to_string())?;
+            state.set_visible(true).await;
+        }
         active.navigate(parsed).map_err(|e| e.to_string())?;
         state.clear_pending_url().await;
     }
