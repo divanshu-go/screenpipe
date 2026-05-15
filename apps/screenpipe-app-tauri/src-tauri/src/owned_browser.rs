@@ -32,9 +32,10 @@
 
 use async_trait::async_trait;
 use screenpipe_connect::connections::browser::{EvalResult, OwnedWebviewHandle};
+use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::webview::PageLoadEvent;
 use tauri::{
@@ -101,58 +102,12 @@ const BRIDGE_INIT_SCRIPT: &str = r#"
 })();
 "#;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BrowserSessionDecision {
-    UseBrowserSession,
-    ContinueLoggedOut,
-}
-
-#[derive(serde::Serialize, Clone)]
-struct BrowserSessionAccessRequestPayload {
-    request_id: String,
-    url: String,
-    host: String,
-}
-
-static SESSION_ACCESS_PENDING: OnceLock<
-    Mutex<HashMap<String, oneshot::Sender<BrowserSessionDecision>>>,
-> = OnceLock::new();
-static SESSION_ACCESS_DECISIONS: OnceLock<Mutex<HashMap<String, BrowserSessionDecision>>> =
-    OnceLock::new();
-
-fn pending_session_access(
-) -> &'static Mutex<HashMap<String, oneshot::Sender<BrowserSessionDecision>>> {
-    SESSION_ACCESS_PENDING.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn remembered_session_access() -> &'static Mutex<HashMap<String, BrowserSessionDecision>> {
-    SESSION_ACCESS_DECISIONS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-async fn remember_session_access_decision(host: &str, decision: BrowserSessionDecision) {
-    remembered_session_access()
-        .lock()
-        .await
-        .insert(host.to_ascii_lowercase(), decision);
-}
-
-#[tauri::command]
-pub async fn owned_browser_resolve_session_access(
-    request_id: String,
-    allow: bool,
-) -> Result<(), String> {
-    let decision = if allow {
-        BrowserSessionDecision::UseBrowserSession
-    } else {
-        BrowserSessionDecision::ContinueLoggedOut
-    };
-    let tx = pending_session_access()
-        .lock()
-        .await
-        .remove(&request_id)
-        .ok_or_else(|| "session access request expired".to_string())?;
-    tx.send(decision)
-        .map_err(|_| "session access request was already closed".to_string())
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OwnedBrowserStateEvent {
+    url: Option<String>,
+    title: Option<String>,
+    loading: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -403,9 +358,10 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
         // code-only evals. URL navigations defer showing until after the
         // optional session-access prompt, so the sidebar can explain the
         // request before any native webview covers it.
-        let was_visible = webview_window.is_visible().unwrap_or(false);
-        if !was_visible && url.is_none() {
-            let _ = webview_window.show();
+        let was_visible = self.state.is_visible().await;
+        if !was_visible && target_url.is_none() {
+            let _ = active.show();
+            self.state.set_visible(true).await;
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
 
@@ -414,17 +370,13 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
         // the old eval-based navigation could no-op while the window was
         // hidden/offscreen, leaving the request waiting forever for a title
         // marker that would never be written.
-        if let Some(target) = url {
-            let parsed: url::Url = target
-                .parse()
-                .map_err(|e: url::ParseError| format!("invalid url: {e}"))?;
+        if let Some(parsed) = target_url {
             inject_cookies_for_url(&self.app, &parsed).await;
-            if !webview_window.is_visible().unwrap_or(false) {
-                let _ = webview_window.show();
+            if !was_visible {
+                let _ = active.show();
+                self.state.set_visible(true).await;
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
-            let _ = self.app.emit(NAVIGATE_EVENT, parsed.as_str());
-            self.state.store_pending_url(parsed.clone()).await;
             active
                 .navigate(parsed)
                 .map_err(|e| format!("webview.navigate failed: {e}"))?;
@@ -559,19 +511,18 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
         prepare_navigation(&self.app, &self.state, &parsed).await;
         inject_cookies_for_url(&self.app, &parsed).await;
 
-        // Make the webview live before navigating — a hidden WebView2
-        // window can silently drop the navigate call. We do NOT hold the
-        // eval_lock here; navigate is independent of in-flight evals so
-        // a long-running snapshot can't queue behind it.
-        if !webview_window.is_visible().unwrap_or(false) {
-            let _ = webview_window.show();
+        if let Some(active) = self.state.active().await {
+            if !self.state.is_visible().await {
+                let _ = active.show();
+                self.state.set_visible(true).await;
+            }
+            active
+                .navigate(parsed)
+                .map_err(|e| format!("webview.navigate failed: {e}"))?;
+            self.state.clear_pending_url().await;
+        } else {
+            debug!("owned-browser navigate queued until sidebar attaches child webview");
         }
-
-        let _ = self.app.emit(NAVIGATE_EVENT, parsed.as_str());
-        self.state.store_pending_url(parsed.clone()).await;
-        active
-            .navigate(parsed)
-            .map_err(|e| format!("webview.navigate failed: {e}"))?;
 
         // Brief wait so the navigation has time to *commit* before we
         // return — `webview.navigate()` only schedules the load. If we
@@ -767,93 +718,18 @@ pub async fn owned_browser_set_bounds(
         return Ok(());
     }
 
-    if ensure_child_bounds(&app, &parent, x, y, width, height)
-        .await?
-        .is_some()
-    {
+    // Frontend session-access card is HTML; keep the native layer hidden until
+    // the user resolves the prompt (pushBounds races would otherwise re-show).
+    if !pending_session_access().lock().await.is_empty() {
+        if let Some(active) = state.active().await {
+            let _ = active.hide();
+        }
+        state.set_visible(false).await;
         return Ok(());
     }
 
-    set_fallback_bounds(&app, &parent, x, y, width, height).await
-}
-
-/// macOS only: parent label currently bound via `addChildWindow:`. The
-/// owned-browser is a singleton, so a single global slot is sufficient.
-/// Read/written from `owned_browser_set_bounds` to skip redundant
-/// bind calls — `addChildWindow:` is documented idempotent but each
-/// call still walks NSWindow's child list and fires
-/// runningboard/WindowServer notifications, which under per-frame
-/// invocation drives the SCK audio-filter daemon (replayd) into a
-/// restart loop.
-#[cfg(target_os = "macos")]
-fn bound_parent() -> &'static Mutex<Option<String>> {
-    static BOUND_PARENT: OnceLock<Mutex<Option<String>>> = OnceLock::new();
-    BOUND_PARENT.get_or_init(|| Mutex::new(None))
-}
-
-/// macOS only: make the owned-browser a child of the named host window
-/// via `[NSWindow addChildWindow:ordered:NSWindowAbove]`. Once bound,
-/// the OS propagates parent visibility (orderOut / miniaturize / app
-/// deactivate) to the child for free, and the child stays above its
-/// parent in z-order — but only within the parent's app, not floating
-/// globally over other apps. Cocoa enforces single-parent semantics, so
-/// re-binding to a different parent automatically removes the old one.
-#[cfg(target_os = "macos")]
-async fn bind_owned_browser_to_parent(app: &AppHandle, parent_label: &str) -> Result<(), String> {
-    use objc::runtime::Object;
-    use objc::{msg_send, sel, sel_impl};
-
-    let app_for_main = app.clone();
-    let parent_label = parent_label.to_string();
-    let child_label = child_label.to_string();
-    let (tx, rx) = tokio::sync::oneshot::channel::<Result<(), String>>();
-
-    app.run_on_main_thread(move || {
-        let result: Result<(), String> = (|| {
-            // Resolve parent NSWindow* — host can be either an NSPanel
-            // (overlay/window timeline + chat) or a regular WebviewWindow
-            // (settings / home in window mode), so try both lookups.
-            let parent_ptr: *mut Object = if let Ok(panel) =
-                <tauri::AppHandle as tauri_nspanel::ManagerExt<_>>::get_webview_panel(
-                    &app_for_main,
-                    &parent_label,
-                ) {
-                &*panel as *const _ as *mut Object
-            } else if let Some(win) = app_for_main.get_webview_window(&parent_label) {
-                let raw = win
-                    .ns_window()
-                    .map_err(|e| format!("ns_window for {parent_label}: {e}"))?;
-                raw as *mut Object
-            } else {
-                return Err(format!("parent window {parent_label:?} not found"));
-            };
-
-            let child_win = app_for_main
-                .get_webview_window(&child_label)
-                .ok_or_else(|| format!("{child_label} not initialized"))?;
-            let child_ptr: *mut Object = child_win
-                .ns_window()
-                .map_err(|e| format!("ns_window for {child_label}: {e}"))?
-                as *mut Object;
-
-            if parent_ptr.is_null() || child_ptr.is_null() {
-                return Err("null NSWindow pointer".to_string());
-            }
-            if std::ptr::eq(parent_ptr, child_ptr) {
-                return Err("refusing to add window as child of itself".to_string());
-            }
-
-            // NSWindowOrderingMode::NSWindowAbove == 1
-            unsafe {
-                let _: () = msg_send![parent_ptr, addChildWindow: child_ptr ordered: 1i64];
-            }
-            Ok(())
-        })();
-        let _ = tx.send(result);
-    })
-    .map_err(|e| format!("run_on_main_thread: {e}"))?;
-    rx.await
-        .map_err(|_| "main thread channel closed".to_string())?
+    ensure_child_bounds(&app, &parent, x, y, width, height).await?;
+    Ok(())
 }
 
 /// Navigate the embedded webview to `url`. Used by the agent (via
@@ -973,8 +849,10 @@ async fn browser_session_decision_for_url(
         return decision;
     }
 
-    if let Some(webview_window) = app.get_webview_window(WEBVIEW_LABEL) {
-        let _ = webview_window.hide();
+    let state = browser_state();
+    if let Some(active) = state.active().await {
+        let _ = active.hide();
+        state.set_visible(false).await;
     }
 
     let request_id = Uuid::new_v4().to_string();
