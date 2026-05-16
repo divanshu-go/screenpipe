@@ -4,6 +4,7 @@
 
 use crate::core::engine::AudioTranscriptionEngine;
 use crate::transcription::deepgram::batch::transcribe_with_deepgram;
+use crate::transcription::deepgram::DeepgramTranscriptionConfig;
 use crate::transcription::openai_compatible::batch::transcribe_with_openai_compatible;
 use crate::transcription::whisper::batch::process_with_whisper;
 use crate::transcription::whisper::model::{
@@ -90,7 +91,7 @@ pub enum TranscriptionEngine {
         vocabulary: Vec<VocabularyEntry>,
     },
     Deepgram {
-        api_key: String,
+        config: DeepgramTranscriptionConfig,
         languages: Vec<Language>,
         vocabulary: Vec<VocabularyEntry>,
     },
@@ -111,7 +112,7 @@ impl TranscriptionEngine {
     /// Factory that only loads the model needed for the configured engine.
     pub async fn new(
         config: Arc<AudioTranscriptionEngine>,
-        deepgram_api_key: Option<String>,
+        deepgram_config: Option<DeepgramTranscriptionConfig>,
         openai_compatible_config: Option<crate::transcription::stt::OpenAICompatibleConfig>,
         languages: Vec<Language>,
         vocabulary: Vec<VocabularyEntry>,
@@ -120,9 +121,11 @@ impl TranscriptionEngine {
             AudioTranscriptionEngine::Disabled => Ok(Self::Disabled),
 
             AudioTranscriptionEngine::Deepgram => {
-                let api_key = deepgram_api_key.unwrap_or_default();
+                let config = deepgram_config
+                    .filter(DeepgramTranscriptionConfig::is_ready)
+                    .ok_or_else(|| anyhow!("Deepgram transcription config is missing"))?;
                 Ok(Self::Deepgram {
-                    api_key,
+                    config,
                     languages,
                     vocabulary,
                 })
@@ -394,11 +397,11 @@ impl TranscriptionEngine {
                 vocabulary: vocabulary.clone(),
             }),
             Self::Deepgram {
-                api_key,
+                config,
                 languages,
                 vocabulary,
             } => Ok(TranscriptionSession::Deepgram {
-                api_key: api_key.clone(),
+                config: config.clone(),
                 languages: languages.clone(),
                 vocabulary: vocabulary.clone(),
             }),
@@ -477,7 +480,7 @@ pub enum TranscriptionSession {
         vocabulary: Vec<VocabularyEntry>,
     },
     Deepgram {
-        api_key: String,
+        config: DeepgramTranscriptionConfig,
         languages: Vec<Language>,
         vocabulary: Vec<VocabularyEntry>,
     },
@@ -506,7 +509,7 @@ impl TranscriptionSession {
             Self::Disabled => Ok(String::new()),
 
             Self::Deepgram {
-                api_key,
+                config,
                 languages,
                 vocabulary,
             } => {
@@ -526,7 +529,7 @@ impl TranscriptionSession {
                     Ok(String::new())
                 } else {
                     match transcribe_with_deepgram(
-                        api_key,
+                        config,
                         audio,
                         device,
                         sample_rate,

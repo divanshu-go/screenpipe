@@ -81,22 +81,10 @@ impl ServerCore {
             info!("Using Chinese HuggingFace mirror");
         }
 
-        // Deepgram proxy setup
-        if config.audio_transcription_engine == AudioTranscriptionEngine::Deepgram {
-            let has_personal_key = config
-                .deepgram_api_key
-                .as_ref()
-                .map_or(false, |k| !k.is_empty() && k != "default");
-            if has_personal_key {
-                std::env::remove_var("DEEPGRAM_API_URL");
-                std::env::remove_var("CUSTOM_DEEPGRAM_API_TOKEN");
-                info!("Using personal Deepgram API key for audio transcription");
-            } else if let Some(ref user_id) = config.user_id {
-                std::env::set_var("DEEPGRAM_API_URL", "https://api.screenpi.pe/v1/listen");
-                std::env::set_var("CUSTOM_DEEPGRAM_API_TOKEN", user_id);
-                info!("Using screenpipe cloud for audio transcription");
-            }
-        }
+        // Audio transcription provider config is passed directly into
+        // AudioManagerOptions. Do not use process env here: Deepgram used to
+        // read env via lazy_static, which made capture-level engine changes
+        // impossible after the first read.
 
         // --- Database ---
         let local_data_dir = config.data_dir.clone();
@@ -221,6 +209,9 @@ impl ServerCore {
 
         let meeting_detector: Option<Arc<MeetingDetector>> = if config.disable_audio {
             info!("meeting detector disabled because audio capture is disabled");
+            None
+        } else if config.disable_meeting_detector {
+            info!("meeting detector disabled by settings");
             None
         } else {
             let detector = Arc::new(MeetingDetector::new());

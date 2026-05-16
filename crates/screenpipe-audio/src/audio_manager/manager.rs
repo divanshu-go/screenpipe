@@ -213,6 +213,25 @@ impl AudioManager {
         Ok(manager)
     }
 
+    /// Apply fresh capture/audio options without rebuilding the long-lived server.
+    ///
+    /// This is intended to run while capture is stopped, before `start()`.
+    /// It lets settings such as transcription engine, cloud credentials,
+    /// live-meeting provider, devices, language, vocabulary, and batch mode
+    /// update on a capture-level restart.
+    ///
+    /// TODO(capture-boundary): OS audio backend flags are still read by
+    /// `DeviceManager::new()` and need a deeper DeviceManager rebuild.
+    pub async fn apply_options(&self, options: AudioManagerOptions) -> Result<()> {
+        if self.status().await == AudioManagerStatus::Running {
+            self.stop_internal().await?;
+        }
+
+        *self.options.write().await = options;
+        *self.engine.write().await = None;
+        Ok(())
+    }
+
     /// Set a callback that fires after each audio transcription is inserted into DB.
     /// Must be called before `start()`.
     pub fn set_on_transcription_insert(&mut self, cb: crate::transcription::AudioInsertCallback) {
@@ -636,7 +655,7 @@ impl AudioManager {
         let options = self.options.read().await;
         let output_path = options.output_path.clone();
         let languages = options.languages.clone();
-        let deepgram_api_key = options.deepgram_api_key.clone();
+        let deepgram_config = options.deepgram_config.clone();
         let openai_compatible_config = options.openai_compatible_config.clone();
         let audio_transcription_engine = options.transcription_engine.clone();
         let vocabulary = options.vocabulary.clone();
@@ -655,7 +674,7 @@ impl AudioManager {
         // Build unified transcription engine — only loads the needed model
         let engine = TranscriptionEngine::new(
             audio_transcription_engine.clone(),
-            deepgram_api_key.clone(),
+            deepgram_config.clone(),
             openai_compatible_config.clone(),
             languages.clone(),
             vocabulary.clone(),
@@ -1084,6 +1103,12 @@ impl AudioManager {
         self.options.read().await.deepgram_api_key.clone()
     }
 
+    pub async fn deepgram_config(
+        &self,
+    ) -> Option<crate::transcription::deepgram::DeepgramTranscriptionConfig> {
+        self.options.read().await.deepgram_config.clone()
+    }
+
     /// Returns the current OpenAI Compatible config.
     pub async fn openai_compatible_config(&self) -> Option<crate::OpenAICompatibleConfig> {
         self.options.read().await.openai_compatible_config.clone()
@@ -1104,7 +1129,7 @@ impl AudioManager {
     pub async fn refresh_model_capabilities(&self) -> bool {
         let options = self.options.read().await;
         let audio_transcription_engine = options.transcription_engine.clone();
-        let deepgram_api_key = options.deepgram_api_key.clone();
+        let deepgram_config = options.deepgram_config.clone();
         let openai_compatible_config = options.openai_compatible_config.clone();
         let languages = options.languages.clone();
         let vocabulary = options.vocabulary.clone();
@@ -1132,7 +1157,7 @@ impl AudioManager {
             {
                 match TranscriptionEngine::new(
                     audio_transcription_engine.clone(),
-                    deepgram_api_key.clone(),
+                    deepgram_config.clone(),
                     openai_compatible_config.clone(),
                     languages.clone(),
                     vocabulary.clone(),
@@ -1172,7 +1197,7 @@ impl AudioManager {
                 {
                     match TranscriptionEngine::new(
                         audio_transcription_engine.clone(),
-                        deepgram_api_key.clone(),
+                        deepgram_config.clone(),
                         openai_compatible_config.clone(),
                         languages.clone(),
                         vocabulary.clone(),

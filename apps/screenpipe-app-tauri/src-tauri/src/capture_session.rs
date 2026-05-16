@@ -11,6 +11,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use screenpipe_audio::core::engine::AudioTranscriptionEngine;
+use screenpipe_audio::transcription::stt::{
+    OpenAICompatibleConfig, DEFAULT_OPENAI_COMPATIBLE_ENDPOINT, DEFAULT_OPENAI_COMPATIBLE_MODEL,
+};
 use screenpipe_engine::{
     start_meeting_watcher, start_ui_recording,
     vision_manager::{start_monitor_watcher, stop_monitor_watcher, VisionManager},
@@ -54,6 +58,7 @@ impl CaptureSession {
         info!("Starting capture session");
 
         let (shutdown_tx, _) = broadcast::channel::<()>(1);
+        reconfigure_audio_manager(server, config).await?;
 
         // --- Capture trigger sender (set by VisionManager, consumed by UI recorder) ---
         let mut capture_trigger_tx: Option<screenpipe_engine::event_driven_capture::TriggerSender> =
@@ -241,4 +246,54 @@ impl CaptureSession {
 
         info!("Capture session stopped");
     }
+}
+
+async fn reconfigure_audio_manager(
+    server: &ServerCore,
+    config: &RecordingConfig,
+) -> Result<(), String> {
+    let openai_compatible_config =
+        if config.audio_transcription_engine == AudioTranscriptionEngine::OpenAICompatible {
+            Some(OpenAICompatibleConfig {
+                endpoint: config
+                    .openai_compatible_endpoint
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_OPENAI_COMPATIBLE_ENDPOINT.to_string()),
+                api_key: config.openai_compatible_api_key.clone(),
+                model: config
+                    .openai_compatible_model
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_OPENAI_COMPATIBLE_MODEL.to_string()),
+                client: None,
+                headers: config.openai_compatible_headers.clone(),
+                raw_audio: config.openai_compatible_raw_audio,
+            })
+        } else {
+            None
+        };
+
+    let mut audio_manager_builder = config
+        .to_audio_manager_builder(server.data_path.clone(), config.audio_devices.clone())
+        .transcription_mode(config.transcription_mode.clone())
+        .openai_compatible_config(openai_compatible_config);
+
+    // TODO(capture-boundary): `MeetingDetector` is still owned by ServerCore,
+    // so toggling disableAudio/disableMeetingDetector from a server-started
+    // state can still require rebuilding that owner. The audio transcription
+    // and live-provider settings below are capture-level after this refresh.
+    if let Some(ref detector) = server.meeting_detector {
+        audio_manager_builder = audio_manager_builder.meeting_detector(detector.clone());
+    }
+
+    let options = audio_manager_builder
+        .build_options()
+        .await
+        .map_err(|e| format!("Failed to build audio options: {}", e))?;
+    server
+        .audio_manager
+        .apply_options(options)
+        .await
+        .map_err(|e| format!("Failed to apply audio options: {}", e))?;
+
+    Ok(())
 }
