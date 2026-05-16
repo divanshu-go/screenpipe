@@ -96,7 +96,9 @@ impl Default for AudioManagerOptions {
             transcription_engine: Arc::new(AudioTranscriptionEngine::default()),
             vad_engine: VadEngineEnum::Silero,
             languages: vec![],
-            deepgram_config: deepgram_api_key.clone().map(DeepgramTranscriptionConfig::direct),
+            deepgram_config: deepgram_api_key
+                .clone()
+                .map(DeepgramTranscriptionConfig::direct),
             deepgram_api_key,
             openai_compatible_config: None,
             enable_diarization: true,
