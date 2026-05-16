@@ -224,6 +224,28 @@ impl AudioManager {
             self.stop_internal().await?;
         }
 
+        let deepgram_status = match &options.deepgram_config {
+            Some(c) if c.is_ready() => format!(
+                "provider={} host={}",
+                c.provider_slug_for_log(),
+                crate::transcription::deepgram::transcription_endpoint_host_for_log(&c.endpoint)
+            ),
+            Some(_) => "credentials_incomplete".to_string(),
+            None => {
+                if *options.transcription_engine == AudioTranscriptionEngine::Deepgram {
+                    "missing_deepgram_config".to_string()
+                } else {
+                    "n/a".to_string()
+                }
+            }
+        };
+        info!(
+            "audio_manager apply_options: background_engine={} transcription_mode={:?} deepgram[{}]",
+            options.transcription_engine,
+            options.transcription_mode,
+            deepgram_status
+        );
+
         self.device_manager.configure_backend_flags(
             options.experimental_coreaudio_system_audio,
             options.windows_input_aec_enabled,

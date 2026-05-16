@@ -11,8 +11,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use screenpipe_audio::audio_manager::builder::AudioManagerOptions;
 use screenpipe_audio::core::engine::AudioTranscriptionEngine;
 use screenpipe_audio::meeting_detector::MeetingDetector;
+use screenpipe_audio::transcription::deepgram::{
+    transcription_endpoint_host_for_log, DeepgramTranscriptionConfig,
+};
 use screenpipe_audio::transcription::stt::{
     OpenAICompatibleConfig, DEFAULT_OPENAI_COMPATIBLE_ENDPOINT, DEFAULT_OPENAI_COMPATIBLE_MODEL,
 };
@@ -105,8 +109,7 @@ impl CaptureSession {
             tokio::spawn(async move {
                 let mut shutdown_rx = shutdown_rx;
 
-                if let Err(e) =
-                    start_monitor_watcher(vm_spawn.clone(), audio_manager_for_drm).await
+                if let Err(e) = start_monitor_watcher(vm_spawn.clone(), audio_manager_for_drm).await
                 {
                     error!("Failed to start monitor watcher: {:?}", e);
                 }
@@ -249,6 +252,48 @@ impl CaptureSession {
     }
 }
 
+fn log_capture_transcription_config(config: &RecordingConfig, options: &AudioManagerOptions) {
+    let deepgram_diag = match &config.deepgram_config {
+        Some(c) if c.is_ready() => format!(
+            "{}@{}",
+            c.provider_slug_for_log(),
+            transcription_endpoint_host_for_log(&c.endpoint)
+        ),
+        Some(_) => "deepgram:incomplete_credentials".into(),
+        None if config.audio_transcription_engine == AudioTranscriptionEngine::Deepgram => {
+            "deepgram:missing_config".into()
+        }
+        None => "n/a".into(),
+    };
+
+    let ms = &config.meeting_streaming;
+    info!(
+        "capture transcription configured: background_engine={} built_engine={} transcription_mode={:?} deepgram[{}] meeting_live_enabled={} meeting_live_provider={} meeting_live_endpoint_host={} user_id_present={}",
+        config.audio_transcription_engine,
+        options.transcription_engine,
+        config.transcription_mode,
+        deepgram_diag,
+        ms.enabled,
+        ms.provider.as_str(),
+        transcription_endpoint_host_for_log(&ms.endpoint),
+        config
+            .user_id
+            .as_ref()
+            .is_some_and(|s| !s.trim().is_empty()),
+    );
+
+    if config.audio_transcription_engine == AudioTranscriptionEngine::Deepgram
+        && !config
+            .deepgram_config
+            .as_ref()
+            .is_some_and(DeepgramTranscriptionConfig::is_ready)
+    {
+        warn!(
+            "background engine maps to Deepgram but credentials are incomplete — Fix API key / login so batch STT can start"
+        );
+    }
+}
+
 async fn reconfigure_audio_manager(
     server: &ServerCore,
     config: &RecordingConfig,
@@ -296,6 +341,7 @@ async fn reconfigure_audio_manager(
         .build_options()
         .await
         .map_err(|e| format!("Failed to build audio options: {}", e))?;
+    log_capture_transcription_config(config, &options);
     server
         .audio_manager
         .apply_options(options)

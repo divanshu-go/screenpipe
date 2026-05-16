@@ -42,13 +42,7 @@ pub async fn transcribe_with_deepgram(
         &config.auth_token[..config.auth_token.len().min(8)]
     );
 
-    let response = get_deepgram_response(
-        config,
-        audio_bytes,
-        query_params,
-        content_type,
-    )
-    .await;
+    let response = get_deepgram_response(config, audio_bytes, query_params, content_type).await;
 
     handle_deepgram_response(response, device).await
 }
