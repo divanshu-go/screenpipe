@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use screenpipe_audio::core::engine::AudioTranscriptionEngine;
+use screenpipe_audio::meeting_detector::MeetingDetector;
 use screenpipe_audio::transcription::stt::{
     OpenAICompatibleConfig, DEFAULT_OPENAI_COMPATIBLE_ENDPOINT, DEFAULT_OPENAI_COMPATIBLE_MODEL,
 };
@@ -163,7 +164,7 @@ impl CaptureSession {
         };
 
         // --- Meeting watcher ---
-        if let Some(meeting_detector) = server.meeting_detector.clone() {
+        if let Some(meeting_detector) = server.audio_manager.meeting_detector().await {
             let v2_in_meeting = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let _meeting_watcher = start_meeting_watcher(
                 server.db.clone(),
@@ -175,7 +176,7 @@ impl CaptureSession {
             );
             info!("meeting watcher started (v2 UI scanning)");
         } else {
-            info!("meeting watcher skipped because audio capture is disabled");
+            info!("meeting watcher skipped because meeting detection is disabled");
         }
 
         // --- Speaker identification ---
@@ -277,11 +278,17 @@ async fn reconfigure_audio_manager(
         .transcription_mode(config.transcription_mode.clone())
         .openai_compatible_config(openai_compatible_config);
 
-    // TODO(capture-boundary): `MeetingDetector` is still owned by ServerCore,
-    // so toggling disableAudio/disableMeetingDetector from a server-started
-    // state can still require rebuilding that owner. The audio transcription
-    // and live-provider settings below are capture-level after this refresh.
-    if let Some(ref detector) = server.meeting_detector {
+    let meeting_detector = if config.disable_audio {
+        info!("meeting detector disabled because audio capture is disabled");
+        None
+    } else if config.disable_meeting_detector {
+        info!("meeting detector disabled by settings");
+        None
+    } else {
+        Some(Arc::new(MeetingDetector::new()))
+    };
+
+    if let Some(ref detector) = meeting_detector {
         audio_manager_builder = audio_manager_builder.meeting_detector(detector.clone());
     }
 

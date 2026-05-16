@@ -118,7 +118,7 @@ pub struct AudioManager {
     meeting_streaming_handle: Arc<RwLock<Option<JoinHandle<()>>>>,
     recording_receiver_handle: Arc<RwLock<Option<JoinHandle<()>>>>,
     pub metrics: Arc<AudioPipelineMetrics>,
-    meeting_detector: Option<Arc<MeetingDetector>>,
+    meeting_detector: Arc<RwLock<Option<Arc<MeetingDetector>>>>,
     meeting_audio_tap: MeetingAudioTap,
     /// Whether transcription is currently paused (legacy, always false — deferral removed).
     pub transcription_paused: Arc<AtomicBool>,
@@ -200,7 +200,7 @@ impl AudioManager {
             transcription_receiver_handle: Arc::new(RwLock::new(None)),
             meeting_streaming_handle: Arc::new(RwLock::new(None)),
             metrics: Arc::new(AudioPipelineMetrics::new()),
-            meeting_detector,
+            meeting_detector: Arc::new(RwLock::new(meeting_detector)),
             meeting_audio_tap,
             transcription_paused: Arc::new(AtomicBool::new(false)),
             on_transcription_insert: None,
@@ -219,14 +219,16 @@ impl AudioManager {
     /// It lets settings such as transcription engine, cloud credentials,
     /// live-meeting provider, devices, language, vocabulary, and batch mode
     /// update on a capture-level restart.
-    ///
-    /// TODO(capture-boundary): OS audio backend flags are still read by
-    /// `DeviceManager::new()` and need a deeper DeviceManager rebuild.
     pub async fn apply_options(&self, options: AudioManagerOptions) -> Result<()> {
         if self.status().await == AudioManagerStatus::Running {
             self.stop_internal().await?;
         }
 
+        self.device_manager.configure_backend_flags(
+            options.experimental_coreaudio_system_audio,
+            options.windows_input_aec_enabled,
+        );
+        *self.meeting_detector.write().await = options.meeting_detector.clone();
         *self.options.write().await = options;
         *self.engine.write().await = None;
         Ok(())
@@ -285,7 +287,7 @@ impl AudioManager {
             let seg_mgr = self.segmentation_manager.clone();
             let output_path_bg = self.options.read().await.output_path.clone();
             let metrics_bg = self.metrics.clone();
-            let meeting_detector_bg = self.meeting_detector.clone();
+            let meeting_detector_bg = self.meeting_detector().await;
             let handle = tokio::spawn(async move {
                 // Wait for model to load + initial recordings
                 tokio::time::sleep(Duration::from_secs(120)).await;
@@ -665,7 +667,7 @@ impl AudioManager {
         let vad_engine = self.vad_engine.clone();
         let whisper_receiver = self.recording_receiver.clone();
         let metrics = self.metrics.clone();
-        let meeting_detector = self.meeting_detector.clone();
+        let meeting_detector = self.meeting_detector().await;
         let meeting_audio_tap = self.meeting_audio_tap.clone();
         let db = self.db.clone();
         let shared_engine = self.engine.clone();
@@ -1074,9 +1076,9 @@ impl AudioManager {
         Ok(())
     }
 
-    /// Returns a reference to the meeting detector, if batch mode is active.
-    pub fn meeting_detector(&self) -> Option<&Arc<MeetingDetector>> {
-        self.meeting_detector.as_ref()
+    /// Returns the current capture-owned meeting detector, if enabled.
+    pub async fn meeting_detector(&self) -> Option<Arc<MeetingDetector>> {
+        self.meeting_detector.read().await.clone()
     }
 
     /// Returns the shared WhisperContext for backward compatibility, if loaded.

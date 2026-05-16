@@ -16,7 +16,6 @@ use screenpipe_audio::core::device::{
     default_input_device, default_output_device, parse_audio_device,
 };
 use screenpipe_audio::core::engine::AudioTranscriptionEngine;
-use screenpipe_audio::meeting_detector::MeetingDetector;
 use screenpipe_audio::transcription::stt::{
     OpenAICompatibleConfig, DEFAULT_OPENAI_COMPATIBLE_ENDPOINT, DEFAULT_OPENAI_COMPATIBLE_MODEL,
 };
@@ -36,7 +35,6 @@ pub struct ServerCore {
     pub hot_frame_cache: Arc<HotFrameCache>,
     pub vision_metrics: Arc<screenpipe_screen::PipelineMetrics>,
     pub power_manager: Arc<PowerManagerHandle>,
-    pub meeting_detector: Option<Arc<MeetingDetector>>,
     pub pipe_manager: Arc<tokio::sync::Mutex<screenpipe_core::pipes::PipeManager>>,
     pub manual_meeting: Arc<tokio::sync::RwLock<Option<i64>>>,
     pub data_dir: PathBuf,
@@ -207,18 +205,6 @@ impl ServerCore {
             }
         }
 
-        let meeting_detector: Option<Arc<MeetingDetector>> = if config.disable_audio {
-            info!("meeting detector disabled because audio capture is disabled");
-            None
-        } else if config.disable_meeting_detector {
-            info!("meeting detector disabled by settings");
-            None
-        } else {
-            let detector = Arc::new(MeetingDetector::new());
-            info!("meeting detector enabled");
-            Some(detector)
-        };
-
         let openai_compatible_config =
             if config.audio_transcription_engine == AudioTranscriptionEngine::OpenAICompatible {
                 Some(OpenAICompatibleConfig {
@@ -245,10 +231,6 @@ impl ServerCore {
             .to_audio_manager_builder(data_path.clone(), audio_devices)
             .transcription_mode(config.transcription_mode.clone())
             .openai_compatible_config(openai_compatible_config);
-
-        if let Some(ref detector) = meeting_detector {
-            audio_manager_builder = audio_manager_builder.meeting_detector(detector.clone());
-        }
 
         crate::health::set_boot_phase("building_audio", Some("starting audio pipeline"));
         let mut audio_manager = audio_manager_builder.build(db.clone()).await.map_err(|e| {
@@ -623,7 +605,6 @@ impl ServerCore {
             hot_frame_cache,
             vision_metrics,
             power_manager,
-            meeting_detector,
             pipe_manager: shared_pipe_manager,
             manual_meeting,
             data_dir: local_data_dir,
