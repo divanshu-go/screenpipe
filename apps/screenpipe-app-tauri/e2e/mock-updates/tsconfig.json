@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["bun"]
+  },
+  "include": [
+    "server.ts",
+    "prepare-manifest.ts",
+    "stage-release-bundle.ts",
+    "local-signing-constants.ts",
+    "ensure-updater-signing.ts",
+    "run-updater-local-build.ts"
+  ]
+}
