@@ -418,15 +418,12 @@ const applyProCloudAudioDefaults = (settings: Settings): Settings => {
 	if (!isLoggedInProUser(settings.user)) return settings;
 	if ((settings as any)._proCloudAudioDefaultsAppliedV2) return settings;
 
-	if (
-		settings.audioTranscriptionEngine !== "screenpipe-cloud" ||
-		settings.meetingLiveTranscriptionProvider !== "screenpipe-cloud" ||
-		settings.meetingLiveTranscriptionEnabled !== true
-	) {
+	const oldCloudEngineMigrationAlreadyRan = (settings as any)._cloudEngineApplied === true;
+	if (!oldCloudEngineMigrationAlreadyRan) {
 		settings.audioTranscriptionEngine = "screenpipe-cloud";
-		settings.meetingLiveTranscriptionEnabled = true;
-		settings.meetingLiveTranscriptionProvider = "screenpipe-cloud";
 	}
+	settings.meetingLiveTranscriptionEnabled = true;
+	settings.meetingLiveTranscriptionProvider = "screenpipe-cloud";
 	(settings as any)._proCloudAudioDefaultsAppliedV2 = true;
 
 	return settings;
