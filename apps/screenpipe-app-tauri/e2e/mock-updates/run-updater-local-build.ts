@@ -7,15 +7,15 @@ import path from 'node:path';
 
 import {
   ensureUpdaterSigningArtifacts,
-  PUBKEY_MERGE_RELATIVE,
+  pubkeyMergeAbsolute,
   PRIVATE_KEY_ABS,
 } from './ensure-updater-signing';
-import { LOCAL_UPDATER_SIGNING_PASSWORD } from './local-signing-constants';
+import { LOCAL_UPDATER_SIGNING_PASSWORD, LOCAL_UPDATER_CARGO_PROFILE } from './local-signing-constants';
 
 const MOCK_UPDATES_DIR = import.meta.dirname;
 const APP_ROOT = path.join(MOCK_UPDATES_DIR, '..', '..');
 
-const cfgE2e = path.join('src-tauri', 'tauri.e2e.json');
+const cfgE2e = path.join(APP_ROOT, 'src-tauri', 'tauri.e2e.json');
 
 const customSigning =
   Boolean(process.env.TAURI_SIGNING_PRIVATE_KEY?.trim()) ||
@@ -23,7 +23,8 @@ const customSigning =
 
 let env = { ...process.env };
 
-let args = [
+// Collect all tauri flags first, then append cargo passthrough at the end.
+let tauriArgs = [
   'bunx',
   'tauri',
   'build',
@@ -36,7 +37,7 @@ let args = [
 if (!customSigning) {
   ensureUpdaterSigningArtifacts();
   const privateKeyContents = readFileSync(PRIVATE_KEY_ABS, 'utf8').trim();
-  args = [...args, '--config', PUBKEY_MERGE_RELATIVE];
+  tauriArgs = [...tauriArgs, '--config', pubkeyMergeAbsolute()];
   env = {
     ...env,
     TAURI_SIGNING_PRIVATE_KEY: privateKeyContents,
@@ -69,6 +70,9 @@ if (!customSigning) {
 } else {
   env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD = process.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD ?? '';
 }
+
+// Cargo passthrough must come last — everything after `--` goes to cargo, not tauri.
+const args = [...tauriArgs, '--', '--profile', LOCAL_UPDATER_CARGO_PROFILE];
 
 const proc = Bun.spawnSync(args, {
   cwd: APP_ROOT,

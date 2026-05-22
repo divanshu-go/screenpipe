@@ -14,9 +14,11 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 
+import { LOCAL_UPDATER_CARGO_PROFILE } from "./local-signing-constants";
+
 const DIR = import.meta.dirname;
 const APP_ROOT = path.resolve(DIR, "../..");
-const BUNDLE_ROOT = path.join(APP_ROOT, "src-tauri/target/release/bundle");
+const BUNDLE_ROOT = path.join(APP_ROOT, "src-tauri/target", LOCAL_UPDATER_CARGO_PROFILE, "bundle");
 
 async function cargoVersion(): Promise<string> {
   const cargoToml = await readFile(path.join(APP_ROOT, "src-tauri/Cargo.toml"), "utf8");
@@ -90,7 +92,7 @@ function parseArgs(): { version?: string } {
     else if (argv[i] === "--help" || argv[i] === "-h") {
       console.info(`Usage: bun ./e2e/mock-updates/stage-release-bundle.ts [--version SEMVER]
 
-Discovers updater bundle under src-tauri/target/release/bundle/<platform>/ and runs prepare-manifest.ts.
+Discovers updater bundle under src-tauri/target/${LOCAL_UPDATER_CARGO_PROFILE}/bundle/<platform>/ and runs prepare-manifest.ts.
 Version defaults to src-tauri/Cargo.toml.
 
 Run ONLY after updater-local:build (newer semver), BEFORE lowering version and rebuilding older app.

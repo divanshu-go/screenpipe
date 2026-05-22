@@ -9,3 +9,6 @@
  * Bump `LOCAL_UPDATER_PASSWORD_SCHEME_VERSION` in `ensure-updater-signing.ts` when changing this policy.
  */
 export const LOCAL_UPDATER_SIGNING_PASSWORD = 'screenpipe-local-updater-e2e';
+
+/** Cargo profile used by the local updater harness build. Must match `release-local` in src-tauri/Cargo.toml. */
+export const LOCAL_UPDATER_CARGO_PROFILE = 'release-local';
