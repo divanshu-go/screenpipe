@@ -9,11 +9,6 @@
     "types": ["bun", "node"]
   },
   "include": [
-    "server.ts",
-    "prepare-manifest.ts",
-    "stage-release-bundle.ts",
-    "local-signing-constants.ts",
-    "ensure-updater-signing.ts",
-    "run-updater-local-build.ts"
+    "updater-harness.ts"
   ]
 }
