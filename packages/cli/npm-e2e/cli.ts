@@ -19,7 +19,7 @@ Usage:
 Commands:
   build    Build the production native CLI binary for the current platform
   stage    Stage local npm packages into npm-e2e/.work/stage
-  serve    Start Verdaccio on port 4873, publish staged packages, print the npx command
+  serve    Start Verdaccio on port 4873 and publish staged packages
 
 Options:
   --binary <path>          Binary to stage (default: target/<host-target>/release/screenpipe)
@@ -38,19 +38,17 @@ async function cmdServe(args: ReturnType<typeof parseArgs>): Promise<void> {
 
   const workDir = path.join(WORK_DIR, "registry");
   fs.rmSync(workDir, { recursive: true, force: true });
-  const server = await startVerdaccio(args, workDir);
-  await publishPackages(state.stagedCliRoot, server.registryUrl, workDir);
 
-  console.log(`local npm registry: ${server.registryUrl}`);
+  console.log("📦 starting verdaccio registry...");
+  const server = await startVerdaccio(args, workDir);
+  console.log(`✓ registry started at ${server.registryUrl}`);
+
+  console.log("📤 publishing packages...");
+  await publishPackages(state.stagedCliRoot, server.registryUrl, workDir);
+  console.log("✓ packages published");
+
   console.log("");
-  console.log("run this in another terminal:");
-  console.log("");
-  console.log(`npx --yes --registry ${server.registryUrl} screenpipe@latest record \\`);
-  console.log("  --disable-audio \\");
-  console.log("  --disable-vision \\");
-  console.log("  --disable-telemetry \\");
-  console.log("  --disable-meeting-detector");
-  console.log("");
+  console.log(`✓ local npm registry: ${server.registryUrl}`);
   console.log("press Ctrl+C to stop the registry");
 
   const stop = () => {

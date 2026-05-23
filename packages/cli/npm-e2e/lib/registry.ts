@@ -28,6 +28,7 @@ function waitForRegistry(url: string, timeoutMs: number): Promise<void> {
       if (Date.now() - startedAt > timeoutMs) {
         reject(new Error("verdaccio did not become ready in time"));
       } else {
+        process.stdout.write(".");
         setTimeout(tick, 500);
       }
     };
@@ -143,7 +144,9 @@ export async function startVerdaccio(
   );
   child.stdout?.on("data", (chunk) => appendLog(logFile, chunk));
   child.stderr?.on("data", (chunk) => appendLog(logFile, chunk));
+  process.stdout.write("⏳ waiting for registry");
   await waitForRegistry(registryUrl, 60000);
+  process.stdout.write("\n");
   return { child, registryUrl };
 }
 
@@ -154,7 +157,9 @@ export async function publishPackages(
 ): Promise<void> {
   const logFile = path.join(LOG_DIR, "npm-publish.log");
   const npmrcPath = path.join(workDir, "npm-publish.npmrc");
+  process.stdout.write("🔐 setting up authentication");
   await writeVerdaccioAuth(registryUrl, npmrcPath);
+  process.stdout.write("\n");
 
   const env = {
     ...process.env,
@@ -168,15 +173,19 @@ export async function publishPackages(
   };
 
   for (const pkg of PACKAGES) {
+    process.stdout.write(`📦 publishing ${pkg.name}... `);
     await run("npm", ["publish", "--tag", "latest", "--access", "public", "--ignore-scripts"], {
       cwd: path.join(stagedCliRoot, pkg.dir),
       env,
       logFile,
     });
+    process.stdout.write("✓\n");
   }
+  process.stdout.write(`📦 publishing ${WRAPPER.name}... `);
   await run("npm", ["publish", "--tag", "latest", "--access", "public", "--ignore-scripts"], {
     cwd: path.join(stagedCliRoot, WRAPPER.dir),
     env,
     logFile,
   });
+  process.stdout.write("✓\n");
 }
