@@ -1,0 +1,11 @@
+{
+  "name": "@screenpipe/cli-packages",
+  "private": true,
+  "scripts": {
+    "build": "bun ./npm-e2e/cli.ts build",
+    "stage": "bun ./npm-e2e/cli.ts stage",
+    "serve": "bun ./npm-e2e/cli.ts serve",
+    "screenpipe": "npx --yes --registry http://127.0.0.1:4873 screenpipe@latest",
+    "test": "bun ./npm-e2e/runner.ts"
+  }
+}
