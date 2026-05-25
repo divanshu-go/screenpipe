@@ -6,7 +6,8 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { Bell, ChevronRight, ChevronDown, MessageSquare, X } from "lucide-react";
-import { MemoizedReactMarkdown, notificationUrlTransform, openScreenpipeViewerLink } from "@/components/markdown";
+import ReactMarkdown from "react-markdown";
+import { notificationUrlTransform, openScreenpipeViewerLink } from "@/components/markdown";
 import remarkGfm from "remark-gfm";
 import posthog from "posthog-js";
 import { invoke } from "@tauri-apps/api/core";
@@ -219,7 +220,7 @@ export function NotificationBell() {
                         </div>
                         {!isExpanded && entry.body && (
                           <div className="text-[10px] text-muted-foreground mt-0.5 line-clamp-2 pl-4 [&_p]:inline [&_strong]:text-foreground [&_a]:underline">
-                            <MemoizedReactMarkdown
+                            <ReactMarkdown
                               remarkPlugins={[remarkGfm]}
                               urlTransform={notificationUrlTransform}
                               components={{
@@ -244,7 +245,7 @@ export function NotificationBell() {
                               }}
                             >
                               {entry.body}
-                            </MemoizedReactMarkdown>
+                            </ReactMarkdown>
                           </div>
                         )}
                       </div>
@@ -269,7 +270,7 @@ export function NotificationBell() {
                     <div className="px-3 pb-2 pl-7">
                       {entry.body && (
                         <div className="text-[10px] text-muted-foreground leading-relaxed mb-2 [&_p]:mb-1 [&_p:last-child]:mb-0 [&_strong]:text-foreground [&_code]:bg-muted [&_code]:px-1 [&_code]:text-[9px] [&_ul]:pl-4 [&_ul]:my-0.5 [&_li]:my-0">
-                          <MemoizedReactMarkdown
+                          <ReactMarkdown
                             remarkPlugins={[remarkGfm]}
                             urlTransform={notificationUrlTransform}
                             components={{
@@ -292,7 +293,7 @@ export function NotificationBell() {
                                 </a>
                               ),
                             }}
-                          >{entry.body}</MemoizedReactMarkdown>
+                          >{entry.body}</ReactMarkdown>
                         </div>
                       )}
                       {entry.pipe_name && (

@@ -8,8 +8,8 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { listen, emit } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import posthog from "posthog-js";
+import ReactMarkdown from "react-markdown";
 import {
-  MemoizedReactMarkdown,
   notificationUrlTransform,
   openScreenpipeViewerLink,
   screenpipeViewerPathFromHref,
@@ -557,7 +557,7 @@ export default function NotificationPanelPage() {
               color: "rgba(0, 0, 0, 0.5)",
             }}
           >
-            <MemoizedReactMarkdown
+            <ReactMarkdown
               urlTransform={notificationUrlTransform}
               components={{
                 a: ({ href, children }) => {
@@ -620,7 +620,7 @@ export default function NotificationPanelPage() {
                   );
                 },
               }}
-            >{payload.body}</MemoizedReactMarkdown>
+            >{payload.body}</ReactMarkdown>
           </div>
         </div>
 
