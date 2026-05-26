@@ -221,9 +221,9 @@ mod tests {
                 .await
                 .expect("failed to create transcription engine");
 
-        let vad_engine: Arc<tokio::sync::Mutex<VadEngineImpl>> = Arc::new(
-            tokio::sync::Mutex::new(VadEngineImpl::Silero(SileroVad::new().await.unwrap())),
-        );
+        let vad_engine: Arc<tokio::sync::Mutex<VadEngineImpl>> = Arc::new(tokio::sync::Mutex::new(
+            VadEngineImpl::Silero(SileroVad::new().await.unwrap()),
+        ));
         let audio_data = screenpipe_audio::pcm_decode("test_data/Arifi.wav")
             .expect("Failed to decode audio file");
 
@@ -351,7 +351,9 @@ mod tests {
                 .expect("failed to create transcription engine");
 
         // Initialize VAD engine
-        let vad_engine = Arc::new(Mutex::new(VadEngineImpl::Silero(SileroVad::new().await.unwrap())));
+        let vad_engine = Arc::new(Mutex::new(VadEngineImpl::Silero(
+            SileroVad::new().await.unwrap(),
+        )));
 
         // Measure transcription time
         let start_time = Instant::now();

@@ -176,7 +176,9 @@ impl AudioManager {
                         Arc::new(Mutex::new(VadEngineImpl::WebRtc(WebRtcVad::new())))
                     }
                 },
-                VadEngineEnum::WebRtc => Arc::new(Mutex::new(VadEngineImpl::WebRtc(WebRtcVad::new()))),
+                VadEngineEnum::WebRtc => {
+                    Arc::new(Mutex::new(VadEngineImpl::WebRtc(WebRtcVad::new())))
+                }
             }
         };
 

@@ -255,7 +255,9 @@ impl FrameDiskCache {
                 transcription: {
                     let mut s = String::new();
                     for a in audio_entries.iter() {
-                        if !s.is_empty() { s.push(' '); }
+                        if !s.is_empty() {
+                            s.push(' ');
+                        }
                         s.push_str(&a.transcription);
                     }
                     Arc::from(s)

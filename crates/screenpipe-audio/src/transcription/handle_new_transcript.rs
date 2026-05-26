@@ -106,9 +106,7 @@ pub async fn handle_new_transcript(
         let mut processed_previous: Option<String> = None;
         let mut was_trimmed = false;
 
-        if let Some((previous, current)) =
-            transcription.cleanup_overlap(&previous_transcript)
-        {
+        if let Some((previous, current)) = transcription.cleanup_overlap(&previous_transcript) {
             // If current is empty after cleanup, the entire transcript was a duplicate - skip it
             if current.is_empty() {
                 metrics.record_duplicate_blocked();

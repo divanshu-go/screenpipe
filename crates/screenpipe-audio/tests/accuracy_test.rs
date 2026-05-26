@@ -59,8 +59,9 @@ async fn test_transcription_accuracy() {
             .await
             .expect("failed to create transcription engine");
 
-    let vad_engine: Arc<Mutex<VadEngineImpl>> =
-        Arc::new(Mutex::new(VadEngineImpl::Silero(SileroVad::new().await.unwrap())));
+    let vad_engine: Arc<Mutex<VadEngineImpl>> = Arc::new(Mutex::new(VadEngineImpl::Silero(
+        SileroVad::new().await.unwrap(),
+    )));
 
     let mut tasks = Vec::new();
 

@@ -298,9 +298,8 @@ mod tests {
 
     #[test]
     fn smalllist_collect_from_iterator() {
-        let list: SmallList<String, 2> = vec!["x".to_string(), "y".to_string()]
-            .into_iter()
-            .collect();
+        let list: SmallList<String, 2> =
+            vec!["x".to_string(), "y".to_string()].into_iter().collect();
         assert_eq!(list.len(), 2);
     }
 

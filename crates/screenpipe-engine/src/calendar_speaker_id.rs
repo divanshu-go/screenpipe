@@ -28,9 +28,9 @@
 //! naming decisions.
 
 use chrono::{DateTime, Utc};
+use rustc_hash::{FxHashMap, FxHashSet};
 use screenpipe_db::ActiveSpeaker;
 use serde::{Deserialize, Serialize};
-use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
@@ -152,7 +152,8 @@ pub fn decide_speaker_names(
     // This works for any meeting size (2+).
     {
         // Collect all named speakers from observations (already named + just decided)
-        let newly_named_ids: FxHashSet<i64> = decisions.names.iter().map(|d| d.speaker_id).collect();
+        let newly_named_ids: FxHashSet<i64> =
+            decisions.names.iter().map(|d| d.speaker_id).collect();
         let newly_named_map: FxHashMap<i64, &str> = decisions
             .names
             .iter()

@@ -407,20 +407,20 @@ async fn handle_stream_frames_socket(
                                             // needs the same lock to process live
                                             // frames (the only channel consumer).
                                             let frames_to_send: Vec<_> = chunks
-                                                    .frames
-                                                    .into_iter()
-                                                    .filter_map(|chunk| {
-                                                        if !sent_ids_backfill.insert(chunk.frame_id) {
-                                                            return None;
-                                                        }
-                                                        let frame = create_time_series_frame(chunk);
-                                                        if frame.frame_data.is_empty() {
-                                                            None
-                                                        } else {
-                                                            Some(frame)
-                                                        }
-                                                    })
-                                                    .collect();
+                                                .frames
+                                                .into_iter()
+                                                .filter_map(|chunk| {
+                                                    if !sent_ids_backfill.insert(chunk.frame_id) {
+                                                        return None;
+                                                    }
+                                                    let frame = create_time_series_frame(chunk);
+                                                    if frame.frame_data.is_empty() {
+                                                        None
+                                                    } else {
+                                                        Some(frame)
+                                                    }
+                                                })
+                                                .collect();
 
                                             for frame in frames_to_send {
                                                 if frame_tx_db.send(frame).await.is_err() {

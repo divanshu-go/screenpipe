@@ -288,7 +288,11 @@ pub async fn process_audio_input(
     // When resampling is needed, Arc::from(vec) fuses the Arc header and f32 data
     // into a single allocation (1 alloc vs 2 for Arc::new(Vec<f32>)).
     let audio_data: Arc<[f32]> = if audio.sample_rate != SAMPLE_RATE {
-        Arc::from(resample(audio.data.as_ref(), audio.sample_rate, SAMPLE_RATE)?)
+        Arc::from(resample(
+            audio.data.as_ref(),
+            audio.sample_rate,
+            SAMPLE_RATE,
+        )?)
     } else {
         Arc::clone(&audio.data)
     };

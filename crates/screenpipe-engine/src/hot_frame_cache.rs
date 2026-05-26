@@ -9,11 +9,11 @@
 //! This eliminates the heavy `find_video_chunks` polling that starved the DB pool.
 
 use chrono::{DateTime, Datelike, Utc};
+use parking_lot::RwLock;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use parking_lot::RwLock;
 use tokio::sync::{broadcast, watch};
 use tracing::{info, warn};
 

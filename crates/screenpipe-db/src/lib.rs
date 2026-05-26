@@ -15,11 +15,11 @@ pub use db::{
     ImmediateTx, NewMeetingTranscriptSegment, MEETING_END_REASON_AUTO_END,
     MEETING_END_REASON_EXPLICIT_STOP, MEETING_END_REASON_SHUTDOWN,
 };
+pub use memory_types::{intern, InternedString, SmallList};
 pub use migration_worker::{
     create_migration_worker, MigrationCommand, MigrationConfig, MigrationResponse, MigrationStatus,
     MigrationWorker,
 };
-pub use memory_types::{intern, InternedString, SmallList};
 pub use text_normalizer::{expand_search_query, sanitize_fts5_query};
 pub use types::*;
 pub use write_queue::{request_write_pause, request_write_resume, SyncTable};
