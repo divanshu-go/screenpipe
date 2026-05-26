@@ -40,7 +40,7 @@ pub struct DeviceFrame {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioEntry {
     pub transcription: String,
-    pub device_name: String,
+    pub device_name: Arc<str>,
     pub is_input: bool,
     pub audio_file_path: String,
     pub duration_secs: f64,
@@ -55,7 +55,7 @@ impl From<screenpipe_db::AudioEntry> for AudioEntry {
     fn from(db_entry: screenpipe_db::AudioEntry) -> Self {
         Self {
             transcription: db_entry.transcription,
-            device_name: db_entry.device_name,
+            device_name: db_entry.device_name.as_arc(),
             is_input: db_entry.is_input,
             audio_file_path: db_entry.audio_file_path,
             duration_secs: db_entry.duration_secs,
@@ -73,7 +73,8 @@ pub struct FrameMetadata {
     pub file_path: String,
     pub app_name: String,
     pub window_name: String,
-    pub transcription: String,
+    /// Shared via Arc — cloning DeviceFrames with the same transcription is O(1).
+    pub transcription: Arc<str>,
     pub ocr_text: String,
     pub browser_url: Option<String>,
 }
@@ -251,11 +252,14 @@ impl FrameDiskCache {
                 file_path: device_data.video_file_path.clone(),
                 app_name: device_data.app_name.clone(),
                 window_name: device_data.window_name.clone(),
-                transcription: audio_entries
-                    .iter()
-                    .map(|a| a.transcription.clone())
-                    .collect::<Vec<_>>()
-                    .join(" "),
+                transcription: {
+                    let mut s = String::new();
+                    for a in audio_entries.iter() {
+                        if !s.is_empty() { s.push(' '); }
+                        s.push_str(&a.transcription);
+                    }
+                    Arc::from(s)
+                },
                 ocr_text: device_data.text.clone(),
                 browser_url: device_data.browser_url.clone(),
             },
@@ -525,7 +529,7 @@ impl FrameCache {
                         debug!("cache hit for {}", cache_key);
                         timeseries_frame.frame_data.push(DeviceFrame {
                             frame_id: chunk.frame_id,
-                            device_id: device_data.device_name.clone(),
+                            device_id: device_data.device_name.to_string(),
                             image_data: frame_data,
                             metadata,
                             audio_entries: chunk
@@ -533,7 +537,7 @@ impl FrameCache {
                                 .iter()
                                 .map(|a| AudioEntry {
                                     transcription: a.transcription.clone(),
-                                    device_name: a.device_name.clone(),
+                                    device_name: a.device_name.as_arc(),
                                     is_input: a.is_input,
                                     audio_file_path: a.audio_file_path.clone(),
                                     duration_secs: a.duration_secs,
@@ -817,18 +821,22 @@ async fn extract_frame(
                 fps: chunk.fps,
                 frame_data: vec![DeviceFrame {
                     frame_id: frame.frame_id,
-                    device_id: device_data.device_name.clone(),
+                    device_id: device_data.device_name.to_string(),
                     image_data: frame_data.clone(),
                     metadata: FrameMetadata {
                         file_path: device_data.video_file_path.clone(),
                         app_name: device_data.app_name.clone(),
                         window_name: device_data.window_name.clone(),
-                        transcription: chunk
-                            .audio_entries
-                            .iter()
-                            .map(|a| a.transcription.clone())
-                            .collect::<Vec<_>>()
-                            .join(" "),
+                        transcription: {
+                            let mut s = String::new();
+                            for a in chunk.audio_entries.iter() {
+                                if !s.is_empty() {
+                                    s.push(' ');
+                                }
+                                s.push_str(&a.transcription);
+                            }
+                            Arc::from(s)
+                        },
                         ocr_text: device_data.text.clone(),
                         browser_url: device_data.browser_url.clone(),
                     },
@@ -837,7 +845,7 @@ async fn extract_frame(
                         .iter()
                         .map(|a| AudioEntry {
                             transcription: a.transcription.clone(),
-                            device_name: a.device_name.clone(),
+                            device_name: a.device_name.as_arc(),
                             is_input: a.is_input,
                             audio_file_path: a.audio_file_path.clone(),
                             duration_secs: a.duration_secs,

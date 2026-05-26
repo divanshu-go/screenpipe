@@ -22,7 +22,7 @@ use screenpipe_screen::frame_comparison::{FrameComparer, FrameComparisonConfig};
 use screenpipe_screen::monitor::SafeMonitor;
 use screenpipe_screen::snapshot_writer::SnapshotWriter;
 use screenpipe_screen::utils::capture_monitor_image;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -510,7 +510,7 @@ pub async fn event_driven_capture_loop(
     // Per-device elements dedup cache: device_name → (last_frame_id, last_content_hash)
     // When consecutive frames have the same content_hash, we skip inserting elements
     // and reference the previous frame's elements instead.
-    let mut last_elements_cache: HashMap<String, (i64, i64)> = HashMap::new();
+    let mut last_elements_cache: FxHashMap<String, (i64, i64)> = FxHashMap::default();
     // Debounce consecutive capture errors — log error! once on first failure,
     // then suppress until success. Prevents monitor disconnect from flooding
     // Sentry with 100k+ identical events.
@@ -1356,7 +1356,7 @@ async fn push_to_hot_cache(
     let hot = HotFrame {
         frame_id: result.frame_id,
         timestamp: result.captured_at,
-        device_name: device_name.to_string(),
+        device_name: Arc::from(device_name),
         app_name: result.app_name.clone().unwrap_or_default(),
         window_name: result.window_name.clone().unwrap_or_default(),
         ocr_text_preview: result
@@ -1480,8 +1480,8 @@ fn terminal_ocr_throttled(app_name: &str) -> bool {
         return false;
     }
 
-    static LAST_CAPTURE: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
-    let map = LAST_CAPTURE.get_or_init(|| Mutex::new(HashMap::new()));
+    static LAST_CAPTURE: OnceLock<Mutex<FxHashMap<String, Instant>>> = OnceLock::new();
+    let map = LAST_CAPTURE.get_or_init(|| Mutex::new(FxHashMap::default()));
     let mut guard = match map.lock() {
         Ok(g) => g,
         // Poisoned mutex: don't block captures, just allow this one
