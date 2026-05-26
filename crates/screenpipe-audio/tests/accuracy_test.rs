@@ -9,7 +9,7 @@ use screenpipe_audio::speaker::embedding::EmbeddingExtractor;
 use screenpipe_audio::speaker::embedding_manager::EmbeddingManager;
 use screenpipe_audio::speaker::prepare_segments;
 use screenpipe_audio::transcription::stt::SAMPLE_RATE;
-use screenpipe_audio::vad::{silero::SileroVad, VadEngine};
+use screenpipe_audio::vad::{silero::SileroVad, VadEngine, VadEngineImpl};
 use screenpipe_audio::{resample, AudioInput, TranscriptionEngine};
 use screenpipe_core::Language;
 use std::path::PathBuf;
@@ -59,8 +59,8 @@ async fn test_transcription_accuracy() {
             .await
             .expect("failed to create transcription engine");
 
-    let vad_engine: Arc<Mutex<Box<dyn VadEngine + Send>>> =
-        Arc::new(Mutex::new(Box::new(SileroVad::new().await.unwrap())));
+    let vad_engine: Arc<Mutex<VadEngineImpl>> =
+        Arc::new(Mutex::new(VadEngineImpl::Silero(SileroVad::new().await.unwrap())));
 
     let mut tasks = Vec::new();
 

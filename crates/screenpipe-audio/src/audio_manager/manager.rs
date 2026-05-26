@@ -44,7 +44,7 @@ use crate::{
         audio::resample,
         ffmpeg::{get_new_file_path_with_timestamp, write_audio_to_file},
     },
-    vad::{silero::SileroVad, webrtc::WebRtcVad, VadEngine, VadEngineEnum},
+    vad::{silero::SileroVad, webrtc::WebRtcVad, VadEngineEnum, VadEngineImpl},
     AudioInput, TranscriptionResult,
 };
 
@@ -108,7 +108,7 @@ pub struct AudioManager {
     segmentation_manager: Arc<SegmentationManager>,
     status: Arc<RwLock<AudioManagerStatus>>,
     db: Arc<DatabaseManager>,
-    vad_engine: Arc<Mutex<Box<dyn VadEngine + Send>>>,
+    vad_engine: Arc<Mutex<VadEngineImpl>>,
     recording_handles: Arc<RecordingHandlesMap>,
     recording_sender: Arc<crossbeam::channel::Sender<AudioInput>>,
     recording_receiver: Arc<crossbeam::channel::Receiver<AudioInput>>,
@@ -165,18 +165,18 @@ impl AudioManager {
         }
         let segmentation_manager = Arc::new(SegmentationManager::new(options.is_disabled).await?);
         let status = RwLock::new(AudioManagerStatus::Stopped);
-        let vad_engine: Arc<Mutex<Box<dyn VadEngine + Send>>> = if options.is_disabled {
-            Arc::new(Mutex::new(Box::new(WebRtcVad::new())))
+        let vad_engine: Arc<Mutex<VadEngineImpl>> = if options.is_disabled {
+            Arc::new(Mutex::new(VadEngineImpl::WebRtc(WebRtcVad::new())))
         } else {
             match options.vad_engine {
                 VadEngineEnum::Silero => match SileroVad::new().await {
-                    Ok(vad) => Arc::new(Mutex::new(Box::new(vad))),
+                    Ok(vad) => Arc::new(Mutex::new(VadEngineImpl::Silero(vad))),
                     Err(e) => {
                         warn!("silero vad unavailable, falling back to webrtc: {}", e);
-                        Arc::new(Mutex::new(Box::new(WebRtcVad::new())))
+                        Arc::new(Mutex::new(VadEngineImpl::WebRtc(WebRtcVad::new())))
                     }
                 },
-                VadEngineEnum::WebRtc => Arc::new(Mutex::new(Box::new(WebRtcVad::new()))),
+                VadEngineEnum::WebRtc => Arc::new(Mutex::new(VadEngineImpl::WebRtc(WebRtcVad::new()))),
             }
         };
 

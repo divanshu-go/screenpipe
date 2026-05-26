@@ -73,12 +73,47 @@ static MODEL_PATH: Mutex<Option<PathBuf>> = Mutex::const_new(None);
 
 static DOWNLOADING: AtomicBool = AtomicBool::new(false);
 
-pub async fn create_vad_engine(engine: VadEngineEnum) -> anyhow::Result<Box<dyn VadEngine>> {
+/// Concrete enum over the two VAD backends — no heap allocation, no vtable dispatch.
+// Always stored as Arc<Mutex<VadEngineImpl>> — the 272-byte stack size is irrelevant
+// because the value lives on the heap inside Arc. Suppressing the lint here so clippy
+// doesn't misleadingly suggest boxing the large variant (that defeats the optimization).
+#[allow(clippy::large_enum_variant)]
+pub enum VadEngineImpl {
+    WebRtc(WebRtcVad),
+    Silero(SileroVad),
+}
+
+impl VadEngine for VadEngineImpl {
+    fn is_voice_segment(&mut self, audio_chunk: &[f32]) -> anyhow::Result<bool> {
+        match self {
+            Self::WebRtc(v) => v.is_voice_segment(audio_chunk),
+            Self::Silero(v) => v.is_voice_segment(audio_chunk),
+        }
+    }
+
+    fn audio_type(&mut self, audio_chunk: &[f32]) -> anyhow::Result<VadStatus> {
+        match self {
+            Self::WebRtc(v) => v.audio_type(audio_chunk),
+            Self::Silero(v) => v.audio_type(audio_chunk),
+        }
+    }
+
+    fn set_speech_threshold(&mut self, threshold: Option<f32>) {
+        match self {
+            Self::WebRtc(v) => v.set_speech_threshold(threshold),
+            Self::Silero(v) => v.set_speech_threshold(threshold),
+        }
+    }
+}
+
+unsafe impl Send for VadEngineImpl {}
+
+pub async fn create_vad_engine(engine: VadEngineEnum) -> anyhow::Result<VadEngineImpl> {
     match engine {
-        VadEngineEnum::WebRtc => Ok(Box::new(WebRtcVad::new())),
+        VadEngineEnum::WebRtc => Ok(VadEngineImpl::WebRtc(WebRtcVad::new())),
         VadEngineEnum::Silero => {
             let silero_vad = SileroVad::new().await?;
-            Ok(Box::new(silero_vad))
+            Ok(VadEngineImpl::Silero(silero_vad))
         }
     }
 }

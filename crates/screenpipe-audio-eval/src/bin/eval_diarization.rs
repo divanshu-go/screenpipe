@@ -31,7 +31,7 @@ use screenpipe_audio::core::stream::AudioStream;
 use screenpipe_audio::speaker::embedding::EmbeddingExtractor;
 use screenpipe_audio::speaker::embedding_manager::EmbeddingManager;
 use screenpipe_audio::speaker::prepare_segments;
-use screenpipe_audio::vad::{silero::SileroVad, VadEngine};
+use screenpipe_audio::vad::{silero::SileroVad, VadEngineImpl};
 use screenpipe_audio_eval::{load_rttm, score_pipeline, RttmSegment};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -121,8 +121,8 @@ async fn main() -> Result<()> {
 
     eprintln!("loading silero vad...");
     SileroVad::ensure_model_available().await?;
-    let vad: Arc<Mutex<Box<dyn VadEngine + Send>>> =
-        Arc::new(Mutex::new(Box::new(SileroVad::new().await?)));
+    let vad: Arc<Mutex<VadEngineImpl>> =
+        Arc::new(Mutex::new(VadEngineImpl::Silero(SileroVad::new().await?)));
 
     let embedding_extractor = Arc::new(std::sync::Mutex::new(EmbeddingExtractor::new(
         embedding_model_path.to_str().unwrap(),

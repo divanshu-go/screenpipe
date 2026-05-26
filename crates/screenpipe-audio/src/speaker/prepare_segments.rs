@@ -6,7 +6,7 @@ use crate::{
     utils::audio::{
         average_noise_spectrum, filter_music_frames, normalize_v2, spectral_subtraction,
     },
-    vad::VadEngine,
+    vad::{VadEngine, VadEngineImpl},
 };
 use anyhow::Result;
 use std::{path::PathBuf, sync::Arc, sync::Mutex as StdMutex};
@@ -21,7 +21,7 @@ use super::{
 #[allow(clippy::too_many_arguments)]
 pub async fn prepare_segments(
     audio_data: &[f32],
-    vad_engine: Arc<Mutex<Box<dyn VadEngine + Send>>>,
+    vad_engine: Arc<Mutex<VadEngineImpl>>,
     segmentation_model_path: Option<&PathBuf>,
     embedding_manager: Arc<StdMutex<EmbeddingManager>>,
     embedding_extractor: Option<Arc<StdMutex<EmbeddingExtractor>>>,

@@ -20,7 +20,7 @@ use screenpipe_audio::speaker::{
 use screenpipe_audio::transcription::deepgram::{
     batch::transcribe_with_deepgram_detailed, DeepgramTranscriptionConfig,
 };
-use screenpipe_audio::vad::{silero::SileroVad, VadEngine};
+use screenpipe_audio::vad::{silero::SileroVad, VadEngineImpl};
 use screenpipe_audio::{pcm_decode, resample};
 use screenpipe_audio_eval::{load_rttm, score_pipeline, RttmSegment};
 use screenpipe_core::Language;
@@ -354,8 +354,8 @@ async fn run_local_predictions(fixtures: &[Fixture]) -> Result<HashMap<String, P
             samples
         };
         let total_samples = samples.len();
-        let vad: Arc<Mutex<Box<dyn VadEngine + Send>>> =
-            Arc::new(Mutex::new(Box::new(SileroVad::new().await?)));
+        let vad: Arc<Mutex<VadEngineImpl>> =
+            Arc::new(Mutex::new(VadEngineImpl::Silero(SileroVad::new().await?)));
         let embedding_extractor = Arc::new(std::sync::Mutex::new(EmbeddingExtractor::new(
             embedding_model_path.to_str().unwrap(),
         )?));

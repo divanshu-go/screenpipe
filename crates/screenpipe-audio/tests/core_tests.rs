@@ -16,7 +16,7 @@ mod tests {
     use screenpipe_audio::speaker::embedding::EmbeddingExtractor;
     use screenpipe_audio::speaker::embedding_manager::EmbeddingManager;
     use screenpipe_audio::speaker::prepare_segments;
-    use screenpipe_audio::vad::{silero::SileroVad, VadEngine};
+    use screenpipe_audio::vad::{silero::SileroVad, VadEngine, VadEngineImpl};
     use screenpipe_audio::{pcm_decode, AudioInput, TranscriptionEngine};
     use screenpipe_core::Language;
     use std::path::{Path, PathBuf};
@@ -221,8 +221,8 @@ mod tests {
                 .await
                 .expect("failed to create transcription engine");
 
-        let vad_engine: Arc<tokio::sync::Mutex<Box<dyn VadEngine + Send>>> = Arc::new(
-            tokio::sync::Mutex::new(Box::new(SileroVad::new().await.unwrap())),
+        let vad_engine: Arc<tokio::sync::Mutex<VadEngineImpl>> = Arc::new(
+            tokio::sync::Mutex::new(VadEngineImpl::Silero(SileroVad::new().await.unwrap())),
         );
         let audio_data = screenpipe_audio::pcm_decode("test_data/Arifi.wav")
             .expect("Failed to decode audio file");
@@ -351,8 +351,7 @@ mod tests {
                 .expect("failed to create transcription engine");
 
         // Initialize VAD engine
-        let vad_engine: Box<dyn VadEngine + Send> = Box::new(SileroVad::new().await.unwrap());
-        let vad_engine = Arc::new(Mutex::new(vad_engine));
+        let vad_engine = Arc::new(Mutex::new(VadEngineImpl::Silero(SileroVad::new().await.unwrap())));
 
         // Measure transcription time
         let start_time = Instant::now();
