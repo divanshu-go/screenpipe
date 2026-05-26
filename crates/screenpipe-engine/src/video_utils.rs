@@ -10,22 +10,21 @@ use screenpipe_core::pii_removal::PiiRegion;
 use screenpipe_core::{ffmpeg_cmd_async, find_ffmpeg_path};
 use screenpipe_db::VideoMetadata as DBVideoMetadata;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use dashmap::DashMap;
 use std::io::Cursor;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 use tokio::io::AsyncReadExt;
-use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 /// Global cache for video metadata (FPS, duration) to avoid repeated ffprobe calls.
 /// Key: canonical file path, Value: (fps, duration_seconds)
-/// This dramatically improves frame extraction performance by eliminating
-/// redundant ffprobe process spawns (~200-500ms saved per frame request).
-static VIDEO_METADATA_CACHE: LazyLock<RwLock<HashMap<String, (f64, f64)>>> =
-    LazyLock::new(|| RwLock::new(HashMap::with_capacity(100)));
+/// DashMap provides per-shard locking — parallel frame extraction threads
+/// never contend on the global read lock (~200-500ms saved per frame request).
+static VIDEO_METADATA_CACHE: LazyLock<DashMap<String, (f64, f64)>> =
+    LazyLock::new(|| DashMap::with_capacity(100));
 
 /// Get ffprobe path from ffmpeg path, handling Windows .exe extension.
 /// Falls back to searching PATH via `which` if ffprobe isn't alongside ffmpeg.
@@ -410,16 +409,14 @@ async fn get_video_fps_and_duration(
     ffmpeg_path: &std::path::Path,
     video_path: &str,
 ) -> Result<(f64, f64)> {
-    // Check cache first (fast path)
-    {
-        let cache = VIDEO_METADATA_CACHE.read().await;
-        if let Some(&(fps, duration)) = cache.get(video_path) {
-            debug!(
-                "Video metadata cache HIT for {}: fps={}, duration={}",
-                video_path, fps, duration
-            );
-            return Ok((fps, duration));
-        }
+    // Check cache first (fast path — DashMap shard read, no global lock)
+    if let Some(entry) = VIDEO_METADATA_CACHE.get(video_path) {
+        let (fps, duration) = *entry;
+        debug!(
+            "Video metadata cache HIT for {}: fps={}, duration={}",
+            video_path, fps, duration
+        );
+        return Ok((fps, duration));
     }
 
     debug!(
@@ -430,20 +427,23 @@ async fn get_video_fps_and_duration(
     // Cache miss - call ffprobe
     let (fps, duration) = get_video_fps_and_duration_uncached(ffmpeg_path, video_path).await?;
 
-    // Store in cache
+    // Store in cache — evict oldest half if over limit
     {
-        let mut cache = VIDEO_METADATA_CACHE.write().await;
-        // Limit cache size to prevent unbounded memory growth
-        if cache.len() >= 1000 {
-            // Simple eviction: clear half the cache when full
-            // In production, consider LRU eviction
-            let keys_to_remove: Vec<_> = cache.keys().take(500).cloned().collect();
+        if VIDEO_METADATA_CACHE.len() >= 1000 {
+            let keys_to_remove: Vec<_> = VIDEO_METADATA_CACHE
+                .iter()
+                .take(500)
+                .map(|e| e.key().clone())
+                .collect();
             for key in keys_to_remove {
-                cache.remove(&key);
+                VIDEO_METADATA_CACHE.remove(&key);
             }
-            debug!("Video metadata cache pruned to {} entries", cache.len());
+            debug!(
+                "Video metadata cache pruned to {} entries",
+                VIDEO_METADATA_CACHE.len()
+            );
         }
-        cache.insert(video_path.to_string(), (fps, duration));
+        VIDEO_METADATA_CACHE.insert(video_path.to_string(), (fps, duration));
     }
 
     Ok((fps, duration))
