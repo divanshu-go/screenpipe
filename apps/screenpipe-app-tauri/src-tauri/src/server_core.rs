@@ -256,7 +256,7 @@ impl ServerCore {
                             audio_chunk_id: info.audio_chunk_id,
                             timestamp: ts,
                             transcription: info.transcription,
-                            device_name: info.device_name,
+                            device_name: info.device_name.into(),
                             is_input: info.is_input,
                             audio_file_path: info.audio_file_path,
                             duration_secs: info.duration_secs,

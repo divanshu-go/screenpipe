@@ -894,7 +894,7 @@ async fn main() -> anyhow::Result<()> {
                             audio_chunk_id: info.audio_chunk_id,
                             timestamp: ts,
                             transcription: info.transcription,
-                            device_name: info.device_name,
+                            device_name: Arc::from(info.device_name.as_str()),
                             is_input: info.is_input,
                             audio_file_path: info.audio_file_path,
                             duration_secs: info.duration_secs,

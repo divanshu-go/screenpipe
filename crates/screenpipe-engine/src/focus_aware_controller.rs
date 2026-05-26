@@ -31,9 +31,10 @@
 //! path — no opt-out needed.
 
 use crate::focus_tracker::{FocusEvent, FocusTracker, MonitorIdentity};
-use std::collections::HashMap;
+use parking_lot::Mutex;
+use rustc_hash::FxHashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Notify;
 use tracing::{debug, warn};
@@ -83,7 +84,7 @@ pub struct FocusAwareController {
     tracker: Arc<dyn FocusTracker>,
     /// When each monitor last held focus. `Instant` = the moment it *lost*
     /// focus. A monitor that's never been focused is absent from the map.
-    last_focus_time: Mutex<HashMap<MonitorKey, Instant>>,
+    last_focus_time: Mutex<FxHashMap<MonitorKey, Instant>>,
     /// Currently focused monitor identity, or `None` if unknown.
     current_focus: Mutex<Option<MonitorIdentity>>,
     /// Wall-clock time the most recent focus/unknown event was received. If
@@ -91,7 +92,7 @@ pub struct FocusAwareController {
     /// Unknown so all monitors stay Active (safe default).
     last_event_time: Mutex<Instant>,
     /// Per-monitor Notify used to wake Cold capture loops when focus returns.
-    monitor_notifies: Mutex<HashMap<u32, Arc<Notify>>>,
+    monitor_notifies: Mutex<FxHashMap<u32, Arc<Notify>>>,
     stop_flag: Arc<AtomicBool>,
 }
 
@@ -99,10 +100,10 @@ impl FocusAwareController {
     pub fn new(tracker: Arc<dyn FocusTracker>) -> Arc<Self> {
         let ctrl = Arc::new(Self {
             tracker,
-            last_focus_time: Mutex::new(HashMap::new()),
+            last_focus_time: Mutex::new(FxHashMap::default()),
             current_focus: Mutex::new(None),
             last_event_time: Mutex::new(Instant::now()),
-            monitor_notifies: Mutex::new(HashMap::new()),
+            monitor_notifies: Mutex::new(FxHashMap::default()),
             stop_flag: Arc::new(AtomicBool::new(false)),
         });
         ctrl.spawn_subscriber();
@@ -151,10 +152,7 @@ impl FocusAwareController {
 
     fn apply_focus(&self, identity: MonitorIdentity) {
         let prev = {
-            let mut current = self
-                .current_focus
-                .lock()
-                .expect("focus-aware current_focus mutex poisoned");
+            let mut current = self.current_focus.lock();
             let prev = current.clone();
             *current = Some(identity.clone());
             prev
@@ -163,11 +161,9 @@ impl FocusAwareController {
         // Record the previous monitor's loss-of-focus instant.
         if let Some(prev_identity) = prev {
             if !prev_identity.matches(&identity) {
-                let mut times = self
-                    .last_focus_time
+                self.last_focus_time
                     .lock()
-                    .expect("focus-aware last_focus_time mutex poisoned");
-                times.insert(MonitorKey::from_identity(&prev_identity), Instant::now());
+                    .insert(MonitorKey::from_identity(&prev_identity), Instant::now());
             }
         }
 
@@ -181,20 +177,14 @@ impl FocusAwareController {
 
     fn apply_unknown(&self) {
         {
-            let mut current = self
-                .current_focus
-                .lock()
-                .expect("focus-aware current_focus mutex poisoned");
-            *current = None;
+            *self.current_focus.lock() = None;
         }
         self.touch_last_event();
         self.wake_all_monitors();
     }
 
     fn touch_last_event(&self) {
-        if let Ok(mut t) = self.last_event_time.lock() {
-            *t = Instant::now();
-        }
+        *self.last_event_time.lock() = Instant::now();
     }
 
     /// Query state for a monitor. Must be cheap — called on every capture
@@ -217,12 +207,7 @@ impl FocusAwareController {
         // during sleep/wake, etc.) and treat everything as Active. Matches
         // the Null-tracker all-Active fallback so a broken focus source
         // never silently freezes capture on non-focused monitors.
-        let last_event_elapsed = self
-            .last_event_time
-            .lock()
-            .ok()
-            .map(|t| t.elapsed())
-            .unwrap_or_else(|| Duration::from_secs(0));
+        let last_event_elapsed = self.last_event_time.lock().elapsed();
         if last_event_elapsed >= STALE_FOCUS_CUTOFF {
             return CaptureState::Active;
         }
@@ -230,11 +215,7 @@ impl FocusAwareController {
         // If focus is Unknown (no data yet), everything is Active — safest
         // fallback. Preserves existing behaviour when the tracker can't
         // resolve the cursor to a monitor.
-        let current = self
-            .current_focus
-            .lock()
-            .expect("focus-aware current_focus mutex poisoned")
-            .clone();
+        let current = self.current_focus.lock().clone();
         let Some(current_identity) = current else {
             return CaptureState::Active;
         };
@@ -244,12 +225,7 @@ impl FocusAwareController {
         }
 
         let key = MonitorKey::from_identity(identity);
-        let last = self
-            .last_focus_time
-            .lock()
-            .expect("focus-aware last_focus_time mutex poisoned")
-            .get(&key)
-            .copied();
+        let last = self.last_focus_time.lock().get(&key).copied();
 
         match last {
             // Never focused since controller start → Cold. The loop will block
@@ -274,20 +250,16 @@ impl FocusAwareController {
     /// Returns the notify for a monitor (creates on first call). Cold loops
     /// await on this to wake when focus returns.
     pub fn notify_for(&self, monitor_id: u32) -> Arc<Notify> {
-        let mut map = self
-            .monitor_notifies
+        self.monitor_notifies
             .lock()
-            .expect("focus-aware monitor_notifies mutex poisoned");
-        map.entry(monitor_id)
+            .entry(monitor_id)
             .or_insert_with(|| Arc::new(Notify::new()))
             .clone()
     }
 
     fn wake_all_monitors(&self) {
-        if let Ok(map) = self.monitor_notifies.lock() {
-            for notify in map.values() {
-                notify.notify_waiters();
-            }
+        for notify in self.monitor_notifies.lock().values() {
+            notify.notify_waiters();
         }
     }
 
@@ -300,10 +272,8 @@ impl FocusAwareController {
         self.tracker.stop();
         // Wake any Cold loops so they observe shutdown via the stop_signal
         // they check on the next iteration.
-        if let Ok(map) = self.monitor_notifies.lock() {
-            for n in map.values() {
-                n.notify_waiters();
-            }
+        for n in self.monitor_notifies.lock().values() {
+            n.notify_waiters();
         }
     }
 
@@ -336,21 +306,15 @@ impl FocusAwareController {
         identity: &MonitorIdentity,
         lost_at: Instant,
     ) {
-        let mut times = self
-            .last_focus_time
+        self.last_focus_time
             .lock()
-            .expect("focus-aware last_focus_time mutex poisoned");
-        times.insert(MonitorKey::from_identity(identity), lost_at);
+            .insert(MonitorKey::from_identity(identity), lost_at);
     }
 
     /// Force the last-event timestamp to simulate a stalled tracker.
     #[cfg(test)]
     pub(crate) fn backdate_last_event_for_test(&self, at: Instant) {
-        let mut t = self
-            .last_event_time
-            .lock()
-            .expect("focus-aware last_event_time mutex poisoned");
-        *t = at;
+        *self.last_event_time.lock() = at;
     }
 }
 
