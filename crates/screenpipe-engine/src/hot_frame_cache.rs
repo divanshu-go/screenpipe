@@ -9,8 +9,12 @@
 //! This eliminates the heavy `find_video_chunks` polling that starved the DB pool.
 
 use chrono::{DateTime, Datelike, Utc};
+use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
 use std::collections::BTreeMap;
-use tokio::sync::{broadcast, watch, RwLock};
+use std::sync::Arc;
+use parking_lot::RwLock;
+use tokio::sync::{broadcast, watch};
 use tracing::{info, warn};
 
 use crate::video_cache::{AudioEntry, DeviceFrame, FrameMetadata, TimeSeriesFrame};
@@ -21,7 +25,7 @@ use crate::video_cache::{AudioEntry, DeviceFrame, FrameMetadata, TimeSeriesFrame
 pub struct HotFrame {
     pub frame_id: i64,
     pub timestamp: DateTime<Utc>,
-    pub device_name: String,
+    pub device_name: Arc<str>,
     pub app_name: String,
     pub window_name: String,
     pub ocr_text_preview: String,
@@ -39,7 +43,7 @@ pub struct HotAudio {
     pub audio_chunk_id: i64,
     pub timestamp: DateTime<Utc>,
     pub transcription: String,
-    pub device_name: String,
+    pub device_name: Arc<str>,
     pub is_input: bool,
     pub audio_file_path: String,
     pub duration_secs: f64,
@@ -55,7 +59,7 @@ pub struct HotAudio {
 /// Broadcast channels push live updates to WS handlers without polling.
 pub struct HotFrameCache {
     frames: RwLock<BTreeMap<(DateTime<Utc>, i64), HotFrame>>,
-    audio: RwLock<BTreeMap<DateTime<Utc>, Vec<HotAudio>>>,
+    audio: RwLock<BTreeMap<DateTime<Utc>, SmallVec<[HotAudio; 2]>>>,
     frame_notify: broadcast::Sender<HotFrame>,
     audio_notify: broadcast::Sender<HotAudio>,
     /// Ordinal day number — cache is cleared on day rollover.
@@ -95,45 +99,44 @@ impl HotFrameCache {
     }
 
     /// Check for day rollover and clear cache if needed.
-    async fn maybe_rollover(&self) {
+    fn maybe_rollover(&self) {
         let today = Utc::now().ordinal();
-        let mut day = self.cache_day.write().await;
+        let mut day = self.cache_day.write();
         if *day != today {
             info!(
                 "hot_frame_cache: day rollover ({} -> {}), clearing cache",
                 *day, today
             );
-            self.frames.write().await.clear();
-            self.audio.write().await.clear();
-            *self.cache_warm_start.write().await = None;
+            self.frames.write().clear();
+            self.audio.write().clear();
+            *self.cache_warm_start.write() = None;
             *day = today;
         }
     }
 
     /// Push a captured frame into the cache and broadcast to subscribers.
     pub async fn push_frame(&self, frame: HotFrame) {
-        self.maybe_rollover().await;
+        self.maybe_rollover();
         let key = (frame.timestamp, frame.frame_id);
         // Extend cache coverage if this frame is earlier than current warm_start
         {
-            let mut ws = self.cache_warm_start.write().await;
+            let mut ws = self.cache_warm_start.write();
             match *ws {
                 None => *ws = Some(frame.timestamp),
                 Some(existing) if frame.timestamp < existing => *ws = Some(frame.timestamp),
                 _ => {}
             }
         }
-        self.frames.write().await.insert(key, frame.clone());
+        self.frames.write().insert(key, frame.clone());
         // Broadcast to WS handlers — ignore errors (no subscribers = fine)
         let _ = self.frame_notify.send(frame);
     }
 
     /// Push an audio transcription into the cache and broadcast.
     pub async fn push_audio(&self, audio: HotAudio) {
-        self.maybe_rollover().await;
+        self.maybe_rollover();
         self.audio
             .write()
-            .await
             .entry(audio.timestamp)
             .or_default()
             .push(audio.clone());
@@ -157,8 +160,8 @@ impl HotFrameCache {
         start: DateTime<Utc>,
         end: DateTime<Utc>,
     ) -> Vec<TimeSeriesFrame> {
-        let frames = self.frames.read().await;
-        let audio = self.audio.read().await;
+        let frames = self.frames.read();
+        let audio = self.audio.read();
 
         let range_start = (start, i64::MIN);
         let range_end = (end, i64::MAX);
@@ -175,13 +178,13 @@ impl HotFrameCache {
     /// Earliest timestamp the cache covers (inclusive).
     /// Returns `None` if cache is empty / not yet warmed.
     /// The streaming handler uses this to skip or narrow the DB backfill.
-    pub async fn earliest_coverage(&self) -> Option<DateTime<Utc>> {
-        *self.cache_warm_start.read().await
+    pub fn earliest_coverage(&self) -> Option<DateTime<Utc>> {
+        *self.cache_warm_start.read()
     }
 
     /// Check if the cache has data for a given date (today).
-    pub async fn is_today(&self, ts: DateTime<Utc>) -> bool {
-        let day = self.cache_day.read().await;
+    pub fn is_today(&self, ts: DateTime<Utc>) -> bool {
+        let day = self.cache_day.read();
         ts.ordinal() == *day && ts.year() == Utc::now().year()
     }
 
@@ -212,7 +215,7 @@ impl HotFrameCache {
         match db.find_video_chunks(start, end).await {
             Ok(chunks) => {
                 let mut frame_count = 0;
-                let mut frames = self.frames.write().await;
+                let mut frames = self.frames.write();
 
                 for frame_data in chunks.frames {
                     // Convert FrameData to HotFrames
@@ -224,7 +227,7 @@ impl HotFrameCache {
                         let hot = HotFrame {
                             frame_id: frame_data.frame_id,
                             timestamp: frame_data.timestamp,
-                            device_name: ocr_entry.device_name.clone(),
+                            device_name: Arc::from(ocr_entry.device_name.as_ref()),
                             app_name: ocr_entry.app_name.clone(),
                             window_name: ocr_entry.window_name.clone(),
                             ocr_text_preview: ocr_entry.text.chars().take(200).collect(),
@@ -241,13 +244,13 @@ impl HotFrameCache {
 
                     // Convert audio entries
                     if !frame_data.audio_entries.is_empty() {
-                        let mut audio_map = self.audio.write().await;
+                        let mut audio_map = self.audio.write();
                         for audio_entry in &frame_data.audio_entries {
                             let hot_audio = HotAudio {
                                 audio_chunk_id: audio_entry.audio_chunk_id,
                                 timestamp: frame_data.timestamp,
                                 transcription: audio_entry.transcription.clone(),
-                                device_name: audio_entry.device_name.clone(),
+                                device_name: Arc::from(audio_entry.device_name.as_ref()),
                                 is_input: audio_entry.is_input,
                                 audio_file_path: audio_entry.audio_file_path.clone(),
                                 duration_secs: audio_entry.duration_secs,
@@ -269,7 +272,7 @@ impl HotFrameCache {
                 // NOT claim coverage — otherwise the streaming handler skips
                 // the DB backfill and the timeline stays permanently empty.
                 if frame_count > 0 {
-                    *self.cache_warm_start.write().await = Some(start);
+                    *self.cache_warm_start.write() = Some(start);
                 }
 
                 info!(
@@ -295,18 +298,18 @@ impl HotFrameCache {
     /// backward" right after the user clicked delete-last-15-min).
     pub async fn evict_range(&self, start: DateTime<Utc>, end: DateTime<Utc>) {
         {
-            let mut frames = self.frames.write().await;
+            let mut frames = self.frames.write();
             frames.retain(|(ts, _), _| *ts < start || *ts > end);
         }
         {
-            let mut audio = self.audio.write().await;
+            let mut audio = self.audio.write();
             audio.retain(|ts, _| *ts < start || *ts > end);
         }
         // Push warm_start forward if it now points inside the evicted range.
-        let mut ws = self.cache_warm_start.write().await;
+        let mut ws = self.cache_warm_start.write();
         if let Some(existing) = *ws {
             if existing >= start && existing <= end {
-                let frames = self.frames.read().await;
+                let frames = self.frames.read();
                 *ws = frames.keys().next().map(|(t, _)| *t);
             }
         }
@@ -315,7 +318,7 @@ impl HotFrameCache {
     /// Public wrapper: find audio entries near a given timestamp.
     /// Used by the streaming handler to attach audio to live frames.
     pub async fn find_audio_near(&self, frame_ts: DateTime<Utc>) -> Vec<AudioEntry> {
-        let audio_map = self.audio.read().await;
+        let audio_map = self.audio.read();
         find_audio_for_frame(&audio_map, frame_ts)
     }
 
@@ -326,10 +329,10 @@ impl HotFrameCache {
         &self,
         compacted: &[(i64, String, i64, f64)], // (frame_id, mp4_path, offset_index, fps)
     ) {
-        let mut frames = self.frames.write().await;
+        let mut frames = self.frames.write();
         // Build a lookup by frame_id for O(n) scan
-        let mut updates: std::collections::HashMap<i64, (&str, i64, f64)> =
-            std::collections::HashMap::with_capacity(compacted.len());
+        let mut updates: FxHashMap<i64, (&str, i64, f64)> =
+            FxHashMap::with_capacity_and_hasher(compacted.len(), Default::default());
         for (fid, path, offset, fps) in compacted {
             updates.insert(*fid, (path.as_str(), *offset, *fps));
         }
@@ -348,7 +351,7 @@ impl HotFrameCache {
 /// transcription by minutes — audio is keyed by capture_timestamp which
 /// may differ from frame timestamps by up to the chunk duration (~30s).
 fn find_audio_for_frame(
-    audio_map: &BTreeMap<DateTime<Utc>, Vec<HotAudio>>,
+    audio_map: &BTreeMap<DateTime<Utc>, SmallVec<[HotAudio; 2]>>,
     frame_ts: DateTime<Utc>,
 ) -> Vec<AudioEntry> {
     let pad = chrono::Duration::seconds(60);
@@ -378,14 +381,14 @@ fn find_audio_for_frame(
 /// Convert a HotFrame + audio into the existing TimeSeriesFrame format.
 fn hot_frame_to_timeseries(hot: &HotFrame, audio_entries: Vec<AudioEntry>) -> TimeSeriesFrame {
     let device_frame = DeviceFrame {
-        device_id: hot.device_name.clone(),
+        device_id: hot.device_name.to_string(),
         frame_id: hot.frame_id,
         image_data: vec![],
         metadata: FrameMetadata {
             file_path: hot.snapshot_path.clone(),
             app_name: hot.app_name.clone(),
             window_name: hot.window_name.clone(),
-            transcription: String::new(),
+            transcription: Arc::from(""),
             ocr_text: hot.ocr_text_preview.clone(),
             browser_url: hot.browser_url.clone(),
         },
@@ -414,7 +417,7 @@ mod tests {
         let frame = HotFrame {
             frame_id: 1,
             timestamp: now,
-            device_name: "monitor_0".to_string(),
+            device_name: Arc::from("monitor_0"),
             app_name: "TestApp".to_string(),
             window_name: "TestWindow".to_string(),
             ocr_text_preview: "hello world".to_string(),
@@ -447,7 +450,7 @@ mod tests {
             .push_frame(HotFrame {
                 frame_id: 1,
                 timestamp: now,
-                device_name: "monitor_0".to_string(),
+                device_name: Arc::from("monitor_0"),
                 app_name: "App".to_string(),
                 window_name: "Win".to_string(),
                 ocr_text_preview: String::new(),
@@ -466,7 +469,7 @@ mod tests {
                 audio_chunk_id: 10,
                 timestamp: now + chrono::Duration::seconds(5),
                 transcription: "hello".to_string(),
-                device_name: "mic_0".to_string(),
+                device_name: Arc::from("mic_0"),
                 is_input: true,
                 audio_file_path: "/tmp/audio.mp4".to_string(),
                 duration_secs: 3.0,
@@ -497,7 +500,7 @@ mod tests {
         let frame = HotFrame {
             frame_id: 42,
             timestamp: Utc::now(),
-            device_name: "monitor_0".to_string(),
+            device_name: Arc::from("monitor_0"),
             app_name: "App".to_string(),
             window_name: "Win".to_string(),
             ocr_text_preview: String::new(),
@@ -518,9 +521,9 @@ mod tests {
     #[tokio::test]
     async fn test_is_today() {
         let cache = HotFrameCache::new();
-        assert!(cache.is_today(Utc::now()).await);
+        assert!(cache.is_today(Utc::now()));
 
         let yesterday = Utc::now() - chrono::Duration::days(1);
-        assert!(!cache.is_today(yesterday).await);
+        assert!(!cache.is_today(yesterday));
     }
 }
