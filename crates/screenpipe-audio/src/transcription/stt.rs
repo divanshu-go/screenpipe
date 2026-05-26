@@ -17,7 +17,7 @@ use crate::transcription::whisper::batch::process_with_whisper;
 use crate::transcription::VocabularyEntry;
 use crate::utils::audio::resample;
 use crate::utils::ffmpeg::{get_new_file_path_with_timestamp, write_audio_to_file};
-use crate::vad::VadEngine;
+use crate::vad::VadEngineImpl;
 use anyhow::Result;
 use reqwest::Client;
 use screenpipe_core::Language;
@@ -267,7 +267,7 @@ pub async fn stt(
 #[allow(clippy::too_many_arguments)]
 pub async fn process_audio_input(
     audio: AudioInput,
-    vad_engine: Arc<Mutex<Box<dyn VadEngine + Send>>>,
+    vad_engine: Arc<Mutex<VadEngineImpl>>,
     segmentation_model_path: Option<PathBuf>,
     embedding_manager: Arc<StdMutex<EmbeddingManager>>,
     embedding_extractor: Option<Arc<StdMutex<EmbeddingExtractor>>>,
@@ -283,14 +283,18 @@ pub async fn process_audio_input(
     // even when smart mode defers processing by 20+ minutes.
     let timestamp = audio.capture_timestamp;
 
-    let audio_data = if audio.sample_rate != SAMPLE_RATE {
-        resample(audio.data.as_ref(), audio.sample_rate, SAMPLE_RATE)?
+    // Reuse the incoming Arc<[f32]> when no resampling is needed (common case) —
+    // just bump the refcount (O(1), no copy).
+    // When resampling is needed, Arc::from(vec) fuses the Arc header and f32 data
+    // into a single allocation (1 alloc vs 2 for Arc::new(Vec<f32>)).
+    let audio_data: Arc<[f32]> = if audio.sample_rate != SAMPLE_RATE {
+        Arc::from(resample(audio.data.as_ref(), audio.sample_rate, SAMPLE_RATE)?)
     } else {
-        audio.data.as_ref().to_vec()
+        Arc::clone(&audio.data)
     };
 
     let audio = AudioInput {
-        data: Arc::new(audio_data.clone()),
+        data: Arc::clone(&audio_data),
         sample_rate: SAMPLE_RATE,
         channels: audio.channels,
         device: audio.device,
@@ -326,7 +330,7 @@ pub async fn process_audio_input(
         let new_file_path =
             get_new_file_path_with_timestamp(&audio.device.to_string(), output_path, capture_dt);
         if let Err(e) = write_audio_to_file(
-            &audio.data.to_vec(),
+            audio.data.as_ref(),
             audio.sample_rate,
             &PathBuf::from(&new_file_path),
             false,
@@ -366,7 +370,7 @@ pub async fn run_stt(
             let diarization_segments = offset_diarization_segments(output, segment.start);
             Ok(TranscriptionResult {
                 input: AudioInput {
-                    data: Arc::new(audio),
+                    data: Arc::from(audio),
                     sample_rate,
                     channels: 1,
                     device: device.clone(),
@@ -387,7 +391,7 @@ pub async fn run_stt(
             error!("STT error for input {}: {:?}", device, e);
             Ok(TranscriptionResult {
                 input: AudioInput {
-                    data: Arc::new(segment.samples),
+                    data: Arc::from(segment.samples),
                     sample_rate: segment.sample_rate,
                     channels: 1,
                     device: device.clone(),

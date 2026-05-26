@@ -31,11 +31,11 @@ pub struct TranscriptionResult {
 
 impl TranscriptionResult {
     // TODO --optimize
-    pub fn cleanup_overlap(&mut self, previous_transcript: String) -> Option<(String, String)> {
+    pub fn cleanup_overlap(&mut self, previous_transcript: &str) -> Option<(String, String)> {
         if let Some(transcription) = &self.transcription {
             let transcription = transcription.to_string();
             if let Some((prev_idx, cur_idx, match_len)) =
-                longest_common_word_substring(previous_transcript.as_str(), transcription.as_str())
+                longest_common_word_substring(previous_transcript, transcription.as_str())
             {
                 // strip old transcript from prev_idx word pos (keep words before the overlap)
                 let prev_words: Vec<&str> = previous_transcript.split_whitespace().collect();
@@ -442,7 +442,7 @@ mod tests {
         let result = TranscriptionResult {
             path: file_path.clone(),
             input: AudioInput {
-                data: Arc::new(vec![]),
+                data: Arc::from(vec![]),
                 sample_rate: 16_000,
                 channels: 1,
                 device: Arc::new(crate::core::device::AudioDevice::new(

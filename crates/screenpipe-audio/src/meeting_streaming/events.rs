@@ -65,7 +65,7 @@ impl MeetingAudioTap {
 /// chunker. Providers consume these only while a meeting stream is active.
 #[derive(Clone, Debug)]
 pub struct MeetingAudioFrame {
-    pub samples: Arc<Vec<f32>>,
+    pub samples: Arc<[f32]>,
     pub device_name: String,
     pub device_type: DeviceType,
     pub sample_rate: u32,
@@ -75,7 +75,7 @@ pub struct MeetingAudioFrame {
 
 impl MeetingAudioFrame {
     pub fn new(
-        samples: Arc<Vec<f32>>,
+        samples: Arc<[f32]>,
         device: &AudioDevice,
         sample_rate: u32,
         channels: u16,

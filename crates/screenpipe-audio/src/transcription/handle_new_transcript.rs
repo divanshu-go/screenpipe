@@ -44,13 +44,27 @@ pub async fn handle_new_transcript(
     metrics: Arc<AudioPipelineMetrics>,
     on_insert: Option<AudioInsertCallback>,
 ) {
+    // Bridge crossbeam's blocking Receiver to a tokio async channel so the
+    // tokio::spawn'd task never blocks a tokio worker thread while waiting for
+    // audio. A dedicated OS thread does the blocking recv and forwards into a
+    // tokio mpsc channel; this task only awaits the async side.
+    let (bridge_tx, mut bridge_rx) = tokio::sync::mpsc::channel::<TranscriptionResult>(4);
+    let crossbeam_rx = transcription_receiver.clone();
+    std::thread::spawn(move || {
+        while let Ok(t) = crossbeam_rx.recv() {
+            if bridge_tx.blocking_send(t).is_err() {
+                break; // Consumer dropped (task aborted) — thread exits cleanly
+            }
+        }
+    });
+
     // Track previous transcript per device to avoid cross-device contamination.
     // The overlap cleanup logic compares current transcript against the previous one
     // from the SAME device — without per-device tracking, device A's transcript
     // could incorrectly trim device B's content.
     let mut prev_transcript_by_device: HashMap<String, String> = HashMap::new();
     let mut prev_id_by_device: HashMap<String, i64> = HashMap::new();
-    while let Ok(mut transcription) = transcription_receiver.recv() {
+    while let Some(mut transcription) = bridge_rx.recv().await {
         // Heartbeat: record that the consumer is alive and processing, even when
         // VAD filters everything. The health check uses this to distinguish
         // "silence, nothing to write" from "pipeline stalled, writes blocked".
@@ -58,7 +72,7 @@ pub async fn handle_new_transcript(
 
         if transcription
             .transcription
-            .clone()
+            .as_ref()
             .is_some_and(|t| t.is_empty())
         {
             metrics.record_transcription_empty();
@@ -93,7 +107,7 @@ pub async fn handle_new_transcript(
         let mut was_trimmed = false;
 
         if let Some((previous, current)) =
-            transcription.cleanup_overlap(previous_transcript.clone())
+            transcription.cleanup_overlap(&previous_transcript)
         {
             // If current is empty after cleanup, the entire transcript was a duplicate - skip it
             if current.is_empty() {
@@ -111,7 +125,7 @@ pub async fn handle_new_transcript(
             }
 
             // Use the cleaned current transcript (with overlap removed)
-            if current != current_transcript.clone().unwrap_or_default() {
+            if current != current_transcript.as_deref().unwrap_or("") {
                 current_transcript = Some(current);
                 was_trimmed = true;
                 metrics.record_overlap_trimmed();
@@ -131,15 +145,14 @@ pub async fn handle_new_transcript(
             .map(|t| t.split_whitespace().count())
             .unwrap_or(0);
 
-        // Save fields before moving transcription into process_transcription_result
-        let device_name = transcription.input.device.to_string();
+        // Reuse device_key for device_name — same string, avoids a second allocation
+        let device_name = device_key.clone();
         let is_input =
             transcription.input.device.device_type == crate::core::device::DeviceType::Input;
         let audio_file_path = transcription.path.clone();
         let start_time = Some(transcription.start_time);
         let end_time = Some(transcription.end_time);
         let duration_secs = transcription.end_time - transcription.start_time;
-        let insert_transcription = current_transcript.clone().unwrap_or_default();
         let capture_timestamp = transcription.input.capture_timestamp;
 
         // Process the transcription result
@@ -174,7 +187,7 @@ pub async fn handle_new_transcript(
                 if let (Some(ref callback), Some(ref result)) = (&on_insert, &result) {
                     callback(AudioInsertInfo {
                         audio_chunk_id: result.audio_chunk_id,
-                        transcription: insert_transcription.clone(),
+                        transcription: current_transcript.clone().unwrap_or_default(),
                         device_name: device_name.clone(),
                         is_input,
                         audio_file_path: audio_file_path.clone(),

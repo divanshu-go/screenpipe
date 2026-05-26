@@ -15,7 +15,7 @@ pub mod whisper;
 
 #[derive(Debug, Clone)]
 pub struct AudioInput {
-    pub data: Arc<Vec<f32>>,
+    pub data: Arc<[f32]>,
     pub sample_rate: u32,
     pub channels: u16,
     pub device: Arc<AudioDevice>,

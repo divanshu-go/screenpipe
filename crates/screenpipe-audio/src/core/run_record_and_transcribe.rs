@@ -126,7 +126,7 @@ fn meeting_frame_from_recorder_output(
     captured_at_unix_ms: u64,
 ) -> MeetingAudioFrame {
     MeetingAudioFrame::new(
-        Arc::new(samples),
+        Arc::from(samples),
         &audio_stream.device,
         audio_stream.device_config.sample_rate().0,
         RECORDER_OUTPUT_CHANNELS,
@@ -488,7 +488,7 @@ async fn flush_audio(
 
     match whisper_sender.send_timeout(
         AudioInput {
-            data: Arc::new(send_data),
+            data: Arc::from(send_data),
             device: audio_stream.device.clone(),
             sample_rate: audio_stream.device_config.sample_rate().0,
             channels: RECORDER_OUTPUT_CHANNELS,
