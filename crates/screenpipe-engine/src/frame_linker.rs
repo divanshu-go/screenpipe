@@ -41,7 +41,7 @@
 //!   same frame_id.
 //! - **Idempotent**: late updates are dropped without panic.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::time::{Duration, Instant};
 
 /// A correlation id is a per-process counter assigned by the recorder
@@ -136,7 +136,7 @@ impl Default for FrameLinkerConfig {
 pub struct FrameLinker {
     config: FrameLinkerConfig,
     /// Events seen but not yet paired with a frame.
-    pending_events: HashMap<CorrelationId, PendingEvent>,
+    pending_events: FxHashMap<CorrelationId, PendingEvent>,
     /// Frames seen but with at least one unmatched correlation id.
     /// Stored unkeyed because a frame may have N correlation ids; we
     /// scan on event arrival. N is bounded by `capacity`.
@@ -161,7 +161,7 @@ impl FrameLinker {
     pub fn new(config: FrameLinkerConfig) -> Self {
         Self {
             config,
-            pending_events: HashMap::new(),
+            pending_events: FxHashMap::default(),
             pending_frames: Vec::new(),
         }
     }

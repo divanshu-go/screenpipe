@@ -30,7 +30,7 @@
 use chrono::{DateTime, Utc};
 use screenpipe_db::ActiveSpeaker;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
@@ -90,17 +90,17 @@ pub fn decide_speaker_names(
     }
 
     // Find speaker IDs that appear on both input and output (loopback/echo)
-    let input_ids: HashSet<i64> = observations
+    let input_ids: FxHashSet<i64> = observations
         .iter()
         .filter(|o| o.is_input_device)
         .map(|o| o.speaker_id)
         .collect();
-    let output_ids: HashSet<i64> = observations
+    let output_ids: FxHashSet<i64> = observations
         .iter()
         .filter(|o| !o.is_input_device)
         .map(|o| o.speaker_id)
         .collect();
-    let loopback_ids: HashSet<i64> = input_ids.intersection(&output_ids).copied().collect();
+    let loopback_ids: FxHashSet<i64> = input_ids.intersection(&output_ids).copied().collect();
 
     // Filter to unnamed speakers with sufficient transcriptions, excluding loopback
     let unnamed_input: Vec<&ActiveSpeaker> = observations
@@ -152,8 +152,8 @@ pub fn decide_speaker_names(
     // This works for any meeting size (2+).
     {
         // Collect all named speakers from observations (already named + just decided)
-        let newly_named_ids: HashSet<i64> = decisions.names.iter().map(|d| d.speaker_id).collect();
-        let newly_named_map: HashMap<i64, &str> = decisions
+        let newly_named_ids: FxHashSet<i64> = decisions.names.iter().map(|d| d.speaker_id).collect();
+        let newly_named_map: FxHashMap<i64, &str> = decisions
             .names
             .iter()
             .map(|d| (d.speaker_id, d.name.as_str()))
@@ -189,7 +189,7 @@ pub fn decide_speaker_names(
         }
 
         // Deduplicate unnamed candidates by speaker_id
-        let mut seen_ids = HashSet::new();
+        let mut seen_ids = FxHashSet::default();
         unnamed_candidates.retain(|c| seen_ids.insert(c.speaker_id));
 
         if unnamed_candidates.len() == 1 {
@@ -443,7 +443,7 @@ async fn deduplicate_existing_speaker_aliases(db: &screenpipe_db::DatabaseManage
         }
     };
 
-    let mut merged_ids = HashSet::new();
+    let mut merged_ids = FxHashSet::default();
     for (speaker_id, speaker_name, _) in speakers {
         if merged_ids.contains(&speaker_id) {
             continue;
@@ -644,7 +644,7 @@ async fn run_speaker_identification_loop(
         };
 
         // Phase 2: During meeting, periodically check and name speakers
-        let mut named_in_meeting: HashSet<i64> = HashSet::new();
+        let mut named_in_meeting: FxHashSet<i64> = FxHashSet::default();
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
         // Skip the first immediate tick
         interval.tick().await;
