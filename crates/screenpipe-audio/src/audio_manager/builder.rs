@@ -284,7 +284,6 @@ impl AudioManagerBuilder {
         }
 
         if !options.is_disabled && options.use_system_default_audio {
-            use crate::core::device::{parse_audio_device, DeviceType};
             let has_output = options.enabled_devices.iter().any(|name| {
                 parse_audio_device(name)
                     .map(|d| d.device_type == DeviceType::Output)
