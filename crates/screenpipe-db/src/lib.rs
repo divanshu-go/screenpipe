@@ -15,7 +15,7 @@ pub use db::{
     ImmediateTx, NewMeetingTranscriptSegment, MEETING_END_REASON_AUTO_END,
     MEETING_END_REASON_EXPLICIT_STOP, MEETING_END_REASON_SHUTDOWN,
 };
-pub use memory_types::{intern, InternedString, SmallList};
+pub use memory_types::{intern, InternedString};
 pub use migration_worker::{
     create_migration_worker, MigrationCommand, MigrationConfig, MigrationResponse, MigrationStatus,
     MigrationWorker,

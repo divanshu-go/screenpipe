@@ -44,27 +44,13 @@ pub async fn handle_new_transcript(
     metrics: Arc<AudioPipelineMetrics>,
     on_insert: Option<AudioInsertCallback>,
 ) {
-    // Bridge crossbeam's blocking Receiver to a tokio async channel so the
-    // tokio::spawn'd task never blocks a tokio worker thread while waiting for
-    // audio. A dedicated OS thread does the blocking recv and forwards into a
-    // tokio mpsc channel; this task only awaits the async side.
-    let (bridge_tx, mut bridge_rx) = tokio::sync::mpsc::channel::<TranscriptionResult>(4);
-    let crossbeam_rx = transcription_receiver.clone();
-    std::thread::spawn(move || {
-        while let Ok(t) = crossbeam_rx.recv() {
-            if bridge_tx.blocking_send(t).is_err() {
-                break; // Consumer dropped (task aborted) — thread exits cleanly
-            }
-        }
-    });
-
     // Track previous transcript per device to avoid cross-device contamination.
     // The overlap cleanup logic compares current transcript against the previous one
     // from the SAME device — without per-device tracking, device A's transcript
     // could incorrectly trim device B's content.
     let mut prev_transcript_by_device: HashMap<String, String> = HashMap::new();
     let mut prev_id_by_device: HashMap<String, i64> = HashMap::new();
-    while let Some(mut transcription) = bridge_rx.recv().await {
+    while let Ok(mut transcription) = transcription_receiver.recv() {
         // Heartbeat: record that the consumer is alive and processing, even when
         // VAD filters everything. The health check uses this to distinguish
         // "silence, nothing to write" from "pipeline stalled, writes blocked".

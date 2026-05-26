@@ -11,7 +11,6 @@
 use chrono::{DateTime, Datelike, Utc};
 use parking_lot::RwLock;
 use rustc_hash::FxHashMap;
-use smallvec::SmallVec;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, watch};
@@ -59,7 +58,7 @@ pub struct HotAudio {
 /// Broadcast channels push live updates to WS handlers without polling.
 pub struct HotFrameCache {
     frames: RwLock<BTreeMap<(DateTime<Utc>, i64), HotFrame>>,
-    audio: RwLock<BTreeMap<DateTime<Utc>, SmallVec<[HotAudio; 2]>>>,
+    audio: RwLock<BTreeMap<DateTime<Utc>, Vec<HotAudio>>>,
     frame_notify: broadcast::Sender<HotFrame>,
     audio_notify: broadcast::Sender<HotAudio>,
     /// Ordinal day number — cache is cleared on day rollover.
@@ -351,7 +350,7 @@ impl HotFrameCache {
 /// transcription by minutes — audio is keyed by capture_timestamp which
 /// may differ from frame timestamps by up to the chunk duration (~30s).
 fn find_audio_for_frame(
-    audio_map: &BTreeMap<DateTime<Utc>, SmallVec<[HotAudio; 2]>>,
+    audio_map: &BTreeMap<DateTime<Utc>, Vec<HotAudio>>,
     frame_ts: DateTime<Utc>,
 ) -> Vec<AudioEntry> {
     let pad = chrono::Duration::seconds(60);

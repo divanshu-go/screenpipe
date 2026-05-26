@@ -30,7 +30,7 @@ use zerocopy::AsBytes;
 use futures::future::try_join_all;
 
 use crate::{
-    memory_types::{InternedString, SmallList},
+    memory_types::InternedString,
     text_similarity::is_similar_transcription,
     AudioChunkProcessingSnapshot, AudioChunksResponse, AudioDevice, AudioEntry, AudioResult,
     AudioResultRaw, ChunkOutcome, ContentType, DeviceType, Element, ElementRow, ElementSource,
@@ -5118,8 +5118,8 @@ impl DatabaseManager {
                 offset_index,
                 fps: chunk_fps,
                 machine_id: row.try_get("machine_id").ok(),
-                ocr_entries: SmallList::new(),
-                audio_entries: SmallList::new(),
+                ocr_entries: Vec::new(),
+                audio_entries: Vec::new(),
             });
 
             let text: String = row.try_get::<String, _>("text").unwrap_or_default();

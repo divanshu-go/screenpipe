@@ -727,13 +727,7 @@ async fn send_batch(
         return Ok(());
     }
 
-    // Pre-size the byte buffer to avoid reallocations inside serde_json.
-    // ~512 bytes/frame is a conservative estimate; the Vec grows as needed
-    // but only reallocates when the batch exceeds previous peak size.
-    let mut json_bytes = Vec::with_capacity(buffer.len() * 512);
-    serde_json::to_writer(&mut json_bytes, &buffer)?;
-    // SAFETY: serde_json always outputs valid UTF-8.
-    let json = unsafe { String::from_utf8_unchecked(json_bytes) };
+    let json = serde_json::to_string(&buffer)?;
     sender.send(Message::Text(json)).await?;
     buffer.clear();
     Ok(())
