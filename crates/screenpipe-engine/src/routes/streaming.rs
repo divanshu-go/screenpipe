@@ -29,7 +29,9 @@ use crate::{
 use super::content::{write_frames_to_video, FrameContent};
 use super::websocket::{try_acquire_ws_connection, WsConnectionGuard};
 
-use tokio::sync::{broadcast, mpsc, Mutex};
+use dashmap::DashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
+use tokio::sync::{broadcast, mpsc};
 
 #[derive(Deserialize)]
 pub struct StreamFramesRequest {
@@ -82,7 +84,7 @@ pub struct DeviceMetadata {
 
 #[derive(Debug, Serialize)]
 pub struct AudioData {
-    pub device_name: String,
+    pub device_name: Arc<str>,
     pub is_input: bool,
     pub transcription: String,
     pub audio_file_path: String,
@@ -91,6 +93,29 @@ pub struct AudioData {
     pub audio_chunk_id: i64,
     pub speaker_id: Option<i64>,
     pub speaker_name: Option<String>,
+}
+
+/// Typed struct for live audio-update WS messages.
+/// Replaces `serde_json::json!({})` which allocates an intermediate Value.
+#[derive(Debug, Serialize)]
+struct AudioUpdateMessage<'a> {
+    #[serde(rename = "type")]
+    msg_type: &'static str,
+    timestamp: DateTime<Utc>,
+    audio: AudioUpdatePayload<'a>,
+}
+
+#[derive(Debug, Serialize)]
+struct AudioUpdatePayload<'a> {
+    device_name: &'a Arc<str>,
+    is_input: bool,
+    transcription: &'a str,
+    audio_file_path: &'a str,
+    duration_secs: f64,
+    start_offset: f64,
+    audio_chunk_id: i64,
+    speaker_id: Option<i64>,
+    speaker_name: Option<&'a str>,
 }
 
 impl From<TimeSeriesFrame> for StreamTimeSeriesResponse {
@@ -146,7 +171,7 @@ pub(crate) fn create_time_series_frame(chunk: FrameData) -> TimeSeriesFrame {
         .iter()
         .map(|a| AudioEntry {
             transcription: a.transcription.clone(),
-            device_name: a.device_name.clone(),
+            device_name: a.device_name.as_arc(),
             is_input: a.is_input,
             audio_file_path: a.audio_file_path.clone(),
             duration_secs: a.duration_secs,
@@ -158,13 +183,18 @@ pub(crate) fn create_time_series_frame(chunk: FrameData) -> TimeSeriesFrame {
         })
         .collect();
 
-    // Pre-compute transcription text once
-    let transcription_text: String = chunk
-        .audio_entries
-        .iter()
-        .map(|a| a.transcription.clone())
-        .collect::<Vec<_>>()
-        .join(" ");
+    // Pre-compute transcription text once — write directly to avoid the
+    // intermediate Vec<String> that collect().join() would allocate.
+    let transcription_text: Arc<str> = {
+        let mut s = String::new();
+        for a in chunk.audio_entries.iter() {
+            if !s.is_empty() {
+                s.push(' ');
+            }
+            s.push_str(&a.transcription);
+        }
+        Arc::from(s)
+    };
 
     // Create DeviceFrames from OCR entries
     let mut device_frames: Vec<DeviceFrame> = chunk
@@ -173,7 +203,7 @@ pub(crate) fn create_time_series_frame(chunk: FrameData) -> TimeSeriesFrame {
         // Filter out screenpipe frames at display time
         .filter(|device_data| !device_data.app_name.to_lowercase().contains("screenpipe"))
         .map(|device_data| DeviceFrame {
-            device_id: device_data.device_name,
+            device_id: device_data.device_name.to_string(),
             frame_id: chunk.frame_id,
             image_data: vec![], // Empty since we don't need image data
             metadata: FrameMetadata {
@@ -251,15 +281,14 @@ async fn handle_stream_frames_socket(
     let cache = state.hot_frame_cache.clone();
     let db = state.db.clone();
 
-    // Shared state: track sent frame IDs to avoid duplicates
-    let sent_frame_ids: Arc<Mutex<std::collections::HashSet<i64>>> =
-        Arc::new(Mutex::new(std::collections::HashSet::new()));
+    // Shared state: lock-free set for dedup across concurrent send/receive tasks
+    let sent_frame_ids: Arc<DashSet<i64>> = Arc::new(DashSet::new());
 
     // Channel for initial batch results (from cache or DB)
     let (frame_tx, frame_rx) = tokio::sync::mpsc::channel::<TimeSeriesFrame>(100);
 
-    // Shared flag: should we subscribe to live cache updates?
-    let live_subscribe: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
+    // Shared flag: true once a "today" request confirms live subscription is wanted.
+    let live_subscribe: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
 
     let sent_ids_clone = sent_frame_ids.clone();
     let live_sub_clone = live_subscribe.clone();
@@ -278,15 +307,15 @@ async fn handle_stream_frames_socket(
                         let limit = stream_frame_limit(request.limit);
 
                         // Clear sent IDs for new request
-                        sent_ids_clone.lock().await.clear();
+                        sent_ids_clone.clear();
 
                         // Decide: is this a "today" request (use cache) or past day (use DB)?
                         // Only use hot_cache if end_time reaches into the present/future.
                         // If the entire range is in the past (even on today's calendar day),
                         // use database — hot_cache only has recent in-memory frames.
                         let now = Utc::now();
-                        let is_today = (cache_clone.is_today(start_time).await
-                            || cache_clone.is_today(end_time).await)
+                        let is_today = (cache_clone.is_today(start_time)
+                            || cache_clone.is_today(end_time))
                             && end_time >= now;
 
                         info!(
@@ -297,8 +326,8 @@ async fn handle_stream_frames_socket(
                             limit
                         );
 
-                        // Set live subscription flag
-                        *live_sub_clone.lock().await = Some(is_today);
+                        // Set live subscription flag (lock-free)
+                        live_sub_clone.store(is_today, Ordering::Relaxed);
 
                         if is_today {
                             // Wait for cache to warm before responding (max 30s).
@@ -319,19 +348,12 @@ async fn handle_stream_frames_socket(
                             sorted.truncate(limit);
                             let initial_count = sorted.len();
 
-                            // Record sent IDs first (fast, no async), then send
-                            // frames WITHOUT holding the lock. Previously the lock
-                            // was held across channel sends, blocking the receive
-                            // loop from processing new WS messages (e.g. past-day
-                            // navigation requests) for seconds.
-                            {
-                                let mut sent = sent_ids_clone.lock().await;
-                                for frame in &sorted {
-                                    for df in &frame.frame_data {
-                                        sent.insert(df.frame_id);
-                                    }
+                            // Register sent IDs lock-free (DashSet) before sending frames.
+                            for frame in &sorted {
+                                for df in &frame.frame_data {
+                                    sent_ids_clone.insert(df.frame_id);
                                 }
-                            } // lock dropped
+                            }
 
                             for frame in sorted {
                                 let _ = frame_tx.send(frame).await;
@@ -342,7 +364,7 @@ async fn handle_stream_frames_socket(
                             // earliest coverage timestamp from warm_from_db +
                             // push_frame. If the cache covers start_time, we
                             // skip the 60s+ find_video_chunks query entirely.
-                            let cache_start = cache_clone.earliest_coverage().await;
+                            let cache_start = cache_clone.earliest_coverage();
                             let backfill_needed = match cache_start {
                                 Some(cs) if cs <= start_time => false,
                                 Some(cs) => {
@@ -384,16 +406,13 @@ async fn handle_stream_frames_socket(
                                             // deadlocking with the send_handle which
                                             // needs the same lock to process live
                                             // frames (the only channel consumer).
-                                            let frames_to_send: Vec<_> = {
-                                                let mut sent = sent_ids_backfill.lock().await;
-                                                chunks
+                                            let frames_to_send: Vec<_> = chunks
                                                     .frames
                                                     .into_iter()
                                                     .filter_map(|chunk| {
-                                                        if sent.contains(&chunk.frame_id) {
+                                                        if !sent_ids_backfill.insert(chunk.frame_id) {
                                                             return None;
                                                         }
-                                                        sent.insert(chunk.frame_id);
                                                         let frame = create_time_series_frame(chunk);
                                                         if frame.frame_data.is_empty() {
                                                             None
@@ -401,8 +420,7 @@ async fn handle_stream_frames_socket(
                                                             Some(frame)
                                                         }
                                                     })
-                                                    .collect()
-                                            }; // lock dropped
+                                                    .collect();
 
                                             for frame in frames_to_send {
                                                 if frame_tx_db.send(frame).await.is_err() {
@@ -470,6 +488,7 @@ async fn handle_stream_frames_socket(
 
         loop {
             tokio::select! {
+                biased;
                 // Frames from initial batch (cache read or DB fetch)
                 frame = async {
                     match &mut frame_rx_channel {
@@ -505,17 +524,14 @@ async fn handle_stream_frames_socket(
                     match result {
                         Ok(hot_frame) => {
                             // Check if live subscription is active
-                            let is_live = live_subscribe.lock().await.unwrap_or(false);
+                            let is_live = live_subscribe.load(Ordering::Relaxed);
                             if !is_live {
                                 continue;
                             }
-                            // Skip already-sent frames
-                            let mut sent = sent_frame_ids.lock().await;
-                            if sent.contains(&hot_frame.frame_id) {
+                            // Skip already-sent frames (lock-free insert returns false if already present)
+                            if !sent_frame_ids.insert(hot_frame.frame_id) {
                                 continue;
                             }
-                            sent.insert(hot_frame.frame_id);
-                            drop(sent);
 
                             // Skip screenpipe's own frames
                             if hot_frame.app_name.to_lowercase().contains("screenpipe") {
@@ -530,7 +546,7 @@ async fn handle_stream_frames_socket(
                             let response = StreamTimeSeriesResponse {
                                 timestamp: hot_frame.timestamp,
                                 devices: vec![DeviceFrameResponse {
-                                    device_id: hot_frame.device_name.clone(),
+                                    device_id: hot_frame.device_name.to_string(),
                                     frame_id: hot_frame.frame_id,
                                     offset_index: hot_frame.offset_index,
                                     fps: hot_frame.fps,
@@ -583,28 +599,33 @@ async fn handle_stream_frames_socket(
                 result = audio_rx_cache.recv() => {
                     match result {
                         Ok(hot_audio) => {
-                            let is_live = live_subscribe.lock().await.unwrap_or(false);
+                            let is_live = live_subscribe.load(Ordering::Relaxed);
                             if !is_live {
                                 continue;
                             }
                             // Send a lightweight audio-update message so the
                             // frontend can merge transcription into existing frames.
-                            let update = serde_json::json!({
-                                "type": "audio_update",
-                                "timestamp": hot_audio.timestamp,
-                                "audio": {
-                                    "device_name": hot_audio.device_name,
-                                    "is_input": hot_audio.is_input,
-                                    "transcription": hot_audio.transcription,
-                                    "audio_file_path": hot_audio.audio_file_path,
-                                    "duration_secs": hot_audio.duration_secs,
-                                    "start_offset": hot_audio.start_time.unwrap_or(0.0),
-                                    "audio_chunk_id": hot_audio.audio_chunk_id,
-                                    "speaker_id": hot_audio.speaker_id,
-                                    "speaker_name": hot_audio.speaker_name,
-                                }
-                            });
-                            if let Err(e) = sender.send(Message::Text(update.to_string())).await {
+                            // Typed struct avoids the intermediate serde_json::Value allocation.
+                            let update = AudioUpdateMessage {
+                                msg_type: "audio_update",
+                                timestamp: hot_audio.timestamp,
+                                audio: AudioUpdatePayload {
+                                    device_name: &hot_audio.device_name,
+                                    is_input: hot_audio.is_input,
+                                    transcription: &hot_audio.transcription,
+                                    audio_file_path: &hot_audio.audio_file_path,
+                                    duration_secs: hot_audio.duration_secs,
+                                    start_offset: hot_audio.start_time.unwrap_or(0.0),
+                                    audio_chunk_id: hot_audio.audio_chunk_id,
+                                    speaker_id: hot_audio.speaker_id,
+                                    speaker_name: hot_audio.speaker_name.as_deref(),
+                                },
+                            };
+                            let json = match serde_json::to_string(&update) {
+                                Ok(s) => s,
+                                Err(e) => { warn!("audio update serialize error: {}", e); continue; }
+                            };
+                            if let Err(e) = sender.send(Message::Text(json)).await {
                                 warn!("failed to send audio update: {}", e);
                                 break;
                             }
@@ -655,7 +676,7 @@ async fn fetch_and_process_frames_with_tracking(
     frame_tx: mpsc::Sender<TimeSeriesFrame>,
     is_descending: bool,
     limit: usize,
-    sent_frame_ids: Arc<Mutex<std::collections::HashSet<i64>>>,
+    sent_frame_ids: Arc<DashSet<i64>>,
 ) -> Result<Option<DateTime<Utc>>, anyhow::Error> {
     let mut chunks = db.find_video_chunks(start_time, end_time).await?;
     let mut latest_timestamp: Option<DateTime<Utc>> = None;
@@ -670,27 +691,22 @@ async fn fetch_and_process_frames_with_tracking(
     }
     chunks.frames.truncate(limit);
 
-    // Record all sent IDs in one lock acquisition, then drop the lock
-    // before sending frames through the channel. Acquiring the lock per-frame
-    // or holding it across async sends can contend with the send_handle's
-    // live-frame path which also needs this lock.
-    let frames_to_send: Vec<_> = {
-        let mut sent = sent_frame_ids.lock().await;
-        chunks
-            .frames
-            .into_iter()
-            .filter_map(|chunk| {
-                sent.insert(chunk.frame_id);
-                let ts = chunk.timestamp;
-                let frame = create_time_series_frame(chunk);
-                if frame.frame_data.is_empty() {
-                    None
-                } else {
-                    Some((ts, frame))
-                }
-            })
-            .collect()
-    }; // lock dropped
+    // DashSet::insert returns false if already present — use that for dedup.
+    // No lock held across async sends; each insert is an independent shard lock.
+    let frames_to_send: Vec<_> = chunks
+        .frames
+        .into_iter()
+        .filter_map(|chunk| {
+            sent_frame_ids.insert(chunk.frame_id);
+            let ts = chunk.timestamp;
+            let frame = create_time_series_frame(chunk);
+            if frame.frame_data.is_empty() {
+                None
+            } else {
+                Some((ts, frame))
+            }
+        })
+        .collect();
 
     for (ts, frame) in frames_to_send {
         if latest_timestamp.is_none() || ts > latest_timestamp.unwrap() {
@@ -711,7 +727,13 @@ async fn send_batch(
         return Ok(());
     }
 
-    let json = serde_json::to_string(&buffer)?;
+    // Pre-size the byte buffer to avoid reallocations inside serde_json.
+    // ~512 bytes/frame is a conservative estimate; the Vec grows as needed
+    // but only reallocates when the batch exceeds previous peak size.
+    let mut json_bytes = Vec::with_capacity(buffer.len() * 512);
+    serde_json::to_writer(&mut json_bytes, &buffer)?;
+    // SAFETY: serde_json always outputs valid UTF-8.
+    let json = unsafe { String::from_utf8_unchecked(json_bytes) };
     sender.send(Message::Text(json)).await?;
     buffer.clear();
     Ok(())
@@ -1275,9 +1297,9 @@ mod tests {
     use screenpipe_db::{AudioEntry as DbAudioEntry, FrameData, OCREntry};
 
     fn create_test_frame_data(num_ocr_entries: usize, num_audio_entries: usize) -> FrameData {
-        let ocr_entries: Vec<OCREntry> = (0..num_ocr_entries)
+        let ocr_entries = (0..num_ocr_entries)
             .map(|i| OCREntry {
-                device_name: format!("monitor_{}", i % 2),
+                device_name: format!("monitor_{}", i % 2).into(),
                 video_file_path: format!("/path/to/video_{}.mp4", i % 2),
                 app_name: format!("App{}", i),
                 window_name: format!("Window{}", i),
@@ -1286,10 +1308,10 @@ mod tests {
             })
             .collect();
 
-        let audio_entries: Vec<DbAudioEntry> = (0..num_audio_entries)
+        let audio_entries = (0..num_audio_entries)
             .map(|i| DbAudioEntry {
                 transcription: format!("Audio transcription {}", i),
-                device_name: format!("microphone_{}", i),
+                device_name: format!("microphone_{}", i).into(),
                 is_input: true,
                 audio_file_path: format!("/path/to/audio_{}.mp4", i),
                 duration_secs: 3.0,
