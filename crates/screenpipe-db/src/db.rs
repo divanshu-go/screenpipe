@@ -30,14 +30,16 @@ use zerocopy::AsBytes;
 use futures::future::try_join_all;
 
 use crate::{
-    text_similarity::is_similar_transcription, AudioChunkProcessingSnapshot, AudioChunksResponse,
-    AudioDevice, AudioEntry, AudioResult, AudioResultRaw, ChunkOutcome, ContentType, DeviceType,
-    Element, ElementRow, ElementSource, FrameData, FrameRow, FrameRowLight, FrameWindowData,
-    InsertUiEvent, MeetingRecord, MeetingTranscriptSegment, MemoryRecord, MemorySyncRow,
-    NewDiarizationSegment, OCREntry, OCRResult, OCRResultRaw, OcrEngine, OcrTextBlock, Order,
-    ReplacementAudioTranscription, SearchMatch, SearchMatchGroup, SearchResult, Speaker,
-    TagContentType, TextBounds, TextPosition, TimeSeriesChunk, UiContent, UiEventRecord,
-    UiEventRow, VideoMetadata, MAX_TRANSCRIPTION_ATTEMPTS,
+    memory_types::{InternedString, SmallList},
+    text_similarity::is_similar_transcription,
+    AudioChunkProcessingSnapshot, AudioChunksResponse, AudioDevice, AudioEntry, AudioResult,
+    AudioResultRaw, ChunkOutcome, ContentType, DeviceType, Element, ElementRow, ElementSource,
+    FrameData, FrameRow, FrameRowLight, FrameWindowData, InsertUiEvent, MeetingRecord,
+    MeetingTranscriptSegment, MemoryRecord, MemorySyncRow, NewDiarizationSegment, OCREntry,
+    OCRResult, OCRResultRaw, OcrEngine, OcrTextBlock, Order, ReplacementAudioTranscription,
+    SearchMatch, SearchMatchGroup, SearchResult, Speaker, TagContentType, TextBounds,
+    TextPosition, TimeSeriesChunk, UiContent, UiEventRecord, UiEventRow, VideoMetadata,
+    MAX_TRANSCRIPTION_ATTEMPTS,
 };
 
 /// Time window (in seconds) to check for similar transcriptions across devices.
@@ -3713,7 +3715,7 @@ impl DatabaseManager {
                 app_name: raw.app_name,
                 ocr_engine: raw.ocr_engine,
                 window_name: raw.window_name,
-                device_name: raw.device_name,
+                device_name: InternedString::from(raw.device_name),
                 tags: raw
                     .tags
                     .map(|t| t.split(',').map(String::from).collect())
@@ -4005,12 +4007,12 @@ impl DatabaseManager {
                     timestamp: raw.timestamp,
                     file_path: raw.file_path,
                     offset_index: raw.offset_index,
-                    transcription_engine: transcription_engine.clone(),
+                    transcription_engine: InternedString::from(transcription_engine.as_str()),
                     tags: raw
                         .tags
                         .map(|s| s.split(',').map(|s| s.to_owned()).collect())
                         .unwrap_or_default(),
-                    device_name: raw.device_name,
+                    device_name: InternedString::from(raw.device_name),
                     device_type: if raw.is_input_device {
                         DeviceType::Input
                     } else {
@@ -4124,9 +4126,11 @@ impl DatabaseManager {
                     timestamp,
                     file_path: format!("live://meeting/{}/transcript/{}", raw.meeting_id, raw.id),
                     offset_index: 0,
-                    transcription_engine,
-                    tags: vec!["meeting".to_string(), "live".to_string()],
-                    device_name: raw.device_name,
+                    transcription_engine: InternedString::from(transcription_engine.as_str()),
+                    tags: vec!["meeting".to_string(), "live".to_string()]
+                        .into_iter()
+                        .collect(),
+                    device_name: InternedString::from(raw.device_name),
                     device_type: if raw.device_type.eq_ignore_ascii_case("output") {
                         DeviceType::Output
                     } else {
@@ -5114,8 +5118,8 @@ impl DatabaseManager {
                 offset_index,
                 fps: chunk_fps,
                 machine_id: row.try_get("machine_id").ok(),
-                ocr_entries: Vec::new(),
-                audio_entries: Vec::new(),
+                ocr_entries: SmallList::new(),
+                audio_entries: SmallList::new(),
             });
 
             let text: String = row.try_get::<String, _>("text").unwrap_or_default();
@@ -5127,9 +5131,10 @@ impl DatabaseManager {
                     text,
                     app_name: row.try_get::<String, _>("app_name").unwrap_or_default(),
                     window_name: row.try_get::<String, _>("window_name").unwrap_or_default(),
-                    device_name: row
-                        .try_get::<String, _>("screen_device")
-                        .unwrap_or_default(),
+                    device_name: InternedString::from(
+                        row.try_get::<String, _>("screen_device")
+                            .unwrap_or_default(),
+                    ),
                     video_file_path: video_path,
                     browser_url: row.try_get("browser_url").ok(),
                 });
@@ -5176,7 +5181,7 @@ impl DatabaseManager {
             // Create the audio entry once
             let audio_entry = AudioEntry {
                 transcription: row.get("transcription"),
-                device_name: row.get("audio_device"),
+                device_name: InternedString::from(row.get::<String, _>("audio_device")),
                 is_input: row.get("is_input_device"),
                 audio_file_path: row.get("audio_path"),
                 duration_secs: row.get("duration_secs"),
