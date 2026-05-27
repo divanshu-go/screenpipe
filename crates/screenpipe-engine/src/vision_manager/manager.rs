@@ -187,7 +187,10 @@ impl VisionManager {
     /// Uses prefix matching (name + resolution) so that position changes after
     /// reconnect don't break the filter.
     pub fn is_monitor_allowed(&self, monitor: &screenpipe_screen::monitor::SafeMonitor) -> bool {
-        if self.stale_allowlist_fallback.load(std::sync::atomic::Ordering::Relaxed) {
+        if self
+            .stale_allowlist_fallback
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             return true;
         }
         if self.config.use_all_monitors || self.config.monitor_ids.is_empty() {
