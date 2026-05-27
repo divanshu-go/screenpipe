@@ -281,6 +281,12 @@ export type Settings = SettingsStore & {
 	 *  Costs one extra inference per new chat. Disable to save tokens —
 	 *  chats fall back to a title derived from the first message (default: true) */
 	autoGenerateChatTitles?: boolean;
+	/** User-authored profile context for personalizing chat and pipe prompts. */
+	userProfile?: string;
+	/** Include userProfile in Screenpipe Chat system prompts. Default false. */
+	userProfileChatEnabled?: boolean;
+	/** Include userProfile in pipe prompts by default. Individual pipes can override. Default false. */
+	userProfilePipesEnabled?: boolean;
 	/** Notification preferences — which notification sources are enabled */
 	notificationPrefs?: {
 		captureStalls: boolean;
@@ -570,6 +576,9 @@ let DEFAULT_SETTINGS: Settings = {
 			localRetentionEnabled: false,
 			localRetentionDays: 14,
 			localRetentionMode: "media",
+			userProfile: "",
+			userProfileChatEnabled: false,
+			userProfilePipesEnabled: false,
 			encryptStore: true,
 			hdRecordingDefault: "ask",
 			hdRecordingIntervalMs: 100,
@@ -676,6 +685,18 @@ function createSettingsStore() {
 		}
 		if (settings.appendTypedTextToMeetingNote === undefined) {
 			settings.appendTypedTextToMeetingNote = true;
+			needsUpdate = true;
+		}
+		if (settings.userProfile === undefined) {
+			settings.userProfile = "";
+			needsUpdate = true;
+		}
+		if (settings.userProfileChatEnabled === undefined) {
+			settings.userProfileChatEnabled = false;
+			needsUpdate = true;
+		}
+		if (settings.userProfilePipesEnabled === undefined) {
+			settings.userProfilePipesEnabled = false;
 			needsUpdate = true;
 		}
 
@@ -895,6 +916,17 @@ function createSettingsStore() {
 
 const settingsStore = createSettingsStore();
 
+const syncPipeUserProfileContext = async (settings: Settings) => {
+	try {
+		await invoke("set_pipe_user_profile_context", {
+			profile: settings.userProfile?.trim() ? settings.userProfile : null,
+			pipesEnabled: settings.userProfilePipesEnabled ?? false,
+		});
+	} catch {
+		// The server may not be started yet; SettingsProvider retries on load/update.
+	}
+};
+
 // Context for React
 interface SettingsContextType {
 	settings: Settings;
@@ -923,6 +955,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 				setSettings(loadedSettings);
 				setIsSettingsLoaded(true);
 				setLoadingError(null);
+				syncPipeUserProfileContext(loadedSettings);
 
 				// Configure the API module — single source of truth for port + auth.
 				// `apiKey` is intentionally NOT passed: `ensureInitialized` in
@@ -1106,6 +1139,12 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 	const updateSettings = async (updates: Partial<Settings>) => {
 		await settingsStore.set(updates);
 		// Settings will be updated via the listener
+		if (
+			"userProfile" in updates ||
+			"userProfilePipesEnabled" in updates
+		) {
+			await syncPipeUserProfileContext({ ...settings, ...updates } as Settings);
+		}
 
 		// Only update the port in the API module immediately — auth changes
 		// (apiAuth / apiKey) must NOT be applied until after the server restarts.

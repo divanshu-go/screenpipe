@@ -792,6 +792,34 @@ pub async fn set_cloud_token(
     Ok(())
 }
 
+/// Push the locally stored user profile into the running pipe manager.
+///
+/// The profile stays local; this only updates the long-lived in-process
+/// `PipeManager` so scheduled pipes do not need to read the encrypted settings
+/// store on every run.
+#[tauri::command]
+#[specta::specta]
+pub async fn set_pipe_user_profile_context(
+    profile: Option<String>,
+    pipes_enabled: bool,
+    state: tauri::State<'_, crate::recording::RecordingState>,
+) -> Result<(), String> {
+    let normalized = profile.and_then(|p| {
+        let trimmed = p.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    });
+    let server = state.server.lock().await;
+    if let Some(server) = server.as_ref() {
+        let mut manager = server.pipe_manager.lock().await;
+        manager.set_user_profile_context(normalized, pipes_enabled);
+    }
+    Ok(())
+}
+
 /// Persist the user's enterprise admin status + team API token so the
 /// pi-agent's `screenpipe-team` skill knows whether to install itself.
 ///

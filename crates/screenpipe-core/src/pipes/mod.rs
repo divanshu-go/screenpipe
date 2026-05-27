@@ -1284,6 +1284,9 @@ pub struct PipeManager {
     /// Connected integrations context injected into every pipe *system* prompt.
     /// Set by the engine layer (which owns the SecretStore) via `set_connections_context`.
     connections_context: Option<String>,
+    /// User-authored profile context injected into pipe system prompts when enabled.
+    user_profile_context: Option<String>,
+    user_profile_pipes_enabled: bool,
     /// Local API auth key — injected into pipe subprocesses as SCREENPIPE_LOCAL_API_KEY
     /// so pipes can authenticate to localhost:3030 when API auth is enabled.
     local_api_key: Option<String>,
@@ -1326,6 +1329,8 @@ impl PipeManager {
             token_registry: None,
             extra_context: None,
             connections_context: None,
+            user_profile_context: None,
+            user_profile_pipes_enabled: false,
             local_api_key: None,
             fallback_registry: registry,
         }
@@ -1360,6 +1365,19 @@ impl PipeManager {
     /// Called by the engine layer after computing it via `render_context`.
     pub fn set_connections_context(&mut self, ctx: String) {
         self.connections_context = if ctx.is_empty() { None } else { Some(ctx) };
+    }
+
+    /// Set user profile context for pipe prompts.
+    pub fn set_user_profile_context(&mut self, profile: Option<String>, pipes_enabled: bool) {
+        self.user_profile_context = profile.and_then(|p| {
+            let trimmed = p.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        });
+        self.user_profile_pipes_enabled = pipes_enabled;
     }
 
     /// Expose the API port so callers (e.g. engine layer) can pass it to
@@ -1938,6 +1956,11 @@ impl PipeManager {
             self.api_port,
             preset_prompt.as_deref(),
             self.connections_context.as_deref(),
+            user_profile_context_for_pipe(
+                &config,
+                self.user_profile_pipes_enabled,
+                self.user_profile_context.as_deref(),
+            ),
             self.local_api_key.as_deref(),
         );
         let prompt = self.render_prompt(&config, &body, preset_prompt.as_deref());
@@ -2429,6 +2452,11 @@ impl PipeManager {
                 self.api_port,
                 preset_prompt.as_deref(),
                 self.connections_context.as_deref(),
+                user_profile_context_for_pipe(
+                    &config,
+                    self.user_profile_pipes_enabled,
+                    self.user_profile_context.as_deref(),
+                ),
                 self.local_api_key.as_deref(),
             );
             let prompt = self.render_prompt(&config, &body, preset_prompt.as_deref());
@@ -3179,6 +3207,8 @@ impl PipeManager {
         let token_registry = self.token_registry.clone();
         let extra_context = self.extra_context.clone();
         let connections_context = self.connections_context.clone();
+        let user_profile_context = self.user_profile_context.clone();
+        let user_profile_pipes_enabled = self.user_profile_pipes_enabled;
         let local_api_key = self.local_api_key.clone();
 
         let handle = tokio::spawn(async move {
@@ -3547,6 +3577,11 @@ impl PipeManager {
                         api_port,
                         preset_prompt.as_deref(),
                         connections_context.as_deref(),
+                        user_profile_context_for_pipe(
+                            config,
+                            user_profile_pipes_enabled,
+                            user_profile_context.as_deref(),
+                        ),
                         local_api_key.as_deref(),
                     );
                     let prompt = render_prompt_with_port(
@@ -4180,6 +4215,7 @@ fn render_pipe_system_prompt(
     api_port: u16,
     system_prompt: Option<&str>,
     connections_context: Option<&str>,
+    user_profile_context: Option<&str>,
     local_api_key: Option<&str>,
 ) -> String {
     let os = std::env::consts::OS;
@@ -4205,6 +4241,12 @@ fn render_pipe_system_prompt(
     ));
     sys.push_str(body);
 
+    if let Some(profile) = user_profile_context {
+        sys.push_str("\n\n# User profile\n\n");
+        sys.push_str("The user explicitly provided this persistent personal context. Use it to personalize this pipe when relevant, but do not reveal or quote sensitive details unless the user asks.\n\n");
+        sys.push_str(profile);
+    }
+
     if let Some(ctx) = connections_context {
         sys.push_str("\n\n");
         sys.push_str(ctx);
@@ -4212,6 +4254,23 @@ fn render_pipe_system_prompt(
     }
 
     sys
+}
+
+fn user_profile_context_for_pipe<'a>(
+    config: &PipeConfig,
+    global_enabled: bool,
+    profile: Option<&'a str>,
+) -> Option<&'a str> {
+    let enabled = config
+        .config
+        .get("include_user_profile")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(global_enabled);
+    if enabled {
+        profile.filter(|p| !p.trim().is_empty())
+    } else {
+        None
+    }
 }
 
 /// Build the dynamic user prompt for a pipe.
@@ -5405,7 +5464,7 @@ mod tests {
         assert!(prompt.contains("Time range:"));
         assert!(prompt.contains("Do the work described above now."));
         // Port / body go into system prompt, not user prompt
-        let sys = render_pipe_system_prompt("body text", 3031, None, None, None);
+        let sys = render_pipe_system_prompt("body text", 3031, None, None, None, None);
         assert!(sys.contains("http://localhost:3031"));
         assert!(!sys.contains("http://localhost:3030"));
         assert!(sys.contains("body text"));
@@ -5432,7 +5491,7 @@ mod tests {
             privacy_filter: false,
             trigger: None,
         };
-        let sys = render_pipe_system_prompt("hello", 3030, None, None, None);
+        let sys = render_pipe_system_prompt("hello", 3030, None, None, None, None);
         assert!(sys.contains("http://localhost:3030"));
     }
 
@@ -5463,6 +5522,7 @@ mod tests {
             Some("You are a helpful assistant"),
             None,
             None,
+            None,
         );
         assert!(sys.starts_with("You are a helpful assistant\n\n"));
         assert!(sys.contains("body text"));
@@ -5490,14 +5550,14 @@ mod tests {
             privacy_filter: false,
             trigger: None,
         };
-        let sys = render_pipe_system_prompt("body text", 3030, None, None, None);
+        let sys = render_pipe_system_prompt("body text", 3030, None, None, None, None);
         assert!(!sys.contains("System prompt:"));
         assert!(sys.contains("body text"));
     }
 
     #[test]
     fn test_system_prompt_contains_anti_recursion_warning() {
-        let sys = render_pipe_system_prompt("task body", 3030, None, None, None);
+        let sys = render_pipe_system_prompt("task body", 3030, None, None, None, None);
         assert!(sys.contains("NEVER run `screenpipe pipe run`"));
         assert!(sys.contains("You ARE this pipe"));
     }
@@ -5507,7 +5567,7 @@ mod tests {
         // Pass the key explicitly — the renderer must not depend on parent
         // process env (which is empty in tests and was the root cause of the
         // 403 reported by the security-requests-grc pipe in prod).
-        let sys = render_pipe_system_prompt("task body", 3030, None, None, Some("sp-test-key"));
+        let sys = render_pipe_system_prompt("task body", 3030, None, None, None, Some("sp-test-key"));
         assert!(
             sys.contains("API Authentication: REQUIRED"),
             "auth note must be emitted when local_api_key is Some"
@@ -5517,7 +5577,7 @@ mod tests {
 
     #[test]
     fn test_system_prompt_omits_auth_note_when_no_key() {
-        let sys = render_pipe_system_prompt("task body", 3030, None, None, None);
+        let sys = render_pipe_system_prompt("task body", 3030, None, None, None, None);
         assert!(
             !sys.contains("API Authentication: REQUIRED"),
             "auth note must not be emitted when local_api_key is None"

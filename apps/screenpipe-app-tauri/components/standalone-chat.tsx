@@ -16,7 +16,7 @@ import { pipeSessionId } from "@/lib/events/types";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
-import { useSettings, ChatMessage, ChatConversation } from "@/lib/hooks/use-settings";
+import { useSettings, ChatMessage, ChatConversation, type Settings as ScreenpipeSettings } from "@/lib/hooks/use-settings";
 import { cn } from "@/lib/utils";
 import { Loader2, Send, Square, Settings, ExternalLink, X, ImageIcon, History, Search, Trash2, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Plus, Copy, Check, Clock, Calendar, Paperclip, Filter, RefreshCw, GitBranch, MoreHorizontal, Pencil, Pin, Shield, ShieldCheck, Sparkles, Plug, CornerDownRight } from "lucide-react";
 import { SchedulePromptDialog } from "@/components/chat/schedule-prompt-dialog";
@@ -716,6 +716,12 @@ Don't reach for these on short answers.
 Current time: ${now.toISOString()}
 User's timezone: ${timezone} (UTC${offsetStr})
 User's local time: ${now.toLocaleString()}`;
+}
+
+function buildUserProfileContext(settings: ScreenpipeSettings): string {
+  const profile = settings.userProfile?.trim();
+  if (!profile || !settings.userProfileChatEnabled) return "";
+  return `# User profile\n\nThe user explicitly provided this persistent personal context. Use it to personalize responses when relevant, but do not reveal or quote sensitive details unless the user asks.\n\n${profile}`;
 }
 
 function buildConnectionsContext(
@@ -4715,8 +4721,9 @@ export function StandaloneChat({
     // This is passed via --append-system-prompt to Pi, enabling Anthropic prompt
     // caching (90% input cost reduction on subsequent messages).
     const presetPrompt = p.prompt || "";
+    const userProfileContext = buildUserProfileContext(settings);
     const connectionsCtx = buildConnectionsContext(connections);
-    const systemPrompt = `${buildSystemPrompt()}\n\n${presetPrompt}${connectionsCtx}`.trim() || null;
+    const systemPrompt = `${buildSystemPrompt()}\n\n${userProfileContext}\n\n${presetPrompt}${connectionsCtx}`.trim() || null;
     return {
       provider: p.provider,
       url: p.url || "",
@@ -4726,7 +4733,7 @@ export function StandaloneChat({
       systemPrompt,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activePreset?.provider, activePreset?.url, activePreset?.model, activePreset?.apiKey, (activePreset as any)?.maxTokens, activePreset?.prompt, connections]);
+  }, [activePreset?.provider, activePreset?.url, activePreset?.model, activePreset?.apiKey, (activePreset as any)?.maxTokens, activePreset?.prompt, connections, settings.userProfile, settings.userProfileChatEnabled]);
 
   const setRunningConfigFromProviderConfig = useCallback((providerConfig: NonNullable<ReturnType<typeof buildProviderConfig>>) => {
     piRunningConfigRef.current = {
@@ -4775,10 +4782,9 @@ export function StandaloneChat({
     setRunningConfigFromProviderConfig(providerConfig);
   }, [piInfo?.pid, piInfo?.running, setRunningConfigFromProviderConfig, settings.user?.token]);
 
-  // When connections change (e.g., user connected Google Calendar in Settings),
-  // silently restart Pi if the system prompt changed and no message is in-flight.
+  // When system-prompt context changes (connections or user profile), silently
+  // restart Pi if no message is in-flight.
   useEffect(() => {
-    if (connections.length === 0) return;
     const config = buildProviderConfig();
     if (!config) return;
     const running = piRunningConfigRef.current;
@@ -4792,7 +4798,7 @@ export function StandaloneChat({
       })
       .catch(() => {});
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connections]);
+  }, [connections, settings.userProfile, settings.userProfileChatEnabled]);
 
   // Check Pi status on mount — Pi is auto-started at app boot by Rust
   useEffect(() => {

@@ -2360,6 +2360,36 @@ export function PipesSection() {
                           />
                         </div>
 
+                        {/* User profile context toggle */}
+                        <div className="flex items-center justify-between border px-3 py-2.5">
+                          <div>
+                            <span className="text-xs font-medium cursor-help" title="include the Settings → Personalization user profile in this pipe's system prompt">
+                              user profile context
+                            </span>
+                            <p className="text-[11px] text-muted-foreground mt-0.5">
+                              {settings.userProfilePipesEnabled ? "on by global default" : "off by global default"}
+                            </p>
+                          </div>
+                          <Switch
+                            checked={(pipe.config.include_user_profile as boolean | undefined) ?? (settings.userProfilePipesEnabled ?? false)}
+                            onCheckedChange={(checked) => {
+                              const pipeName = pipe.config.name;
+                              setPipes((prev) =>
+                                prev.map((p) =>
+                                  p.config.name === pipeName
+                                    ? { ...p, config: { ...p.config, include_user_profile: checked } }
+                                    : p
+                                )
+                              );
+                              fetch(`${apiBase}/pipes/${pipeName}/config`, {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ include_user_profile: checked }),
+                              }).then(() => fetchPipes());
+                            }}
+                          />
+                        </div>
+
                       </TabsContent>
 
                       {/* ═══ RUNS TAB ═══ */}

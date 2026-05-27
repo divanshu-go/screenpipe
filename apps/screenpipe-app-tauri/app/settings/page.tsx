@@ -9,6 +9,7 @@ import {
   Video,
   Keyboard,
   User,
+  UserRound,
   Settings as SettingsIcon,
   HardDrive,
   Shield,
@@ -36,6 +37,7 @@ import { StorageSection } from "@/components/settings/storage-section";
 import { NotificationsSettings } from "@/components/settings/notifications-settings";
 import { UsageSection } from "@/components/settings/usage-section";
 import { SpeakersSection } from "@/components/settings/speakers-section";
+import { PersonalizationSection } from "@/components/settings/personalization-section";
 import { useEnterprisePolicy } from "@/lib/hooks/use-enterprise-policy";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { commands } from "@/lib/utils/tauri";
@@ -45,6 +47,7 @@ type SettingsSection =
   | "account"
   | "recording"
   | "ai"
+  | "personalization"
   | "general"
   | "display"
   | "shortcuts"
@@ -58,7 +61,7 @@ type SettingsSection =
 
 const ALL_SETTINGS_SECTIONS: SettingsSection[] = [
   "display", "general", "ai", "recording", "shortcuts", "notifications",
-  "usage", "privacy", "storage", "speakers",
+  "personalization", "usage", "privacy", "storage", "speakers",
   "team", "account", "referral",
 ];
 
@@ -196,6 +199,7 @@ function SettingsContent() {
         { id: "display" as const, label: "Display", icon: <Layout className="h-4 w-4" /> },
         { id: "general" as const, label: "General", icon: <SettingsIcon className="h-4 w-4" /> },
         { id: "ai" as const, label: "AI models", icon: <Brain className="h-4 w-4" /> },
+        { id: "personalization" as const, label: "Personalization", icon: <UserRound className="h-4 w-4" /> },
         { id: "recording" as const, label: "Recording", icon: <Video className="h-4 w-4" /> },
         { id: "shortcuts" as const, label: "Shortcuts", icon: <Keyboard className="h-4 w-4" /> },
         { id: "notifications" as const, label: "Notifications", icon: <Bell className="h-4 w-4" /> },
@@ -229,6 +233,7 @@ function SettingsContent() {
       case "general":       return <GeneralSettings />;
       case "display":       return <DisplaySection />;
       case "ai":            return <AIPresets />;
+      case "personalization": return <PersonalizationSection />;
       case "account":       return <AccountSection />;
       case "recording":     return <RecordingSettings />;
       case "shortcuts":     return <ShortcutSection />;
