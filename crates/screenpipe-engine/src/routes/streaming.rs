@@ -326,8 +326,10 @@ async fn handle_stream_frames_socket(
                             limit
                         );
 
-                        // Set live subscription flag (lock-free)
-                        live_sub_clone.store(is_today, Ordering::Relaxed);
+                        // Set live subscription flag — Release so the live reader
+                        // observes the preceding sent_ids_clone.clear() and cache
+                        // reads before it sees the new flag value.
+                        live_sub_clone.store(is_today, Ordering::Release);
 
                         if is_today {
                             // Wait for cache to warm before responding (max 30s).
@@ -524,7 +526,7 @@ async fn handle_stream_frames_socket(
                     match result {
                         Ok(hot_frame) => {
                             // Check if live subscription is active
-                            let is_live = live_subscribe.load(Ordering::Relaxed);
+                            let is_live = live_subscribe.load(Ordering::Acquire);
                             if !is_live {
                                 continue;
                             }
@@ -599,7 +601,7 @@ async fn handle_stream_frames_socket(
                 result = audio_rx_cache.recv() => {
                     match result {
                         Ok(hot_audio) => {
-                            let is_live = live_subscribe.load(Ordering::Relaxed);
+                            let is_live = live_subscribe.load(Ordering::Acquire);
                             if !is_live {
                                 continue;
                             }
@@ -697,7 +699,11 @@ async fn fetch_and_process_frames_with_tracking(
         .frames
         .into_iter()
         .filter_map(|chunk| {
-            sent_frame_ids.insert(chunk.frame_id);
+            // insert() returns false if already present — skip duplicates
+            // (same frame can appear from both the hot-cache initial send and the DB query).
+            if !sent_frame_ids.insert(chunk.frame_id) {
+                return None;
+            }
             let ts = chunk.timestamp;
             let frame = create_time_series_frame(chunk);
             if frame.frame_data.is_empty() {

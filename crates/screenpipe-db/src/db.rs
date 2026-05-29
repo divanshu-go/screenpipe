@@ -4036,7 +4036,7 @@ impl DatabaseManager {
             })
             .collect();
 
-        Ok(try_join_all(futures).await?.into_iter().collect())
+        Ok(try_join_all(futures).await?)
     }
 
     #[allow(clippy::too_many_arguments)]

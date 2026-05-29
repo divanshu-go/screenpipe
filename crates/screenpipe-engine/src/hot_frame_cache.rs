@@ -306,12 +306,24 @@ impl HotFrameCache {
             audio.retain(|ts, _| *ts < start || *ts > end);
         }
         // Push warm_start forward if it now points inside the evicted range.
-        let mut ws = self.cache_warm_start.write();
-        if let Some(existing) = *ws {
-            if existing >= start && existing <= end {
-                let frames = self.frames.read();
-                *ws = frames.keys().next().map(|(t, _)| *t);
+        // Read frames BEFORE acquiring cache_warm_start.write() — holding ws.write()
+        // while acquiring frames.read() would invert the lock order used by
+        // maybe_rollover (frames.write → cache_warm_start.write) and deadlock.
+        let new_warm_start = {
+            let ws = self.cache_warm_start.read();
+            if let Some(existing) = *ws {
+                if existing >= start && existing <= end {
+                    let frames = self.frames.read();
+                    Some(frames.keys().next().map(|(t, _)| *t))
+                } else {
+                    None
+                }
+            } else {
+                None
             }
+        };
+        if let Some(new_start) = new_warm_start {
+            *self.cache_warm_start.write() = new_start;
         }
     }
 
