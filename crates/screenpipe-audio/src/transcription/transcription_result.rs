@@ -30,10 +30,8 @@ pub struct TranscriptionResult {
 }
 
 impl TranscriptionResult {
-    // TODO --optimize
     pub fn cleanup_overlap(&mut self, previous_transcript: &str) -> Option<(String, String)> {
         if let Some(transcription) = &self.transcription {
-            let transcription = transcription.to_string();
             if let Some((prev_idx, cur_idx, match_len)) =
                 longest_common_word_substring(previous_transcript, transcription.as_str())
             {

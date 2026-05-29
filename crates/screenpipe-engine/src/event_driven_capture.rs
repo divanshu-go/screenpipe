@@ -12,7 +12,7 @@ use crate::hot_frame_cache::{HotFrame, HotFrameCache};
 use crate::power::PowerProfile;
 use anyhow::Result;
 use chrono::Utc;
-use rustc_hash::FxHashMap;
+use std::collections::HashMap;
 use screenpipe_a11y::tree::TreeWalkerConfig;
 use screenpipe_a11y::ActivityFeed;
 use screenpipe_capture::paired_capture::{paired_capture, CaptureContext, PairedCaptureResult};
@@ -510,7 +510,7 @@ pub async fn event_driven_capture_loop(
     // Per-device elements dedup cache: device_name → (last_frame_id, last_content_hash)
     // When consecutive frames have the same content_hash, we skip inserting elements
     // and reference the previous frame's elements instead.
-    let mut last_elements_cache: FxHashMap<String, (i64, i64)> = FxHashMap::default();
+    let mut last_elements_cache: HashMap<String, (i64, i64)> = HashMap::default();
     // Debounce consecutive capture errors — log error! once on first failure,
     // then suppress until success. Prevents monitor disconnect from flooding
     // Sentry with 100k+ identical events.
@@ -1480,8 +1480,8 @@ fn terminal_ocr_throttled(app_name: &str) -> bool {
         return false;
     }
 
-    static LAST_CAPTURE: OnceLock<Mutex<FxHashMap<String, Instant>>> = OnceLock::new();
-    let map = LAST_CAPTURE.get_or_init(|| Mutex::new(FxHashMap::default()));
+    static LAST_CAPTURE: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
+    let map = LAST_CAPTURE.get_or_init(|| Mutex::new(HashMap::default()));
     let mut guard = match map.lock() {
         Ok(g) => g,
         // Poisoned mutex: don't block captures, just allow this one
