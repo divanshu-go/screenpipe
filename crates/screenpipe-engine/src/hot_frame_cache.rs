@@ -213,13 +213,13 @@ impl HotFrameCache {
 
         match db.find_video_chunks(start, end).await {
             Ok(chunks) => {
-                let mut frame_count = 0;
-                let mut frames = self.frames.write();
+                // Build both maps off-lock so we don't stall tokio workers while
+                // iterating potentially thousands of frames from the DB result.
+                let mut new_frames: BTreeMap<(DateTime<Utc>, i64), HotFrame> = BTreeMap::new();
+                let mut new_audio: BTreeMap<DateTime<Utc>, Vec<HotAudio>> = BTreeMap::new();
 
                 for frame_data in chunks.frames {
-                    // Convert FrameData to HotFrames
                     for ocr_entry in &frame_data.ocr_entries {
-                        // Skip screenpipe's own frames
                         if ocr_entry.app_name.to_lowercase().contains("screenpipe") {
                             continue;
                         }
@@ -237,34 +237,35 @@ impl HotFrameCache {
                             fps: frame_data.fps,
                             machine_id: frame_data.machine_id.clone(),
                         };
-                        frames.insert((hot.timestamp, hot.frame_id), hot);
-                        frame_count += 1;
+                        new_frames.insert((hot.timestamp, hot.frame_id), hot);
                     }
 
-                    // Convert audio entries
-                    if !frame_data.audio_entries.is_empty() {
-                        let mut audio_map = self.audio.write();
-                        for audio_entry in &frame_data.audio_entries {
-                            let hot_audio = HotAudio {
-                                audio_chunk_id: audio_entry.audio_chunk_id,
-                                timestamp: frame_data.timestamp,
-                                transcription: audio_entry.transcription.clone(),
-                                device_name: Arc::from(audio_entry.device_name.as_ref()),
-                                is_input: audio_entry.is_input,
-                                audio_file_path: audio_entry.audio_file_path.clone(),
-                                duration_secs: audio_entry.duration_secs,
-                                start_time: audio_entry.start_time,
-                                end_time: audio_entry.end_time,
-                                speaker_id: audio_entry.speaker_id,
-                                speaker_name: audio_entry.speaker_name.clone(),
-                            };
-                            audio_map
-                                .entry(hot_audio.timestamp)
-                                .or_default()
-                                .push(hot_audio);
-                        }
+                    for audio_entry in &frame_data.audio_entries {
+                        let hot_audio = HotAudio {
+                            audio_chunk_id: audio_entry.audio_chunk_id,
+                            timestamp: frame_data.timestamp,
+                            transcription: audio_entry.transcription.clone(),
+                            device_name: Arc::from(audio_entry.device_name.as_ref()),
+                            is_input: audio_entry.is_input,
+                            audio_file_path: audio_entry.audio_file_path.clone(),
+                            duration_secs: audio_entry.duration_secs,
+                            start_time: audio_entry.start_time,
+                            end_time: audio_entry.end_time,
+                            speaker_id: audio_entry.speaker_id,
+                            speaker_name: audio_entry.speaker_name.clone(),
+                        };
+                        new_audio
+                            .entry(hot_audio.timestamp)
+                            .or_default()
+                            .push(hot_audio);
                     }
                 }
+
+                let frame_count = new_frames.len();
+
+                // Short critical sections — hold locks only for the extend, not the loop.
+                self.frames.write().extend(new_frames);
+                self.audio.write().extend(new_audio);
 
                 // Only set cache coverage if we actually found frames. When the
                 // cache is empty (e.g. vision disabled, fresh install), we must

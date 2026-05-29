@@ -106,8 +106,6 @@ impl VadEngine for VadEngineImpl {
     }
 }
 
-unsafe impl Send for VadEngineImpl {}
-
 pub async fn create_vad_engine(engine: VadEngineEnum) -> anyhow::Result<VadEngineImpl> {
     match engine {
         VadEngineEnum::WebRtc => Ok(VadEngineImpl::WebRtc(WebRtcVad::new())),

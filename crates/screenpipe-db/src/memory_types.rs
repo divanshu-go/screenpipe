@@ -25,12 +25,7 @@ static INTERNER: Lazy<DashMap<Box<str>, Arc<str>>> = Lazy::new(DashMap::new);
 /// — no new heap allocation occurs. This deduplicates repeated strings (device
 /// names, engine names) across all results in a query.
 pub fn intern(s: &str) -> Arc<str> {
-    if let Some(existing) = INTERNER.get(s) {
-        return Arc::clone(&*existing);
-    }
-    let arc: Arc<str> = Arc::from(s);
-    INTERNER.entry(s.into()).or_insert_with(|| Arc::clone(&arc));
-    arc
+    Arc::clone(&*INTERNER.entry(s.into()).or_insert_with(|| Arc::from(s)))
 }
 
 /// A reference-counted, interned string with `OaSchema` support.
@@ -164,8 +159,10 @@ impl Serialize for InternedString {
 
 impl<'de> Deserialize<'de> for InternedString {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        // Do not call intern() here: request bodies can contain arbitrary strings
+        // (UUIDs, paths, user text) that would permanently grow the interner.
         let s = String::deserialize(d)?;
-        Ok(InternedString(intern(&s)))
+        Ok(InternedString(Arc::from(s.as_str())))
     }
 }
 
