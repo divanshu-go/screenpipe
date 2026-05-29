@@ -915,6 +915,30 @@ pub async fn spawn_screenpipe(
                 .unwrap_or_default()
                 .as_secs();
             state.last_spawn_epoch.store(spawn_epoch, Ordering::SeqCst);
+
+            // Seed user profile context from settings store into the pipe manager.
+            // set_pipe_user_profile_context is a no-op on boot because state.server
+            // is None when the frontend first calls it; seeding here ensures pipes
+            // always start with the right profile context.
+            let profile = store
+                .extra
+                .get("userProfile")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.trim().is_empty())
+                .map(|s| s.to_string());
+            let pipes_enabled = store
+                .extra
+                .get("userProfilePipesEnabled")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            {
+                let server_guard = state.server.lock().await;
+                if let Some(server) = server_guard.as_ref() {
+                    let mut manager = server.pipe_manager.lock().await;
+                    manager.set_user_profile_context(profile, pipes_enabled);
+                }
+            }
+
             Ok(())
         }
         Ok(Err(e)) => {

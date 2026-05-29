@@ -4723,7 +4723,8 @@ export function StandaloneChat({
     const presetPrompt = p.prompt || "";
     const userProfileContext = buildUserProfileContext(settings);
     const connectionsCtx = buildConnectionsContext(connections);
-    const systemPrompt = `${buildSystemPrompt()}\n\n${userProfileContext}\n\n${presetPrompt}${connectionsCtx}`.trim() || null;
+    const parts = [buildSystemPrompt(), userProfileContext, presetPrompt + connectionsCtx].filter(Boolean);
+    const systemPrompt = parts.join("\n\n") || null;
     return {
       provider: p.provider,
       url: p.url || "",

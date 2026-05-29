@@ -5584,6 +5584,70 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_user_profile_context_for_pipe_global_default() {
+        let mut config = PipeConfig {
+            name: "test".to_string(),
+            schedule: "manual".to_string(),
+            enabled: true,
+            agent: "pi".to_string(),
+            model: "test-model".to_string(),
+            provider: None,
+            preset: vec![],
+            permissions: PipePermissionsConfig::default(),
+            config: HashMap::new(),
+            connections: vec![],
+            timeout: None,
+            source_slug: None,
+            installed_version: None,
+            source_hash: None,
+            subagent: false,
+            privacy_filter: false,
+            trigger: None,
+        };
+
+        // No per-pipe override → falls back to global_enabled
+        assert_eq!(
+            user_profile_context_for_pipe(&config, false, Some("my profile")),
+            None,
+            "global disabled, no override → should be None"
+        );
+        assert_eq!(
+            user_profile_context_for_pipe(&config, true, Some("my profile")),
+            Some("my profile"),
+            "global enabled, no override → should pass through"
+        );
+
+        // Per-pipe override=true takes precedence over global false
+        config.config.insert("include_user_profile".to_string(), serde_json::Value::Bool(true));
+        assert_eq!(
+            user_profile_context_for_pipe(&config, false, Some("my profile")),
+            Some("my profile"),
+            "per-pipe override=true should override global disabled"
+        );
+
+        // Per-pipe override=false takes precedence over global true
+        config.config.insert("include_user_profile".to_string(), serde_json::Value::Bool(false));
+        assert_eq!(
+            user_profile_context_for_pipe(&config, true, Some("my profile")),
+            None,
+            "per-pipe override=false should override global enabled"
+        );
+    }
+
+    #[test]
+    fn test_render_pipe_system_prompt_injects_user_profile() {
+        let sys = render_pipe_system_prompt("task body", 3030, None, None, Some("I am an engineer"), None);
+        assert!(sys.contains("# User profile"), "header must be present");
+        assert!(sys.contains("I am an engineer"), "profile text must be present");
+    }
+
+    #[test]
+    fn test_render_pipe_system_prompt_omits_user_profile_when_none() {
+        let sys = render_pipe_system_prompt("task body", 3030, None, None, None, None);
+        assert!(!sys.contains("# User profile"), "header must not appear when profile is None");
+    }
+
     // -- PipeExecution / SchedulerState serde roundtrip ----------------------
 
     #[test]

@@ -33,8 +33,12 @@ export function PersonalizationSection() {
   }, [settings.userProfile]);
 
   const save = async () => {
-    await updateSettings({ userProfile: draft });
-    toast({ title: "profile saved" });
+    try {
+      await updateSettings({ userProfile: draft });
+      toast({ title: "profile saved" });
+    } catch {
+      toast({ title: "failed to save profile", variant: "destructive" });
+    }
   };
 
   const discard = () => {

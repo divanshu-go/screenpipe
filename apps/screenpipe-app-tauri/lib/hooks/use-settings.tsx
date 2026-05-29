@@ -9,8 +9,7 @@ import { platform } from "@tauri-apps/plugin-os";
 import { Store } from "@tauri-apps/plugin-store";
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import posthog from "posthog-js";
-import { User } from "../utils/tauri";
-import { SettingsStore } from "../utils/tauri";
+import { User, SettingsStore, commands } from "../utils/tauri";
 import { installAuthInterceptor } from "../auth-guard";
 import type { SourceCitation } from "@/lib/source-citations";
 import type {
@@ -917,13 +916,12 @@ function createSettingsStore() {
 const settingsStore = createSettingsStore();
 
 const syncPipeUserProfileContext = async (settings: Settings) => {
-	try {
-		await invoke("set_pipe_user_profile_context", {
-			profile: settings.userProfile?.trim() ? settings.userProfile : null,
-			pipesEnabled: settings.userProfilePipesEnabled ?? false,
-		});
-	} catch {
-		// The server may not be started yet; SettingsProvider retries on load/update.
+	const result = await commands.setPipeUserProfileContext(
+		settings.userProfile?.trim() || null,
+		settings.userProfilePipesEnabled ?? false,
+	);
+	if (result.status === "error") {
+		// Server may not be running yet; spawn_screenpipe seeds from the store on boot.
 	}
 };
 
@@ -1143,7 +1141,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 			"userProfile" in updates ||
 			"userProfilePipesEnabled" in updates
 		) {
-			await syncPipeUserProfileContext({ ...settings, ...updates } as Settings);
+			syncPipeUserProfileContext({ ...settings, ...updates } as Settings);
 		}
 
 		// Only update the port in the API module immediately — auth changes

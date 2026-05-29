@@ -2385,7 +2385,7 @@ export function PipesSection() {
                                 method: "POST",
                                 headers: { "Content-Type": "application/json" },
                                 body: JSON.stringify({ include_user_profile: checked }),
-                              }).then(() => fetchPipes());
+                              }).then(() => fetchPipes()).catch(() => fetchPipes());
                             }}
                           />
                         </div>

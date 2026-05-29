@@ -1424,6 +1424,21 @@ async setOnboardingStep(step: string) : Promise<Result<null, string>> {
 }
 },
 /**
+ * Push the locally stored user profile into the running pipe manager.
+ *
+ * The profile stays local; this only updates the long-lived in-process
+ * `PipeManager` so scheduled pipes do not need to read the encrypted settings
+ * store on every run.
+ */
+async setPipeUserProfileContext(profile: string | null, pipesEnabled: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_pipe_user_profile_context", { profile, pipesEnabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Enable or disable sync.
  */
 async setSyncEnabled(enabled: boolean) : Promise<Result<null, string>> {
