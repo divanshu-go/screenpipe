@@ -183,8 +183,27 @@ pub async fn start_monitor_watcher(
             }
 
             // ── Normal monitor polling ──────────────────────────────────────
-            // If stopped (e.g. no monitors after undock/wake), retry start()
+            // If stopped (e.g. no monitors after undock/wake, or a 0-monitor
+            // start failure because the screen was locked at an auto-update
+            // restart — issue https://github.com/screenpipe/screenpipe/issues/3702), retry start().
+            //
+            // Recovery wakeup (Option B for https://github.com/screenpipe/screenpipe/issues/3702): instead of a blind 5s sleep,
+            // race a short timer against the screen-unlock signal. When the user
+            // unlocks, displays become enumerable again and we retry *immediately*
+            // rather than waiting up to 5s. On non-macOS the unlock notify never
+            // fires, so the timer alone drives retries.
             if vision_manager.status().await != VisionManagerStatus::Running {
+                #[cfg(target_os = "macos")]
+                {
+                    let unlock = crate::sleep_monitor::screen_unlock_notify();
+                    tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+                        _ = unlock.notified() => {
+                            info!("screen unlocked — retrying VisionManager start immediately");
+                        }
+                    }
+                }
+                #[cfg(not(target_os = "macos"))]
                 tokio::time::sleep(Duration::from_secs(5)).await;
                 match vision_manager.start().await {
                     Ok(()) => {

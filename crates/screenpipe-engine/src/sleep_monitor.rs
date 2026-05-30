@@ -50,6 +50,25 @@ static SCREEN_IS_LOCKED: AtomicBool = AtomicBool::new(false);
 #[cfg(target_os = "macos")]
 static DISPLAY_RECONFIG_NOTIFY: Notify = Notify::const_new();
 
+/// Fired when the screen transitions from locked → unlocked
+/// (`com.apple.screenIsUnlocked`, or the CGSession safety-net poll catching a
+/// missed notification). Lets subsystems that couldn't enumerate monitors while
+/// the screen was locked retry immediately on unlock instead of waiting for the
+/// next timer tick. Uses the same `notify_one` single-consumer semantics as
+/// `DISPLAY_RECONFIG_NOTIFY`: at most one pending permit is buffered when no
+/// waiter is parked, so the next `.notified().await` returns immediately.
+///
+/// This is the recovery signal for issue https://github.com/screenpipe/screenpipe/issues/3702: an auto-update restart while the
+/// screen is locked enumerates 0 monitors, VisionManager start() fails, and the
+/// monitor watcher must re-run start() on unlock to bring capture back.
+static SCREEN_UNLOCK_NOTIFY: Notify = Notify::const_new();
+
+/// Handle to the screen-unlock notify. Await `.notified()` on it to be woken the
+/// next time the screen transitions from locked to unlocked.
+pub fn screen_unlock_notify() -> &'static Notify {
+    &SCREEN_UNLOCK_NOTIFY
+}
+
 /// Set to `true` once `CGDisplayRegisterReconfigurationCallback` has been
 /// registered successfully. If registration fails (rare CG error path),
 /// callers should fall back to shorter polling instead of relying on the
@@ -280,6 +299,11 @@ pub fn start_sleep_monitor() {
                 // the capture loop recreates them with fresh frames.
                 #[cfg(target_os = "macos")]
                 screenpipe_screen::stream_invalidation::request();
+                // Wake any subsystem that aborted while the screen was locked
+                // (e.g. the monitor watcher after a 0-monitor start failure on a
+                // locked-screen auto-update restart — issue https://github.com/screenpipe/screenpipe/issues/3702) so it can
+                // retry monitor enumeration immediately.
+                SCREEN_UNLOCK_NOTIFY.notify_one();
             }
         }
 
@@ -341,6 +365,10 @@ pub fn start_sleep_monitor() {
                 info!("Screen unlocked (CGSession safety-net poll)");
                 #[cfg(target_os = "macos")]
                 screenpipe_screen::stream_invalidation::request();
+                // Safety-net for the unlock recovery signal (issue https://github.com/screenpipe/screenpipe/issues/3702): if the
+                // CFNotificationCenter unlock notification was dropped, this poll
+                // still wakes waiters within ~5s.
+                SCREEN_UNLOCK_NOTIFY.notify_one();
             }
         }
     });
@@ -523,6 +551,9 @@ fn on_did_wake(handle: &tokio::runtime::Handle) {
             info!("Screen unlocked after wake (CGSession safety-net cleared SCREEN_IS_LOCKED)");
             #[cfg(target_os = "macos")]
             screenpipe_screen::stream_invalidation::request();
+            // Recovery signal for issue https://github.com/screenpipe/screenpipe/issues/3702 — wake the monitor watcher so it
+            // retries enumeration now that displays are available post-wake.
+            SCREEN_UNLOCK_NOTIFY.notify_one();
         }
 
         // Resume DB write queue now that the system is stable.
@@ -713,6 +744,33 @@ mod tests {
         tokio::time::timeout(std::time::Duration::from_millis(50), waiter)
             .await
             .expect("parked waiter should be woken by notify_one")
+            .expect("waiter task should not panic");
+    }
+
+    /// The screen-unlock recovery signal (https://github.com/screenpipe/screenpipe/issues/3702) must be observable through the
+    /// public `screen_unlock_notify()` handle and follow `notify_one`
+    /// buffer-or-wake semantics, so the monitor watcher's retry `select!` is
+    /// guaranteed to wake on unlock.
+    #[tokio::test]
+    async fn test_screen_unlock_notify_wakes_waiter() {
+        // Case 1: a notify issued before a waiter parks must be buffered and
+        // consumed immediately by the next `.notified()`.
+        screen_unlock_notify().notify_one();
+        tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            screen_unlock_notify().notified(),
+        )
+        .await
+        .expect("buffered unlock permit should be consumed immediately");
+
+        // Case 2: a parked waiter must be woken by a subsequent notify.
+        let waiter = tokio::spawn(async { screen_unlock_notify().notified().await });
+        tokio::task::yield_now().await;
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        screen_unlock_notify().notify_one();
+        tokio::time::timeout(std::time::Duration::from_millis(50), waiter)
+            .await
+            .expect("parked waiter should be woken by unlock notify")
             .expect("waiter task should not panic");
     }
 
