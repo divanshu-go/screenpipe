@@ -96,56 +96,19 @@ impl CaptureSession {
                 None
             };
 
-            // Attempt the initial VisionManager::start inline.
-            //
-            // History of this call site:
-            //   1. Originally `start()` ran inside a detached `tokio::spawn`,
-            //      which returned the outer `Ok(Self)` before the spawn even
-            //      ran — so a silent failure left a "dead" CaptureSession parked
-            //      in RecordingState.capture and every tray click short-circuited
-            //      on is_some().
-            //   2. We then `?`-propagated the error so the failure surfaced. But
-            //      that early-return meant the monitor watcher below — the ONLY
-            //      thing that retries `start()` on unlock / display-reconfig —
-            //      never got spawned. A transient "0 monitors enumerated because
-            //      the screen was locked at startup" (common right after an
-            //      auto-update restart) then killed capture *permanently*: the
-            //      recorder sat dead until the user manually restarted the app.
-            //      See issue https://github.com/screenpipe/screenpipe/issues/3702.
-            //
-            // Fix: treat a failed initial `start()` as RECOVERABLE. We always
-            // spawn the monitor watcher; its retry loop wakes on screen-unlock
-            // and display-reconfiguration and re-invokes `start()` until monitors
-            // appear. Only a hard failure (which `start()` does not currently
-            // return — it rolls status back to Stopped on the stale/empty case)
-            // would warrant aborting the session.
+            // A failed initial start() (e.g. 0 monitors while screen is locked at boot)
+            // is recoverable — the monitor watcher below retries on unlock/topology change.
+            // Don't propagate the error; keep the session alive so the watcher can run.
             match vision_manager.start().await {
                 Ok(()) => info!("VisionManager started successfully"),
                 Err(e) => {
-                    // Do NOT abort the capture session. The monitor watcher
-                    // spawned below will retry start() on unlock / topology
-                    // change and recover automatically.
-                    warn!(
-                        "VisionManager initial start failed ({e}); monitor watcher \
-                         will retry on screen-unlock / display reconfiguration"
-                    );
-                    // Surface the real state to the tray/health rather than
-                    // letting the caller log "started successfully" and report
-                    // healthy while vision is actually down (https://github.com/screenpipe/screenpipe/issues/3702
-                    // review note). `Starting` reads as "recovering" — the
-                    // health poll promotes it to Recording once the watcher's
-                    // retry succeeds and frames start landing.
-                    crate::health::set_recording_status(
-                        crate::health::RecordingStatus::Starting,
-                    );
+                    warn!("VisionManager initial start failed ({e}); monitor watcher will retry");
+                    crate::health::set_recording_status(crate::health::RecordingStatus::Starting);
                 }
             }
 
             // Long-running parts (monitor watcher + shutdown handler) stay in the
-            // spawn — they're fire-and-forget by design. This MUST be spawned
-            // even when the initial start() failed, because the watcher's retry
-            // loop is what recovers capture after a locked-screen / no-monitor
-            // startup (issue https://github.com/screenpipe/screenpipe/issues/3702).
+            // spawn — they're fire-and-forget by design.
             let vm_spawn = vision_manager.clone();
             tokio::spawn(async move {
                 let mut shutdown_rx = shutdown_rx;

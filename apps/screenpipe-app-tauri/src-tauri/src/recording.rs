@@ -925,12 +925,6 @@ pub async fn spawn_screenpipe(
         Ok(Err(e)) => {
             state.is_starting.store(false, Ordering::SeqCst);
             state.is_starting_capture.store(false, Ordering::SeqCst);
-            // NOTE (https://github.com/screenpipe/screenpipe/issues/3702): as of the locked-screen recovery fix, a transient
-            // "no monitors matched" no longer fails CaptureSession::start — the
-            // session is created and the monitor watcher retries start() on
-            // unlock. This branch now only fires for genuinely fatal capture
-            // failures, but we keep the Error status mapping as a safety net in
-            // case some other path resurfaces the stale-allowlist string.
             if e.contains("no monitors matched") {
                 crate::health::set_recording_status(crate::health::RecordingStatus::Error);
             }

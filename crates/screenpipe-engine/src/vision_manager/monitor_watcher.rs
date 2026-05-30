@@ -183,41 +183,19 @@ pub async fn start_monitor_watcher(
             }
 
             // ── Normal monitor polling ──────────────────────────────────────
-            // If stopped (e.g. no monitors after undock/wake, or a 0-monitor
-            // start failure because the screen was locked at an auto-update
-            // restart — issue https://github.com/screenpipe/screenpipe/issues/3702), retry start().
-            //
-            // Recovery wakeup (Option B for https://github.com/screenpipe/screenpipe/issues/3702): instead of a blind 5s sleep,
-            // race a short timer against the screen-unlock signal. When the user
-            // unlocks, displays become enumerable again and we retry *immediately*
-            // rather than waiting up to 5s. On non-macOS the unlock notify never
-            // fires, so the timer alone drives retries.
+            // If stopped (e.g. no monitors after undock/wake), retry start().
             if vision_manager.status().await != VisionManagerStatus::Running {
                 #[cfg(target_os = "macos")]
                 {
                     let unlock = crate::sleep_monitor::screen_unlock_notify();
-                    // Drain any permit buffered by an unlock that fired while we
-                    // were Running (and thus not parked here). Without this drain,
-                    // a stale permit makes the wait below return instantly the
-                    // first time we enter recovery and logs "screen unlocked"
-                    // without an unlock having just happened
-                    // (https://github.com/screenpipe/screenpipe/issues/3702 review note).
-                    //
-                    // `timeout(0, notified())` polls the `notified()` future
-                    // exactly once: if a permit was buffered it is consumed and
-                    // the future resolves `Ok`; otherwise it elapses `Err`. Either
-                    // way the stale permit is gone and we don't block.
-                    let _ =
-                        tokio::time::timeout(Duration::from_millis(0), unlock.notified()).await;
-
-                    // Now wait for a *fresh* unlock (or the 5s backstop).
-                    let woke_on_unlock = tokio::time::timeout(
-                        Duration::from_secs(5),
-                        unlock.notified(),
-                    )
-                    .await
-                    .is_ok();
-                    if woke_on_unlock {
+                    // Drain any permit buffered while we were Running so we don't
+                    // wake instantly on a stale signal.
+                    let _ = tokio::time::timeout(Duration::from_millis(0), unlock.notified()).await;
+                    // Race unlock against the 5s backstop.
+                    if tokio::time::timeout(Duration::from_secs(5), unlock.notified())
+                        .await
+                        .is_ok()
+                    {
                         info!("screen unlocked — retrying VisionManager start immediately");
                     }
                 }
