@@ -196,11 +196,29 @@ pub async fn start_monitor_watcher(
                 #[cfg(target_os = "macos")]
                 {
                     let unlock = crate::sleep_monitor::screen_unlock_notify();
-                    tokio::select! {
-                        _ = tokio::time::sleep(Duration::from_secs(5)) => {}
-                        _ = unlock.notified() => {
-                            info!("screen unlocked — retrying VisionManager start immediately");
-                        }
+                    // Drain any permit buffered by an unlock that fired while we
+                    // were Running (and thus not parked here). Without this drain,
+                    // a stale permit makes the wait below return instantly the
+                    // first time we enter recovery and logs "screen unlocked"
+                    // without an unlock having just happened
+                    // (https://github.com/screenpipe/screenpipe/issues/3702 review note).
+                    //
+                    // `timeout(0, notified())` polls the `notified()` future
+                    // exactly once: if a permit was buffered it is consumed and
+                    // the future resolves `Ok`; otherwise it elapses `Err`. Either
+                    // way the stale permit is gone and we don't block.
+                    let _ =
+                        tokio::time::timeout(Duration::from_millis(0), unlock.notified()).await;
+
+                    // Now wait for a *fresh* unlock (or the 5s backstop).
+                    let woke_on_unlock = tokio::time::timeout(
+                        Duration::from_secs(5),
+                        unlock.notified(),
+                    )
+                    .await
+                    .is_ok();
+                    if woke_on_unlock {
+                        info!("screen unlocked — retrying VisionManager start immediately");
                     }
                 }
                 #[cfg(not(target_os = "macos"))]

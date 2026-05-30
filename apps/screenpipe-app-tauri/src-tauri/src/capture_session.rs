@@ -129,6 +129,15 @@ impl CaptureSession {
                         "VisionManager initial start failed ({e}); monitor watcher \
                          will retry on screen-unlock / display reconfiguration"
                     );
+                    // Surface the real state to the tray/health rather than
+                    // letting the caller log "started successfully" and report
+                    // healthy while vision is actually down (https://github.com/screenpipe/screenpipe/issues/3702
+                    // review note). `Starting` reads as "recovering" — the
+                    // health poll promotes it to Recording once the watcher's
+                    // retry succeeds and frames start landing.
+                    crate::health::set_recording_status(
+                        crate::health::RecordingStatus::Starting,
+                    );
                 }
             }
 

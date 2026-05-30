@@ -26,7 +26,6 @@ use tracing::{debug, error, info, warn};
 use crate::analytics::capture_event_nonblocking;
 #[cfg(target_os = "macos")]
 use serde_json::json;
-#[cfg(target_os = "macos")]
 use tokio::sync::Notify;
 
 /// Tracks whether the system is currently in a "post-wake" state
@@ -772,6 +771,35 @@ mod tests {
             .await
             .expect("parked waiter should be woken by unlock notify")
             .expect("waiter task should not panic");
+    }
+
+    /// Mirrors the monitor watcher's stale-permit drain (https://github.com/screenpipe/screenpipe/issues/3702
+    /// review note): a permit buffered by an unlock that fired while the watcher
+    /// was NOT parked must be drained with a zero-timeout poll, so the
+    /// subsequent "wait for a fresh unlock" does not return instantly.
+    #[tokio::test]
+    async fn test_stale_permit_drain_then_block() {
+        let notify = std::sync::Arc::new(Notify::const_new());
+
+        // Simulate a stale permit buffered while no waiter was parked.
+        notify.notify_one();
+
+        // Drain step: timeout(0, notified()) consumes the buffered permit.
+        let drained =
+            tokio::time::timeout(std::time::Duration::from_millis(0), notify.notified()).await;
+        assert!(
+            drained.is_ok(),
+            "zero-timeout poll should consume the buffered stale permit"
+        );
+
+        // Now a fresh wait must actually block (no stale permit left), so a
+        // short timeout elapses with Err rather than returning Ok instantly.
+        let fresh =
+            tokio::time::timeout(std::time::Duration::from_millis(30), notify.notified()).await;
+        assert!(
+            fresh.is_err(),
+            "after draining, the next wait must block until a real unlock"
+        );
     }
 
     #[cfg(target_os = "macos")]
