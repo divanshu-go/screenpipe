@@ -450,8 +450,12 @@ pub struct FrameCache {
 
 impl FrameCache {
     pub async fn new(screenpipe_dir: PathBuf, db: Arc<DatabaseManager>) -> Result<Self> {
+        let cache_dir_path = cache_dir()
+            .map(|d| d.join("screenpipe").join("frames"))
+            .unwrap_or_else(|| screenpipe_dir.join("cache").join("frames"));
+
         let cache_config = CacheConfig {
-            cache_dir: cache_dir().unwrap().join("screenpipe").join("frames"),
+            cache_dir: cache_dir_path,
             ..Default::default()
         };
 
@@ -750,7 +754,7 @@ async fn extract_frame(
         "1",         // Limit to single thread
         "-cpu-used", // Faster encoding
         "4",
-        output_pattern.to_str().unwrap(),
+        output_pattern.to_str().ok_or_else(|| anyhow::anyhow!("output pattern is not valid UTF-8"))?,
     ]);
 
     #[cfg(windows)]
