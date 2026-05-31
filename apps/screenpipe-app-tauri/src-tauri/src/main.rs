@@ -110,6 +110,9 @@ pub use server::spawn_server;
 pub use permissions::do_permissions_check;
 pub use permissions::open_permission_settings;
 pub use permissions::request_permission;
+pub use enterprise_policy::set_enterprise_policy;
+pub use enterprise_policy::set_sync_streams;
+pub use enterprise_install_metadata::get_enterprise_install_metadata;
 use sentry;
 use tauri::AppHandle;
 #[cfg(target_os = "macos")]

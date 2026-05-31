@@ -132,7 +132,7 @@ async function applyAiPresetPolicy(policy: EnterpriseAiPresetPolicy): Promise<vo
 
 async function getEnterpriseInstallMetadata(): Promise<EnterpriseInstallMetadata> {
   try {
-    return await commands.getEnterpriseInstallMetadata();
+    return await invoke<EnterpriseInstallMetadata>("get_enterprise_install_metadata");
   } catch {
     return {
       install_source: "unknown",
@@ -385,7 +385,9 @@ export function useEnterprisePolicy() {
 
       // Push hidden sections to Rust so tray menu can use them
       try {
-        await commands.setEnterprisePolicy(result.hiddenSections);
+        await invoke("set_enterprise_policy", {
+          hiddenSections: result.hiddenSections,
+        });
       } catch (e) {
         console.warn("[enterprise] failed to push policy to Rust:", e);
       }
