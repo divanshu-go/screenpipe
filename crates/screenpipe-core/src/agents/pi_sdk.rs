@@ -26,12 +26,15 @@ use super::{AgentExecutor, AgentOutput, ExecutionHandle, SharedPid};
 use anyhow::{anyhow, Result};
 use arc_swap::ArcSwap;
 use std::path::Path;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::UnboundedSender;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
-use pi_agent_rust::sdk::{create_agent_session, AgentEvent, SessionOptions};
+use pi_agent_rust::sdk::{
+    create_agent_session, AgentEvent, Config, ContentBlock, SessionOptions, TextContent, Tool,
+    ToolFactory, ToolOutput, ToolRegistry, ToolUpdate, default_tool_registry,
+};
 
 /// Local-model skill hint, identical to the subprocess path (`pi_start_inner`)
 /// and the embedded chat path (`pi_sdk_chat`). Parity gaps E1/K5.
@@ -53,6 +56,251 @@ fn build_batch_append_system_prompt(
         (false, None) => None,
     }
 }
+
+// ── Sub-agent support ────────────────────────────────────────────────────────
+
+const SUB_AGENT_MAX_CONCURRENT: usize = 3;
+const SUB_AGENT_MAX_TOTAL: usize = 10;
+const SUB_AGENT_TIMEOUT_SECS: u64 = 300;
+
+/// Shared concurrency/total counters for one parent session's sub-agent budget.
+struct SubAgentCounters {
+    active: AtomicUsize,
+    total: AtomicUsize,
+}
+
+impl SubAgentCounters {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            active: AtomicUsize::new(0),
+            total: AtomicUsize::new(0),
+        })
+    }
+}
+
+/// Drop guard — decrements the active counter when a sub-agent finishes or panics.
+struct ActiveGuard(Arc<SubAgentCounters>);
+
+impl Drop for ActiveGuard {
+    fn drop(&mut self) {
+        self.0.active.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// First-class `sub_agent` tool. The LLM calls it with `{ "prompt": "..." }`.
+///
+/// This is the clean Rust-SDK path: the LLM sees a real tool in its schema and
+/// calls it directly — no bash command string matching, no interception.
+/// The JS `sub-agent.ts` had to intercept bash because extensions had no other
+/// hook; we own the tool registry, so we just add the tool.
+struct SubAgentTool {
+    provider: String,
+    model: String,
+    api_key: Option<String>,
+    working_dir: std::path::PathBuf,
+    counters: Arc<SubAgentCounters>,
+}
+
+#[async_trait::async_trait]
+impl Tool for SubAgentTool {
+    fn name(&self) -> &str {
+        "sub_agent"
+    }
+
+    fn label(&self) -> &str {
+        "Sub-Agent"
+    }
+
+    fn description(&self) -> &str {
+        "Delegate a focused task to an independent sub-agent that runs in parallel. \
+         The sub-agent only sees the prompt you provide, not your conversation. \
+         It can use bash (curl the screenpipe API at localhost:3030). \
+         Returns the sub-agent's full text output."
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "string",
+                    "description": "The task for the sub-agent. Be specific: include API endpoints, required data, and expected output format."
+                }
+            },
+            "required": ["prompt"]
+        })
+    }
+
+    async fn execute(
+        &self,
+        _tool_call_id: &str,
+        input: serde_json::Value,
+        _on_update: Option<Box<dyn Fn(ToolUpdate) + Send + Sync>>,
+    ) -> pi_agent_rust::sdk::Result<ToolOutput> {
+        use pi_agent_rust::sdk::Error;
+
+        let prompt = match input.get("prompt").and_then(|v| v.as_str()) {
+            Some(p) if !p.trim().is_empty() => p.to_string(),
+            _ => {
+                return Ok(ToolOutput {
+                    content: vec![ContentBlock::Text(TextContent::new(
+                        "Error: `prompt` parameter is required and must be non-empty.",
+                    ))],
+                    details: None,
+                    is_error: true,
+                });
+            }
+        };
+
+        // Anti-nest: the subprocess path sets SCREENPIPE_SUBAGENT=1 in child
+        // envs. Honour it so that pipes already running as sub-agents (via the
+        // subprocess path) cannot spawn further sub-agents.
+        if std::env::var("SCREENPIPE_SUBAGENT").as_deref() == Ok("1") {
+            return Ok(ToolOutput {
+                content: vec![ContentBlock::Text(TextContent::new(
+                    "Error: sub-agents cannot spawn further sub-agents.",
+                ))],
+                details: None,
+                is_error: true,
+            });
+        }
+
+        // Concurrency limit.
+        let prev_active = self.counters.active.load(Ordering::Relaxed);
+        if prev_active >= SUB_AGENT_MAX_CONCURRENT {
+            return Ok(ToolOutput {
+                content: vec![ContentBlock::Text(TextContent::new(format!(
+                    "Error: {SUB_AGENT_MAX_CONCURRENT} sub-agents already running. \
+                     Wait for one to finish ({prev_active} active)."
+                )))],
+                details: None,
+                is_error: true,
+            });
+        }
+
+        // Total limit — fetch_add before the check avoids a TOCTOU race.
+        let prev_total = self.counters.total.fetch_add(1, Ordering::Relaxed);
+        if prev_total >= SUB_AGENT_MAX_TOTAL {
+            self.counters.total.fetch_sub(1, Ordering::Relaxed);
+            return Ok(ToolOutput {
+                content: vec![ContentBlock::Text(TextContent::new(format!(
+                    "Error: all {SUB_AGENT_MAX_TOTAL} sub-agent slots used."
+                )))],
+                details: None,
+                is_error: true,
+            });
+        }
+
+        self.counters.active.fetch_add(1, Ordering::Relaxed);
+        let _guard = ActiveGuard(self.counters.clone());
+        let slots_remaining = SUB_AGENT_MAX_TOTAL.saturating_sub(prev_total + 1);
+
+        debug!(
+            "sub_agent: provider={} model={} prompt_len={}",
+            self.provider,
+            self.model,
+            prompt.len()
+        );
+
+        // One-shot nested session. No tool_factory → no sub_agent tool → no
+        // recursion possible. This is the natural guard; no env-var needed.
+        let options = SessionOptions {
+            provider: Some(self.provider.clone()),
+            model: Some(self.model.clone()),
+            api_key: self.api_key.clone(),
+            working_directory: Some(self.working_dir.clone()),
+            no_session: true,
+            ..SessionOptions::default()
+        };
+
+        let timeout_result = tokio::time::timeout(
+            std::time::Duration::from_secs(SUB_AGENT_TIMEOUT_SECS),
+            async move {
+                let mut session = create_agent_session(options)
+                    .await
+                    .map_err(|e| Error::tool("sub_agent", format!("session init: {e}")))?;
+                session.prompt(prompt, |_: AgentEvent| {}).await
+            },
+        )
+        .await;
+
+        match timeout_result {
+            Err(_elapsed) => Ok(ToolOutput {
+                content: vec![ContentBlock::Text(TextContent::new(format!(
+                    "Sub-agent timed out after {SUB_AGENT_TIMEOUT_SECS}s."
+                )))],
+                details: None,
+                is_error: true,
+            }),
+            Ok(Err(e)) => Ok(ToolOutput {
+                content: vec![ContentBlock::Text(TextContent::new(format!(
+                    "Sub-agent failed: {e}"
+                )))],
+                details: None,
+                is_error: true,
+            }),
+            Ok(Ok(msg)) => {
+                if let Some(err) = msg.error_message {
+                    return Ok(ToolOutput {
+                        content: vec![ContentBlock::Text(TextContent::new(format!(
+                            "Sub-agent error: {err}"
+                        )))],
+                        details: None,
+                        is_error: true,
+                    });
+                }
+                let text: String = msg
+                    .content
+                    .iter()
+                    .filter_map(|b| {
+                        if let ContentBlock::Text(tc) = b {
+                            Some(tc.text.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let output = if text.is_empty() {
+                    format!("(sub-agent produced no output)\n\n[{slots_remaining} slots remaining]")
+                } else {
+                    format!("{text}\n\n[sub-agent done | {slots_remaining} slots remaining]")
+                };
+                Ok(ToolOutput {
+                    content: vec![ContentBlock::Text(TextContent::new(output))],
+                    details: None,
+                    is_error: false,
+                })
+            }
+        }
+    }
+}
+
+/// [`ToolFactory`] that appends the [`SubAgentTool`] to the standard registry
+/// when `subagent: true` is set in the pipe frontmatter.
+struct SubAgentToolFactory {
+    provider: String,
+    model: String,
+    api_key: Option<String>,
+    working_dir: std::path::PathBuf,
+}
+
+impl ToolFactory for SubAgentToolFactory {
+    fn create_tool_registry(&self, enabled: &[&str], cwd: &Path, config: &Config) -> ToolRegistry {
+        let counters = SubAgentCounters::new();
+        let mut registry = default_tool_registry(enabled, cwd, config);
+        registry.push(Box::new(SubAgentTool {
+            provider: self.provider.clone(),
+            model: self.model.clone(),
+            api_key: self.api_key.clone(),
+            working_dir: self.working_dir.clone(),
+            counters,
+        }));
+        registry
+    }
+}
+
+// ── PiSdkExecutor ────────────────────────────────────────────────────────────
 
 /// In-process pi executor. Wraps a [`PiExecutor`] for all the subprocess-agnostic
 /// setup (config merge, skill/extension install, token storage) and only swaps the
@@ -107,17 +355,15 @@ impl PiSdkExecutor {
         Ok(resolved_provider)
     }
 
-    /// Collect the `.pi/extensions/*.ts` paths prepare() just installed so the
-    /// SDK loads them into its embedded QuickJS runtime.
+    /// Collect the `.pi/extensions/*.ts|.js` paths so the SDK loads them into
+    /// its embedded QuickJS runtime.
     fn extension_paths(working_dir: &Path) -> Vec<std::path::PathBuf> {
         let ext_dir = working_dir.join(".pi").join("extensions");
         let mut paths = Vec::new();
         if let Ok(entries) = std::fs::read_dir(&ext_dir) {
             for e in entries.flatten() {
                 let p = e.path();
-                if p.extension().and_then(|x| x.to_str()) == Some("ts")
-                    || p.extension().and_then(|x| x.to_str()) == Some("js")
-                {
+                if matches!(p.extension().and_then(|x| x.to_str()), Some("ts" | "js")) {
                     paths.push(p);
                 }
             }
@@ -159,9 +405,19 @@ impl PiSdkExecutor {
         // on their own; inject the screenpipe-api skill hint just like the
         // subprocess path and the embedded chat path. Concatenate with any
         // pipe-supplied system prompt (hint first).
-        let combined_system_prompt =
+        let append_system_prompt =
             build_batch_append_system_prompt(resolved_provider, append_system_prompt);
-        let append_system_prompt = combined_system_prompt.as_deref();
+
+        let api_key = self.resolve_api_key(resolved_provider, provider_api_key);
+
+        // The sub_agent tool is always available in embedded mode. The LLM uses
+        // it when the task calls for parallelism; the tool schema is the docs.
+        let tool_factory: Option<Arc<dyn ToolFactory>> = Some(Arc::new(SubAgentToolFactory {
+            provider: resolved_provider.to_string(),
+            model: model.to_string(),
+            api_key: api_key.clone(),
+            working_dir: working_dir.to_path_buf(),
+        }));
 
         // Accumulate serialized events; the trait returns the full stdout buffer.
         let stdout_buf = Arc::new(Mutex::new(String::new()));
@@ -180,9 +436,6 @@ impl PiSdkExecutor {
             }
         });
 
-        let api_key = self
-            .resolve_api_key(resolved_provider, provider_api_key);
-
         let options = SessionOptions {
             provider: Some(resolved_provider.to_string()),
             model: Some(model.to_string()),
@@ -192,6 +445,7 @@ impl PiSdkExecutor {
             no_session: true,
             extension_paths: Self::extension_paths(working_dir),
             extension_policy: Some("safe".to_string()),
+            tool_factory,
             on_event: Some(on_event),
             ..SessionOptions::default()
         };
@@ -406,7 +660,10 @@ impl AgentExecutor for PiSdkExecutor {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_batch_append_system_prompt, PiSdkExecutor};
+    use super::{
+        build_batch_append_system_prompt, PiSdkExecutor, SubAgentCounters,
+        SUB_AGENT_MAX_CONCURRENT, SUB_AGENT_MAX_TOTAL,
+    };
 
     #[test]
     fn provider_key_env_var_maps_like_subprocess() {
@@ -467,5 +724,21 @@ mod tests {
     fn batch_cloud_passes_pipe_prompt_only() {
         let p = build_batch_append_system_prompt("screenpipe", Some("Pipe rules.")).expect("present");
         assert_eq!(p, "Pipe rules.");
+    }
+
+    // ── Sub-agent tool ────────────────────────────────────────────────────────
+
+    #[test]
+    fn sub_agent_counters_start_at_zero() {
+        let c = SubAgentCounters::new();
+        use std::sync::atomic::Ordering;
+        assert_eq!(c.active.load(Ordering::Relaxed), 0);
+        assert_eq!(c.total.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn sub_agent_limits_match_js_extension() {
+        assert_eq!(SUB_AGENT_MAX_CONCURRENT, 3);
+        assert_eq!(SUB_AGENT_MAX_TOTAL, 10);
     }
 }

@@ -1183,6 +1183,9 @@ async fn setup_pipe_permissions(
     if let Err(e) = PiExecutor::ensure_orphan_guard_extension(pipe_dir) {
         warn!("failed to install orphan-guard extension: {}", e);
     }
+    // In embedded mode the Rust SubAgentTool handles this directly; the JS
+    // extension is subprocess-only (it spawns `pi` which doesn't exist in-process).
+    #[cfg(not(feature = "pi-embedded"))]
     if let Err(e) = PiExecutor::ensure_subagent_extension(pipe_dir, config.subagent) {
         warn!("failed to install sub-agent extension: {}", e);
     }
