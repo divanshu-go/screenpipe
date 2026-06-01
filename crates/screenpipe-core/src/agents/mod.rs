@@ -11,11 +11,57 @@
 
 pub mod bash_env;
 pub mod pi;
+#[cfg(feature = "pi-embedded")]
+pub mod pi_sdk;
 
 use anyhow::Result;
 use std::path::Path;
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
+
+use arc_swap::ArcSwap;
+
+/// Build the default pi [`AgentExecutor`] from an optional cloud user token.
+///
+/// With the `pi-embedded` feature the agent runs in-process via the
+/// `pi_agent_rust` SDK ([`pi_sdk::PiSdkExecutor`]); otherwise it spawns the
+/// bun/node pi subprocess ([`pi::PiExecutor`]). Both implement
+/// [`AgentExecutor`], so callers stay identical.
+pub fn build_pi_executor(
+    user_token: Option<String>,
+    api_auth_key: Option<String>,
+) -> Arc<dyn AgentExecutor> {
+    #[cfg(feature = "pi-embedded")]
+    {
+        Arc::new(pi_sdk::PiSdkExecutor::new(user_token).with_api_auth_key(api_auth_key))
+    }
+    #[cfg(not(feature = "pi-embedded"))]
+    {
+        Arc::new(pi::PiExecutor::new(user_token).with_api_auth_key(api_auth_key))
+    }
+}
+
+/// Same as [`build_pi_executor`] but wires a shared, live-updating cloud token
+/// cell plus an optional API auth key (used by the Tauri server, where sign-in
+/// state changes at runtime).
+pub fn build_pi_executor_shared(
+    user_token: Arc<ArcSwap<Option<String>>>,
+    api_auth_key: Option<String>,
+) -> Arc<dyn AgentExecutor> {
+    #[cfg(feature = "pi-embedded")]
+    {
+        Arc::new(
+            pi_sdk::PiSdkExecutor::with_shared_user_token(user_token)
+                .with_api_auth_key(api_auth_key),
+        )
+    }
+    #[cfg(not(feature = "pi-embedded"))]
+    {
+        Arc::new(
+            pi::PiExecutor::with_shared_user_token(user_token).with_api_auth_key(api_auth_key),
+        )
+    }
+}
 
 /// Shared PID that is set synchronously right after `cmd.spawn()`.
 /// The scheduler reads this to kill the process on timeout — no async

@@ -19,7 +19,6 @@ use screenpipe_audio::core::device::{
 use screenpipe_audio::{
     core::device::resolve_audio_devices_for_capture, meeting_detector::MeetingDetector,
 };
-use screenpipe_core::agents::AgentExecutor;
 use screenpipe_core::find_ffmpeg_path;
 use screenpipe_core::paths;
 use screenpipe_db::DatabaseManager;
@@ -1223,9 +1222,9 @@ async fn main() -> anyhow::Result<()> {
     std::fs::create_dir_all(&pipes_dir).ok();
 
     let user_token = std::env::var("SCREENPIPE_API_KEY").ok();
-    let pi_executor = std::sync::Arc::new(
-        screenpipe_core::agents::pi::PiExecutor::new(user_token.clone())
-            .with_api_auth_key(config.api_auth_key.clone()),
+    let pi_executor = screenpipe_core::agents::build_pi_executor(
+        user_token.clone(),
+        config.api_auth_key.clone(),
     );
 
     // Workflow event classifier — opt-in cloud feature. Polls recent activity

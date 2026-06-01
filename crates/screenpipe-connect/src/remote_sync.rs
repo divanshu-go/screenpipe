@@ -570,7 +570,7 @@ async fn sync_to_remote_inner(config: &SyncConfig, data_dir: &Path) -> Result<Sy
         let home = sftp
             .canonicalize(".")
             .await
-            .unwrap_or_else(|_| "/home/".to_string() + &config.user);
+            .unwrap_or_else(|_| format!("/home/{}", config.user));
         format!(
             "{}/{}",
             home.trim_end_matches('/'),

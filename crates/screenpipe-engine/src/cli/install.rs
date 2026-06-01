@@ -21,7 +21,6 @@
 
 use anyhow::{anyhow, Result};
 use colored::Colorize;
-use screenpipe_core::agents::pi::PiExecutor;
 use screenpipe_core::agents::AgentExecutor;
 use screenpipe_core::pipes::{parse_frontmatter, PipeManager};
 use serde::Deserialize;
@@ -85,7 +84,7 @@ pub async fn handle_install(url: &str, allow_untrusted: bool) -> Result<()> {
     std::fs::create_dir_all(&pipes_dir)?;
 
     let user_token = std::env::var("SCREENPIPE_API_KEY").ok();
-    let pi: Arc<dyn AgentExecutor> = Arc::new(PiExecutor::new(user_token));
+    let pi: Arc<dyn AgentExecutor> = screenpipe_core::agents::build_pi_executor(user_token, None);
     let mut executors: HashMap<String, Arc<dyn AgentExecutor>> = HashMap::new();
     executors.insert("pi".to_string(), pi);
     let manager = PipeManager::new(pipes_dir, executors, None, 3030);

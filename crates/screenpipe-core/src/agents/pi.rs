@@ -217,6 +217,15 @@ impl PiExecutor {
         self
     }
 
+    /// The local server's api_auth_key, if configured. The subprocess path
+    /// exports this as `SCREENPIPE_LOCAL_API_KEY` (+ the deprecated
+    /// `SCREENPIPE_API_AUTH_KEY` alias) so pipe bash/TS code can authenticate
+    /// against the local server. The embedded executor must inject the same
+    /// env vars into the in-process bash tool. Parity gap B4.
+    pub fn current_api_auth_key(&self) -> Option<String> {
+        self.api_auth_key.clone()
+    }
+
     /// User policy: when the marker file
     /// `~/.screenpipe/cloud_media_analysis.disabled` exists, the
     /// screenpipe-api skill is installed WITHOUT the Gemma 4 E4B
@@ -837,6 +846,13 @@ impl PiExecutor {
     /// Resolve a model name by stripping date suffixes
     /// (e.g. "claude-haiku-4-5@20251001" → "claude-haiku-4-5").
     /// Passthrough for non-screenpipe providers.
+    ///
+    /// Public wrapper so the embedded SDK executor (`pi_sdk.rs`) shares the
+    /// exact same model-name resolution as the subprocess path.
+    pub fn resolve_model_pub(requested: &str, provider: &str) -> String {
+        Self::resolve_model(requested, provider)
+    }
+
     fn resolve_model(requested: &str, provider: &str) -> String {
         if provider != "screenpipe" {
             return requested.to_string();

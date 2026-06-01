@@ -18,6 +18,15 @@ log = "0.4.17"
 anyhow = "1.0.86"
 arc-swap = "1"
 
+# Embedded pi agent (Rust SDK) — optional, gated behind `pi-embedded`.
+# When enabled, PiSdkExecutor runs the agent in-process via the pi_agent_rust
+# crate instead of spawning the bun/node `pi` subprocess. Our fork pins the
+# crate to stable Rust (nightly->stable) and a screenpipe-tagged version.
+# The crate's lib target is named `pi` (package `pi_agent_rust`). Alias it to
+# `pi_agent_rust` here so our `use pi_agent_rust::sdk` is explicit and doesn't
+# collide with any local `pi` module.
+pi_agent_rust = { package = "pi_agent_rust", git = "https://github.com/divanshu-go/pi_agent_rust", rev = "944716d", optional = true, default-features = false }
+
 tokio = { workspace = true }
 
 # Security
@@ -70,6 +79,9 @@ default = ["security"]
 # without changing behavior (it's never enabled at compile time).
 cargo-clippy = []
 security = ["dep:regex", "dep:lazy_static"]
+# In-process pi agent via the pi_agent_rust SDK (no bun/node subprocess).
+# Additive: the subprocess PiExecutor remains the default path.
+pi-embedded = ["dep:pi_agent_rust"]
 secrets = ["dep:screenpipe-secrets", "dep:screenpipe-vault", "dep:sqlx"]
 cloud-sync = [
     "dep:argon2",

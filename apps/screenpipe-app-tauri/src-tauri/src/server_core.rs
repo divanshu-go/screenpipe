@@ -425,11 +425,12 @@ impl ServerCore {
         // so a fresh sign-in or sign-out takes effect on the very next pipe
         // run without restarting the engine.
         let cloud_token_handle = server.cloud_token.clone();
-        let pi_executor = Arc::new(
-            screenpipe_core::agents::pi::PiExecutor::with_shared_user_token(
-                cloud_token_handle.clone(),
-            )
-            .with_api_auth_key(config.api_auth_key.clone()),
+        // With `pi-embedded` this is an in-process SDK executor; otherwise the
+        // bun/node subprocess executor. Both share the live cloud-token cell so
+        // sign-in/out takes effect on the next pipe run without a restart.
+        let pi_executor = screenpipe_core::agents::build_pi_executor_shared(
+            cloud_token_handle.clone(),
+            config.api_auth_key.clone(),
         );
         let mut agent_executors: std::collections::HashMap<
             String,

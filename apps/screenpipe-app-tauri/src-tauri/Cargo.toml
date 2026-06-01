@@ -267,6 +267,10 @@ enterprise-build = ["dep:thiserror", "dep:screenpipe-sync"]
 
 # On-device AI via Apple Foundation Models (macOS 26+ / Xcode 26+ only)
 apple-intelligence = ["screenpipe-engine/apple-intelligence"]
+# Run the pi agent in-process via the pi_agent_rust SDK instead of spawning the
+# bun/node pi subprocess. Forwards to screenpipe-core (via the engine + the
+# direct screenpipe-core dep used by server_core.rs).
+pi-embedded = ["screenpipe-engine/pi-embedded", "screenpipe-core/pi-embedded"]
 
 qwen3-asr = ["screenpipe-engine/qwen3-asr"]
 parakeet = ["screenpipe-engine/parakeet"]

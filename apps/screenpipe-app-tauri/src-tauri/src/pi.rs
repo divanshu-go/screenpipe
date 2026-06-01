@@ -5,6 +5,15 @@
 //! Pi Coding Agent Integration
 //!
 //! Manages the pi coding agent via RPC mode (stdin/stdout JSON protocol).
+//!
+//! When the `pi-embedded` feature is on, the chat commands additionally
+//! dispatch to the in-process [`pi_sdk_chat`] transport (no subprocess).
+
+/// In-process chat transport (pi_agent_rust SDK). Child module so it can reach
+/// this module's private helpers (emit_agent_event, ensure_pi_config, …).
+#[cfg(feature = "pi-embedded")]
+#[path = "pi_sdk_chat.rs"]
+pub mod pi_sdk_chat;
 
 use screenpipe_core::agents::pi::screenpipe_cloud_models;
 use serde::{Deserialize, Serialize};
@@ -885,10 +894,18 @@ async fn build_models_json(
                     provider_name
                 );
             } else {
+                // The pi SDK auto-resolves a models.json apiKey value as an
+                // env-var reference ONLY when the name ends with `_API_KEY`
+                // (looks_like_api_key_env_var). `OPENAI_CHATGPT_TOKEN` does not,
+                // so it must carry an explicit `env:` prefix or the SDK would
+                // use the literal string as the bearer token (401/403). The
+                // `env:` prefix forces env resolution for any name and is
+                // honored identically by the subprocess CLI and the embedded
+                // SDK. See screenpipe-pi-cli-parity-gap-ledger.md gap B2.
                 let api_key = match config.provider.as_str() {
                     "native-ollama" => "ollama".to_string(),
                     "openai" => "OPENAI_API_KEY".to_string(),
-                    "openai-chatgpt" => "OPENAI_CHATGPT_TOKEN".to_string(),
+                    "openai-chatgpt" => "env:OPENAI_CHATGPT_TOKEN".to_string(),
                     "anthropic" => "ANTHROPIC_API_KEY".to_string(),
                     "custom" => "CUSTOM_API_KEY".to_string(),
                     _ => "".to_string(),
@@ -1021,10 +1038,17 @@ pub async fn pi_info(
     session_id: Option<String>,
 ) -> Result<PiInfo, String> {
     let sid = session_id.unwrap_or_else(|| "chat".to_string());
-    let mut pool = state.0.lock().await;
-    match pool.sessions.get_mut(&sid) {
-        Some(m) => Ok(m.snapshot(&sid)),
-        None => Ok(PiInfo::default()),
+    #[cfg(feature = "pi-embedded")]
+    {
+        return Ok(pi_sdk_chat::info(&sid).await);
+    }
+    #[cfg(not(feature = "pi-embedded"))]
+    {
+        let mut pool = state.0.lock().await;
+        match pool.sessions.get_mut(&sid) {
+            Some(m) => Ok(m.snapshot(&sid)),
+            None => Ok(PiInfo::default()),
+        }
     }
 }
 
@@ -1038,14 +1062,21 @@ pub async fn pi_stop(
     let sid = session_id.unwrap_or_else(|| "chat".to_string());
     info!("Stopping pi sidecar for session: {}", sid);
 
-    let mut pool = state.0.lock().await;
-    if let Some(m) = pool.sessions.get_mut(&sid) {
-        m.stop();
+    #[cfg(feature = "pi-embedded")]
+    {
+        return Ok(pi_sdk_chat::stop(&sid).await);
     }
+    #[cfg(not(feature = "pi-embedded"))]
+    {
+        let mut pool = state.0.lock().await;
+        if let Some(m) = pool.sessions.get_mut(&sid) {
+            m.stop();
+        }
 
-    match pool.sessions.get_mut(&sid) {
-        Some(m) => Ok(m.snapshot(&sid)),
-        None => Ok(PiInfo::default()),
+        match pool.sessions.get_mut(&sid) {
+            Some(m) => Ok(m.snapshot(&sid)),
+            None => Ok(PiInfo::default()),
+        }
     }
 }
 
@@ -1061,7 +1092,14 @@ pub async fn pi_start(
     provider_config: Option<PiProviderConfig>,
 ) -> Result<PiInfo, String> {
     let sid = session_id.unwrap_or_else(|| "chat".to_string());
-    pi_start_inner(app, &state, &sid, project_dir, user_token, provider_config).await
+    #[cfg(feature = "pi-embedded")]
+    {
+        return pi_sdk_chat::start(app, &sid, project_dir, user_token, provider_config).await;
+    }
+    #[cfg(not(feature = "pi-embedded"))]
+    {
+        pi_start_inner(app, &state, &sid, project_dir, user_token, provider_config).await
+    }
 }
 
 /// Kill orphan Pi RPC processes left over from a previous app crash.
@@ -1978,6 +2016,11 @@ pub async fn pi_prompt(
     display_preview: Option<String>,
 ) -> Result<String, String> {
     let sid = session_id.unwrap_or_else(|| "chat".to_string());
+    #[cfg(feature = "pi-embedded")]
+    {
+        let _ = &display_preview;
+        return pi_sdk_chat::prompt(&sid, message.clone(), images.clone()).await;
+    }
     let queue = {
         let mut pool = state.0.lock().await;
         let m = pool.sessions.get_mut(&sid).ok_or("Pi not initialized")?;
@@ -2018,6 +2061,11 @@ pub async fn pi_queue_prompt(
     display_preview: Option<String>,
 ) -> Result<String, String> {
     let sid = session_id.unwrap_or_else(|| "chat".to_string());
+    #[cfg(feature = "pi-embedded")]
+    {
+        let _ = &state;
+        return pi_sdk_chat::queue_prompt(&sid, message, images, display_preview).await;
+    }
     let queue = {
         let mut pool = state.0.lock().await;
         let m = pool.sessions.get_mut(&sid).ok_or("Pi not initialized")?;
@@ -2055,6 +2103,11 @@ pub async fn pi_steer(
     images: Option<Vec<PiImageContent>>,
 ) -> Result<(), String> {
     let sid = session_id.unwrap_or_else(|| "chat".to_string());
+    #[cfg(feature = "pi-embedded")]
+    {
+        let _ = &state;
+        return pi_sdk_chat::steer(&sid, message, images).await;
+    }
     let queue = {
         let mut pool = state.0.lock().await;
         let m = pool.sessions.get_mut(&sid).ok_or("Pi not initialized")?;
@@ -2091,6 +2144,11 @@ pub async fn pi_steer_queued(
     prompt_id: String,
 ) -> Result<bool, String> {
     let sid = session_id.unwrap_or_else(|| "chat".to_string());
+    #[cfg(feature = "pi-embedded")]
+    {
+        let _ = &state;
+        return pi_sdk_chat::steer_queued(&sid, prompt_id).await;
+    }
     let queue = {
         let mut pool = state.0.lock().await;
         let m = pool.sessions.get_mut(&sid).ok_or("Pi not initialized")?;
@@ -2122,6 +2180,11 @@ pub async fn pi_cancel_queued(
     prompt_id: String,
 ) -> Result<bool, String> {
     let sid = session_id.unwrap_or_else(|| "chat".to_string());
+    #[cfg(feature = "pi-embedded")]
+    {
+        let _ = &state;
+        return pi_sdk_chat::cancel_queued(&sid, prompt_id).await;
+    }
     let queue = {
         let pool = state.0.lock().await;
         let m = pool
@@ -2145,6 +2208,19 @@ pub async fn pi_pending(
     session_id: Option<String>,
 ) -> Result<Vec<crate::pi_command_queue::PiQueuedPrompt>, String> {
     let sid = session_id.unwrap_or_else(|| "chat".to_string());
+    #[cfg(feature = "pi-embedded")]
+    {
+        let _ = &state;
+        let queued = pi_sdk_chat::pending(&sid).await;
+        return Ok(queued
+            .into_iter()
+            .map(|q| crate::pi_command_queue::PiQueuedPrompt {
+                id: q.id,
+                preview: q.preview,
+                queued_at_ms: q.queued_at_ms,
+            })
+            .collect());
+    }
     let pool = state.0.lock().await;
     let m = match pool.sessions.get(&sid) {
         Some(m) => m,
@@ -2163,6 +2239,10 @@ pub async fn pi_pending(
 #[specta::specta]
 pub async fn pi_abort(state: State<'_, PiState>, session_id: Option<String>) -> Result<(), String> {
     let sid = session_id.unwrap_or_else(|| "chat".to_string());
+    #[cfg(feature = "pi-embedded")]
+    {
+        return pi_sdk_chat::abort(&sid).await;
+    }
     let queue = {
         let mut pool = state.0.lock().await;
         let m = pool.sessions.get_mut(&sid).ok_or("Pi not initialized")?;
@@ -2185,6 +2265,10 @@ pub async fn pi_abort_active(
     session_id: Option<String>,
 ) -> Result<(), String> {
     let sid = session_id.unwrap_or_else(|| "chat".to_string());
+    #[cfg(feature = "pi-embedded")]
+    {
+        return pi_sdk_chat::abort_active(&sid).await;
+    }
     let queue = {
         let mut pool = state.0.lock().await;
         let m = pool.sessions.get_mut(&sid).ok_or("Pi not initialized")?;
@@ -2209,6 +2293,10 @@ pub async fn pi_new_session(
     session_id: Option<String>,
 ) -> Result<(), String> {
     let sid = session_id.unwrap_or_else(|| "chat".to_string());
+    #[cfg(feature = "pi-embedded")]
+    {
+        return pi_sdk_chat::new_session(&sid).await;
+    }
     let queue = {
         let mut pool = state.0.lock().await;
         let m = pool.sessions.get_mut(&sid).ok_or("Pi not initialized")?;
@@ -2274,6 +2362,11 @@ pub async fn pi_set_model(
     provider_config: PiProviderConfig,
 ) -> Result<(), String> {
     let sid = session_id.unwrap_or_else(|| "chat".to_string());
+
+    #[cfg(feature = "pi-embedded")]
+    {
+        return pi_sdk_chat::set_model(&sid, provider_config.clone()).await;
+    }
 
     // Map frontend provider name → Pi's internal registry name. Must stay in
     // sync with the mapping in `pi_start_inner` (line ~1045) — a mismatch
@@ -3211,6 +3304,22 @@ mod tests {
         let models = openai["models"].as_array().unwrap();
         assert_eq!(models.len(), 1);
         assert_eq!(models[0]["id"], "gpt-4o");
+    }
+
+    #[tokio::test]
+    async fn test_build_models_json_chatgpt_uses_env_prefix() {
+        // Parity gap B2: the pi SDK only auto-resolves an apiKey value as an
+        // env-var reference when it ends with `_API_KEY`. OPENAI_CHATGPT_TOKEN
+        // does not, so it must carry an explicit `env:` prefix; otherwise the
+        // SDK uses the literal name as the bearer token (401/403).
+        let pc = make_provider_config("openai-chatgpt", "gpt-4o");
+        let config = build_models_json(None, Some(&pc)).await;
+        let providers = config["providers"].as_object().unwrap();
+        assert!(providers.contains_key("openai-chatgpt"));
+        assert_eq!(
+            providers["openai-chatgpt"]["apiKey"], "env:OPENAI_CHATGPT_TOKEN",
+            "chatgpt apiKey must use env: prefix so the SDK resolves the env var"
+        );
     }
 
     #[tokio::test]

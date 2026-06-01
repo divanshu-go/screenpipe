@@ -160,6 +160,9 @@ cuda = ["screenpipe-audio/cuda"]
 directml = ["screenpipe-audio/directml"]
 vulkan = ["screenpipe-audio/vulkan"]
 debug-console = ["console-subscriber"]
+# Run the pi agent in-process via the pi_agent_rust SDK instead of spawning the
+# bun/node pi subprocess. Passthrough to screenpipe-core's `pi-embedded`.
+pi-embedded = ["screenpipe-core/pi-embedded"]
 pulseaudio = ["screenpipe-audio/pulseaudio"]
 apple-intelligence = ["dep:screenpipe-apple-intelligence"]
 qwen3-asr = ["screenpipe-audio/qwen3-asr"]
