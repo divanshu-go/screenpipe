@@ -611,6 +611,18 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
     });
   }, [currentUrl]);
 
+  const clearBrowserData = useCallback(async () => {
+    try {
+      await commands.ownedBrowserClearBrowsingData();
+      if (currentUrl) {
+        setLoading(true);
+        await commands.ownedBrowserNavigate(currentUrl);
+      }
+    } catch (e) {
+      console.error("clear owned-browser browsing data failed", e);
+    }
+  }, [currentUrl]);
+
   const enableAndRetryWithCookies = useCallback(async () => {
     await setCookieAccessGranted(true);
     await commands.confirmBrowserCookieAccessForSession();
@@ -645,6 +657,13 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
                 void retryWithCookies();
               },
             },
+            {
+              id: "browser-clear-data",
+              text: "Clear browser data",
+              action: () => {
+                void clearBrowserData();
+              },
+            },
           ],
         });
         await menu.popup(
@@ -656,6 +675,7 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
       }
     },
     [
+      clearBrowserData,
       currentUrl,
       enableAndRetryWithCookies,
       retryWithCookies,
