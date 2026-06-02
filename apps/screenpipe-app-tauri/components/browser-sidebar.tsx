@@ -613,6 +613,9 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
 
   const clearBrowserData = useCallback(async () => {
     try {
+      // If browser login stays enabled, reload immediately re-injects cookies
+      // from the user's real browser, making clear look like a no-op.
+      await setCookieAccessGranted(false);
       await commands.ownedBrowserClearBrowsingData();
       if (currentUrl) {
         setLoading(true);
@@ -621,7 +624,7 @@ export function BrowserSidebar({ conversationId }: BrowserSidebarProps) {
     } catch (e) {
       console.error("clear owned-browser browsing data failed", e);
     }
-  }, [currentUrl]);
+  }, [currentUrl, setCookieAccessGranted]);
 
   const enableAndRetryWithCookies = useCallback(async () => {
     await setCookieAccessGranted(true);
