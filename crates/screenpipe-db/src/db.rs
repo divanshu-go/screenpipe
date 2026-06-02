@@ -8905,6 +8905,8 @@ LIMIT ? OFFSET ?
                   SELECT 1 FROM meeting_transcript_segments mts
                   WHERE mts.meeting_id = ?2
                     AND ABS(julianday(mts.captured_at) - julianday(audio_chunks.timestamp)) <= ?3
+                    AND instr(audio_chunks.file_path, mts.device_name) > 0
+                    AND instr(lower(audio_chunks.file_path), '(' || lower(mts.device_type) || ')') > 0
               )
             "#,
         )
