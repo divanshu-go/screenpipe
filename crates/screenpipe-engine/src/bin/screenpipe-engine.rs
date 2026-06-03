@@ -1065,6 +1065,19 @@ async fn main() -> anyhow::Result<()> {
         let h = runtime.spawn(async move {
             let mut shutdown_rx = shutdown_tx_clone2.subscribe();
 
+            // Signal whether the screen SCK stream should carry shared system audio.
+            // This must be set BEFORE vm_clone.start() so the screen stream is created
+            // with captures_audio=true at stream-creation time (static attach).
+            // Condition: audio recording enabled AND user has NOT toggled CoreAudio Process Tap.
+            // When PT is ON, the audio side handles its own capture — no audio on SCK stream.
+            // When PT is OFF (default), audio shares the screen stream.
+            #[cfg(target_os = "macos")]
+            screenpipe_core::sck_shared_audio::configure_startup_audio_intent(
+                config.disable_audio,
+                config.disable_vision,
+                config.experimental_coreaudio_system_audio,
+            );
+
             // Start VisionManager
             if let Err(e) = vm_clone.start().await {
                 error!("Failed to start VisionManager: {:?}", e);

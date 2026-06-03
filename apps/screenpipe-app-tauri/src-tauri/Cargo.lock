@@ -10847,7 +10847,7 @@ dependencies = [
 [[package]]
 name = "sck-rs"
 version = "0.1.0"
-source = "git+https://github.com/screenpipe/sck-rs?rev=b7f48a1236b2339350baa1375a805c7ce32f88df#b7f48a1236b2339350baa1375a805c7ce32f88df"
+source = "git+https://github.com/divanshu-go/sck-rs?branch=screenpipe%2Fsingle-sck-audio-stream#4e59a2791507ed6bd2794ade3e601a2814afce28"
 dependencies = [
  "cidre 0.15.1 (git+https://github.com/yury/cidre.git)",
  "image 0.25.10",

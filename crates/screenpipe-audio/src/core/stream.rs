@@ -68,6 +68,48 @@ impl From<&cpal::SupportedStreamConfig> for AudioStreamConfig {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn can_use_shared_sck_screen_audio(device: &AudioDevice) -> bool {
+    device.device_type == super::device::DeviceType::Output
+        && device.name == super::device::MACOS_OUTPUT_AUDIO_DEVICE_NAME
+        && screenpipe_core::sck_shared_audio::has_screen_stream_for_shared_audio()
+}
+
+#[cfg(target_os = "macos")]
+fn spawn_shared_sck_screen_audio_stream(
+    tx: broadcast::Sender<Vec<f32>>,
+    stream_control_rx: mpsc::Receiver<StreamControl>,
+    is_disconnected: Arc<AtomicBool>,
+) -> (AudioStreamConfig, tokio::task::JoinHandle<()>) {
+    let request = screenpipe_core::sck_shared_audio::request_audio();
+    let mut rx = screenpipe_core::sck_shared_audio::subscribe_audio();
+    let thread = tokio::task::spawn_blocking(move || {
+        let _request = request;
+        loop {
+            if let Ok(StreamControl::Stop { response, mode }) = stream_control_rx.try_recv() {
+                if let Some(delay) = mode.teardown_delay() {
+                    std::thread::sleep(delay);
+                }
+                is_disconnected.store(true, Ordering::Relaxed);
+                response.send(()).ok();
+                break;
+            }
+
+            match rx.blocking_recv() {
+                Ok(samples) => {
+                    let _ = tx.send(samples);
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                    tracing::warn!(skipped, "shared SCK screen audio receiver lagged");
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+
+    (AudioStreamConfig::new(48_000, 1), thread)
+}
+
 #[derive(Clone)]
 pub struct AudioStream {
     pub device: Arc<AudioDevice>,
@@ -118,12 +160,10 @@ impl StreamControl {
 impl AudioStream {
     /// Build an AudioStream for `device`.
     ///
-    /// `use_coreaudio_tap` is a user-level experimental flag. When true AND
-    /// the target is System Audio on macOS 14.4+, the stream is backed by a
-    /// CoreAudio Process Tap (no ScreenCaptureKit session). In every other
-    /// case (flag off, non-macOS, macOS <14.4, mic input, specific output)
-    /// the existing cpal/SCK path runs unchanged — existing users see no
-    /// behavior change.
+    /// `use_coreaudio_tap` is the "CoreAudio system audio capture" toggle (off by
+    /// default). When off, system audio shares the existing screen SCK stream or
+    /// falls back to an audio-only SCK stream. When on, CoreAudio Process Tap is
+    /// tried first on macOS 14.4+, falling back to the shared SCK path on failure.
     pub async fn from_device(
         device: Arc<AudioDevice>,
         is_running: Arc<AtomicBool>,
@@ -153,24 +193,15 @@ impl AudioStream {
 
         #[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
         let (audio_config, stream_thread) = {
-            // macOS 14.4+: try CoreAudio Process Tap for System Audio.
-            // Bypasses SCK display enumeration which fails after sleep/wake.
-            // Gated behind `use_coreaudio_tap` so the SCK path stays the
-            // default until the experimental flag is explicitly turned on.
             #[cfg(target_os = "macos")]
-            let use_process_tap = {
-                use super::device::{DeviceType, MACOS_OUTPUT_AUDIO_DEVICE_NAME};
-                use_coreaudio_tap
-                    && device.device_type == DeviceType::Output
-                    && device.name == MACOS_OUTPUT_AUDIO_DEVICE_NAME
-                    && super::process_tap::is_process_tap_available()
-            };
-            #[cfg(not(target_os = "macos"))]
-            let use_process_tap = false;
+            {
+                let is_system_audio = device.device_type == super::device::DeviceType::Output
+                    && device.name == super::device::MACOS_OUTPUT_AUDIO_DEVICE_NAME;
+                let prefer_process_tap = is_system_audio
+                    && use_coreaudio_tap
+                    && super::process_tap::is_process_tap_available();
 
-            if use_process_tap {
-                #[cfg(target_os = "macos")]
-                {
+                if prefer_process_tap {
                     match super::process_tap::spawn_process_tap_capture(
                         tx.clone(),
                         is_running.clone(),
@@ -178,30 +209,52 @@ impl AudioStream {
                     ) {
                         Ok((config, thread)) => {
                             drop(stream_control_rx);
-                            (config, thread)
+                            return Ok(AudioStream {
+                                device,
+                                device_config: config,
+                                transmitter: Arc::new(tx_clone),
+                                stream_control: stream_control_tx,
+                                stream_thread: Some(Arc::new(tokio::sync::Mutex::new(Some(
+                                    thread,
+                                )))),
+                                is_disconnected,
+                            });
                         }
                         Err(e) => {
-                            tracing::warn!("Process Tap failed, falling back to SCK: {}", e);
-                            Self::start_cpal_stream(
-                                &device,
-                                tx,
-                                stream_control_rx,
-                                &is_running,
-                                &is_disconnected,
-                                &stream_control_tx,
-                                windows_input_aec,
-                                macos_input_vpio,
-                            )
-                            .await?
+                            tracing::warn!("Process Tap failed: {}", e);
                         }
                     }
                 }
-                #[cfg(not(target_os = "macos"))]
-                {
-                    unreachable!()
+
+                if can_use_shared_sck_screen_audio(&device) {
+                    tracing::info!(
+                        device = %device,
+                        owner_display = ?screenpipe_core::sck_shared_audio::audio_owner_display_id(),
+                        "SCK_AUDIO_BACKEND backend=shared_screen_sck sck_stream=false"
+                    );
+                    spawn_shared_sck_screen_audio_stream(
+                        tx,
+                        stream_control_rx,
+                        is_disconnected.clone(),
+                    )
+                } else {
+                    let (config, thread) = Self::start_cpal_stream(
+                        &device,
+                        tx,
+                        stream_control_rx,
+                        &is_running,
+                        &is_disconnected,
+                        &stream_control_tx,
+                        windows_input_aec,
+                        macos_input_vpio,
+                    )
+                    .await?;
+                    (config, thread)
                 }
-            } else {
-                Self::start_cpal_stream(
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                let (config, thread) = Self::start_cpal_stream(
                     &device,
                     tx,
                     stream_control_rx,
@@ -211,7 +264,8 @@ impl AudioStream {
                     windows_input_aec,
                     macos_input_vpio,
                 )
-                .await?
+                .await?;
+                (config, thread)
             }
         };
 

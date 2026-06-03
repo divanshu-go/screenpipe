@@ -10,6 +10,8 @@ use once_cell::sync::Lazy;
 use std::fmt;
 #[cfg(target_os = "windows")]
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+#[cfg(target_os = "macos")]
+use std::sync::Once;
 use std::sync::{Arc, RwLock};
 use tracing;
 
@@ -83,6 +85,33 @@ pub fn set_sck_capture_max_width(max_width: u32) {
 #[cfg(target_os = "macos")]
 fn sck_capture_max_width() -> u32 {
     SCK_CAPTURE_MAX_WIDTH.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(target_os = "macos")]
+static SCK_SHARED_AUDIO_HOOKS: Once = Once::new();
+
+#[cfg(target_os = "macos")]
+fn ensure_sck_shared_audio_hooks() {
+    SCK_SHARED_AUDIO_HOOKS.call_once(|| {
+        sck_rs::configure_shared_audio_hooks(sck_rs::SharedAudioHooks {
+            is_requested: Some(Arc::new(
+                screenpipe_core::sck_shared_audio::is_audio_requested,
+            )),
+            try_acquire_owner: Some(Arc::new(|display_id| {
+                screenpipe_core::sck_shared_audio::try_acquire_audio_owner(display_id)
+                    .map(|owner| Box::new(owner) as Box<dyn std::any::Any + Send>)
+            })),
+            publish_mono: Some(Arc::new(
+                screenpipe_core::sck_shared_audio::publish_audio_mono,
+            )),
+            stream_started: Some(Arc::new(
+                screenpipe_core::sck_shared_audio::screen_stream_started,
+            )),
+            stream_stopped: Some(Arc::new(
+                screenpipe_core::sck_shared_audio::screen_stream_stopped,
+            )),
+        });
+    });
 }
 
 #[derive(Clone)]
@@ -252,6 +281,9 @@ impl SafeMonitor {
     pub async fn capture_image(&self) -> Result<DynamicImage> {
         let monitor_id = self.monitor_id;
         let use_sck = self.use_sck;
+        if use_sck {
+            ensure_sck_shared_audio_hooks();
+        }
         let cached_sck = self.cached_sck.clone();
         let cached_xcap = self.cached_xcap.clone();
 
@@ -344,6 +376,9 @@ impl SafeMonitor {
 
         let monitor_id = self.monitor_id;
         let use_sck = self.use_sck;
+        if use_sck {
+            ensure_sck_shared_audio_hooks();
+        }
         let cached_sck = self.cached_sck.clone();
         let ids = excluded_window_ids.to_vec();
 
@@ -805,6 +840,7 @@ pub async fn list_monitors_detailed() -> std::result::Result<Vec<SafeMonitor>, M
         tokio::task::spawn_blocking(|| {
             cidre::objc::ar_pool(|| {
                 if use_sck_rs() {
+                    ensure_sck_shared_audio_hooks();
                     tracing::debug!("Using sck-rs for screen capture (macOS 12.3+)");
                     match SckMonitor::all() {
                         Ok(monitors) if monitors.is_empty() => {
@@ -1084,6 +1120,7 @@ impl SafeMonitor {
     /// private windows never reach the recorder. Blocks briefly while the
     /// stream starts; call from a blocking context.
     pub fn start_hd_capture(&self, fps: u32, excluded_window_ids: &[u32]) -> Result<HdCapture> {
+        ensure_sck_shared_audio_hooks();
         let (width, height) = hd_scaled_dims(
             self.monitor_data.width,
             self.monitor_data.height,

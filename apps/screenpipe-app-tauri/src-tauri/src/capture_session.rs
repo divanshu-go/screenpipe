@@ -104,6 +104,17 @@ impl CaptureSession {
                 None
             };
 
+            // Signal whether the screen SCK stream should carry shared system audio.
+            // Must be set BEFORE vision_manager.start() so MonitorStream::new() sees it
+            // and creates the stream with capturesAudio=true + presenterOverlayPrivacyAlertSetting=Never
+            // at creation time (not via update_cfg, which cannot change presenterOverlay setting).
+            #[cfg(target_os = "macos")]
+            screenpipe_core::sck_shared_audio::configure_startup_audio_intent(
+                config.disable_audio,
+                config.disable_vision,
+                config.experimental_coreaudio_system_audio,
+            );
+
             // A failed initial start() (e.g. 0 monitors while screen is locked at boot)
             // is recoverable — the monitor watcher below retries on unlock/topology change.
             // Don't propagate the error; keep the session alive so the watcher can run.

@@ -7,6 +7,7 @@ pub mod memories;
 pub mod paths;
 pub mod permissions;
 pub mod pipes;
+pub mod sck_shared_audio;
 pub mod strings;
 pub mod window_pattern;
 // Thin ffmpeg encoder helpers — moved out of screenpipe-engine so that
