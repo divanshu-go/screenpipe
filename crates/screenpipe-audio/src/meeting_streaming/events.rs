@@ -178,12 +178,25 @@ pub struct MeetingTranscriptFinal {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MeetingStreamingRecoveryAction {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MeetingStreamingError {
     pub meeting_id: i64,
     pub provider: String,
     pub model: Option<String>,
     pub device_name: Option<String>,
     pub message: String,
+    #[serde(default)]
+    pub error_code: Option<String>,
+    #[serde(default)]
+    pub recording_continues: bool,
+    #[serde(default)]
+    pub recovery_actions: Vec<MeetingStreamingRecoveryAction>,
     pub occurred_at: DateTime<Utc>,
 }
 

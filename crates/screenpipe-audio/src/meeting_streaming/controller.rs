@@ -20,8 +20,9 @@ use super::{
     deepgram_live,
     events::{
         MeetingAudioFrame, MeetingAudioTap, MeetingLifecycleEvent, MeetingStreamingError,
-        MeetingStreamingSessionEnded, MeetingStreamingSessionStarted,
-        MeetingStreamingStatusChanged, MeetingTranscriptDelta, MeetingTranscriptFinal,
+        MeetingStreamingRecoveryAction, MeetingStreamingSessionEnded,
+        MeetingStreamingSessionStarted, MeetingStreamingStatusChanged, MeetingTranscriptDelta,
+        MeetingTranscriptFinal,
     },
     selected_engine, MeetingStreamingConfig, MeetingStreamingProvider,
 };
@@ -827,6 +828,15 @@ fn emit_error(
         provider: provider.to_string(),
         model,
         device_name,
+        error_code: Some("live_transcription_not_ready".to_string()),
+        recording_continues: true,
+        recovery_actions: vec![MeetingStreamingRecoveryAction {
+            id: "continue-recording-background-transcription".to_string(),
+            label: "continue recording".to_string(),
+            description:
+                "Keep mic/system audio recording; background transcription will catch up later."
+                    .to_string(),
+        }],
         message,
         occurred_at: Utc::now(),
     };
@@ -1049,6 +1059,9 @@ mod tests {
             model: None,
             device_name: Some("airpods".to_string()),
             message: "websocket failed".to_string(),
+            error_code: Some("upstream_unavailable".to_string()),
+            recording_continues: true,
+            recovery_actions: Vec::new(),
             occurred_at: Utc::now(),
         };
         note_live_transcription_error(&audio_tap, &mut session, &event);

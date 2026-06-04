@@ -16,7 +16,10 @@ use tracing::{debug, info, warn};
 use crate::{
     core::{device::DeviceType, engine::AudioTranscriptionEngine},
     meeting_streaming::{
-        events::{MeetingStreamingError, MeetingTranscriptDelta, MeetingTranscriptFinal},
+        events::{
+            MeetingStreamingError, MeetingStreamingRecoveryAction, MeetingTranscriptDelta,
+            MeetingTranscriptFinal,
+        },
         MeetingAudioFrame, MeetingStreamingConfig,
     },
     transcription::engine::{TranscriptionEngine, TranscriptionSession},
@@ -311,6 +314,15 @@ fn emit_error(
         provider: config.provider.as_str().to_string(),
         model: config.model.clone(),
         device_name,
+        error_code: Some("selected_engine_live_failed".to_string()),
+        recording_continues: true,
+        recovery_actions: vec![MeetingStreamingRecoveryAction {
+            id: "continue-recording-background-transcription".to_string(),
+            label: "continue recording".to_string(),
+            description:
+                "Keep mic/system audio recording; background transcription will catch up later."
+                    .to_string(),
+        }],
         message,
         occurred_at: Utc::now(),
     };

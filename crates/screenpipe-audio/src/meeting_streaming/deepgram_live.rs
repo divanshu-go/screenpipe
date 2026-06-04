@@ -31,7 +31,10 @@ use url::Url;
 use crate::{
     core::device::DeviceType,
     meeting_streaming::{
-        events::{MeetingStreamingError, MeetingTranscriptDelta, MeetingTranscriptFinal},
+        events::{
+            MeetingStreamingError, MeetingStreamingRecoveryAction, MeetingTranscriptDelta,
+            MeetingTranscriptFinal,
+        },
         net::connect_websocket_with_ipv4_fallback,
         MeetingAudioFrame, MeetingStreamingConfig, MeetingStreamingProvider,
     },
@@ -520,10 +523,76 @@ fn emit_error(
         provider: config.provider.as_str().to_string(),
         model: config.model.clone(),
         device_name,
+        error_code: Some(classify_live_error(config, &message).to_string()),
+        recording_continues: true,
+        recovery_actions: recovery_actions_for_provider(&config.provider),
         message,
         occurred_at: Utc::now(),
     };
     let _ = screenpipe_events::send_event("meeting_streaming_error", event);
+}
+
+fn classify_live_error(config: &MeetingStreamingConfig, message: &str) -> &'static str {
+    let lower = message.to_lowercase();
+    if lower.contains("rate limited") || lower.contains("429") {
+        return "upstream_rate_limited";
+    }
+    if lower.contains("not configured") || lower.contains("upstream_configured=false") {
+        return "realtime_not_configured";
+    }
+    if lower.contains("screenpipe cloud login") || lower.contains("login is required") {
+        return "cloud_login_required";
+    }
+    if lower.contains("readiness") || lower.contains("not ready") {
+        return "cloud_realtime_not_ready";
+    }
+    if lower.contains("websocket") || lower.contains("upstream unavailable") {
+        return "upstream_unavailable";
+    }
+    match config.provider {
+        MeetingStreamingProvider::ScreenpipeCloud => "cloud_realtime_failed",
+        MeetingStreamingProvider::DeepgramLive => "direct_deepgram_live_failed",
+        MeetingStreamingProvider::Disabled | MeetingStreamingProvider::SelectedEngine => {
+            "live_transcription_failed"
+        }
+    }
+}
+
+fn recovery_actions_for_provider(
+    provider: &MeetingStreamingProvider,
+) -> Vec<MeetingStreamingRecoveryAction> {
+    if !matches!(provider, MeetingStreamingProvider::ScreenpipeCloud) {
+        return vec![MeetingStreamingRecoveryAction {
+            id: "continue-recording-background-transcription".to_string(),
+            label: "continue recording".to_string(),
+            description:
+                "Keep mic/system audio recording; background transcription will catch up later."
+                    .to_string(),
+        }];
+    }
+
+    vec![
+        MeetingStreamingRecoveryAction {
+            id: "retry-screenpipe-cloud-live".to_string(),
+            label: "retry cloud live".to_string(),
+            description: "Retry ScreenPipe Cloud live transcription for this meeting.".to_string(),
+        },
+        MeetingStreamingRecoveryAction {
+            id: "continue-recording-cloud-batch-later".to_string(),
+            label: "record now, cloud batch later".to_string(),
+            description: "Keep recording separate mic/system tracks and let cloud batch transcription recover missing text later.".to_string(),
+        },
+        MeetingStreamingRecoveryAction {
+            id: "use-local-transcription".to_string(),
+            label: "use local transcription".to_string(),
+            description: "Switch this recovery path to local transcription only if you explicitly choose it.".to_string(),
+        },
+        MeetingStreamingRecoveryAction {
+            id: "use-direct-deepgram".to_string(),
+            label: "use direct Deepgram".to_string(),
+            description: "Use your own Deepgram key as a direct provider.".to_string(),
+        },
+    ]
 }
 
 fn device_type_label(device_type: &DeviceType) -> &'static str {

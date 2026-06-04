@@ -82,12 +82,21 @@ interface LiveStreamingStatus {
   error?: string | null;
 }
 
+interface LiveRecoveryAction {
+  id: string;
+  label: string;
+  description: string;
+}
+
 interface LiveStreamingError {
   meeting_id: number;
   provider: string;
   model?: string | null;
   device_name?: string | null;
   message: string;
+  error_code?: string | null;
+  recording_continues?: boolean;
+  recovery_actions?: LiveRecoveryAction[];
   occurred_at: string;
 }
 
@@ -222,7 +231,14 @@ function formatClock(ms: number): string {
   });
 }
 
-function liveErrorSummary(message: string | null): string {
+function liveErrorSummary(error: LiveStreamingError | string | null): string {
+  const message = typeof error === "string" ? error : error?.message;
+  const code = typeof error === "string" ? null : error?.error_code;
+  if (code === "upstream_rate_limited") return "cloud live transcription is rate limited";
+  if (code === "realtime_not_configured") return "cloud live transcription is not configured";
+  if (code === "cloud_login_required") return "cloud login required";
+  if (code === "cloud_realtime_not_ready") return "cloud live transcription is not ready";
+  if (code === "upstream_unavailable") return "cloud live transcription is unavailable";
   const lower = (message ?? "").toLowerCase();
   if (
     lower.includes("lookup address") ||
@@ -265,7 +281,7 @@ export function TranscriptPanel({
   const [liveStatus, setLiveStatus] = useState<LiveStreamingStatus | null>(
     null,
   );
-  const [liveError, setLiveError] = useState<string | null>(null);
+  const [liveError, setLiveError] = useState<LiveStreamingError | null>(null);
   const [isFollowingLive, setIsFollowingLive] = useState(true);
   const [hasUnseenLive, setHasUnseenLive] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -397,7 +413,18 @@ export function TranscriptPanel({
           return;
         }
         setLiveStatus(event.payload);
-        setLiveError(event.payload.error ?? null);
+        setLiveError(
+          event.payload.error
+            ? {
+                meeting_id: Number(event.payload.meeting_id ?? meeting.id),
+                provider: event.payload.provider,
+                message: event.payload.error,
+                recording_continues: true,
+                recovery_actions: [],
+                occurred_at: new Date().toISOString(),
+              }
+            : null,
+        );
       },
     );
 
@@ -406,7 +433,7 @@ export function TranscriptPanel({
       (event) => {
         if (cancelled || Number(event.payload.meeting_id) !== meeting.id)
           return;
-        setLiveError(event.payload.message);
+        setLiveError(event.payload);
       },
     );
 
@@ -599,8 +626,13 @@ export function TranscriptPanel({
   const showRecoveryBanner =
     isLive &&
     Boolean(liveError || (pendingTranscriptSegments > 0 && liveStatus?.active));
+  const liveRecoveryActions = liveError?.recovery_actions ?? [];
   const recoveryMessage = liveError
-    ? `${liveErrorSummary(liveError)}. Still recording; background transcription will recover missing audio.`
+    ? `${liveErrorSummary(liveError)}. ${
+        liveError.recording_continues === false
+          ? "Check recording status."
+          : "Still recording mic/system audio separately; background transcription can recover missing text."
+      }`
     : `Still recording; ${pendingTranscriptSegments} audio segment${
         pendingTranscriptSegments === 1 ? "" : "s"
       } waiting for background transcription.`;
@@ -696,7 +728,14 @@ export function TranscriptPanel({
         {showRecoveryBanner && (
           <div className="flex items-start gap-2 border-b border-amber-500/20 bg-amber-500/10 px-4 py-2 text-xs text-amber-900 dark:text-amber-200">
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-            <span className="leading-5">{recoveryMessage}</span>
+            <div className="min-w-0 space-y-1 leading-5">
+              <p>{recoveryMessage}</p>
+              {liveRecoveryActions.length > 0 && (
+                <p className="text-[11px] text-amber-900/80 dark:text-amber-200/80">
+                  options, in order: {liveRecoveryActions.map((action) => action.label).join(" → ")}
+                </p>
+              )}
+            </div>
           </div>
         )}
 
