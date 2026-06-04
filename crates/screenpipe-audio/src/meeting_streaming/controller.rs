@@ -23,7 +23,8 @@ use super::{
         MeetingStreamingContinueBatchRequested, MeetingStreamingError,
         MeetingStreamingRecoveryAction, MeetingStreamingRetryRequested,
         MeetingStreamingSessionEnded, MeetingStreamingSessionStarted,
-        MeetingStreamingStatusChanged, MeetingTranscriptDelta, MeetingTranscriptFinal,
+        MeetingStreamingStatusChanged, MeetingStreamingUseLocalRequested, MeetingTranscriptDelta,
+        MeetingTranscriptFinal,
     },
     selected_engine, MeetingStreamingConfig, MeetingStreamingProvider,
 };
@@ -109,6 +110,9 @@ pub fn start_meeting_streaming_loop(
         let mut continue_batch_sub = screenpipe_events::subscribe_to_event::<
             MeetingStreamingContinueBatchRequested,
         >("meeting_streaming_continue_batch_requested");
+        let mut use_local_sub = screenpipe_events::subscribe_to_event::<
+            MeetingStreamingUseLocalRequested,
+        >("meeting_streaming_use_local_requested");
         let mut inactivity_tick = tokio::time::interval(LIVE_INACTIVITY_CHECK_INTERVAL);
         let mut active: Option<ActiveMeetingStream> = None;
 
@@ -231,6 +235,11 @@ pub fn start_meeting_streaming_loop(
                 Some(event) = continue_batch_sub.next() => {
                     if let Some(session) = active.as_mut() {
                         continue_recording_cloud_batch_later(&audio_tap, session, &event.data);
+                    }
+                }
+                Some(event) = use_local_sub.next() => {
+                    if let Some(session) = active.as_mut() {
+                        use_local_live_transcription(&audio_tap, &transcription_engine, session, &event.data).await;
                     }
                 }
                 frame = audio_rx.recv() => {
@@ -720,6 +729,74 @@ fn continue_recording_cloud_batch_later(
     );
 }
 
+async fn use_local_live_transcription(
+    audio_tap: &MeetingAudioTap,
+    transcription_engine: &Arc<RwLock<Option<TranscriptionEngine>>>,
+    session: &mut ActiveMeetingStream,
+    event: &MeetingStreamingUseLocalRequested,
+) {
+    if session.meeting_id != event.meeting_id {
+        return;
+    }
+
+    let engine = transcription_engine
+        .read()
+        .await
+        .as_ref()
+        .map(TranscriptionEngine::config);
+    if !engine.is_some_and(is_local_live_engine) {
+        emit_status(
+            true,
+            Some(session.meeting_id),
+            &session.provider,
+            false,
+            Some("local live transcription is unavailable; choose a local transcription engine first".to_string()),
+        );
+        return;
+    }
+
+    session.config = session
+        .config
+        .clone()
+        .with_provider(MeetingStreamingProvider::SelectedEngine);
+    session.provider = session.config.provider.as_str().to_string();
+    session.device_senders.clear();
+    session.device_retry_after.clear();
+    session.live_transcription_enabled = true;
+    session.live_transcript_seen = false;
+    session.last_live_transcript_at = None;
+    session.notified_transcript_stall = false;
+    audio_tap.set_active(true);
+    audio_tap.set_background_suppressed(false);
+    info!(
+        "meeting streaming: switching meeting to explicit local live transcription (meeting_id={}, reason={})",
+        session.meeting_id,
+        event.reason.as_deref().unwrap_or("manual")
+    );
+    emit_status(
+        true,
+        Some(session.meeting_id),
+        &session.provider,
+        true,
+        None,
+    );
+}
+
+fn is_local_live_engine(engine: AudioTranscriptionEngine) -> bool {
+    matches!(
+        engine,
+        AudioTranscriptionEngine::WhisperTiny
+            | AudioTranscriptionEngine::WhisperTinyQuantized
+            | AudioTranscriptionEngine::WhisperLargeV3Turbo
+            | AudioTranscriptionEngine::WhisperLargeV3TurboQuantized
+            | AudioTranscriptionEngine::WhisperLargeV3
+            | AudioTranscriptionEngine::WhisperLargeV3Quantized
+            | AudioTranscriptionEngine::Parakeet
+            | AudioTranscriptionEngine::ParakeetMlx
+            | AudioTranscriptionEngine::Qwen3Asr
+    )
+}
+
 fn device_stream_key(frame: &MeetingAudioFrame) -> String {
     let device_type = match &frame.device_type {
         crate::core::device::DeviceType::Input => "input",
@@ -1176,6 +1253,54 @@ mod tests {
         assert!(session.device_senders.is_empty());
         assert!(session.device_retry_after.is_empty());
         assert!(!session.notified_transcript_stall);
+    }
+
+    #[test]
+    fn local_live_engine_detection_excludes_cloud_and_direct_api_engines() {
+        assert!(is_local_live_engine(
+            AudioTranscriptionEngine::WhisperLargeV3Turbo
+        ));
+        assert!(is_local_live_engine(AudioTranscriptionEngine::Parakeet));
+        assert!(is_local_live_engine(AudioTranscriptionEngine::Qwen3Asr));
+        assert!(!is_local_live_engine(AudioTranscriptionEngine::Deepgram));
+        assert!(!is_local_live_engine(
+            AudioTranscriptionEngine::OpenAICompatible
+        ));
+        assert!(!is_local_live_engine(AudioTranscriptionEngine::Disabled));
+    }
+
+    #[tokio::test]
+    async fn use_local_transcription_does_not_switch_without_local_engine() {
+        let audio_tap = test_audio_tap();
+        let now = Instant::now();
+        let mut session = test_session(now, true);
+        session.config = MeetingStreamingConfig::from_settings(
+            true,
+            "screenpipe-cloud",
+            Some("cloud-token".to_string()),
+            None,
+            None,
+            None,
+        );
+        session.provider = "screenpipe-cloud".to_string();
+        let engine = Arc::new(RwLock::new(None));
+
+        use_local_live_transcription(
+            &audio_tap,
+            &engine,
+            &mut session,
+            &MeetingStreamingUseLocalRequested {
+                meeting_id: 42,
+                reason: Some("test".to_string()),
+            },
+        )
+        .await;
+
+        assert_eq!(session.provider, "screenpipe-cloud");
+        assert_eq!(
+            session.config.provider,
+            MeetingStreamingProvider::ScreenpipeCloud
+        );
     }
 
     #[tokio::test]

@@ -3387,3 +3387,19 @@ pub fn continue_meeting_recording_cloud_batch_later(meeting_id: i64) -> Result<(
     )
     .map_err(|err| err.to_string())
 }
+
+#[tauri::command]
+#[specta::specta]
+pub fn use_meeting_local_transcription(meeting_id: i64) -> Result<(), String> {
+    if meeting_id <= 0 {
+        return Err("meeting_id must be positive".to_string());
+    }
+    screenpipe_events::send_event(
+        "meeting_streaming_use_local_requested",
+        serde_json::json!({
+            "meeting_id": meeting_id,
+            "reason": "user_use_local_transcription",
+        }),
+    )
+    .map_err(|err| err.to_string())
+}

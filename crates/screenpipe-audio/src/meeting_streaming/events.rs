@@ -214,6 +214,13 @@ pub struct MeetingStreamingContinueBatchRequested {
     pub reason: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MeetingStreamingUseLocalRequested {
+    pub meeting_id: i64,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct MeetingStreamingStatusChanged {
     pub active: bool,

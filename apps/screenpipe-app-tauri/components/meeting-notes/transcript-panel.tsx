@@ -286,6 +286,7 @@ export function TranscriptPanel({
   const [liveError, setLiveError] = useState<LiveStreamingError | null>(null);
   const [retryingLive, setRetryingLive] = useState(false);
   const [continuingBatchLater, setContinuingBatchLater] = useState(false);
+  const [usingLocalTranscription, setUsingLocalTranscription] = useState(false);
   const [isFollowingLive, setIsFollowingLive] = useState(true);
   const [hasUnseenLive, setHasUnseenLive] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -321,6 +322,7 @@ export function TranscriptPanel({
     setLiveError(null);
     setRetryingLive(false);
     setContinuingBatchLater(false);
+    setUsingLocalTranscription(false);
   }, [meeting.id]);
 
   useEffect(() => {
@@ -622,6 +624,25 @@ export function TranscriptPanel({
     }
   }, [continuingBatchLater, liveStatus?.provider, meeting.id, setLiveActionError]);
 
+  const handleUseLocalTranscription = useCallback(async () => {
+    if (usingLocalTranscription) return;
+    setUsingLocalTranscription(true);
+    try {
+      const result = await commands.useMeetingLocalTranscription(meeting.id);
+      if (result.status === "error") {
+        setLiveActionError(
+          result.error || "could not switch to local transcription",
+          "use_local_transcription_failed",
+        );
+        return;
+      }
+      setLiveError(null);
+      setLiveStatus((prev) => prev ? { ...prev, provider: "selected-engine", active: true, live_transcription_enabled: true, error: null } : prev);
+    } finally {
+      setUsingLocalTranscription(false);
+    }
+  }, [meeting.id, setLiveActionError, usingLocalTranscription]);
+
   useEffect(() => {
     if (!isOpen) return;
     setIsFollowingLive(true);
@@ -701,6 +722,9 @@ export function TranscriptPanel({
   );
   const canContinueBatchLater = liveRecoveryActions.some(
     (action) => action.id === "continue-recording-cloud-batch-later",
+  );
+  const canUseLocalTranscription = liveRecoveryActions.some(
+    (action) => action.id === "use-local-transcription",
   );
   const recoveryMessage = liveError
     ? `${liveErrorSummary(liveError)}. ${
@@ -815,7 +839,7 @@ export function TranscriptPanel({
                       variant="outline"
                       size="sm"
                       onClick={() => void handleRetryLiveTranscription()}
-                      disabled={retryingLive || continuingBatchLater}
+                      disabled={retryingLive || continuingBatchLater || usingLocalTranscription}
                       className="h-6 rounded-none border-amber-700/30 bg-background/70 px-2 text-[11px] text-amber-950 hover:bg-background dark:text-amber-100"
                     >
                       {retryingLive && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
@@ -827,11 +851,23 @@ export function TranscriptPanel({
                       variant="outline"
                       size="sm"
                       onClick={() => void handleContinueBatchLater()}
-                      disabled={retryingLive || continuingBatchLater}
+                      disabled={retryingLive || continuingBatchLater || usingLocalTranscription}
                       className="h-6 rounded-none border-amber-700/30 bg-background/70 px-2 text-[11px] text-amber-950 hover:bg-background dark:text-amber-100"
                     >
                       {continuingBatchLater && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
                       record now, cloud batch later
+                    </Button>
+                  )}
+                  {canUseLocalTranscription && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void handleUseLocalTranscription()}
+                      disabled={retryingLive || continuingBatchLater || usingLocalTranscription}
+                      className="h-6 rounded-none border-amber-700/30 bg-background/70 px-2 text-[11px] text-amber-950 hover:bg-background dark:text-amber-100"
+                    >
+                      {usingLocalTranscription && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
+                      use local transcription
                     </Button>
                   )}
                 </div>
