@@ -11,7 +11,7 @@ import { trackUsage, getUsageStatus, isModelAllowed, getTierConfig, getCreditBal
 import { handleChatCompletions } from './handlers/chat';
 import { handleModelListing } from './handlers/models';
 import { handleFileTranscription, handleABTestAdmin } from './handlers/transcription';
-import { handleRealtimeTranscriptionUpgrade } from './handlers/realtime-transcription';
+import { handleRealtimeTranscriptionStatus, handleRealtimeTranscriptionUpgrade } from './handlers/realtime-transcription';
 import { handleVoiceTranscription, handleVoiceQuery, handleTextToSpeech, handleVoiceChat } from './handlers/voice';
 import { handleVertexProxy, handleVertexModels } from './handlers/vertex-proxy';
 import { handleWebSearch } from './handlers/web-search';
@@ -308,6 +308,10 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
 			}
 
 			return response;
+		}
+
+		if (path === '/v1/realtime/status' && request.method === 'GET') {
+			return handleRealtimeTranscriptionStatus(env);
 		}
 
 		if (path === '/v1/realtime' && request.method === 'GET') {
