@@ -10,6 +10,7 @@ use std::sync::{
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use futures::{SinkExt, StreamExt};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::{
     sync::mpsc,
@@ -39,6 +40,7 @@ use crate::{
 
 const DEEPGRAM_PCM_SAMPLE_RATE: u32 = 16_000;
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(8);
+const SCREENPIPE_CLOUD_REALTIME_STATUS_TIMEOUT: Duration = Duration::from_secs(4);
 
 pub fn spawn_deepgram_live_stream(
     config: MeetingStreamingConfig,
@@ -103,6 +105,10 @@ async fn run_stream(
             )
         }
     };
+
+    if matches!(config.provider, MeetingStreamingProvider::ScreenpipeCloud) {
+        ensure_screenpipe_cloud_realtime_ready(&config, credential).await?;
+    }
 
     let mut url = Url::parse(&config.endpoint).context("invalid Deepgram live websocket URL")?;
     configure_live_query(&mut url, &config);
@@ -237,6 +243,90 @@ fn auth_header(provider: &MeetingStreamingProvider, credential: &str) -> String 
             String::new()
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct ScreenpipeCloudRealtimeStatus {
+    status: String,
+    upstream_configured: bool,
+}
+
+async fn ensure_screenpipe_cloud_realtime_ready(
+    config: &MeetingStreamingConfig,
+    credential: &str,
+) -> Result<()> {
+    let status_url = screenpipe_cloud_realtime_status_url(&config.endpoint)?;
+    let response = reqwest::Client::builder()
+        .timeout(SCREENPIPE_CLOUD_REALTIME_STATUS_TIMEOUT)
+        .build()
+        .context("failed to create ScreenPipe Cloud realtime readiness client")?
+        .get(status_url.clone())
+        .header(
+            AUTHORIZATION.as_str(),
+            auth_header(&config.provider, credential),
+        )
+        .header(
+            USER_AGENT.as_str(),
+            "screenpipe-meeting-streaming-readiness",
+        )
+        .send()
+        .await
+        .with_context(|| {
+            format!("failed to check ScreenPipe Cloud realtime readiness at {status_url}")
+        })?;
+
+    let status = response.status();
+    if status.as_u16() == 404 || status.as_u16() == 405 {
+        warn!(
+            "meeting streaming: ScreenPipe Cloud realtime status endpoint unavailable ({}); continuing with websocket upgrade",
+            status
+        );
+        return Ok(());
+    }
+
+    let body = response
+        .text()
+        .await
+        .context("failed to read ScreenPipe Cloud realtime readiness response")?;
+
+    if !status.is_success() {
+        anyhow::bail!(
+            "ScreenPipe Cloud realtime transcription readiness check failed ({}): {}",
+            status,
+            body.chars().take(500).collect::<String>()
+        );
+    }
+
+    let readiness: ScreenpipeCloudRealtimeStatus = serde_json::from_str(&body)
+        .context("failed to parse ScreenPipe Cloud realtime readiness response")?;
+    if readiness.status != "ready" || !readiness.upstream_configured {
+        anyhow::bail!(
+            "ScreenPipe Cloud realtime transcription is not ready (status={}, upstream_configured={})",
+            readiness.status,
+            readiness.upstream_configured
+        );
+    }
+
+    Ok(())
+}
+
+fn screenpipe_cloud_realtime_status_url(endpoint: &str) -> Result<Url> {
+    let mut url =
+        Url::parse(endpoint).context("invalid ScreenPipe Cloud realtime websocket URL")?;
+    match url.scheme() {
+        "wss" => url
+            .set_scheme("https")
+            .map_err(|_| anyhow::anyhow!("invalid ScreenPipe Cloud realtime websocket scheme"))?,
+        "ws" => url
+            .set_scheme("http")
+            .map_err(|_| anyhow::anyhow!("invalid ScreenPipe Cloud realtime websocket scheme"))?,
+        "https" | "http" => {}
+        scheme => anyhow::bail!("unsupported ScreenPipe Cloud realtime scheme: {scheme}"),
+    }
+    url.set_path("/v1/realtime/status");
+    url.set_query(None);
+    url.set_fragment(None);
+    Ok(url)
 }
 
 fn encode_frame(frame: &MeetingAudioFrame) -> Result<Vec<u8>> {
@@ -474,6 +564,31 @@ mod tests {
     fn blank_language_uses_multilingual_streaming() {
         let q = live_query(Some("   "));
         assert!(q.contains("language=multi"), "got: {q}");
+    }
+
+    #[test]
+    fn screenpipe_cloud_status_url_uses_http_readiness_endpoint() {
+        let url = screenpipe_cloud_realtime_status_url(
+            "wss://api.screenpipe.com/v1/realtime?model=nova-3",
+        )
+        .unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://api.screenpipe.com/v1/realtime/status"
+        );
+    }
+
+    #[test]
+    fn screenpipe_cloud_status_url_accepts_local_http_endpoint() {
+        let url = screenpipe_cloud_realtime_status_url("ws://localhost:8787/v1/realtime").unwrap();
+        assert_eq!(url.as_str(), "http://localhost:8787/v1/realtime/status");
+    }
+
+    #[test]
+    fn screenpipe_cloud_status_url_rejects_unsupported_scheme() {
+        assert!(
+            screenpipe_cloud_realtime_status_url("ftp://api.screenpipe.com/v1/realtime").is_err()
+        );
     }
 
     #[test]
