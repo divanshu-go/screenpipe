@@ -242,6 +242,14 @@ async confirmBrowserCookieAccessForSession() : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async continueMeetingRecordingCloudBatchLater(meetingId: number) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("continue_meeting_recording_cloud_batch_later", { meetingId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Copy a frame deeplink (screenpipe://frame/N) to clipboard. Native API only.
  */

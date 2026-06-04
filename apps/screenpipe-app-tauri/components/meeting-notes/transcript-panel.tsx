@@ -240,6 +240,7 @@ function liveErrorSummary(error: LiveStreamingError | string | null): string {
   if (code === "cloud_login_required") return "cloud login required";
   if (code === "cloud_realtime_not_ready") return "cloud live transcription is not ready";
   if (code === "upstream_unavailable") return "cloud live transcription is unavailable";
+  if (code === "cloud_batch_later_selected") return "live transcription paused";
   const lower = (message ?? "").toLowerCase();
   if (
     lower.includes("lookup address") ||
@@ -284,6 +285,7 @@ export function TranscriptPanel({
   );
   const [liveError, setLiveError] = useState<LiveStreamingError | null>(null);
   const [retryingLive, setRetryingLive] = useState(false);
+  const [continuingBatchLater, setContinuingBatchLater] = useState(false);
   const [isFollowingLive, setIsFollowingLive] = useState(true);
   const [hasUnseenLive, setHasUnseenLive] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -318,6 +320,7 @@ export function TranscriptPanel({
     setLiveStatus(null);
     setLiveError(null);
     setRetryingLive(false);
+    setContinuingBatchLater(false);
   }, [meeting.id]);
 
   useEffect(() => {
@@ -556,31 +559,68 @@ export function TranscriptPanel({
     if (following) setHasUnseenLive(false);
   }, [isLive, query]);
 
+  const setLiveActionError = useCallback(
+    (message: string, code: string) => {
+      setLiveError((prev) => ({
+        meeting_id: meeting.id,
+        provider: prev?.provider ?? liveStatus?.provider ?? "screenpipe-cloud",
+        model: prev?.model,
+        device_name: prev?.device_name,
+        message,
+        error_code: code,
+        recording_continues: true,
+        recovery_actions: prev?.recovery_actions ?? [],
+        occurred_at: new Date().toISOString(),
+      }));
+    },
+    [liveStatus?.provider, meeting.id],
+  );
+
   const handleRetryLiveTranscription = useCallback(async () => {
     if (retryingLive) return;
     setRetryingLive(true);
     try {
       const result = await commands.retryMeetingLiveTranscription(meeting.id);
       if (result.status === "error") {
-        setLiveError((prev) => ({
-          meeting_id: meeting.id,
-          provider: prev?.provider ?? liveStatus?.provider ?? "screenpipe-cloud",
-          model: prev?.model,
-          device_name: prev?.device_name,
-          message: result.error || "could not retry live transcription",
-          error_code: "retry_live_transcription_failed",
-          recording_continues: true,
-          recovery_actions: prev?.recovery_actions ?? [],
-          occurred_at: new Date().toISOString(),
-        }));
+        setLiveActionError(
+          result.error || "could not retry live transcription",
+          "retry_live_transcription_failed",
+        );
         return;
       }
       setLiveError(null);
-      setLiveStatus((prev) => prev ? { ...prev, active: true, error: null } : prev);
+      setLiveStatus((prev) => prev ? { ...prev, active: true, live_transcription_enabled: true, error: null } : prev);
     } finally {
       setRetryingLive(false);
     }
-  }, [liveStatus?.provider, meeting.id, retryingLive]);
+  }, [meeting.id, retryingLive, setLiveActionError]);
+
+  const handleContinueBatchLater = useCallback(async () => {
+    if (continuingBatchLater) return;
+    setContinuingBatchLater(true);
+    try {
+      const result = await commands.continueMeetingRecordingCloudBatchLater(meeting.id);
+      if (result.status === "error") {
+        setLiveActionError(
+          result.error || "could not pause live transcription",
+          "continue_batch_later_failed",
+        );
+        return;
+      }
+      setLiveStatus((prev) => prev ? { ...prev, active: true, live_transcription_enabled: false, error: null } : prev);
+      setLiveError({
+        meeting_id: meeting.id,
+        provider: liveStatus?.provider ?? "screenpipe-cloud",
+        message: "live transcription paused; recording continues for cloud batch recovery",
+        error_code: "cloud_batch_later_selected",
+        recording_continues: true,
+        recovery_actions: [],
+        occurred_at: new Date().toISOString(),
+      });
+    } finally {
+      setContinuingBatchLater(false);
+    }
+  }, [continuingBatchLater, liveStatus?.provider, meeting.id, setLiveActionError]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -658,6 +698,9 @@ export function TranscriptPanel({
   const liveRecoveryActions = liveError?.recovery_actions ?? [];
   const canRetryLive = liveRecoveryActions.some(
     (action) => action.id === "retry-screenpipe-cloud-live",
+  );
+  const canContinueBatchLater = liveRecoveryActions.some(
+    (action) => action.id === "continue-recording-cloud-batch-later",
   );
   const recoveryMessage = liveError
     ? `${liveErrorSummary(liveError)}. ${
@@ -772,11 +815,23 @@ export function TranscriptPanel({
                       variant="outline"
                       size="sm"
                       onClick={() => void handleRetryLiveTranscription()}
-                      disabled={retryingLive}
+                      disabled={retryingLive || continuingBatchLater}
                       className="h-6 rounded-none border-amber-700/30 bg-background/70 px-2 text-[11px] text-amber-950 hover:bg-background dark:text-amber-100"
                     >
                       {retryingLive && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
                       retry cloud live
+                    </Button>
+                  )}
+                  {canContinueBatchLater && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void handleContinueBatchLater()}
+                      disabled={retryingLive || continuingBatchLater}
+                      className="h-6 rounded-none border-amber-700/30 bg-background/70 px-2 text-[11px] text-amber-950 hover:bg-background dark:text-amber-100"
+                    >
+                      {continuingBatchLater && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
+                      record now, cloud batch later
                     </Button>
                   )}
                 </div>

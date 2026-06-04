@@ -19,7 +19,8 @@ use crate::{core::engine::AudioTranscriptionEngine, transcription::engine::Trans
 use super::{
     deepgram_live,
     events::{
-        MeetingAudioFrame, MeetingAudioTap, MeetingLifecycleEvent, MeetingStreamingError,
+        MeetingAudioFrame, MeetingAudioTap, MeetingLifecycleEvent,
+        MeetingStreamingContinueBatchRequested, MeetingStreamingError,
         MeetingStreamingRecoveryAction, MeetingStreamingRetryRequested,
         MeetingStreamingSessionEnded, MeetingStreamingSessionStarted,
         MeetingStreamingStatusChanged, MeetingTranscriptDelta, MeetingTranscriptFinal,
@@ -105,6 +106,9 @@ pub fn start_meeting_streaming_loop(
         let mut retry_sub = screenpipe_events::subscribe_to_event::<MeetingStreamingRetryRequested>(
             "meeting_streaming_retry_requested",
         );
+        let mut continue_batch_sub = screenpipe_events::subscribe_to_event::<
+            MeetingStreamingContinueBatchRequested,
+        >("meeting_streaming_continue_batch_requested");
         let mut inactivity_tick = tokio::time::interval(LIVE_INACTIVITY_CHECK_INTERVAL);
         let mut active: Option<ActiveMeetingStream> = None;
 
@@ -222,6 +226,11 @@ pub fn start_meeting_streaming_loop(
                 Some(event) = retry_sub.next() => {
                     if let Some(session) = active.as_mut() {
                         retry_live_transcription(&audio_tap, session, &event.data);
+                    }
+                }
+                Some(event) = continue_batch_sub.next() => {
+                    if let Some(session) = active.as_mut() {
+                        continue_recording_cloud_batch_later(&audio_tap, session, &event.data);
                     }
                 }
                 frame = audio_rx.recv() => {
@@ -676,6 +685,38 @@ fn retry_live_transcription(
         &session.provider,
         true,
         None,
+    );
+}
+
+fn continue_recording_cloud_batch_later(
+    audio_tap: &MeetingAudioTap,
+    session: &mut ActiveMeetingStream,
+    event: &MeetingStreamingContinueBatchRequested,
+) {
+    if session.meeting_id != event.meeting_id {
+        return;
+    }
+
+    session.device_senders.clear();
+    session.device_retry_after.clear();
+    session.live_transcription_enabled = false;
+    session.live_transcript_seen = false;
+    session.last_live_transcript_at = None;
+    session.notified_transcript_stall = false;
+    audio_tap.set_active(false);
+    audio_tap.set_background_suppressed(false);
+    info!(
+        "meeting streaming: continuing recording for cloud batch recovery later (meeting_id={}, provider={}, reason={})",
+        session.meeting_id,
+        session.provider,
+        event.reason.as_deref().unwrap_or("manual")
+    );
+    emit_status(
+        true,
+        Some(session.meeting_id),
+        &session.provider,
+        false,
+        Some("live transcription paused; recording continues for cloud batch recovery".to_string()),
     );
 }
 
@@ -1134,6 +1175,42 @@ mod tests {
         assert!(!audio_tap.background_suppressed());
         assert!(session.device_senders.is_empty());
         assert!(session.device_retry_after.is_empty());
+        assert!(!session.notified_transcript_stall);
+    }
+
+    #[tokio::test]
+    async fn continue_batch_later_stops_only_live_provider() {
+        let audio_tap = test_audio_tap();
+        audio_tap.set_active(true);
+        audio_tap.set_background_suppressed(true);
+        let now = Instant::now();
+        let mut session = test_session(now, true);
+        session.provider = "screenpipe-cloud".to_string();
+        session.notified_transcript_stall = true;
+        session.live_transcript_seen = true;
+        session.last_live_transcript_at = Some(now);
+        session
+            .device_retry_after
+            .insert("mic::input".to_string(), now);
+        let (tx, _rx) = mpsc::channel(1);
+        session.device_senders.insert("mic::input".to_string(), tx);
+
+        continue_recording_cloud_batch_later(
+            &audio_tap,
+            &mut session,
+            &MeetingStreamingContinueBatchRequested {
+                meeting_id: 42,
+                reason: Some("test".to_string()),
+            },
+        );
+
+        assert!(!session.live_transcription_enabled);
+        assert!(!audio_tap.is_active());
+        assert!(!audio_tap.background_suppressed());
+        assert!(session.device_senders.is_empty());
+        assert!(session.device_retry_after.is_empty());
+        assert!(!session.live_transcript_seen);
+        assert!(session.last_live_transcript_at.is_none());
         assert!(!session.notified_transcript_stall);
     }
 
