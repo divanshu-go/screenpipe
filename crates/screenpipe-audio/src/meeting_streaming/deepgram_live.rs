@@ -40,7 +40,7 @@ use crate::{
 
 const DEEPGRAM_PCM_SAMPLE_RATE: u32 = 16_000;
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(8);
-const SCREENPIPE_CLOUD_REALTIME_STATUS_TIMEOUT: Duration = Duration::from_secs(4);
+const SCREENPIPE_CLOUD_REALTIME_STATUS_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub fn spawn_deepgram_live_stream(
     config: MeetingStreamingConfig,
