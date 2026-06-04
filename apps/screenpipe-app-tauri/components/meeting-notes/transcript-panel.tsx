@@ -25,6 +25,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { SpeakerAssignPopover } from "@/components/speaker-assign-popover";
 import { useHealthCheck } from "@/lib/hooks/use-health-check";
+import { commands } from "@/lib/utils/tauri";
 import {
   fetchMeetingAudio,
   type MeetingAudioChunk,
@@ -282,6 +283,7 @@ export function TranscriptPanel({
     null,
   );
   const [liveError, setLiveError] = useState<LiveStreamingError | null>(null);
+  const [retryingLive, setRetryingLive] = useState(false);
   const [isFollowingLive, setIsFollowingLive] = useState(true);
   const [hasUnseenLive, setHasUnseenLive] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -315,6 +317,7 @@ export function TranscriptPanel({
     setLiveBlocks([]);
     setLiveStatus(null);
     setLiveError(null);
+    setRetryingLive(false);
   }, [meeting.id]);
 
   useEffect(() => {
@@ -553,6 +556,32 @@ export function TranscriptPanel({
     if (following) setHasUnseenLive(false);
   }, [isLive, query]);
 
+  const handleRetryLiveTranscription = useCallback(async () => {
+    if (retryingLive) return;
+    setRetryingLive(true);
+    try {
+      const result = await commands.retryMeetingLiveTranscription(meeting.id);
+      if (result.status === "error") {
+        setLiveError((prev) => ({
+          meeting_id: meeting.id,
+          provider: prev?.provider ?? liveStatus?.provider ?? "screenpipe-cloud",
+          model: prev?.model,
+          device_name: prev?.device_name,
+          message: result.error || "could not retry live transcription",
+          error_code: "retry_live_transcription_failed",
+          recording_continues: true,
+          recovery_actions: prev?.recovery_actions ?? [],
+          occurred_at: new Date().toISOString(),
+        }));
+        return;
+      }
+      setLiveError(null);
+      setLiveStatus((prev) => prev ? { ...prev, active: true, error: null } : prev);
+    } finally {
+      setRetryingLive(false);
+    }
+  }, [liveStatus?.provider, meeting.id, retryingLive]);
+
   useEffect(() => {
     if (!isOpen) return;
     setIsFollowingLive(true);
@@ -627,6 +656,9 @@ export function TranscriptPanel({
     isLive &&
     Boolean(liveError || (pendingTranscriptSegments > 0 && liveStatus?.active));
   const liveRecoveryActions = liveError?.recovery_actions ?? [];
+  const canRetryLive = liveRecoveryActions.some(
+    (action) => action.id === "retry-screenpipe-cloud-live",
+  );
   const recoveryMessage = liveError
     ? `${liveErrorSummary(liveError)}. ${
         liveError.recording_continues === false
@@ -731,9 +763,23 @@ export function TranscriptPanel({
             <div className="min-w-0 space-y-1 leading-5">
               <p>{recoveryMessage}</p>
               {liveRecoveryActions.length > 0 && (
-                <p className="text-[11px] text-amber-900/80 dark:text-amber-200/80">
-                  options, in order: {liveRecoveryActions.map((action) => action.label).join(" → ")}
-                </p>
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-amber-900/80 dark:text-amber-200/80">
+                  <span>
+                    options, in order: {liveRecoveryActions.map((action) => action.label).join(" → ")}
+                  </span>
+                  {canRetryLive && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void handleRetryLiveTranscription()}
+                      disabled={retryingLive}
+                      className="h-6 rounded-none border-amber-700/30 bg-background/70 px-2 text-[11px] text-amber-950 hover:bg-background dark:text-amber-100"
+                    >
+                      {retryingLive && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
+                      retry cloud live
+                    </Button>
+                  )}
+                </div>
               )}
             </div>
           </div>

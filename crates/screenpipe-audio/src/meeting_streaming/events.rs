@@ -200,6 +200,13 @@ pub struct MeetingStreamingError {
     pub occurred_at: DateTime<Utc>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MeetingStreamingRetryRequested {
+    pub meeting_id: i64,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct MeetingStreamingStatusChanged {
     pub active: bool,

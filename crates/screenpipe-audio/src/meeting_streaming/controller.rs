@@ -20,9 +20,9 @@ use super::{
     deepgram_live,
     events::{
         MeetingAudioFrame, MeetingAudioTap, MeetingLifecycleEvent, MeetingStreamingError,
-        MeetingStreamingRecoveryAction, MeetingStreamingSessionEnded,
-        MeetingStreamingSessionStarted, MeetingStreamingStatusChanged, MeetingTranscriptDelta,
-        MeetingTranscriptFinal,
+        MeetingStreamingRecoveryAction, MeetingStreamingRetryRequested,
+        MeetingStreamingSessionEnded, MeetingStreamingSessionStarted,
+        MeetingStreamingStatusChanged, MeetingTranscriptDelta, MeetingTranscriptFinal,
     },
     selected_engine, MeetingStreamingConfig, MeetingStreamingProvider,
 };
@@ -101,6 +101,9 @@ pub fn start_meeting_streaming_loop(
         );
         let mut error_sub = screenpipe_events::subscribe_to_event::<MeetingStreamingError>(
             "meeting_streaming_error",
+        );
+        let mut retry_sub = screenpipe_events::subscribe_to_event::<MeetingStreamingRetryRequested>(
+            "meeting_streaming_retry_requested",
         );
         let mut inactivity_tick = tokio::time::interval(LIVE_INACTIVITY_CHECK_INTERVAL);
         let mut active: Option<ActiveMeetingStream> = None;
@@ -214,6 +217,11 @@ pub fn start_meeting_streaming_loop(
                 Some(event) = error_sub.next() => {
                     if let Some(session) = active.as_mut() {
                         note_live_transcription_error(&audio_tap, session, &event.data);
+                    }
+                }
+                Some(event) = retry_sub.next() => {
+                    if let Some(session) = active.as_mut() {
+                        retry_live_transcription(&audio_tap, session, &event.data);
                     }
                 }
                 frame = audio_rx.recv() => {
@@ -624,6 +632,50 @@ fn note_live_transcription_error(
         &session.provider,
         session.live_transcription_enabled,
         Some(event.message.clone()),
+    );
+}
+
+fn retry_live_transcription(
+    audio_tap: &MeetingAudioTap,
+    session: &mut ActiveMeetingStream,
+    event: &MeetingStreamingRetryRequested,
+) {
+    if session.meeting_id != event.meeting_id {
+        return;
+    }
+    if !session.config.provider.supports_live_transcription()
+        || !session.config.live_transcription_ready()
+    {
+        emit_status(
+            true,
+            Some(session.meeting_id),
+            &session.provider,
+            false,
+            Some("live transcription is not ready to retry".to_string()),
+        );
+        return;
+    }
+
+    session.device_senders.clear();
+    session.device_retry_after.clear();
+    session.live_transcription_enabled = true;
+    session.live_transcript_seen = false;
+    session.last_live_transcript_at = None;
+    session.notified_transcript_stall = false;
+    audio_tap.set_active(true);
+    audio_tap.set_background_suppressed(false);
+    info!(
+        "meeting streaming: retrying live transcription provider streams (meeting_id={}, provider={}, reason={})",
+        session.meeting_id,
+        session.provider,
+        event.reason.as_deref().unwrap_or("manual")
+    );
+    emit_status(
+        true,
+        Some(session.meeting_id),
+        &session.provider,
+        true,
+        None,
     );
 }
 
@@ -1044,6 +1096,45 @@ mod tests {
         assert!(session.live_transcript_seen);
         assert!(session.last_live_transcript_at.is_some());
         assert!(audio_tap.background_suppressed());
+    }
+
+    #[tokio::test]
+    async fn retry_live_transcription_restarts_provider_without_restart_audio_capture() {
+        let audio_tap = test_audio_tap();
+        let now = Instant::now();
+        let mut session = test_session(now, true);
+        session.config = MeetingStreamingConfig::from_settings(
+            true,
+            "screenpipe-cloud",
+            Some("cloud-token".to_string()),
+            None,
+            None,
+            None,
+        );
+        session.provider = "screenpipe-cloud".to_string();
+        session.live_transcription_enabled = false;
+        session.notified_transcript_stall = true;
+        session
+            .device_retry_after
+            .insert("mic::input".to_string(), now);
+        let (tx, _rx) = mpsc::channel(1);
+        session.device_senders.insert("mic::input".to_string(), tx);
+
+        retry_live_transcription(
+            &audio_tap,
+            &mut session,
+            &MeetingStreamingRetryRequested {
+                meeting_id: 42,
+                reason: Some("test".to_string()),
+            },
+        );
+
+        assert!(session.live_transcription_enabled);
+        assert!(audio_tap.is_active());
+        assert!(!audio_tap.background_suppressed());
+        assert!(session.device_senders.is_empty());
+        assert!(session.device_retry_after.is_empty());
+        assert!(!session.notified_transcript_stall);
     }
 
     #[tokio::test]

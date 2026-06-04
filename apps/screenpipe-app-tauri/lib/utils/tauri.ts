@@ -1533,6 +1533,14 @@ async resumeGlobalShortcuts() : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async retryMeetingLiveTranscription(meetingId: number) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("retry_meeting_live_transcription", { meetingId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Reveal a file in the OS file browser (Finder / Explorer / etc).
  */

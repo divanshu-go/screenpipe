@@ -3355,3 +3355,19 @@ pub fn set_autostart(app_handle: tauri::AppHandle, enabled: bool) -> Result<(), 
     );
     Ok(())
 }
+
+#[tauri::command]
+#[specta::specta]
+pub fn retry_meeting_live_transcription(meeting_id: i64) -> Result<(), String> {
+    if meeting_id <= 0 {
+        return Err("meeting_id must be positive".to_string());
+    }
+    screenpipe_events::send_event(
+        "meeting_streaming_retry_requested",
+        serde_json::json!({
+            "meeting_id": meeting_id,
+            "reason": "user_retry_cloud_live",
+        }),
+    )
+    .map_err(|err| err.to_string())
+}
