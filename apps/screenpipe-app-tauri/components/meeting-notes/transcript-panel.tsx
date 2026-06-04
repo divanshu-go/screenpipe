@@ -287,6 +287,7 @@ export function TranscriptPanel({
   const [retryingLive, setRetryingLive] = useState(false);
   const [continuingBatchLater, setContinuingBatchLater] = useState(false);
   const [usingLocalTranscription, setUsingLocalTranscription] = useState(false);
+  const [usingDirectDeepgram, setUsingDirectDeepgram] = useState(false);
   const [isFollowingLive, setIsFollowingLive] = useState(true);
   const [hasUnseenLive, setHasUnseenLive] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -323,6 +324,7 @@ export function TranscriptPanel({
     setRetryingLive(false);
     setContinuingBatchLater(false);
     setUsingLocalTranscription(false);
+    setUsingDirectDeepgram(false);
   }, [meeting.id]);
 
   useEffect(() => {
@@ -643,6 +645,25 @@ export function TranscriptPanel({
     }
   }, [meeting.id, setLiveActionError, usingLocalTranscription]);
 
+  const handleUseDirectDeepgram = useCallback(async () => {
+    if (usingDirectDeepgram) return;
+    setUsingDirectDeepgram(true);
+    try {
+      const result = await commands.useMeetingDirectDeepgramTranscription(meeting.id);
+      if (result.status === "error") {
+        setLiveActionError(
+          result.error || "could not switch to direct Deepgram",
+          "use_direct_deepgram_failed",
+        );
+        return;
+      }
+      setLiveError(null);
+      setLiveStatus((prev) => prev ? { ...prev, provider: "deepgram-live", active: true, live_transcription_enabled: true, error: null } : prev);
+    } finally {
+      setUsingDirectDeepgram(false);
+    }
+  }, [meeting.id, setLiveActionError, usingDirectDeepgram]);
+
   useEffect(() => {
     if (!isOpen) return;
     setIsFollowingLive(true);
@@ -725,6 +746,9 @@ export function TranscriptPanel({
   );
   const canUseLocalTranscription = liveRecoveryActions.some(
     (action) => action.id === "use-local-transcription",
+  );
+  const canUseDirectDeepgram = liveRecoveryActions.some(
+    (action) => action.id === "use-direct-deepgram",
   );
   const recoveryMessage = liveError
     ? `${liveErrorSummary(liveError)}. ${
@@ -839,7 +863,7 @@ export function TranscriptPanel({
                       variant="outline"
                       size="sm"
                       onClick={() => void handleRetryLiveTranscription()}
-                      disabled={retryingLive || continuingBatchLater || usingLocalTranscription}
+                      disabled={retryingLive || continuingBatchLater || usingLocalTranscription || usingDirectDeepgram}
                       className="h-6 rounded-none border-amber-700/30 bg-background/70 px-2 text-[11px] text-amber-950 hover:bg-background dark:text-amber-100"
                     >
                       {retryingLive && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
@@ -851,7 +875,7 @@ export function TranscriptPanel({
                       variant="outline"
                       size="sm"
                       onClick={() => void handleContinueBatchLater()}
-                      disabled={retryingLive || continuingBatchLater || usingLocalTranscription}
+                      disabled={retryingLive || continuingBatchLater || usingLocalTranscription || usingDirectDeepgram}
                       className="h-6 rounded-none border-amber-700/30 bg-background/70 px-2 text-[11px] text-amber-950 hover:bg-background dark:text-amber-100"
                     >
                       {continuingBatchLater && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
@@ -863,11 +887,23 @@ export function TranscriptPanel({
                       variant="outline"
                       size="sm"
                       onClick={() => void handleUseLocalTranscription()}
-                      disabled={retryingLive || continuingBatchLater || usingLocalTranscription}
+                      disabled={retryingLive || continuingBatchLater || usingLocalTranscription || usingDirectDeepgram}
                       className="h-6 rounded-none border-amber-700/30 bg-background/70 px-2 text-[11px] text-amber-950 hover:bg-background dark:text-amber-100"
                     >
                       {usingLocalTranscription && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
                       use local transcription
+                    </Button>
+                  )}
+                  {canUseDirectDeepgram && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void handleUseDirectDeepgram()}
+                      disabled={retryingLive || continuingBatchLater || usingLocalTranscription || usingDirectDeepgram}
+                      className="h-6 rounded-none border-amber-700/30 bg-background/70 px-2 text-[11px] text-amber-950 hover:bg-background dark:text-amber-100"
+                    >
+                      {usingDirectDeepgram && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
+                      use direct Deepgram
                     </Button>
                   )}
                 </div>

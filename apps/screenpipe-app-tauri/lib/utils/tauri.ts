@@ -1991,6 +1991,14 @@ async uploadFileToS3(filePath: string, signedUrl: string) : Promise<Result<boole
     else return { status: "error", error: e  as any };
 }
 },
+async useMeetingDirectDeepgramTranscription(meetingId: number) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("use_meeting_direct_deepgram_transcription", { meetingId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async useMeetingLocalTranscription(meetingId: number) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("use_meeting_local_transcription", { meetingId }) };

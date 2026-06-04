@@ -3403,3 +3403,19 @@ pub fn use_meeting_local_transcription(meeting_id: i64) -> Result<(), String> {
     )
     .map_err(|err| err.to_string())
 }
+
+#[tauri::command]
+#[specta::specta]
+pub fn use_meeting_direct_deepgram_transcription(meeting_id: i64) -> Result<(), String> {
+    if meeting_id <= 0 {
+        return Err("meeting_id must be positive".to_string());
+    }
+    screenpipe_events::send_event(
+        "meeting_streaming_use_direct_deepgram_requested",
+        serde_json::json!({
+            "meeting_id": meeting_id,
+            "reason": "user_use_direct_deepgram",
+        }),
+    )
+    .map_err(|err| err.to_string())
+}

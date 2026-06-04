@@ -156,7 +156,10 @@ impl MeetingStreamingConfig {
                 );
             }
             MeetingStreamingProvider::DeepgramLive => {
-                self.api_key = provider_api_key(&self.provider);
+                self.api_key = self
+                    .api_key
+                    .take()
+                    .or_else(|| provider_api_key(&self.provider));
                 self.endpoint = endpoint_from_env(
                     &["SCREENPIPE_MEETING_DEEPGRAM_LIVE_URL"],
                     DEEPGRAM_LIVE_URL,
@@ -188,6 +191,7 @@ impl MeetingStreamingConfig {
             enabled,
             provider,
             auth_token: cloud_token.filter(|s| !s.trim().is_empty()),
+            api_key: provider_api_key_override.clone(),
             language: language.filter(|s| !s.trim().is_empty()),
             local_speaker_name: local_speaker_name.and_then(|name| non_empty_trimmed(&name)),
             ..Self::default()
@@ -357,6 +361,22 @@ mod tests {
                 Ok(MeetingStreamingProvider::SelectedEngine)
             );
         }
+    }
+
+    #[test]
+    fn screenpipe_cloud_preserves_direct_deepgram_key_for_explicit_fallback() {
+        let config = MeetingStreamingConfig::from_settings(
+            true,
+            "screenpipe-cloud",
+            Some("cloud-token".to_string()),
+            Some("settings-deepgram-key".to_string()),
+            None,
+            None,
+        );
+
+        let direct = config.with_provider(MeetingStreamingProvider::DeepgramLive);
+        assert_eq!(direct.api_key.as_deref(), Some("settings-deepgram-key"));
+        assert!(direct.live_transcription_ready());
     }
 
     #[test]

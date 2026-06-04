@@ -256,10 +256,7 @@ impl RecordingConfig {
                 settings.meeting_live_transcription_enabled,
                 &settings.meeting_live_transcription_provider,
                 settings.effective_user_id().map(str::to_string),
-                match settings.meeting_live_transcription_provider.as_str() {
-                    "deepgram-live" | "deepgram_live" => Some(settings.deepgram_api_key.clone()),
-                    _ => None,
-                },
+                settings.effective_deepgram_key().map(str::to_string),
                 single_language_code(&settings.languages),
                 settings.effective_user_name().map(str::to_string),
             ),

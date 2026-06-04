@@ -23,8 +23,8 @@ use super::{
         MeetingStreamingContinueBatchRequested, MeetingStreamingError,
         MeetingStreamingRecoveryAction, MeetingStreamingRetryRequested,
         MeetingStreamingSessionEnded, MeetingStreamingSessionStarted,
-        MeetingStreamingStatusChanged, MeetingStreamingUseLocalRequested, MeetingTranscriptDelta,
-        MeetingTranscriptFinal,
+        MeetingStreamingStatusChanged, MeetingStreamingUseDirectDeepgramRequested,
+        MeetingStreamingUseLocalRequested, MeetingTranscriptDelta, MeetingTranscriptFinal,
     },
     selected_engine, MeetingStreamingConfig, MeetingStreamingProvider,
 };
@@ -113,6 +113,10 @@ pub fn start_meeting_streaming_loop(
         let mut use_local_sub = screenpipe_events::subscribe_to_event::<
             MeetingStreamingUseLocalRequested,
         >("meeting_streaming_use_local_requested");
+        let mut use_direct_deepgram_sub =
+            screenpipe_events::subscribe_to_event::<MeetingStreamingUseDirectDeepgramRequested>(
+                "meeting_streaming_use_direct_deepgram_requested",
+            );
         let mut inactivity_tick = tokio::time::interval(LIVE_INACTIVITY_CHECK_INTERVAL);
         let mut active: Option<ActiveMeetingStream> = None;
 
@@ -240,6 +244,11 @@ pub fn start_meeting_streaming_loop(
                 Some(event) = use_local_sub.next() => {
                     if let Some(session) = active.as_mut() {
                         use_local_live_transcription(&audio_tap, &transcription_engine, session, &event.data).await;
+                    }
+                }
+                Some(event) = use_direct_deepgram_sub.next() => {
+                    if let Some(session) = active.as_mut() {
+                        use_direct_deepgram_live_transcription(&audio_tap, session, &event.data);
                     }
                 }
                 frame = audio_rx.recv() => {
@@ -782,6 +791,54 @@ async fn use_local_live_transcription(
     );
 }
 
+fn use_direct_deepgram_live_transcription(
+    audio_tap: &MeetingAudioTap,
+    session: &mut ActiveMeetingStream,
+    event: &MeetingStreamingUseDirectDeepgramRequested,
+) {
+    if session.meeting_id != event.meeting_id {
+        return;
+    }
+
+    let direct_config = session
+        .config
+        .clone()
+        .with_provider(MeetingStreamingProvider::DeepgramLive);
+    if !direct_config.live_transcription_ready() {
+        emit_status(
+            true,
+            Some(session.meeting_id),
+            &session.provider,
+            false,
+            Some("direct Deepgram live transcription needs a Deepgram API key".to_string()),
+        );
+        return;
+    }
+
+    session.config = direct_config;
+    session.provider = session.config.provider.as_str().to_string();
+    session.device_senders.clear();
+    session.device_retry_after.clear();
+    session.live_transcription_enabled = true;
+    session.live_transcript_seen = false;
+    session.last_live_transcript_at = None;
+    session.notified_transcript_stall = false;
+    audio_tap.set_active(true);
+    audio_tap.set_background_suppressed(false);
+    info!(
+        "meeting streaming: switching meeting to explicit direct Deepgram live transcription (meeting_id={}, reason={})",
+        session.meeting_id,
+        event.reason.as_deref().unwrap_or("manual")
+    );
+    emit_status(
+        true,
+        Some(session.meeting_id),
+        &session.provider,
+        true,
+        None,
+    );
+}
+
 fn is_local_live_engine(engine: AudioTranscriptionEngine) -> bool {
     matches!(
         engine,
@@ -1253,6 +1310,72 @@ mod tests {
         assert!(session.device_senders.is_empty());
         assert!(session.device_retry_after.is_empty());
         assert!(!session.notified_transcript_stall);
+    }
+
+    #[tokio::test]
+    async fn direct_deepgram_switch_requires_explicit_key() {
+        let audio_tap = test_audio_tap();
+        let now = Instant::now();
+        let mut session = test_session(now, true);
+        session.config = MeetingStreamingConfig::from_settings(
+            true,
+            "screenpipe-cloud",
+            Some("cloud-token".to_string()),
+            None,
+            None,
+            None,
+        );
+        session.provider = "screenpipe-cloud".to_string();
+
+        use_direct_deepgram_live_transcription(
+            &audio_tap,
+            &mut session,
+            &MeetingStreamingUseDirectDeepgramRequested {
+                meeting_id: 42,
+                reason: Some("test".to_string()),
+            },
+        );
+
+        assert_eq!(session.provider, "screenpipe-cloud");
+        assert_eq!(
+            session.config.provider,
+            MeetingStreamingProvider::ScreenpipeCloud
+        );
+    }
+
+    #[tokio::test]
+    async fn direct_deepgram_switch_uses_preserved_settings_key() {
+        let audio_tap = test_audio_tap();
+        let now = Instant::now();
+        let mut session = test_session(now, true);
+        session.config = MeetingStreamingConfig::from_settings(
+            true,
+            "screenpipe-cloud",
+            Some("cloud-token".to_string()),
+            Some("deepgram-key".to_string()),
+            None,
+            None,
+        );
+        session.provider = "screenpipe-cloud".to_string();
+        session.live_transcription_enabled = false;
+
+        use_direct_deepgram_live_transcription(
+            &audio_tap,
+            &mut session,
+            &MeetingStreamingUseDirectDeepgramRequested {
+                meeting_id: 42,
+                reason: Some("test".to_string()),
+            },
+        );
+
+        assert_eq!(session.provider, "deepgram-live");
+        assert_eq!(
+            session.config.provider,
+            MeetingStreamingProvider::DeepgramLive
+        );
+        assert_eq!(session.config.api_key.as_deref(), Some("deepgram-key"));
+        assert!(session.live_transcription_enabled);
+        assert!(audio_tap.is_active());
     }
 
     #[test]
