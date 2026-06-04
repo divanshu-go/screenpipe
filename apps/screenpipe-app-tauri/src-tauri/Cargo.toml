@@ -308,7 +308,9 @@ ignored = ["tauri-utils", "screenpipe-redact", "thiserror", "screenpipe-sync"]
 # macOS tray menus can outlive the Rust `Menu` that created them while the
 # native menu is open. This fork stores an Rc<MenuChild> on NSMenuItem instead
 # of a raw pointer so stale AppKit items keep their Rust click data alive.
-muda = { git = "https://github.com/divanshu-go/muda", branch = "fix/macos-menu-item-use-after-free" }
+# Pinned by commit (not branch) for reproducible builds; drop once
+# upstream tauri-apps/muda#361 merges and ships in a released muda.
+muda = { git = "https://github.com/divanshu-go/muda", rev = "9dc5de53e84040a63c9a5423b669ec892de8a671" }
 
 [profile.release]
 codegen-units = 1

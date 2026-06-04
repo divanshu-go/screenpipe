@@ -7359,7 +7359,7 @@ dependencies = [
 [[package]]
 name = "muda"
 version = "0.19.2"
-source = "git+https://github.com/divanshu-go/muda?branch=fix%2Fmacos-menu-item-use-after-free#9dc5de53e84040a63c9a5423b669ec892de8a671"
+source = "git+https://github.com/divanshu-go/muda?rev=9dc5de53e84040a63c9a5423b669ec892de8a671#9dc5de53e84040a63c9a5423b669ec892de8a671"
 dependencies = [
  "crossbeam-channel",
  "dpi",
