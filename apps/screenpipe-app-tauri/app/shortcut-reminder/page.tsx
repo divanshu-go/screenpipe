@@ -5,7 +5,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { localFetch } from "@/lib/api";
 import { exists, readTextFile } from "@tauri-apps/plugin-fs";
@@ -14,12 +14,115 @@ import posthog from "posthog-js";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { getStore, saveAndEncrypt } from "@/lib/hooks/use-settings";
 import { commands } from "@/lib/utils/tauri";
-import { X, Phone } from "lucide-react";
+import { AlertTriangle, X, Phone } from "lucide-react";
 import { useOverlayData } from "./use-overlay-data";
 import { AudioEqualizer } from "./audio-equalizer";
 import { ScreenMatrix } from "./screen-matrix";
 import { computeMeetingActive, type MeetingStatusResponse } from "@/lib/utils/meeting-state";
 import { appendAuthToken, ensureApiReady, getApiBaseUrl } from "@/lib/api";
+
+interface LiveStreamingStatus {
+  active: boolean;
+  meeting_id?: number | null;
+  provider: string;
+  live_transcription_enabled: boolean;
+  error?: string | null;
+}
+
+interface LiveStreamingError {
+  meeting_id: number;
+  provider: string;
+  message: string;
+  error_code?: string | null;
+  recording_continues?: boolean;
+}
+
+interface TranscriptStallEvent {
+  meeting_id?: number | null;
+  provider?: string | null;
+  elapsed_secs?: number | null;
+}
+
+interface LiveTranscriptWarning {
+  meetingId: number | null;
+  message: string;
+}
+
+function liveWarningMessage(error: LiveStreamingError | string | null): string {
+  const code = typeof error === "string" ? null : error?.error_code;
+  if (code === "upstream_rate_limited") return "live transcript rate limited";
+  if (code === "realtime_not_configured") return "live transcript not configured";
+  if (code === "cloud_login_required") return "cloud login required";
+  if (code === "upstream_unavailable") return "live transcript unavailable";
+  return "recording continues, live transcript needs attention";
+}
+
+function useLiveTranscriptWarning(meetingActive: boolean): LiveTranscriptWarning | null {
+  const [warning, setWarning] = useState<LiveTranscriptWarning | null>(null);
+
+  useEffect(() => {
+    if (!meetingActive) {
+      setWarning(null);
+    }
+  }, [meetingActive]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const statusUnlisten = listen<LiveStreamingStatus>(
+      "meeting-streaming-status-changed",
+      (event) => {
+        if (cancelled) return;
+        const status = event.payload;
+        if (!status.active) {
+          setWarning(null);
+          return;
+        }
+        if (status.error) {
+          setWarning({
+            meetingId: status.meeting_id ?? null,
+            message: "recording continues, live transcript needs attention",
+          });
+          return;
+        }
+        if (status.live_transcription_enabled) {
+          setWarning(null);
+        }
+      },
+    );
+
+    const errorUnlisten = listen<LiveStreamingError>(
+      "meeting-streaming-error",
+      (event) => {
+        if (cancelled) return;
+        setWarning({
+          meetingId: Number.isFinite(event.payload.meeting_id) ? event.payload.meeting_id : null,
+          message: liveWarningMessage(event.payload),
+        });
+      },
+    );
+
+    const stallUnlisten = listen<TranscriptStallEvent>(
+      "meeting-streaming-transcript-stall",
+      (event) => {
+        if (cancelled) return;
+        setWarning({
+          meetingId: event.payload.meeting_id ?? null,
+          message: "audio flowing, transcript stalled",
+        });
+      },
+    );
+
+    return () => {
+      cancelled = true;
+      statusUnlisten.then((fn) => fn());
+      errorUnlisten.then((fn) => fn());
+      stallUnlisten.then((fn) => fn());
+    };
+  }, []);
+
+  return meetingActive ? warning : null;
+}
 
 function useMeetingState() {
   const [meetingState, setMeetingState] = useState(() => computeMeetingActive(null, 0));
@@ -113,6 +216,7 @@ export default function ShortcutReminderPage() {
   const [searchShortcut, setSearchShortcut] = useState<string | null>(null);
   const overlayData = useOverlayData();
   const meeting = useMeetingState();
+  const liveTranscriptWarning = useLiveTranscriptWarning(meeting.active);
   const [overlayScale, setOverlayScale] = useState(1);
   const isMacRef = useRef(isMac);
   isMacRef.current = isMac;
@@ -247,6 +351,17 @@ export default function ShortcutReminderPage() {
   const smIconPx = 10 * overlayScale;
   const dotPx = Math.max(5 * overlayScale, 5);
 
+  const openLiveTranscriptWarning = useCallback(async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (liveTranscriptWarning?.meetingId != null) {
+      const deeplink = `screenpipe://meeting/${liveTranscriptWarning.meetingId}`;
+      await commands.showWindow({ Home: { page: null } });
+      await emit("deep-link-received", deeplink);
+      return;
+    }
+    await commands.showWindow({ Home: { page: null } });
+  }, [liveTranscriptWarning?.meetingId]);
+
   return (
     <div
       className="w-full h-full flex items-center justify-center"
@@ -346,6 +461,24 @@ export default function ShortcutReminderPage() {
           </div>
           <div className="bg-white/15" />
           <div className="flex items-center justify-center" style={{ gap: `${gap}px`, padding: `${padY}px ${padX}px` }}>
+            {liveTranscriptWarning && (
+              <button
+                onClick={openLiveTranscriptWarning}
+                onMouseDown={(e) => e.stopPropagation()}
+                className="relative flex items-center justify-center hover:bg-amber-500/20 transition-colors cursor-pointer"
+                title={liveTranscriptWarning.message}
+                style={{ padding: `${padY}px`, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+              >
+                <span
+                  className="absolute rounded-full bg-amber-300 animate-pulse"
+                  style={{ top: -1, right: -1, width: `${dotPx}px`, height: `${dotPx}px` }}
+                />
+                <AlertTriangle
+                  style={{ width: `${smIconPx}px`, height: `${smIconPx}px` }}
+                  className="text-amber-300"
+                />
+              </button>
+            )}
             <button
               onClick={(e) => {
                 e.stopPropagation();

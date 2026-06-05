@@ -27,6 +27,20 @@ use crate::notifications::client;
 use crate::store::SettingsStore;
 
 #[derive(Clone, Debug, Default, Deserialize)]
+struct StreamingErrorEvent {
+    #[serde(default)]
+    meeting_id: Option<i64>,
+    #[serde(default)]
+    provider: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
+    #[serde(default)]
+    error_code: Option<String>,
+    #[serde(default)]
+    recording_continues: bool,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
 struct StallEvent {
     #[serde(default)]
     meeting_id: Option<i64>,
@@ -46,6 +60,15 @@ pub fn start(app: AppHandle) {
         }
     });
 
+    let error_app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut sub =
+            screenpipe_events::subscribe_to_event::<StreamingErrorEvent>("meeting_streaming_error");
+        while let Some(event) = sub.next().await {
+            handle_streaming_error(&error_app, event.data);
+        }
+    });
+
     let transcript_app = app;
     tauri::async_runtime::spawn(async move {
         let mut sub = screenpipe_events::subscribe_to_event::<StallEvent>(
@@ -55,6 +78,46 @@ pub fn start(app: AppHandle) {
             handle_transcript_stall(&transcript_app, event.data);
         }
     });
+}
+
+fn handle_streaming_error(app: &AppHandle, event: StreamingErrorEvent) {
+    if !pref_enabled(app, "liveTranscriptStalled") {
+        debug!("meeting streaming error notification skipped by preference");
+        return;
+    }
+
+    let meeting_id = event.meeting_id;
+    warn!(
+        "meeting streaming: surfacing live transcription error (meeting_id={:?}, provider={:?}, code={:?})",
+        meeting_id, event.provider, event.error_code
+    );
+
+    let mut actions = Vec::new();
+    if let Some(id) = meeting_id {
+        actions.push(serde_json::json!({
+            "id": "open-live-transcript",
+            "action": "open-live-transcript",
+            "label": "open recovery options",
+            "type": "deeplink",
+            "url": format!("screenpipe://meeting/{id}"),
+            "primary": true,
+        }));
+    }
+
+    let body = if event.recording_continues {
+        "recording continues; live transcript needs attention".to_string()
+    } else {
+        event
+            .message
+            .unwrap_or_else(|| "live transcript needs attention".to_string())
+    };
+    client::send_typed_with_actions(
+        "live transcript unavailable",
+        body,
+        "meeting",
+        None,
+        actions,
+    );
 }
 
 fn handle_audio_stall(app: &AppHandle, event: StallEvent) {
@@ -101,12 +164,24 @@ fn handle_transcript_stall(app: &AppHandle, event: StallEvent) {
         event.meeting_id, event.provider, elapsed
     );
 
+    let mut actions = Vec::new();
+    if let Some(id) = event.meeting_id {
+        actions.push(serde_json::json!({
+            "id": "open-live-transcript",
+            "action": "open-live-transcript",
+            "label": "open recovery options",
+            "type": "deeplink",
+            "url": format!("screenpipe://meeting/{id}"),
+            "primary": true,
+        }));
+    }
+
     client::send_typed_with_actions(
         "live transcript not flowing",
-        format!("audio is being captured but no transcript has arrived in {elapsed}s — retrying in the background"),
+        format!("audio is being captured but no transcript has arrived in {elapsed}s — open recovery options or keep recording for batch transcription"),
         "meeting",
-        Some(30_000),
-        Vec::new(),
+        None,
+        actions,
     );
 }
 

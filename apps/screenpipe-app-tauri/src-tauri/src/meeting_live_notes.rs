@@ -162,6 +162,11 @@ pub fn start(app: AppHandle) {
         "meeting_streaming_status_changed",
         "meeting-streaming-status-changed",
     );
+    forward_screenpipe_event(
+        app.clone(),
+        "meeting_streaming_transcript_stall",
+        "meeting-streaming-transcript-stall",
+    );
 
     let calendar_events = Arc::new(RwLock::new(Vec::<CalendarEventSignal>::new()));
     // Flips to true on first publication from `start_calendar_events_publisher`,
