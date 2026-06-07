@@ -89,6 +89,11 @@ export interface WatchAuthorizationStatusOptions {
    * visibility changes.
    */
   pollIntervalMs?: number | false
+  /**
+   * Continue polling even when `document.hidden` is true (e.g. the screenpipe
+   * window is occluded by system settings). Defaults to `false`.
+   */
+  pollWhenHidden?: boolean
 }
 
 export type UnwatchAuthorizationStatus = () => void
@@ -180,11 +185,12 @@ export function watchAuthorizationStatus(
     document.addEventListener('visibilitychange', handleVisibilityChange)
   }
 
+  const pollWhenHidden = options.pollWhenHidden ?? false
   const intervalId =
     pollIntervalMs === false
       ? undefined
       : globalThis.setInterval(() => {
-          if (typeof document === 'undefined' || !document.hidden) {
+          if (pollWhenHidden || typeof document === 'undefined' || !document.hidden) {
             void refresh()
           }
         }, pollIntervalMs)
@@ -397,6 +403,11 @@ async function restoreAlwaysOnTopWhenScreenpipeRefocuses(): Promise<void> {
         try { state.pendingFocusUnlisten(); } catch {}
         state.pendingFocusUnlisten = null;
       }
+      // Hide the drag panel when screenpipe is frontmost — it should only
+      // be visible in system settings, not alongside our own windows.
+      if (state.flow) {
+        try { await state.flow.stopCurrentFlow(); } catch {}
+      }
       try {
         await setCurrentWindowAlwaysOnTopNative(true);
       } catch (error) {
@@ -452,11 +463,15 @@ function stopActiveWatcher(): void {
 async function stopActiveFlow(): Promise<void> {
   stopActiveWatcher();
   if (!state.flow) return;
-  try {
-    await state.flow.stopCurrentFlow();
-  } catch (error) {
-    console.error("permission-flow stopCurrentFlow failed:", error);
-  }
+  const flow = state.flow;
+  state.flow = null;
+  state.flowPromise = null;
+  // stopCurrentFlow() is a soft signal the native plugin may ignore when its
+  // drag state machine is stuck (e.g. app was already in the settings list so
+  // the drop was never "accepted"). close() destroys the underlying Swift
+  // controller, which unconditionally tears down the panel.
+  try { await flow.stopCurrentFlow(); } catch {}
+  try { await flow.close(); } catch {}
 }
 
 function watchUntilGrantedAndClose(dragPermission: Permission): void {
@@ -472,6 +487,7 @@ function watchUntilGrantedAndClose(dragPermission: Permission): void {
     },
     {
       emitInitial: false,
+      pollWhenHidden: true,
       onError: (error) => {
         console.error("permission-flow watch failed:", error);
       },
@@ -521,14 +537,39 @@ export async function requestPermissionWithFlow(
 
   try {
     const flow = await getOrCreateFlow();
-    await flow.startFlow({
-      permission: dragPermission,
-      appPath,
-      useClickSourceFrame: true,
-    });
+    // Reset the existing TCC entry (if any) before showing the drag panel.
+    // macOS rejects drag-drops for apps already in the list, so clearing the
+    // stale entry first ensures the drag creates a clean new one.
+    const preState = await authorizationState(dragPermission).catch(() => null);
+    if (preState !== PermissionAuthorizationState.Granted) {
+      await commands.resetPermission(permission).catch(() => {});
+    }
+    // Start watching BEFORE the drag panel opens so a manual toggle in
+    // system settings is detected while startFlow is still awaiting.
     watchUntilGrantedAndClose(dragPermission);
+    try {
+      await flow.startFlow({
+        permission: dragPermission,
+        appPath,
+        useClickSourceFrame: true,
+      });
+    } catch {
+      // startFlow may throw if the watcher detected a toggle grant and closed
+      // the flow mid-drag. Fall through to the post-check below.
+    }
+    // If the watcher already handled the grant, nothing left to do.
+    if (!state.flow && !state.activeWatch) return;
+    // startFlow resolved — do an immediate grant check for the "already in
+    // list, re-enabled via drag" case.
+    const postDragState = await authorizationState(dragPermission);
+    if (postDragState === PermissionAuthorizationState.Granted) {
+      await stopActiveFlow();
+      await reclaimScreenpipeWindow();
+    }
+    // Not yet granted — watcher keeps polling.
   } catch (error) {
     console.error("permission-flow failed, falling back:", error);
+    await stopActiveFlow();
     await requestNativePermission(permission);
   }
 }
@@ -547,14 +588,27 @@ export async function openPermissionSettingsWithFlow(
 
   try {
     const flow = await getOrCreateFlow();
-    await flow.startFlow({
-      permission: dragPermission,
-      appPath,
-      useClickSourceFrame: false,
-    });
+    const preState = await authorizationState(dragPermission).catch(() => null);
+    if (preState !== PermissionAuthorizationState.Granted) {
+      await commands.resetPermission(permission).catch(() => {});
+    }
     watchUntilGrantedAndClose(dragPermission);
+    try {
+      await flow.startFlow({
+        permission: dragPermission,
+        appPath,
+        useClickSourceFrame: false,
+      });
+    } catch {}
+    if (!state.flow && !state.activeWatch) return;
+    const postDragState = await authorizationState(dragPermission);
+    if (postDragState === PermissionAuthorizationState.Granted) {
+      await stopActiveFlow();
+      await reclaimScreenpipeWindow();
+    }
   } catch (error) {
     console.error("permission-flow settings open failed, falling back:", error);
+    await stopActiveFlow();
     await openNativePermissionSettings(permission);
   }
 }
