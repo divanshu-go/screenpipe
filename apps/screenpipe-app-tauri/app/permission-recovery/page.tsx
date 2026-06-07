@@ -7,6 +7,7 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Monitor, Mic, Keyboard, Lock, Check, RefreshCw } from "lucide-react";
 import { commands } from "@/lib/utils/tauri";
+import { requestPermissionWithFlow } from "@/lib/utils/permission-flow";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import posthog from "posthog-js";
 
@@ -146,7 +147,7 @@ export default function PermissionRecoveryPage() {
 
   const handleFix = async (permission: Parameters<typeof commands.requestPermission>[0]) => {
     posthog.capture("permission_recovery_manual_fix", { permission });
-    try { await commands.requestPermission(permission); } catch {}
+    try { await requestPermissionWithFlow(permission); } catch {}
     await checkPermissions();
   };
 
