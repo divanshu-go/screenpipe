@@ -130,8 +130,12 @@ export default function PermissionRecoveryPage() {
 
     const screenOk = permissions.screenRecording === "granted" || permissions.screenRecording === "notNeeded";
     const micOk = permissions.microphone === "granted" || permissions.microphone === "notNeeded";
+    const accessibilityOk =
+      !isMacOS ||
+      permissions.accessibility === "granted" ||
+      permissions.accessibility === "notNeeded";
 
-    if (screenOk && micOk) {
+    if (screenOk && micOk && accessibilityOk) {
       restartTriggeredRef.current = true;
       setTimeout(async () => {
         try {
@@ -143,7 +147,7 @@ export default function PermissionRecoveryPage() {
         }
       }, 1000);
     }
-  }, [permissions]);
+  }, [permissions, isMacOS]);
 
   const handleFix = async (permission: Parameters<typeof commands.requestPermission>[0]) => {
     posthog.capture("permission_recovery_manual_fix", { permission });
@@ -164,7 +168,10 @@ export default function PermissionRecoveryPage() {
   const accessibilityStatus = permissions?.accessibility === "granted" || permissions?.accessibility === "notNeeded"
     ? "granted" : permissions === null ? "checking" : "denied";
 
-  const allOk = screenStatus === "granted" && micStatus === "granted";
+  const allOk =
+    screenStatus === "granted" &&
+    micStatus === "granted" &&
+    accessibilityStatus === "granted";
 
   return (
     <div className="flex flex-col w-full h-screen overflow-hidden bg-background">
