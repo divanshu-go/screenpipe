@@ -89,12 +89,12 @@ export function PermissionBanner() {
             // denied, it falls back to opening System Settings internally.
             try {
               if (!permissions.screenOk) await requestPermissionWithFlow("screenRecording");
-              else if (!permissions.micOk) await requestPermissionWithFlow("microphone");
+              else if (!permissions.micOk) await commands.requestPermission("microphone");
               else if (!permissions.accessibilityOk) await requestPermissionWithFlow("accessibility");
             } catch {
               // fallback to opening settings directly
               if (!permissions.screenOk) await openPermissionSettingsWithFlow("screenRecording");
-              else if (!permissions.micOk) await openPermissionSettingsWithFlow("microphone");
+              else if (!permissions.micOk) await commands.openPermissionSettings("microphone");
               else if (!permissions.accessibilityOk) await openPermissionSettingsWithFlow("accessibility");
             }
           }}

@@ -112,7 +112,7 @@ export default function PermissionsStep({
       title: "Capture what you say",
       subtitle: "Lets Screenpipe transcribe your voice in meetings and calls",
       check: () => commands.checkMicrophonePermission(),
-      request: () => requestPermissionWithFlow("microphone"),
+      request: () => commands.requestPermission("microphone"),
     },
     {
       id: "accessibility",

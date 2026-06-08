@@ -68,7 +68,11 @@ export const PermissionButtons: React.FC<PermissionButtonsProps> = ({
         await commands.closeWindow("Main");
       }
 
-      await requestPermissionWithFlow(permissionType);
+      if (permissionType === "screenRecording") {
+        await requestPermissionWithFlow(permissionType);
+      } else {
+        await commands.requestPermission(permissionType);
+      }
 
       // Refresh permissions after request
       const perms = await commands.doPermissionsCheck(false);
@@ -108,7 +112,11 @@ export const PermissionButtons: React.FC<PermissionButtonsProps> = ({
         await commands.closeWindow("Main");
       }
 
-      await openPermissionSettingsWithFlow(permissionType);
+      if (permissionType === "screenRecording") {
+        await openPermissionSettingsWithFlow(permissionType);
+      } else {
+        await commands.openPermissionSettings(permissionType);
+      }
     } catch (error) {
       console.error(`failed to open ${type} permission settings:`, error);
       toast({

@@ -8,7 +8,6 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Check, Circle, ExternalLink, Loader2, RefreshCw, X } from "lucide-react";
 import { commands } from "@/lib/utils/tauri";
-import { openPermissionSettingsWithFlow } from "@/lib/utils/permission-flow";
 import { platform } from "@tauri-apps/plugin-os";
 
 interface BrowserStatus {
@@ -68,11 +67,11 @@ export function BrowserUrlCard({ onStatusChange }: BrowserUrlCardProps) {
     const hadBrowsers = browsers.length > 0;
     try {
       await commands.requestBrowsersAutomationPermission();
-      if (!hadBrowsers) await openPermissionSettingsWithFlow("automation");
+      if (!hadBrowsers) await commands.openPermissionSettings("automation");
       setTimeout(refresh, 1000);
     } catch {
       try {
-        await openPermissionSettingsWithFlow("automation");
+        await commands.openPermissionSettings("automation");
       } catch {
         // ignore
       }
@@ -179,7 +178,7 @@ export function BrowserUrlCard({ onStatusChange }: BrowserUrlCardProps) {
                           size="sm"
                           className="h-6 text-[10px] px-2"
                           onClick={() =>
-                            openPermissionSettingsWithFlow("automation")
+                            commands.openPermissionSettings("automation")
                           }
                         >
                           <ExternalLink className="h-3 w-3 mr-1" />
@@ -229,7 +228,7 @@ export function BrowserUrlCard({ onStatusChange }: BrowserUrlCardProps) {
                     variant="ghost"
                     size="sm"
                     className="h-7 text-xs gap-1.5 normal-case font-sans tracking-normal"
-                    onClick={() => openPermissionSettingsWithFlow("automation")}
+                    onClick={() => commands.openPermissionSettings("automation")}
                   >
                     <ExternalLink className="h-3 w-3" />
                     open settings

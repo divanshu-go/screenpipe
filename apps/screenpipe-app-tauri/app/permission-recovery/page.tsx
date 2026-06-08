@@ -151,7 +151,13 @@ export default function PermissionRecoveryPage() {
 
   const handleFix = async (permission: Parameters<typeof commands.requestPermission>[0]) => {
     posthog.capture("permission_recovery_manual_fix", { permission });
-    try { await requestPermissionWithFlow(permission); } catch {}
+    try {
+      if (permission === "screenRecording" || permission === "accessibility") {
+        await requestPermissionWithFlow(permission);
+      } else {
+        await commands.requestPermission(permission);
+      }
+    } catch {}
     await checkPermissions();
   };
 
