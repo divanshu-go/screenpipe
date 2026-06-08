@@ -48,7 +48,6 @@ tauri-plugin-autostart = "=2.5.1"
 tauri-plugin-shell = "=2.3.5"
 tauri-plugin-store = "=2.4.2"
 tauri-plugin-http = "=2.5.7"
-tauri-plugin-permission-flow = { git = "https://github.com/divanshu-go/permission-flow", rev = "8877d0a07802977356911de272435d92bed49227", package = "tauri-plugin-permission-flow" }
 
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -177,6 +176,7 @@ tauri-plugin-single-instance = { version = "2.3.7", features = ["deep-link"] }
 tauri-plugin-updater = "2.10.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+tauri-plugin-permission-flow = { git = "https://github.com/divanshu-go/permission-flow", rev = "8877d0a07802977356911de272435d92bed49227", package = "tauri-plugin-permission-flow" }
 tracing-oslog = "0.3.0"
 core-foundation = "0.10"
 cocoa = "0.26.0"

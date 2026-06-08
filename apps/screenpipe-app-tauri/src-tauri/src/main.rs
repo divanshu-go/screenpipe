@@ -864,7 +864,6 @@ async fn main() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_permission_flow::init())
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
             None,
@@ -872,6 +871,8 @@ async fn main() {
         // single-instance plugin uses zbus::blocking on Linux which panics
         // inside an existing tokio runtime (nested block_on), so skip it on Linux
         ;
+    #[cfg(target_os = "macos")]
+    let app = app.plugin(tauri_plugin_permission_flow::init());
     #[cfg(not(target_os = "linux"))]
     let app = app.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
         // Defer off event stack: plugin may invoke this from run loop (nounwind).
