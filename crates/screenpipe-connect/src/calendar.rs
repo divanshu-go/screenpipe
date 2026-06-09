@@ -15,8 +15,8 @@ use chrono::{DateTime, Duration, Local, Utc};
 use eventkit::{
     AuthorizationStatus, CalendarInfo, EventKitError, EventsManager, Result as EKResult,
 };
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 use tracing::{info, warn};
 
 /// Set once Calendar access is granted in this process (the user accepted the
