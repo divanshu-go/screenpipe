@@ -142,8 +142,8 @@ pub fn preflight_check(need_screen: bool, need_audio: bool) -> bool {
 /// are combined per context.
 #[cfg(target_os = "macos")]
 mod macos_screen_recording {
-    use std::ffi::c_void;
     use core_graphics::geometry::{CGPoint, CGRect, CGSize};
+    use std::ffi::c_void;
 
     type CGImageRef = *mut c_void;
     const ON_SCREEN_ONLY: u32 = 1;
@@ -179,7 +179,12 @@ mod macos_screen_recording {
                 .output()
                 .ok()
                 .and_then(|o| String::from_utf8(o.stdout).ok())
-                .and_then(|v| v.trim().split('.').next().and_then(|s| s.parse::<i32>().ok()))
+                .and_then(|v| {
+                    v.trim()
+                        .split('.')
+                        .next()
+                        .and_then(|s| s.parse::<i32>().ok())
+                })
                 .map(|major| major >= 15)
                 .unwrap_or(false)
         })
@@ -189,7 +194,10 @@ mod macos_screen_recording {
     pub fn capture_probe() -> bool {
         let rect = CGRect {
             origin: CGPoint { x: 0.0, y: 0.0 },
-            size: CGSize { width: 1.0, height: 1.0 },
+            size: CGSize {
+                width: 1.0,
+                height: 1.0,
+            },
         };
 
         unsafe {
@@ -203,7 +211,6 @@ mod macos_screen_recording {
             }
         }
     }
-
 }
 
 /// CLI: always uses `preflight() || capture_probe()` on every macOS version.
@@ -217,9 +224,9 @@ pub fn check_screen_recording() -> PermissionStatus {
 }
 
 /// Tauri app: on release builds on macOS 15+, skips `capture_probe()` to avoid a false
-/// positive — Apple changed `CGWindowListCreateImage` to return the app's own windows 
-/// even without Screen Recording permission, so a non-NULL result no longer implies access. 
-/// Dev builds (`debug_assertions`) skip this restriction: devs already have permissions 
+/// positive — Apple changed `CGWindowListCreateImage` to return the app's own windows
+/// even without Screen Recording permission, so a non-NULL result no longer implies access.
+/// Dev builds (`debug_assertions`) skip this restriction: devs already have permissions
 /// and benefit from the full probe chain to avoid false-negative preflight stalls.
 #[cfg(target_os = "macos")]
 pub fn check_screen_recording_tauri() -> PermissionStatus {
@@ -228,7 +235,11 @@ pub fn check_screen_recording_tauri() -> PermissionStatus {
     } else {
         macos_screen_recording::preflight() || macos_screen_recording::capture_probe()
     };
-    if ok { PermissionStatus::Granted } else { PermissionStatus::Denied }
+    if ok {
+        PermissionStatus::Granted
+    } else {
+        PermissionStatus::Denied
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
