@@ -841,7 +841,9 @@ fn run_event_tap(
     // Expose the tap to the callback for TAP_DISABLED_BY_TIMEOUT handling.
     // SAFETY: `installed.tap` lives until teardown(), which happens after the
     // while loop — well after any callback that could read this pointer.
-    state.tap_ptr.store(&mut *installed.tap as *mut cg::EventTap, Ordering::Release);
+    state
+        .tap_ptr
+        .store(&mut *installed.tap as *mut cg::EventTap, Ordering::Release);
 
     debug!("Event tap started");
 
@@ -859,10 +861,18 @@ fn run_event_tap(
         // (~1 s) and trigger a burst-replay of queued events (phantom keystrokes).
         let drained = {
             let mut buf = state.text_buf.lock();
-            if buf.should_flush() { buf.flush() } else { None }
+            if buf.should_flush() {
+                buf.flush()
+            } else {
+                None
+            }
         };
         if let Some(s) = drained {
-            let text = if state.config.apply_pii_removal { remove_pii(&s) } else { s };
+            let text = if state.config.apply_pii_removal {
+                remove_pii(&s)
+            } else {
+                s
+            };
             let mut event =
                 UiEvent::text(Utc::now(), state.start.elapsed().as_millis() as u64, text);
             event.app_name = (**state.current_app.load()).clone();
@@ -894,7 +904,11 @@ fn run_event_tap(
     // Final flush — same lock discipline: release before PII removal.
     let drained = { state.text_buf.lock().flush() };
     if let Some(s) = drained {
-        let text = if state.config.apply_pii_removal { remove_pii(&s) } else { s };
+        let text = if state.config.apply_pii_removal {
+            remove_pii(&s)
+        } else {
+            s
+        };
         let mut event = UiEvent::text(Utc::now(), state.start.elapsed().as_millis() as u64, text);
         event.app_name = (**state.current_app.load()).clone();
         event.window_title = (**state.current_window.load()).clone();
@@ -1451,7 +1465,10 @@ fn run_app_observer(
     // removing it (keycastr 1025e8f). Doing only the first two still lets the
     // kernel replay queued source events; doing only the last two leaves
     // Chromium in accessibility mode and it replays on its own.
-    debug!("AXObserver shutdown: starting cleanup (pid={})", observed_pid);
+    debug!(
+        "AXObserver shutdown: starting cleanup (pid={})",
+        observed_pid
+    );
 
     if let Some(mut existing) = observer.take() {
         if observed_pid != 0 {
