@@ -19,7 +19,7 @@ edition = "2021"
 
 [workspace.dependencies]
 # AI
-tokenizers = "0.21.0"
+tokenizers = { version = "0.21.0", default-features = false }
 hf-hub = { version = "0.3.2", git = "https://github.com/neo773/hf-hub", rev = "437dcf4049233f4a0e0cfc4e1c1dbf5ed2c57760", default-features = false, features = [
     "native-tls",
     "tokio",
@@ -93,12 +93,12 @@ sqlx = { version = "0.7", features = ["sqlite", "runtime-tokio-rustls"] }
 # Math / ML
 ndarray = "0.16"
 rand = "0.9"
-ort = "=2.0.0-rc.10"
+ort = { version = "=2.0.0-rc.10", default-features = false }
 
 # Platform
 dirs = "6"
 which = "7"
-zbus = { version = "5.5", features = ["blocking"] }
+zbus = { version = "5.5", default-features = false, features = ["blocking"] }
 windows = "0.58"
 xcap = "0.9"
 keyring = "3"
