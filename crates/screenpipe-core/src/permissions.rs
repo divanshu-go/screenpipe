@@ -130,12 +130,16 @@ pub fn preflight_check(need_screen: bool, need_audio: bool) -> bool {
 
 /// macOS Screen Recording TCC probes.
 ///
-/// `CGPreflightScreenCaptureAccess` has a known false-negative bug (returns `false`
-/// when permission is actually granted, e.g. for CLI binaries launched via `npx`
-/// from a fresh cache path). A `true` preflight is always trustworthy; a `false` is
-/// confirmed by `capture_probe` before reporting denial — except on macOS 15+ release
-/// Tauri builds where `capture_probe` produces false positives (Apple changed
-/// `CGWindowListCreateImage` to return the app's own windows without permission).
+/// - `preflight`: `CGPreflightScreenCaptureAccess` — fast, no side effects. A `true`
+///   result is always reliable; a `false` can be a false negative (known bug for CLI
+///   binaries on fresh TCC cache paths, e.g. via `npx`).
+/// - `capture_probe`: `CGWindowListCreateImage` — real capture attempt. Reliable on
+///   macOS ≤ 14 and in CLI. On macOS 15+ inside a Tauri app, Apple changed it to
+///   return the calling app's own windows even without permission → always non-NULL →
+///   false positive. Do NOT use in Tauri on macOS 15+ release builds.
+///
+/// See `check_screen_recording` and `check_screen_recording_tauri` for how these
+/// are combined per context.
 #[cfg(target_os = "macos")]
 mod macos_screen_recording {
     use std::ffi::c_void;
@@ -213,9 +217,9 @@ pub fn check_screen_recording() -> PermissionStatus {
 }
 
 /// Tauri app: on release builds on macOS 15+, skips `capture_probe()` to avoid a false
-/// positive — Apple changed `CGWindowListCreateImage` to return the app's own windows
-/// even without Screen Recording permission, so a non-NULL result no longer implies access.
-/// Dev builds (`debug_assertions`) skip this restriction: devs already have permissions
+/// positive — Apple changed `CGWindowListCreateImage` to return the app's own windows 
+/// even without Screen Recording permission, so a non-NULL result no longer implies access. 
+/// Dev builds (`debug_assertions`) skip this restriction: devs already have permissions 
 /// and benefit from the full probe chain to avoid false-negative preflight stalls.
 #[cfg(target_os = "macos")]
 pub fn check_screen_recording_tauri() -> PermissionStatus {
@@ -225,6 +229,11 @@ pub fn check_screen_recording_tauri() -> PermissionStatus {
         macos_screen_recording::preflight() || macos_screen_recording::capture_probe()
     };
     if ok { PermissionStatus::Granted } else { PermissionStatus::Denied }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn check_screen_recording_tauri() -> PermissionStatus {
+    PermissionStatus::NotNeeded
 }
 
 #[cfg(target_os = "macos")]
