@@ -595,10 +595,7 @@ fn copy_permission_flow_bundle() {
     let bundle_src = std::env::var("DEP_TAURI_PLUGIN_PERMISSION_FLOW_BUNDLE_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| {
-            panic!(
-                "DEP_TAURI_PLUGIN_PERMISSION_FLOW_BUNDLE_DIR not set; \
-                 plugin rev is too old to forward bundle-dir metadata"
-            )
+            panic!("DEP_TAURI_PLUGIN_PERMISSION_FLOW_BUNDLE_DIR not set")
         });
 
     if !bundle_src.exists() {
