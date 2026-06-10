@@ -579,13 +579,12 @@ int shortcut_is_available(void) { return 0; }
 }
 
 /// Stage `PermissionFlow_PermissionFlow.bundle` into `src-tauri/` so Tauri
-/// bundles it into `Contents/Resources/`. Missing it crashes onboarding
-/// with `fatalError` on the first localized string.
+/// bundles it into `Contents/Resources/`. Missing it crashes onboarding with
+/// `fatalError` on the first localized string in a shipped `.app`.
 ///
 /// Source path comes from `DEP_TAURI_PLUGIN_PERMISSION_FLOW_BUNDLE_DIR`,
 /// which the plugin's build.rs re-exports from upstream `permission-flow`
-/// via Cargo `links` metadata. Panics on miss — a silent warning previously
-/// let broken `.app`s ship.
+/// via Cargo `links` metadata.
 #[cfg(target_os = "macos")]
 fn copy_permission_flow_bundle() {
     let bundle_name = "PermissionFlow_PermissionFlow.bundle";
@@ -598,12 +597,21 @@ fn copy_permission_flow_bundle() {
             panic!("DEP_TAURI_PLUGIN_PERMISSION_FLOW_BUNDLE_DIR not set")
         });
 
+    // Missing here means swift-rs's SwiftPM build didn't emit it. Hard-fail
+    // release (shippable .app must have it) and warn-only debug (e2e CI uses
+    // --no-bundle and doesn't assemble a .app).
     if !bundle_src.exists() {
-        panic!(
-            "{} missing at {}; swift-rs build failed (rerun with -vv)",
+        let is_release = std::env::var("PROFILE").as_deref() == Ok("release");
+        let msg = format!(
+            "{} missing at {}; swift-rs didn't emit it",
             bundle_name,
-            bundle_src.display()
+            bundle_src.display(),
         );
+        if is_release {
+            panic!("{msg}");
+        }
+        println!("cargo:warning={msg} (debug build, skipping stage)");
+        return;
     }
 
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
