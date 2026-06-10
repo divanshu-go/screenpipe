@@ -371,6 +371,23 @@ fn main() {
 
         // Build SwiftUI shortcut reminder
         build_shortcut_reminder();
+
+        // Stage permission-flow's resource bundle for Tauri to pick up.
+        copy_permission_flow_bundle();
+    }
+
+    // Empty stub on non-macOS so the resource entry in every tauri*.conf.json
+    // resolves to something. The bundle is macOS-only at runtime; this just
+    // keeps the bundler glob from erroring on Linux/Windows builds.
+    #[cfg(not(target_os = "macos"))]
+    {
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+        let stub = std::path::PathBuf::from(&manifest_dir)
+            .join("PermissionFlow_PermissionFlow.bundle");
+        if !stub.exists() {
+            std::fs::create_dir_all(&stub).ok();
+            std::fs::write(stub.join(".placeholder"), b"").ok();
+        }
     }
 
     // Copy mlx.metallib to a known location so Tauri can bundle it as a resource.
@@ -559,4 +576,64 @@ int shortcut_is_available(void) { return 0; }
 
     println!("cargo:rustc-link-search=native={}", out_dir.display());
     println!("cargo:rustc-link-lib=static=shortcut_reminder");
+}
+
+/// Stage `PermissionFlow_PermissionFlow.bundle` into `src-tauri/` so Tauri
+/// bundles it into `Contents/Resources/`. Missing it crashes onboarding
+/// with `fatalError` on the first localized string.
+///
+/// Source path comes from `DEP_TAURI_PLUGIN_PERMISSION_FLOW_BUNDLE_DIR`,
+/// which the plugin's build.rs re-exports from upstream `permission-flow`
+/// via Cargo `links` metadata. Panics on miss — a silent warning previously
+/// let broken `.app`s ship.
+#[cfg(target_os = "macos")]
+fn copy_permission_flow_bundle() {
+    let bundle_name = "PermissionFlow_PermissionFlow.bundle";
+
+    println!("cargo:rerun-if-env-changed=DEP_TAURI_PLUGIN_PERMISSION_FLOW_BUNDLE_DIR");
+
+    let bundle_src = std::env::var("DEP_TAURI_PLUGIN_PERMISSION_FLOW_BUNDLE_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            panic!(
+                "DEP_TAURI_PLUGIN_PERMISSION_FLOW_BUNDLE_DIR not set; \
+                 plugin rev is too old to forward bundle-dir metadata"
+            )
+        });
+
+    if !bundle_src.exists() {
+        panic!(
+            "{} missing at {}; swift-rs build failed (rerun with -vv)",
+            bundle_name,
+            bundle_src.display()
+        );
+    }
+
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let bundle_dst = std::path::PathBuf::from(&manifest_dir).join(bundle_name);
+
+    if bundle_dst.exists() {
+        let _ = std::fs::remove_dir_all(&bundle_dst);
+    }
+
+    if let Err(e) = copy_dir_all(&bundle_src, &bundle_dst) {
+        panic!("copy {} → {}: {e}", bundle_src.display(), bundle_dst.display());
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn copy_dir_all(
+    src: &std::path::Path,
+    dst: &std::path::Path,
+) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)?.flatten() {
+        let dst_path = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_all(&entry.path(), &dst_path)?;
+        } else {
+            std::fs::copy(entry.path(), dst_path)?;
+        }
+    }
+    Ok(())
 }
