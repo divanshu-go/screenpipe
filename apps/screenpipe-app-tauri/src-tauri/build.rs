@@ -597,9 +597,14 @@ fn copy_permission_flow_bundle() {
             panic!("DEP_TAURI_PLUGIN_PERMISSION_FLOW_BUNDLE_DIR not set")
         });
 
-    // Missing here means swift-rs's SwiftPM build didn't emit it. Hard-fail
-    // release (shippable .app must have it) and warn-only debug (e2e CI uses
-    // --no-bundle and doesn't assemble a .app).
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let bundle_dst = std::path::PathBuf::from(&manifest_dir).join(bundle_name);
+
+    // Missing source means swift-rs's SwiftPM build didn't emit the bundle
+    // (CI cache layering, scratch-path mismatch, etc.). Release builds must
+    // ship the real bundle — hard-fail. Debug builds (e2e CI) only need the
+    // path to exist so tauri-build's resource validation passes; same
+    // empty-stub trick mlx.metallib uses above.
     if !bundle_src.exists() {
         let is_release = std::env::var("PROFILE").as_deref() == Ok("release");
         let msg = format!(
@@ -610,12 +615,13 @@ fn copy_permission_flow_bundle() {
         if is_release {
             panic!("{msg}");
         }
-        println!("cargo:warning={msg} (debug build, skipping stage)");
+        println!("cargo:warning={msg} (debug build, staging empty stub)");
+        if !bundle_dst.exists() {
+            let _ = std::fs::create_dir_all(&bundle_dst);
+            let _ = std::fs::write(bundle_dst.join(".placeholder"), b"");
+        }
         return;
     }
-
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-    let bundle_dst = std::path::PathBuf::from(&manifest_dir).join(bundle_name);
 
     if bundle_dst.exists() {
         let _ = std::fs::remove_dir_all(&bundle_dst);
