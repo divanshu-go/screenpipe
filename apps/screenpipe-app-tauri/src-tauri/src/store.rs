@@ -1165,7 +1165,7 @@ impl Default for SettingsStore {
             "Recorder".to_string(),
             "vault".to_string(),
             "OBS Studio".to_string(),
-            "screenpipe".to_string(),
+            "screenpipe::".to_string(),
         ];
 
         #[cfg(target_os = "macos")]
