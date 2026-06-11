@@ -50,7 +50,10 @@ define_class!(
     unsafe impl ASWebAuthenticationPresentationContextProviding for AuthPresentationProvider {
         #[unsafe(method_id(presentationAnchorForWebAuthenticationSession:))]
         fn presentation_anchor(&self, _session: &ASWebAuthenticationSession) -> Retained<NSObject> {
+            // start_session checks for a window before calling session.start(), so
+            // this is only reachable when a window is guaranteed to exist.
             get_key_window_as_anchor()
+                .expect("presentationAnchor called without a window — should have been caught by pre-check")
         }
     }
 );
@@ -64,18 +67,18 @@ impl AuthPresentationProvider {
     }
 }
 
-// Returns the app's key window cast to NSObject for use as an ASPresentationAnchor.
+// Returns the app's key window cast to NSObject for use as an ASPresentationAnchor,
+// or None if no window exists (e.g. menu-bar-only mode).
 // ASPresentationAnchor is a typedef for NSWindow on macOS:
 // https://developer.apple.com/documentation/authenticationservices/aspresentationanchor
 // NSWindow → NSResponder → NSObject, so two `into_super` calls walk up the chain.
-fn get_key_window_as_anchor() -> Retained<NSObject> {
+fn get_key_window_as_anchor() -> Option<Retained<NSObject>> {
     let mtm = unsafe { MainThreadMarker::new_unchecked() };
     let app = NSApplication::sharedApplication(mtm);
     let window = app
         .keyWindow()
-        .or_else(|| app.windows().firstObject())
-        .expect("No windows available for ASWebAuthenticationSession presentation anchor");
-    Retained::into_super(Retained::into_super(window))
+        .or_else(|| app.windows().firstObject())?;
+    Some(Retained::into_super(Retained::into_super(window)))
 }
 
 // Keeps the session and its dependencies alive until the completion handler fires.
@@ -195,6 +198,18 @@ pub async fn start_session(
         unsafe {
             // https://developer.apple.com/documentation/authenticationservices/aswebauthenticationsession/presentationcontextprovider
             session.setPresentationContextProvider(Some(ProtocolObject::from_ref(&*provider)));
+        }
+
+        // Guard: presentationAnchor(for:) is called synchronously inside start().
+        // If no NSWindow exists (menu-bar-only mode), get_key_window_as_anchor() returns
+        // None — the ObjC protocol requires a non-null anchor, so we must reject early.
+        if get_key_window_as_anchor().is_none() {
+            if let Some(tx) = tx.lock().unwrap().take() {
+                let _ = tx.send(Err(
+                    "No window available to present login sheet — open screenpipe first".to_string(),
+                ));
+            }
+            return;
         }
 
         let started = unsafe { session.start() };
