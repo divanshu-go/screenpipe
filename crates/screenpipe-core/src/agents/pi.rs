@@ -1952,20 +1952,33 @@ fn seed_from_global(global: &Path, dest: &Path, data_dir: &Path) -> bool {
         }
     }
 
-    // settings.json minus `packages` (global pi packages stay global).
+    // settings.json: copy run-affecting settings (thinking level, budgets,
+    // compaction, …) so behavior matches pre-isolation, but drop:
+    // - `packages`: global pi packages are the #3812 conflict vector;
+    // - `defaultProvider`/`defaultModel`: those are the *user's* personal pi
+    //   defaults. Screenpipe passes --provider/--model on every spawn, so
+    //   they'd never be read — except by a future flagless spawn, which must
+    //   not silently land on the user's BYOK provider. Pin screenpipe's own
+    //   safe fallback instead ("screenpipe"/"auto": the gateway picks a
+    //   model server-side; on a BYOK-only setup it fails loudly rather than
+    //   billing the user's personal key).
     let settings_src = global.join("settings.json");
-    if settings_src.exists() {
-        if let Ok(content) = std::fs::read_to_string(&settings_src) {
-            if let Ok(mut settings) = serde_json::from_str::<serde_json::Value>(&content) {
-                if let Some(obj) = settings.as_object_mut() {
-                    obj.remove("packages");
-                }
-                let pretty = serde_json::to_string_pretty(&settings).unwrap_or(content);
-                if let Err(e) = std::fs::write(dest.join("settings.json"), pretty) {
-                    warn!("pi config seed: failed to write settings.json: {}", e);
-                }
+    let mut settings: serde_json::Value = std::fs::read_to_string(&settings_src)
+        .ok()
+        .and_then(|c| serde_json::from_str(&c).ok())
+        .unwrap_or_else(|| json!({}));
+    if let Some(obj) = settings.as_object_mut() {
+        obj.remove("packages");
+        obj.insert("defaultProvider".to_string(), json!("screenpipe"));
+        obj.insert("defaultModel".to_string(), json!("auto"));
+    }
+    match serde_json::to_string_pretty(&settings) {
+        Ok(pretty) => {
+            if let Err(e) = std::fs::write(dest.join("settings.json"), pretty) {
+                warn!("pi config seed: failed to write settings.json: {}", e);
             }
         }
+        Err(e) => warn!("pi config seed: failed to serialize settings.json: {}", e),
     }
 
     // Sessions for screenpipe-owned cwds. Pi encodes a session dir name as
@@ -2856,7 +2869,9 @@ mod tests {
         std::fs::write(global.join("auth.json"), r#"{"screenpipe":"tok"}"#).unwrap();
         std::fs::write(
             global.join("settings.json"),
-            r#"{"theme":"dark","packages":["npm:pi-web-access"]}"#,
+            // The user's personal pi defaults must NOT leak into screenpipe's
+            // config; run-affecting settings (theme, thinking, …) must.
+            r#"{"theme":"dark","packages":["npm:pi-web-access"],"defaultProvider":"anthropic","defaultModel":"claude-opus-4-8"}"#,
         )
         .unwrap();
 
@@ -2887,6 +2902,10 @@ mod tests {
                 .unwrap();
         assert_eq!(settings["theme"], "dark");
         assert!(settings.get("packages").is_none());
+        // Personal defaults replaced by screenpipe's safe fallback: a future
+        // flagless spawn must never silently run on the user's BYOK provider.
+        assert_eq!(settings["defaultProvider"], "screenpipe");
+        assert_eq!(settings["defaultModel"], "auto");
 
         // Only the screenpipe-owned session dir came over.
         assert!(dest
