@@ -8,7 +8,8 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     // "sp_" prefix: a generic name like "web_search" collides with the user's
     // global pi packages (e.g. pi-web-access registers "web_search") and a
-    // tool-name conflict aborts non-interactive pi runs (#3812).
+    // tool-name conflict aborts non-interactive pi runs
+    // (https://github.com/screenpipe/screenpipe/issues/3812).
     name: "sp_web_search",
     label: "Web Search",
     description:

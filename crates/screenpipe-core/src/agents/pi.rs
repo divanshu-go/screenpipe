@@ -1797,9 +1797,11 @@ impl AgentExecutor for PiExecutor {
 /// Screenpipe's private pi agent dir (models.json, auth.json, sessions, …).
 ///
 /// Isolated from the user's global `~/.pi/agent` so screenpipe never rewrites
-/// config a standalone pi install owns (#4002) and never loads the user's
+/// config a standalone pi install owns
+/// (https://github.com/screenpipe/screenpipe/issues/4002) and never loads the user's
 /// global pi packages — whose tools can collide with ours and abort the run —
-/// into pipe/chat runs (#3812). Every pi spawn must pass this dir via the
+/// into pipe/chat runs (https://github.com/screenpipe/screenpipe/issues/3812).
+/// Every pi spawn must pass this dir via the
 /// `PI_CODING_AGENT_DIR` env var (see [`apply_pi_isolation_env`]).
 ///
 /// Escape hatch: `SCREENPIPE_PI_AGENT_DIR` overrides the location; setting it
@@ -1854,7 +1856,8 @@ const PI_MIGRATION_MARKER: &str = ".migrated-from-global";
 ///
 /// - `models.json` / `auth.json` / `trust.json`: copied verbatim (auth 0600).
 /// - `settings.json`: copied with the `packages` key stripped — globally
-///   installed pi packages are exactly the #3812 conflict vector.
+///   installed pi packages are exactly the conflict vector from
+///   https://github.com/screenpipe/screenpipe/issues/3812.
 /// - `sessions/<encoded-cwd>/`: copied only for cwds under the screenpipe
 ///   data dir (pi-chat, pi-title, pipes/*) so `--continue` keeps history.
 ///
@@ -1954,7 +1957,8 @@ fn seed_from_global(global: &Path, dest: &Path, data_dir: &Path) -> bool {
 
     // settings.json: copy run-affecting settings (thinking level, budgets,
     // compaction, …) so behavior matches pre-isolation, but drop:
-    // - `packages`: global pi packages are the #3812 conflict vector;
+    // - `packages`: global pi packages are the conflict vector from
+    //   https://github.com/screenpipe/screenpipe/issues/3812;
     // - `defaultProvider`/`defaultModel`: those are the *user's* personal pi
     //   defaults. Screenpipe passes --provider/--model on every spawn, so
     //   they'd never be read — except by a future flagless spawn, which must

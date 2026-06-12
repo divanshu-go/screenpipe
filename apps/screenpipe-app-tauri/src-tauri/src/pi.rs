@@ -471,7 +471,9 @@ impl PiManager {
 /// Get the Pi config directory — screenpipe's isolated agent dir
 /// (`~/.screenpipe/pi-config`), never the user's global `~/.pi/agent`.
 /// Delegates to screenpipe-core, which also runs the one-time seed
-/// migration from the global dir. See PRD-AGENT-001.
+/// migration from the global dir.
+/// See https://github.com/screenpipe/screenpipe/issues/4002
+/// and https://github.com/screenpipe/screenpipe/issues/3812.
 fn get_pi_config_dir() -> Result<PathBuf, String> {
     screenpipe_core::agents::pi::pi_config_dir().map_err(|e| e.to_string())
 }

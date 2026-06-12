@@ -165,7 +165,8 @@ function sourceCitationsFromToolCall(toolCall: ToolCallLike | undefined): Source
   const resultText = resultToText(toolCall.result);
 
   // "sp_web_search" is the current bundled tool; bare "web_search" still
-  // appears when replaying sessions recorded before the sp_ rename (#3812).
+  // appears when replaying sessions recorded before the sp_ rename
+  // (https://github.com/screenpipe/screenpipe/issues/3812).
   if (toolName === "sp_web_search" || toolName === "web_search") {
     return webSearchCitations(args, toolCall.result, resultText);
   }

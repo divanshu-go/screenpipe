@@ -3309,7 +3309,8 @@ pub async fn list_cache_files() -> Result<Vec<CacheFile>, String> {
 
     // Pi config (~/.screenpipe/pi-config/). Never list the user's global
     // ~/.pi/agent here — that belongs to their standalone pi install and
-    // offering to delete it was a footgun (see PRD-AGENT-001).
+    // offering to delete it risked destroying the user's own setup
+    // (https://github.com/screenpipe/screenpipe/issues/4002).
     let pi_config = data_dir.join("pi-config");
     if pi_config.exists() {
         let size = dir_size(&pi_config);
