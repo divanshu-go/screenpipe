@@ -468,10 +468,12 @@ impl PiManager {
     }
 }
 
-/// Get the Pi config directory (~/.pi/agent)
+/// Get the Pi config directory — screenpipe's isolated agent dir
+/// (`~/.screenpipe/pi-config`), never the user's global `~/.pi/agent`.
+/// Delegates to screenpipe-core, which also runs the one-time seed
+/// migration from the global dir. See PRD-AGENT-001.
 fn get_pi_config_dir() -> Result<PathBuf, String> {
-    let home_dir = dirs::home_dir().ok_or_else(|| "Could not find home directory".to_string())?;
-    Ok(home_dir.join(".pi").join("agent"))
+    screenpipe_core::agents::pi::pi_config_dir().map_err(|e| e.to_string())
 }
 
 /// Parse the output of `where pi` on Windows, preferring .cmd files
@@ -991,7 +993,7 @@ fn ensure_web_search_extension(
 }
 
 /// Install the MCP bridge extension. Registers proxy tools that route
-/// `mcp_call` / `mcp_list_tools` requests through the local
+/// `sp_mcp_call` / `sp_mcp_list_tools` requests through the local
 /// `/mcp-servers/*` API. Always installed — does nothing when zero
 /// servers are registered.
 fn ensure_mcp_bridge_extension(project_dir: &str) -> Result<(), String> {
@@ -1686,6 +1688,11 @@ pub async fn pi_start_inner(
         const CREATE_NO_WINDOW: u32 = 0x08000000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
+
+    // Scope pi to screenpipe's isolated agent dir (never ~/.pi/agent).
+    screenpipe_core::agents::pi::apply_pi_isolation_env(&mut |k, v| {
+        cmd.env(k, v);
+    });
 
     if let Some(ref token) = user_token {
         cmd.env("SCREENPIPE_API_KEY", token);
