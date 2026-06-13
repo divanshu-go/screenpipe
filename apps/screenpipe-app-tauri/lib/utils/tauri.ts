@@ -1946,6 +1946,22 @@ async showWindowActivated(window: ShowRewindWindow) : Promise<Result<null, strin
 }
 },
 /**
+ * Tauri command: take a pre-save snapshot of the current store.bin.
+ *
+ * Must be called BEFORE `store.save()` from the frontend so that the
+ * current good state is preserved in `.last-good` before the upcoming
+ * in-place write. If the write crashes mid-stream, the L2 recovery at
+ * next boot restores from this pre-save snapshot.
+ */
+async snapshotLastGoodCmd() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("snapshot_last_good_cmd") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Start the server (if not running) and capture.
  * This is the main entry point called by the frontend.
  */

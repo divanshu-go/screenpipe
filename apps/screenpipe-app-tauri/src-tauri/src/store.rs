@@ -113,9 +113,44 @@ fn store_json_has_presets(data: &[u8]) -> bool {
         .unwrap_or(false)
 }
 
-/// L1 — copy `store.bin` → `store.bin.last-good` if the current file parses
-/// and has aiPresets. Skipped silently otherwise so we never freeze a wiped
-/// state as the recovery source. Called after every successful save.
+/// Is this store JSON worth snapshotting and restoring?
+///
+/// Broader than `store_json_has_presets`: a store is snapshotable when it has
+/// non-empty `aiPresets` (established user) OR a non-empty `user.token`
+/// (logged-in user whose presets haven't been seeded yet). This ensures auth
+/// state is protected even on the first save after login — before the frontend
+/// seeds default presets — which was the root cause of issue #4021 (Windows
+/// crash after fresh install lost login + onboarding state because no
+/// `.last-good` snapshot had been created yet).
+fn store_json_is_snapshotable(data: &[u8]) -> bool {
+    let Some(v) = serde_json::from_slice::<Value>(data).ok() else {
+        return false;
+    };
+    let Some(settings) = v.get("settings") else {
+        return false;
+    };
+    let has_presets = settings
+        .get("aiPresets")
+        .and_then(|p| p.as_array())
+        .map(|a| !a.is_empty())
+        .unwrap_or(false);
+    let has_user_token = settings
+        .get("user")
+        .and_then(|u| u.get("token"))
+        .and_then(|t| t.as_str())
+        .map(|s| !s.is_empty())
+        .unwrap_or(false);
+    has_presets || has_user_token
+}
+
+/// L1 — copy `store.bin` → `store.bin.last-good` if the current file is
+/// snapshotable (has aiPresets OR a user token). Skipped silently otherwise
+/// so we never freeze a wiped state as the recovery source. Called both
+/// BEFORE each save (pre-save snapshot) and AFTER each successful save
+/// (post-save snapshot).
+///
+/// Writes are atomic (temp-file + rename) so a crash during the snapshot
+/// itself cannot corrupt the `.last-good` file on Windows.
 ///
 /// The outgoing snapshot is rotated to `.last-good.prev` when it differs, so
 /// a post-wipe state that re-seeded default presets (and therefore looks
@@ -125,18 +160,29 @@ pub fn snapshot_last_good(store_path: &Path) {
         Ok(d) => d,
         Err(_) => return,
     };
-    if !store_json_has_presets(&data) {
+    if !store_json_is_snapshotable(&data) {
         return;
     }
     let last_good = store_path.with_extension(LAST_GOOD_SUFFIX);
     if let Ok(existing) = std::fs::read(&last_good) {
-        if existing != data && store_json_has_presets(&existing) {
+        if existing != data && store_json_is_snapshotable(&existing) {
             let prev = store_path.with_extension(LAST_GOOD_PREV_SUFFIX);
-            if let Err(e) = std::fs::write(&prev, &existing) {
+            // Atomic write: temp + rename so a crash during rotation can't
+            // corrupt the .prev file on Windows.
+            let prev_tmp = store_path.with_extension("bin.last-good.prev.tmp");
+            if std::fs::write(&prev_tmp, &existing).is_ok() {
+                if let Err(e) = std::fs::rename(&prev_tmp, &prev) {
+                    tracing::warn!(
+                        "snapshot_last_good: failed to rotate {}: {}",
+                        prev.display(),
+                        e
+                    );
+                    let _ = std::fs::remove_file(&prev_tmp);
+                }
+            } else {
                 tracing::warn!(
-                    "snapshot_last_good: failed to rotate {}: {}",
-                    prev.display(),
-                    e
+                    "snapshot_last_good: failed to write temp for {}",
+                    prev.display()
                 );
             }
             #[cfg(unix)]
@@ -146,11 +192,22 @@ pub fn snapshot_last_good(store_path: &Path) {
             }
         }
     }
-    if let Err(e) = std::fs::write(&last_good, &data) {
+    // Atomic write: temp + rename so a crash during the snapshot write can't
+    // leave .last-good in a truncated state.
+    let last_good_tmp = store_path.with_extension("bin.last-good.tmp");
+    if std::fs::write(&last_good_tmp, &data).is_ok() {
+        if let Err(e) = std::fs::rename(&last_good_tmp, &last_good) {
+            tracing::warn!(
+                "snapshot_last_good: failed to rename temp to {}: {}",
+                last_good.display(),
+                e
+            );
+            let _ = std::fs::remove_file(&last_good_tmp);
+        }
+    } else {
         tracing::warn!(
-            "snapshot_last_good: failed to write {}: {}",
-            last_good.display(),
-            e
+            "snapshot_last_good: failed to write temp for {}",
+            last_good.display()
         );
     }
     #[cfg(unix)]
@@ -166,7 +223,7 @@ fn read_healthy_snapshot(store_path: &Path) -> Option<(std::path::PathBuf, Vec<u
     for suffix in [LAST_GOOD_SUFFIX, LAST_GOOD_PREV_SUFFIX] {
         let p = store_path.with_extension(suffix);
         if let Ok(data) = std::fs::read(&p) {
-            if store_json_has_presets(&data) {
+            if store_json_is_snapshotable(&data) {
                 return Some((p, data));
             }
         }
@@ -204,12 +261,17 @@ fn restore_snapshot_over(store_path: &Path, why: &str) -> bool {
         }
     }
 
-    if let Err(e) = std::fs::write(store_path, &data) {
+    // Atomic restore: write to a temp file then rename so a crash during
+    // restore can't leave store.bin in a half-written state.
+    let restore_tmp = store_path.with_extension("bin.restore-tmp");
+    let write_ok = std::fs::write(&restore_tmp, &data).is_ok();
+    let rename_ok = write_ok && std::fs::rename(&restore_tmp, store_path).is_ok();
+    if !rename_ok {
+        let _ = std::fs::remove_file(&restore_tmp);
         tracing::error!(
-            "settings recovery: failed to restore {} from {}: {}",
+            "settings recovery: failed to restore {} from {} (write or rename failed)",
             store_path.display(),
             src.display(),
-            e
         );
         return false;
     }
@@ -228,10 +290,10 @@ fn restore_snapshot_over(store_path: &Path, why: &str) -> bool {
     true
 }
 
-/// L2 — if `store.bin` is degraded (parses but missing aiPresets) and a
-/// snapshot is healthy, restore it before anything else touches the file.
-/// The bad current file is preserved as `.pre-restore-<UTC ts>` so we have
-/// forensics if a user reports the restore was wrong.
+/// L2 — if `store.bin` is degraded (fails JSON parse, or parses but is not
+/// snapshotable — missing aiPresets and no user token) and a snapshot is
+/// healthy, restore it before anything else touches the file. The bad current
+/// file is preserved as `.pre-restore-<UTC ts>` for forensics.
 ///
 /// Returns `true` when a restore happened (telemetry hook).
 pub fn auto_restore_if_wiped(store_path: &Path) -> bool {
@@ -245,12 +307,12 @@ pub fn auto_restore_if_wiped(store_path: &Path) -> bool {
     if is_encrypted_bytes(&cur) {
         return false;
     }
-    if store_json_has_presets(&cur) {
+    if store_json_is_snapshotable(&cur) {
         return false; // current state is healthy, nothing to do
     }
     restore_snapshot_over(
         store_path,
-        "store.bin is degraded (parses but has no aiPresets)",
+        "store.bin is degraded (truncated, empty, or missing aiPresets and user token)",
     )
 }
 
@@ -465,6 +527,30 @@ pub fn reencrypt_store_file(app: &AppHandle) {
 pub fn reencrypt_store(app: AppHandle) -> Result<(), String> {
     reencrypt_store_file(&app);
     Ok(())
+}
+
+/// Tauri command: take a pre-save snapshot of the current store.bin.
+///
+/// Must be called BEFORE `store.save()` from the frontend so that the
+/// current good state is preserved in `.last-good` before the upcoming
+/// in-place write. If the write crashes mid-stream, the L2 recovery at
+/// next boot restores from this pre-save snapshot.
+#[tauri::command]
+#[specta::specta]
+pub fn snapshot_last_good_cmd(app: AppHandle) -> Result<(), String> {
+    if let Ok(base_dir) = get_base_dir(&app, None) {
+        snapshot_last_good(&base_dir.join("store.bin"));
+    }
+    Ok(())
+}
+
+/// Take a pre-save snapshot of the current store.bin. Call this in every
+/// Rust save path BEFORE `store.save()` so the previous good state is in
+/// `.last-good` if the upcoming write crashes mid-stream.
+fn pre_save_snapshot(app: &AppHandle) {
+    if let Ok(base_dir) = get_base_dir(app, None) {
+        snapshot_last_good(&base_dir.join("store.bin"));
+    }
 }
 
 /// Cached store instance — reusable across the process lifetime.
@@ -729,6 +815,7 @@ impl OnboardingStore {
 
         let mut onboarding = Self::get(app)?.unwrap_or_default();
         update(&mut onboarding);
+        pre_save_snapshot(app);
         store.set("onboarding", json!(onboarding));
         store.save().map_err(|e| e.to_string())?;
         reencrypt_store_file(app);
@@ -740,6 +827,7 @@ impl OnboardingStore {
             return Err("Failed to get onboarding store".to_string());
         };
 
+        pre_save_snapshot(app);
         store.set("onboarding", json!(self));
         store.save().map_err(|e| e.to_string())?;
         reencrypt_store_file(app);
@@ -1386,6 +1474,7 @@ impl SettingsStore {
                 let sanitized = Self::sanitize_legacy_fields(raw.clone());
                 // Persist sanitized fields back to store so the migration only warns once
                 if sanitized != raw {
+                    pre_save_snapshot(app);
                     store.set("settings", sanitized.clone());
                     let _ = store.save();
                     reencrypt_store_file(app);
@@ -1552,6 +1641,10 @@ impl SettingsStore {
             return Err("Failed to get store".to_string());
         };
 
+        // Pre-save: snapshot current on-disk state before overwriting it.
+        // If store.save() crashes mid-write on Windows, L2 recovery at next
+        // boot restores from this snapshot.
+        pre_save_snapshot(app);
         store.set("settings", json!(self));
         store.save().map_err(|e| e.to_string())?;
         reencrypt_store_file(app);
@@ -1703,6 +1796,7 @@ impl CloudSyncSettingsStore {
 
     pub fn save(&self, app: &AppHandle) -> Result<(), String> {
         let store = get_store(app, None).map_err(|e| e.to_string())?;
+        pre_save_snapshot(app);
         store.set("cloud_sync", json!(self));
         store.save().map_err(|e| e.to_string())?;
         reencrypt_store_file(app);
@@ -1738,6 +1832,7 @@ impl CloudArchiveSettingsStore {
 
     pub fn save(&self, app: &AppHandle) -> Result<(), String> {
         let store = get_store(app, None).map_err(|e| e.to_string())?;
+        pre_save_snapshot(app);
         store.set("cloud_archive", json!(self));
         store.save().map_err(|e| e.to_string())?;
         reencrypt_store_file(app);
@@ -1774,6 +1869,7 @@ impl IcsCalendarSettingsStore {
 
     pub fn save(&self, app: &AppHandle) -> Result<(), String> {
         let store = get_store(app, None).map_err(|e| e.to_string())?;
+        pre_save_snapshot(app);
         store.set("ics_calendars", json!(self));
         store.save().map_err(|e| e.to_string())?;
         reencrypt_store_file(app);
@@ -1821,6 +1917,7 @@ impl PipeSuggestionsSettingsStore {
 
     pub fn save(&self, app: &AppHandle) -> Result<(), String> {
         let store = get_store(app, None).map_err(|e| e.to_string())?;
+        pre_save_snapshot(app);
         store.set("pipe_suggestions", json!(self));
         store.save().map_err(|e| e.to_string())?;
         reencrypt_store_file(app);
@@ -1834,6 +1931,53 @@ mod tests {
     use serde_json::json;
 
     const FALLBACK_ENGINE: &str = "whisper-large-v3-turbo-quantized";
+
+    // ── store_json_is_snapshotable ───────────────────────────────────────────
+
+    #[test]
+    fn snapshotable_true_with_presets() {
+        let data = json!({"settings": {"aiPresets": [{"id": "chat"}]}});
+        assert!(store_json_is_snapshotable(
+            data.to_string().as_bytes()
+        ));
+    }
+
+    #[test]
+    fn snapshotable_true_with_user_token() {
+        let data = json!({"settings": {"user": {"token": "tok_abc"}, "aiPresets": []}});
+        assert!(store_json_is_snapshotable(
+            data.to_string().as_bytes()
+        ));
+    }
+
+    #[test]
+    fn snapshotable_false_empty_presets_no_token() {
+        let data = json!({"settings": {"aiPresets": []}});
+        assert!(!store_json_is_snapshotable(
+            data.to_string().as_bytes()
+        ));
+    }
+
+    #[test]
+    fn snapshotable_false_no_settings_key() {
+        let data = json!({"onboarding": {"isCompleted": true}});
+        assert!(!store_json_is_snapshotable(
+            data.to_string().as_bytes()
+        ));
+    }
+
+    #[test]
+    fn snapshotable_false_truncated_json() {
+        assert!(!store_json_is_snapshotable(b"{\"settings\": {\"ai"));
+    }
+
+    #[test]
+    fn snapshotable_false_empty_token() {
+        let data = json!({"settings": {"user": {"token": ""}, "aiPresets": []}});
+        assert!(!store_json_is_snapshotable(
+            data.to_string().as_bytes()
+        ));
+    }
 
     #[test]
     fn auto_update_defaults_to_disabled() {
