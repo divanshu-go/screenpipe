@@ -5,7 +5,7 @@
 //! Tauri commands for cloud sync operations.
 
 use crate::recording::{local_api_context_from_app, LocalApiContext};
-use crate::store::{CloudArchiveSettingsStore, CloudSyncSettingsStore, SettingsStore};
+use crate::store::{pre_save_snapshot, CloudArchiveSettingsStore, CloudSyncSettingsStore, SettingsStore};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use chrono::Utc;
 use screenpipe_core::sync::{get_or_create_machine_id, SyncClientConfig, SyncManager};
@@ -257,6 +257,7 @@ pub async fn update_sync_config(
 
     let store = crate::store::get_store(&app, None).map_err(|e| e.to_string())?;
     store.set("sync_config", serde_json::json!(config));
+    pre_save_snapshot(&app);
     store.save().map_err(|e| e.to_string())?;
 
     Ok(())

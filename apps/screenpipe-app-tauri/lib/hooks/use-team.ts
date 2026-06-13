@@ -13,6 +13,7 @@ import {
   unwrapKeyWithPassphrase,
 } from "../team-crypto";
 import { encodePlainConfig, parsePlainConfigValue } from "../team-pipes";
+import { commands } from "@/lib/utils/tauri";
 
 const API = "https://screenpi.pe/api/team";
 
@@ -92,6 +93,7 @@ async function saveTeamKeyToStore(
   const b64 = await exportTeamKey(key);
   const store = await getStore();
   await store.set(teamKeyStoreKey(teamId), b64);
+  await commands.snapshotLastGoodCmd().catch(() => {});
   await store.save();
 }
 
@@ -99,6 +101,7 @@ async function removeTeamKeyFromStore(teamId: string) {
   try {
     const store = await getStore();
     await store.delete(teamKeyStoreKey(teamId));
+    await commands.snapshotLastGoodCmd().catch(() => {});
     await store.save();
   } catch {
     // ignore — key may not exist

@@ -13,6 +13,7 @@ import {
   exists,
   stat,
 } from "@tauri-apps/plugin-fs";
+import { commands } from "@/lib/utils/tauri";
 import type {
   ChatConversation,
   ConversationKind,
@@ -620,6 +621,7 @@ export async function migrateFromStoreBin(): Promise<void> {
         _migratedToFiles: true,
       },
     });
+    await commands.snapshotLastGoodCmd().catch(() => {});
     await store.save();
 
     console.log("[chat-storage] migration complete");

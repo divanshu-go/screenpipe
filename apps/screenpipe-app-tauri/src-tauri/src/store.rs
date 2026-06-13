@@ -103,8 +103,8 @@ fn is_encrypted_bytes(data: &[u8]) -> bool {
 }
 
 /// Did this store JSON parse and contain a non-empty `settings.aiPresets`?
-/// Used as the "is this a real user state" signal — empty presets means the
-/// migration in use-settings.tsx will seed defaults, which is the wipe trigger.
+/// Retained for unit tests; all production paths use `store_json_is_snapshotable`.
+#[cfg_attr(not(test), allow(dead_code))]
 fn store_json_has_presets(data: &[u8]) -> bool {
     serde_json::from_slice::<Value>(data)
         .ok()
@@ -559,7 +559,7 @@ pub fn snapshot_last_good_cmd(app: AppHandle) -> Result<(), String> {
 /// Take a pre-save snapshot of the current store.bin. Call this in every
 /// Rust save path BEFORE `store.save()` so the previous good state is in
 /// `.last-good` if the upcoming write crashes mid-stream.
-fn pre_save_snapshot(app: &AppHandle) {
+pub(crate) fn pre_save_snapshot(app: &AppHandle) {
     if let Ok(base_dir) = get_base_dir(app, None) {
         snapshot_last_good(&base_dir.join("store.bin"));
     }

@@ -15,7 +15,7 @@ use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut};
 use tracing::{error, info};
 
 use crate::commands::{hide_main_window, show_main_window};
-use crate::store::{get_store, SettingsStore};
+use crate::store::{get_store, pre_save_snapshot, SettingsStore};
 use crate::window::ShowRewindWindow;
 
 #[derive(Debug, Default)]
@@ -228,6 +228,7 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
         |app| {
             if let Ok(store) = get_store(app, None) {
                 store.set("disableAudio", false);
+                pre_save_snapshot(app);
                 let _ = store.save();
             }
             let _ = app.emit("shortcut-start-audio", ());
@@ -243,6 +244,7 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
         |app| {
             if let Ok(store) = get_store(app, None) {
                 store.set("disableAudio", true);
+                pre_save_snapshot(app);
                 let _ = store.save();
             }
             let _ = app.emit("shortcut-stop-audio", ());

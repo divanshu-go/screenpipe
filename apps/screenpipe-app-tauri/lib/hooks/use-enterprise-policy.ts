@@ -132,6 +132,7 @@ async function applyAiPresetPolicy(policy: EnterpriseAiPresetPolicy): Promise<vo
     aiPresets: nextPresets,
     enterpriseSuppressedAiPresets: nextSuppressedPresets,
   });
+  await commands.snapshotLastGoodCmd().catch(() => {});
   await store.save();
 }
 
@@ -160,6 +161,7 @@ async function applyAppUpdatePolicy(policy: EnterpriseAppUpdatePolicy): Promise<
       ? settings.autoUpdate ?? policy.default_auto_update
       : policy.default_auto_update,
   });
+  await commands.snapshotLastGoodCmd().catch(() => {});
   await store.save();
   return metadata;
 }
@@ -200,6 +202,7 @@ async function applyPiiPolicy(lockedSettings: Record<string, unknown>): Promise<
   const store = await getStore();
   const settings = (await store.get<Record<string, unknown>>("settings")) || {};
   await store.set("settings", { ...settings, ...updates });
+  await commands.snapshotLastGoodCmd().catch(() => {});
   await store.save();
 }
 
@@ -243,6 +246,7 @@ async function applyInputCapturePolicy(lockedSettings: Record<string, unknown>):
   if (!changed) return;
 
   await store.set("settings", { ...settings, ...updates });
+  await commands.snapshotLastGoodCmd().catch(() => {});
   await store.save();
   console.log(
     `[enterprise] input capture policy changed settings: ${Object.entries(updates)

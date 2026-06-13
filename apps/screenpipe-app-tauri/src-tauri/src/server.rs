@@ -4,6 +4,7 @@
 
 use crate::commands::show_main_window;
 use crate::get_store;
+use crate::store::pre_save_snapshot;
 use crate::window::ShowRewindWindow;
 use axum::body::Bytes;
 use axum::response::IntoResponse;
@@ -397,6 +398,7 @@ async fn handle_auth(
         );
     }
 
+    pre_save_snapshot(&state.app_handle);
     if let Err(e) = store.save() {
         error!("failed to save store: {}", e);
         return Err((
