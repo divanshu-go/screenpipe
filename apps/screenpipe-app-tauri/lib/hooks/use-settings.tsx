@@ -668,7 +668,7 @@ export const getStore = async () => {
 export const saveAndEncrypt = async (store: Store) => {
 	// Pre-save: snapshot current on-disk state before overwriting it.
 	// If store.save() crashes mid-write on Windows, L2 recovery at next
-	// boot restores from this snapshot (fixes issue #4021).
+	// boot restores from this snapshot (fixes https://github.com/screenpipe/screenpipe/issues/4021).
 	await commands.snapshotLastGoodCmd().catch(() => {});
 	await store.save();
 	await commands.reencryptStore().catch(() => {});
