@@ -3,7 +3,7 @@
 !include "x64.nsh"
 
 ; ---------------------------------------------------------------------------
-; _SP_KillProcesses — shared helper called by both PREINSTALL and PREUNINSTALL
+; _SP_KillProcesses -- shared helper called by both PREINSTALL and PREUNINSTALL
 ; Kills all screenpipe processes by name and by install-directory path.
 ; Uses Push/Pop to preserve $0 and $1 across the call site.
 ; ---------------------------------------------------------------------------
@@ -12,7 +12,7 @@
   Push $1
 
   ; $PLUGINSDIR is a per-session temp dir auto-cleaned on installer exit.
-  ; InitPluginsDir is idempotent — safe to call even if a plugin already ran.
+  ; InitPluginsDir is idempotent -- safe to call even if a plugin already ran.
   InitPluginsDir
 
   DetailPrint "Stopping screenpipe processes..."
@@ -26,7 +26,7 @@
   ; Stop any remaining process running from this install directory, including
   ; the bundled Bun sidecar. Use CIM ExecutablePath instead of Get-Process.Path:
   ; reading process module paths can throw "Access to the path is denied".
-  ; FileWriteUTF16LE /BOM writes UTF-16LE with BOM + CRLF line endings — the
+  ; FileWriteUTF16LE /BOM writes UTF-16LE with BOM + CRLF line endings -- the
   ; encoding and line-ending format PowerShell 5.1 on Windows expects. Plain
   ; FileWrite outputs ANSI (system codepage) and silently breaks on non-ASCII
   ; paths; LF-only endings can cause misbehavior on Windows PowerShell 5.1.
@@ -41,7 +41,7 @@
     FileClose $1
     DetailPrint "Stopping processes from $INSTDIR..."
     ; Disable WOW64 FS redirection so System32 resolves to the real 64-bit dir.
-    ; Screenpipe targets 64-bit Windows 10/11 only. RemoteSigned is sufficient —
+    ; Screenpipe targets 64-bit Windows 10/11 only. RemoteSigned is sufficient --
     ; the .ps1 is written locally and has no Zone.Identifier ADS.
     ; /TIMEOUT=30000 caps the wait at 30 s so the installer cannot hang forever.
     ${DisableX64FSRedirection}
