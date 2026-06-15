@@ -29,6 +29,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { PipeAIIconLarge } from "@/components/pipe-ai-icon";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { AIPresetsSelector } from "@/components/rewind/ai-presets-selector";
+import { ThinkingLevelSelector } from "@/components/thinking-level-selector";
 import { AIPreset, PiQueuedPrompt } from "@/lib/utils/tauri";
 // OpenAI SDK no longer used directly — all providers route through Pi agent
 import posthog from "posthog-js";
@@ -4798,6 +4799,21 @@ export function StandaloneChat({
     };
   }, [settings.user?.token]);
 
+  // After Pi starts, immediately push the saved thinking level via RPC so the
+  // running session is in sync from moment zero — not just on the next user action.
+  // Also calls piRequestState so the hook always learns the model's actual
+  // capabilities (e.g. disables button when model doesn't support thinking),
+  // even when the level didn't change and Pi emits no thinking_level_changed event.
+  const syncThinkingLevelAfterStart = useCallback(async (sessionId: string) => {
+    try {
+      const r = await commands.piGetThinkingLevel();
+      if (r.status === "ok") {
+        await commands.piSetThinkingLevel(sessionId, r.data).catch(() => {});
+      }
+    } catch { /* fire-and-forget */ }
+    commands.piRequestState(sessionId).catch(() => {});
+  }, []);
+
   const restartCurrentPiSession = useCallback(async (providerConfig: NonNullable<ReturnType<typeof buildProviderConfig>>) => {
     let currentPid = piInfo?.pid;
     if (typeof currentPid !== "number") {
@@ -4831,7 +4847,8 @@ export function StandaloneChat({
     setPiInfo(result.data);
     piSessionSyncedRef.current = false;
     setRunningConfigFromProviderConfig(providerConfig);
-  }, [piInfo?.pid, piInfo?.running, setRunningConfigFromProviderConfig, settings.user?.token]);
+    syncThinkingLevelAfterStart(piSessionIdRef.current);
+  }, [piInfo?.pid, piInfo?.running, setRunningConfigFromProviderConfig, settings.user?.token, syncThinkingLevelAfterStart]);
 
   // When connections change (e.g., user connected Google Calendar in Settings),
   // silently restart Pi if the system prompt changed and no message is in-flight.
@@ -6036,6 +6053,7 @@ export function StandaloneChat({
         if (result.status === "ok") {
           setPiInfo(result.data);
           piSessionSyncedRef.current = false;
+          syncThinkingLevelAfterStart(piSessionIdRef.current);
         }
       } catch (e) {
         console.warn("[Pi] reauth restart skipped:", e);
@@ -6530,6 +6548,7 @@ export function StandaloneChat({
             if (providerConfig) {
               setRunningConfigFromProviderConfig(providerConfig);
             }
+            syncThinkingLevelAfterStart(piSessionIdRef.current);
           } else {
             const providerLabel = providerConfig?.provider || "AI";
             toast({ title: `failed to start AI assistant (${providerLabel})`, description: result.status === "error" ? result.error : "Unknown error", variant: "destructive" });
@@ -6814,6 +6833,7 @@ export function StandaloneChat({
             if (providerConfig) {
               setRunningConfigFromProviderConfig(providerConfig);
             }
+            syncThinkingLevelAfterStart(piSessionIdRef.current);
             result = await commands.piPrompt(
               piSessionIdRef.current,
               promptMessage,
@@ -9491,6 +9511,9 @@ export function StandaloneChat({
                 if (!activePipeExecution) handlePiRestart(match);
               }}
             />
+            {(!activePreset || activePreset.provider === "screenpipe-cloud") && (
+              <ThinkingLevelSelector streaming={isLoading || isStreaming} sessionId={currentQueueSessionId} />
+            )}
             {(() => {
               const hasInput = input.trim().length > 0 || pastedImages.length > 0 || attachedDocs.length > 0;
               const primaryAction = getComposerPrimaryAction(isLoading || isStreaming, hasInput);
