@@ -4957,6 +4957,12 @@ export function StandaloneChat({
         try {
           await commands.piSetModel(piSessionIdRef.current, providerConfig);
           setRunningConfigFromProviderConfig(providerConfig);
+          // Re-sync thinking-level capability after model swap: the new model
+          // may not support thinking (or may support different levels), and
+          // Pi only emits thinking_level_changed when the effective level
+          // actually changes — so without an explicit get_state the Brain
+          // icon's enabled/disabled state can be stale for the new model.
+          commands.piRequestState(piSessionIdRef.current).catch(() => {});
         } catch (e) {
           console.error("[Pi] Hot-swap failed, falling back to full restart:", e);
           try {
@@ -9511,9 +9517,14 @@ export function StandaloneChat({
                 if (!activePipeExecution) handlePiRestart(match);
               }}
             />
-            {(!activePreset || activePreset.provider === "screenpipe-cloud") && (
-              <ThinkingLevelSelector streaming={isLoading || isStreaming} sessionId={currentQueueSessionId} />
-            )}
+            {/* Selector is shown for every preset. The Brain icon self-disables
+             *  (via `piThinkingUnsupported` from use-pi-thinking-level) when the
+             *  active model has no reasoning capability — Pi clamps to "off" and
+             *  emits thinking_level_changed/get_state with level="off".
+             *  Works for screenpipe-cloud, openai BYOK (gpt-5 / o-series),
+             *  openai-chatgpt (ChatGPT subscription via codex wire), anthropic,
+             *  native-ollama (thinking-capable models), and custom OpenAI-compat. */}
+            <ThinkingLevelSelector streaming={isLoading || isStreaming} sessionId={currentQueueSessionId} />
             {(() => {
               const hasInput = input.trim().length > 0 || pastedImages.length > 0 || attachedDocs.length > 0;
               const primaryAction = getComposerPrimaryAction(isLoading || isStreaming, hasInput);
