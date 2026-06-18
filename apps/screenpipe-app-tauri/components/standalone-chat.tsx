@@ -31,15 +31,10 @@ import { AIPreset, PiQueuedPrompt } from "@/lib/utils/tauri";
 // OpenAI SDK no longer used directly — all providers route through Pi agent
 import posthog from "posthog-js";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
-import { save as saveDialog, open as openFileDialog } from "@tauri-apps/plugin-dialog";
-import { writeTextFile, readFile, mkdir } from "@tauri-apps/plugin-fs";
+import { save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { writeTextFile, mkdir } from "@tauri-apps/plugin-fs";
 import {
-  extractDocument,
   docsToPromptText,
-  isSupportedDocExt,
-  extFromName,
-  DOC_PICKER_EXTENSIONS,
-  type ExtractedDoc,
 } from "@/lib/pi/extract-document";
 import { commands } from "@/lib/utils/tauri";
 import { emit } from "@tauri-apps/api/event";
@@ -50,7 +45,6 @@ import { handlePiEvent, statusForEvent } from "@/lib/stores/pi-event-router";
 import { deriveFallbackConversationTitle } from "@/lib/utils/chat-title";
 import { buildChipModelContent, buildChipDisplayContent, parseConnectionChip } from "@/lib/utils/connection-chip";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { useHardcodedTiles } from "@/lib/hooks/use-hardcoded-tiles";
 import { useIsFullscreen } from "@/lib/hooks/use-is-fullscreen";
@@ -59,10 +53,8 @@ import { useSqlAutocomplete, useTagAutocomplete } from "@/lib/hooks/use-sql-auto
 import { homeDir, join } from "@tauri-apps/api/path";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
 import {
-  parseMentions,
   buildAppMentionSuggestions,
   buildTagMentionSuggestions,
-  filterMentionSuggestions,
   normalizeAppTag,
   extractConversationHistorySyncUserText,
   isInjectedTitleSourcePrompt,
@@ -95,10 +87,6 @@ import { localFetch, getApiBaseUrl } from "@/lib/api";
 import { connectionMentionTag } from "@/lib/chat/connection-suggestions";
 import {
   externalizeLargeContextIfNeeded,
-  makePastedTextDoc,
-  pastedTextDocName,
-  PASTED_TEXT_ATTACHMENT_CHAR_THRESHOLD,
-  PASTED_TEXT_SHOW_IN_FIELD_MAX_CHARS,
 } from "@/lib/chat/large-context";
 import {
   isPlaceholderConversationTitle,
@@ -121,7 +109,6 @@ import { IntegrationIcon, INTEGRATION_ICON_KEYS } from "@/components/settings/co
 import {
   getComposerPrimaryAction,
   isComposerSteerShortcut,
-  normalizeQueueEventPayload,
 } from "@/lib/chat-queue-controls";
 import { ImageViewerDialog, type ImageViewerState } from "@/components/chat/standalone/image-viewer-dialog";
 import { StandaloneChatHeader } from "@/components/chat/standalone/standalone-chat-header";
@@ -137,15 +124,12 @@ import { useChatScroll } from "@/components/chat/standalone/hooks/use-chat-scrol
 import { useChatConnections } from "@/components/chat/standalone/hooks/use-chat-connections";
 import { useChatAttachments } from "@/components/chat/standalone/hooks/use-chat-attachments";
 import { useChatMentions, type MentionSuggestion } from "@/components/chat/standalone/hooks/use-chat-mentions";
-import { usePiChatAgent } from "@/components/chat/standalone/hooks/use-pi-chat-agent";
+import { usePiChatState } from "@/components/chat/standalone/hooks/use-pi-chat-state";
 import { useChatQueue } from "@/components/chat/standalone/hooks/use-chat-queue";
-import { useChatTransport } from "@/components/chat/standalone/hooks/use-chat-transport";
+import { useChatStreamRender } from "@/components/chat/standalone/hooks/use-chat-stream-render";
 import { useChatPrefillEvents } from "@/components/chat/standalone/hooks/use-chat-prefill-events";
 import { useChatConversationEvents } from "@/components/chat/standalone/hooks/use-chat-conversation-events";
-import {
-  useChatPipeWatch,
-  type ActivePipeExecution,
-} from "@/components/chat/standalone/hooks/use-chat-pipe-watch";
+import { useChatPipeWatch } from "@/components/chat/standalone/hooks/use-chat-pipe-watch";
 import type {
   ChatAttachment,
   ContentBlock,
@@ -162,18 +146,10 @@ import type {
 
 const APP_SUGGESTION_LIMIT = 10;
 const TAG_SUGGESTION_LIMIT = 10;
-const TAG_AUTOCOMPLETE_LIMIT = 50;
-const SPEAKER_SUGGESTION_LIMIT = 50;
 const STREAM_RENDER_THROTTLE_MS = 80;
 const POST_STREAM_SIDE_EFFECT_DELAY_MS = 1_500;
 const CHAT_RAIL_CLASS = "max-w-4xl mx-auto w-full";
 
-
-interface Speaker {
-  id: number;
-  name: string;
-  metadata?: string;
-}
 
 const STATIC_MENTION_SUGGESTIONS: MentionSuggestion[] = [
   { tag: "@today", description: "today's activity", category: "time" },
@@ -418,40 +394,6 @@ export function StandaloneChat({
   // runs with `[]` deps) can read the latest values instead of stale closures.
   const isLoadingRef = useRef(false);
   const messagesRef = useRef<Message[]>([]);
-  const {
-    showMentionDropdown,
-    setShowMentionDropdown,
-    isComposing,
-    setIsComposing,
-    mentionFilter,
-    setMentionFilter,
-    mentionTrigger,
-    setMentionTrigger,
-    selectedMentionIndex,
-    setSelectedMentionIndex,
-    speakerSuggestions,
-    setSpeakerSuggestions,
-    isLoadingSpeakers,
-    setIsLoadingSpeakers,
-    tagSearchSuggestions,
-    setTagSearchSuggestions,
-    isLoadingTagSearch,
-    setIsLoadingTagSearch,
-    appFilterOpen,
-    setAppFilterOpen,
-    filterSearch,
-    setFilterSearch,
-    filterTagResults,
-    setFilterTagResults,
-    filterSpeakerResults,
-    setFilterSpeakerResults,
-    isLoadingFilterSearch,
-    setIsLoadingFilterSearch,
-    selectedFilterResultIndex,
-    setSelectedFilterResultIndex,
-    recentSpeakers,
-    setRecentSpeakers,
-  } = useChatMentions();
   const abortControllerRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -462,7 +404,6 @@ export function StandaloneChat({
   const inputSectionRef = useRef<HTMLDivElement>(null);
   const [inputSectionWidth, setInputSectionWidth] = useState(800);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const dropdownRef = useRef<HTMLDivElement>(null);
   // Inline connection prefix: icon+name rendered as an absolute overlay on the
   // textarea's first line. We measure its width and indent the textarea's first
   // line so the typed text flows after the prefix. chipScrollTop tracks the
@@ -471,6 +412,106 @@ export function StandaloneChat({
   const chipPrefixRef = useRef<HTMLDivElement>(null);
   const [chipPrefixWidth, setChipPrefixWidth] = useState(0);
   const [chipScrollTop, setChipScrollTop] = useState(0);
+  const appMentionSuggestions = React.useMemo(
+    () => buildAppMentionSuggestions(appItems, APP_SUGGESTION_LIMIT),
+    [appItems]
+  );
+  const tagMentionSuggestions = React.useMemo(
+    () => buildTagMentionSuggestions(tagItems, TAG_SUGGESTION_LIMIT),
+    [tagItems]
+  );
+  const allTagMentionSuggestions = React.useMemo(
+    () => buildTagMentionSuggestions(tagItems, tagItems.length),
+    [tagItems]
+  );
+  const tagMentionSections = React.useMemo(() => {
+    type TagCountKey = "memory_count" | "audio_count" | "frame_count";
+    const used = new Set<string>();
+
+    const sourceCount = (item: (typeof tagItems)[number], key: TagCountKey) =>
+      item[key] ?? 0;
+
+    const pick = (key: TagCountKey) => {
+      const picked = tagItems
+        .filter((item) => sourceCount(item, key) > 0 && !used.has(item.name))
+        .sort((a, b) => {
+          const sourceDelta = sourceCount(b, key) - sourceCount(a, key);
+          if (sourceDelta !== 0) return sourceDelta;
+          const totalDelta = b.count - a.count;
+          if (totalDelta !== 0) return totalDelta;
+          return a.name.localeCompare(b.name);
+        })
+        .slice(0, TAG_SUGGESTION_LIMIT);
+
+      for (const item of picked) used.add(item.name);
+      return buildTagMentionSuggestions(picked, TAG_SUGGESTION_LIMIT);
+    };
+
+    return [
+      { label: "memory tags", suggestions: pick("memory_count") },
+      { label: "audio tags", suggestions: pick("audio_count") },
+      { label: "screen tags", suggestions: pick("frame_count") },
+    ].filter((section) => section.suggestions.length > 0);
+  }, [tagItems]);
+
+  const appTagMap = React.useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const suggestion of appMentionSuggestions) {
+      if (suggestion.appName) {
+        map[suggestion.tag.slice(1).toLowerCase()] = suggestion.appName;
+      }
+    }
+    return map;
+  }, [appMentionSuggestions]);
+
+  const atMentionSuggestions = React.useMemo(
+    () => [...STATIC_MENTION_SUGGESTIONS, ...appMentionSuggestions],
+    [appMentionSuggestions]
+  );
+  const {
+    showMentionDropdown,
+    setShowMentionDropdown,
+    isComposing,
+    setIsComposing,
+    mentionFilter,
+    setMentionFilter,
+    mentionTrigger,
+    selectedMentionIndex,
+    setSelectedMentionIndex,
+    isLoadingSpeakers,
+    isLoadingTagSearch,
+    appFilterOpen,
+    setAppFilterOpen,
+    filterSearch,
+    setFilterSearch,
+    isLoadingFilterSearch,
+    selectedFilterResultIndex,
+    setSelectedFilterResultIndex,
+    recentSpeakers,
+    activeFilters,
+    hasActiveFilters,
+    activeFilterCount,
+    activeFilterLabels,
+    filterSearchGroups,
+    filterSearchResults,
+    removeFilter,
+    getFilterSuggestionState,
+    applyFilterSuggestion,
+    filteredMentions,
+    handleMentionInputChange,
+    insertMention,
+  } = useChatMentions({
+    input,
+    setInput,
+    inputRef,
+    hasConnectionChip: Boolean(connectionChip),
+    setChipScrollTop,
+    appTagMap,
+    atMentionSuggestions,
+    tagMentionSuggestions,
+    allTagMentionSuggestions,
+  });
+  const dropdownRef = useRef<HTMLDivElement>(null);
   // Root of the chat surface. The webview drag-drop event is window-global and
   // this chat is kept mounted-but-hidden (display:none) on non-chat sections,
   // so we use this ref's visibility to ignore drops meant for another view
@@ -482,6 +523,8 @@ export function StandaloneChat({
   const [prefillSource, setPrefillSource] = useState<string>("search");
   const [prefillFrameId, setPrefillFrameId] = useState<number | null>(null);
   const [isPreparingPrefill, setIsPreparingPrefill] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const isEmbedded = !!className; // embedded in settings vs overlay panel
   const {
     pastedImages,
     setPastedImages,
@@ -492,7 +535,19 @@ export function StandaloneChat({
     pendingDocs,
     setPendingDocs,
     pendingDocsRef,
-  } = useChatAttachments();
+    attachPastedText,
+    handleFilePicker,
+    handlePastedFiles,
+    showPastedTextInField,
+  } = useChatAttachments({
+    isEmbedded,
+    dropRootRef,
+    inputRef,
+    setInput,
+    setIsDragging,
+    setShowMentionDropdown,
+    setMentionFilter,
+  });
   // Single-shot stash of the attachment metadata for the NEXT user message
   // about to be created by sendPiMessage / enqueuePiMessage. sendMessage
   // populates this just before dispatching; the message-creation sites
@@ -509,9 +564,7 @@ export function StandaloneChat({
     return list;
   }
   const [imageViewer, setImageViewer] = useState<ImageViewerState>(null);
-  const [isDragging, setIsDragging] = useState(false);
   const steerShortcutInFlightRef = useRef(false);
-  const isEmbedded = !!className; // embedded in settings vs overlay panel
 
   const {
     piInfo,
@@ -529,7 +582,6 @@ export function StandaloneChat({
     turnIntentLedgerRef,
     pendingSteerBatchRef,
     pendingSteerFlushInFlightRef,
-    streamRenderTimerRef,
     piLastErrorRef,
     invalidatedAuthHandledRef,
     piStartInFlightRef,
@@ -551,14 +603,13 @@ export function StandaloneChat({
     initialSessionIdRef,
     piSessionIdRef,
     piRunningConfigRef,
-  } = usePiChatAgent();
+  } = usePiChatState();
 
   const {
     cancelStreamingMessageRender,
     flushStreamingMessageRender,
     scheduleStreamingMessageRender,
-  } = useChatTransport({
-    streamRenderTimerRef,
+  } = useChatStreamRender({
     piMessageIdRef,
     piStreamingTextRef,
     piContentBlocksRef,
@@ -671,9 +722,6 @@ export function StandaloneChat({
     );
   };
 
-  // Active pipe execution (when watching a running pipe)
-  const [activePipeExecution, setActivePipeExecution] = useState<ActivePipeExecution | null>(null);
-
   const lastUserMessageRef = useRef<string>("");
 
   // Ref to sendMessage so useEffect callbacks can call it without stale closures
@@ -713,7 +761,8 @@ export function StandaloneChat({
     restoreQueuedDisplay,
     takeQueuedDisplayById,
     consumeQueuedDisplayForStartedMessage,
-  } = useChatQueue(currentQueueSessionId);
+    cancelQueuedPrompt,
+  } = useChatQueue(currentQueueSessionId, piSessionIdRef);
   useChatConversationEvents({ conversationId, inputRef });
   const {
     isUserScrolledUp,
@@ -810,42 +859,6 @@ export function StandaloneChat({
     return () => clearTimeout(t);
   }, [conversationId, input, pastedImages, attachedDocs, pendingDocs]);
 
-  // Process an image file to base64
-  // Resize image to max 1024px and compress as JPEG to keep base64 payload small
-  const resizeImage = useCallback((dataUrl: string): Promise<string> => {
-    return new Promise((resolve) => {
-      const img = new Image();
-      img.onload = () => {
-        const MAX = 1024;
-        let { width, height } = img;
-        if (width > MAX || height > MAX) {
-          const scale = MAX / Math.max(width, height);
-          width = Math.round(width * scale);
-          height = Math.round(height * scale);
-        }
-        const canvas = document.createElement("canvas");
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext("2d")!;
-        ctx.drawImage(img, 0, 0, width, height);
-        resolve(canvas.toDataURL("image/jpeg", 0.8));
-      };
-      img.onerror = () => resolve(dataUrl); // fallback to original
-      img.src = dataUrl;
-    });
-  }, []);
-
-  const processImageFile = useCallback((file: File) => {
-    if (!file.type.startsWith("image/")) return;
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      const base64 = event.target?.result as string;
-      const resized = await resizeImage(base64);
-      setPastedImages(prev => [...prev, resized]);
-    };
-    reader.readAsDataURL(file);
-  }, [resizeImage]);
-
   // Chat conversations — stored as individual JSON files in ~/.screenpipe/chats/
   const {
     showHistory,
@@ -892,230 +905,9 @@ export function StandaloneChat({
     inlineHistoryEnabled: !hideInlineHistory,
   });
 
-  // Read an image file by path and append it to pastedImages (base64 data URL)
-  const loadImageFromPath = useCallback(async (filePath: string) => {
-    const ext = filePath.split(".").pop()?.toLowerCase() || "";
-    const imageExts = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"];
-    if (!imageExts.includes(ext)) return;
-
-    try {
-      const bytes = await readFile(filePath);
-      const mimeMap: Record<string, string> = {
-        png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
-        gif: "image/gif", webp: "image/webp", bmp: "image/bmp", svg: "image/svg+xml",
-      };
-      const mime = mimeMap[ext] || "image/png";
-
-      // Convert Uint8Array to base64
-      let binary = "";
-      for (let i = 0; i < bytes.length; i++) {
-        binary += String.fromCharCode(bytes[i]);
-      }
-      const b64 = btoa(binary);
-      const dataUrl = `data:${mime};base64,${b64}`;
-      const resized = await resizeImage(dataUrl);
-      setPastedImages(prev => [...prev, resized]);
-    } catch (err) {
-      console.error("failed to read dropped image:", err);
-    }
-  }, [resizeImage]);
-
-  // Shared extraction lifecycle: register a pending chip immediately,
-  // run the (potentially multi-second) parser, then swap the pending
-  // chip for a resolved one in attachedDocs (or remove it on error /
-  // empty-result). Bytes-loader is a thunk so the caller can choose
-  // how to source the bytes (path read vs. File.arrayBuffer for paste).
-  const extractAndAttach = useCallback(async (
-    name: string,
-    loadBytes: () => Promise<Uint8Array>,
-  ) => {
-    const ext = extFromName(name);
-    if (!isSupportedDocExt(ext)) {
-      toast({ title: "unsupported file", description: `can't read .${ext || "?"} files`, variant: "destructive" });
-      return;
-    }
-    // Dedupe across both resolved and in-flight attachments. Without
-    // the pending check, double-drop of a slow PDF would queue two
-    // extractions and produce a duplicate chip.
-    if (
-      attachedDocsRef.current.some((d) => d.name === name) ||
-      pendingDocsRef.current.some((d) => d.name === name)
-    ) {
-      return;
-    }
-
-    const pendingId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    setPendingDocs((prev) => [...prev, { id: pendingId, name, ext }]);
-
-    try {
-      const bytes = await loadBytes();
-      const doc = await extractDocument(name, bytes);
-      if (!doc.text.trim()) {
-        toast({ title: "no text found", description: `${name} looks empty or has no extractable text`, variant: "destructive" });
-        return;
-      }
-      // Insert under setPendingDocs's removal so the chip transitions
-      // in-place from "loading" to "loaded" inside a single render.
-      setAttachedDocs((prev) => prev.some((d) => d.name === name) ? prev : [...prev, doc]);
-    } catch (err) {
-      console.error("failed to extract attached doc:", err);
-      toast({ title: "couldn't read file", description: err instanceof Error ? err.message : String(err), variant: "destructive" });
-    } finally {
-      setPendingDocs((prev) => prev.filter((p) => p.id !== pendingId));
-    }
-  }, []);
-
-  // Path-based loader (drag-drop / file picker), bytes via tauri fs.
-  const loadDocFromPath = useCallback(async (filePath: string) => {
-    const name = filePath.split(/[\\/]/).pop() || filePath;
-    await extractAndAttach(name, () => readFile(filePath));
-  }, [extractAndAttach]);
-
-  // File-object loader (clipboard paste), bytes via File.arrayBuffer.
-  // Browsers expose pasted Finder/Explorer files as File objects with
-  // no underlying path, so we can't reuse the tauri-fs readFile path.
-  const processDocFile = useCallback(async (file: File) => {
-    const name = file.name || "pasted file";
-    await extractAndAttach(name, async () => new Uint8Array(await file.arrayBuffer()));
-  }, [extractAndAttach]);
-
-  const attachPastedText = useCallback((text: string) => {
-    const normalized = text.replace(/\r\n/g, "\n");
-    if (normalized.length < PASTED_TEXT_ATTACHMENT_CHAR_THRESHOLD) return false;
-    setAttachedDocs((prev) => [
-      ...prev,
-      makePastedTextDoc(normalized, pastedTextDocName(prev)),
-    ]);
-    return true;
-  }, []);
-
-  const showPastedTextInField = useCallback((doc: ExtractedDoc, index: number) => {
-    if (doc.text.length > PASTED_TEXT_SHOW_IN_FIELD_MAX_CHARS) return;
-
-    setInput((prev) => {
-      if (!prev) return doc.text;
-      const separator = prev.endsWith("\n") ? "\n" : "\n\n";
-      return `${prev}${separator}${doc.text}`;
-    });
-    setAttachedDocs((prev) => prev.filter((_, idx) => idx !== index));
-    setShowMentionDropdown(false);
-    setMentionFilter("");
-    window.setTimeout(() => {
-      inputRef.current?.focus();
-      if (inputRef.current) {
-        inputRef.current.style.height = "auto";
-        inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, 150)}px`;
-      }
-    }, 0);
-  }, []);
-
-  // Handle file picker — images and documents
-  const handleFilePicker = useCallback(async () => {
-    const imageExtensions = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"];
-    try {
-      const selected = await openFileDialog({
-        multiple: true,
-        filters: [
-          { name: "Attachments", extensions: [...imageExtensions, ...DOC_PICKER_EXTENSIONS] },
-          { name: "Images", extensions: imageExtensions },
-          { name: "Documents", extensions: [...DOC_PICKER_EXTENSIONS] },
-        ],
-      });
-      if (!selected) return;
-      const paths = Array.isArray(selected) ? selected : [selected];
-      for (const path of paths) {
-        if (imageExtensions.includes(extFromName(path))) {
-          await loadImageFromPath(path);
-        } else {
-          await loadDocFromPath(path);
-        }
-      }
-    } catch (err) {
-      console.error("file picker error:", err);
-    }
-  }, [loadImageFromPath, loadDocFromPath]);
-
-  // Drag-drop only works in the embedded (non-overlay) chat. The overlay is an
-  // NSPanel with NonActivatingPanel style which doesn't receive drag events.
-  useEffect(() => {
-    if (!isEmbedded) return;
-
-    const webview = getCurrentWebview();
-    const unlisten = webview.onDragDropEvent((event) => {
-      // The drag-drop event is window-global. Only react when this chat is the
-      // visible surface; when it's the hidden home layer (display:none on other
-      // sections) offsetParent is null, so a drop meant for another view is not
-      // also staged here.
-      if (!dropRootRef.current || dropRootRef.current.offsetParent === null) {
-        return;
-      }
-      if (event.payload.type === "enter" || event.payload.type === "over") {
-        setIsDragging(true);
-      } else if (event.payload.type === "drop") {
-        setIsDragging(false);
-        const paths = event.payload.paths;
-        if (paths && paths.length > 0) {
-          const imageExtensions = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"];
-          for (const path of paths) {
-            if (imageExtensions.includes(extFromName(path))) {
-              loadImageFromPath(path);
-            } else {
-              loadDocFromPath(path);
-            }
-          }
-        }
-      } else if (event.payload.type === "leave") {
-        setIsDragging(false);
-      }
-    });
-
-    return () => {
-      unlisten.then((fn) => fn());
-    };
-  }, [isEmbedded, loadImageFromPath, loadDocFromPath]);
-
-  // Handle paste events to capture images
+  // Handle paste events for connection chips, files, and oversized text.
   const handlePaste = useCallback((e: React.ClipboardEvent) => {
-    const items = e.clipboardData?.items;
-    const files = e.clipboardData?.files;
-
-    // Walk both file surfaces (`items` for the common path, `files` as a
-    // fallback for browsers that don't expose Finder/Explorer pastes
-    // through items). Images take the existing fast path; documents
-    // route through processDocFile, which mirrors the drag-drop flow
-    // including pending-chip rendering.
-    const handled = new Set<File>();
-    const tryDispatch = (file: File | null | undefined) => {
-      if (!file || handled.has(file)) return false;
-      const fileTypeIsImage = file.type.startsWith("image/");
-      const ext = extFromName(file.name || "");
-      if (fileTypeIsImage) {
-        handled.add(file);
-        processImageFile(file);
-        return true;
-      }
-      if (isSupportedDocExt(ext)) {
-        handled.add(file);
-        void processDocFile(file);
-        return true;
-      }
-      return false;
-    };
-
-    let didDispatch = false;
-    if (items) {
-      for (let i = 0; i < items.length; i++) {
-        const item = items[i];
-        if (item.kind !== "file") continue;
-        if (tryDispatch(item.getAsFile())) didDispatch = true;
-      }
-    }
-    if (files && files.length > 0) {
-      for (let i = 0; i < files.length; i++) {
-        if (tryDispatch(files[i])) didDispatch = true;
-      }
-    }
-    if (didDispatch) {
+    if (handlePastedFiles(e.clipboardData)) {
       e.preventDefault();
       return;
     }
@@ -1140,7 +932,7 @@ export function StandaloneChat({
     if (attachPastedText(text)) {
       e.preventDefault();
     }
-  }, [processImageFile, processDocFile, attachPastedText, connectionChip]);
+  }, [attachPastedText, connectionChip, handlePastedFiles]);
 
   // Signal that this chat window is ready to receive prefill events.
   // Other windows wait for "chat-ready" before emitting "chat-prefill"
@@ -1261,7 +1053,7 @@ export function StandaloneChat({
   // broadcasts its claim, waits a fixed collection window to gather all claims
   // for the same normalized prompt, then independently picks the SAME winner
   // (smallest window label, then earliest ts, then nonce). Losers drop.
-  const { prefillClaimsRef } = useChatPrefillEvents();
+  const { claimPrefillHandling } = useChatPrefillEvents();
 
   // Listen for chat-prefill events from search modal and pipe creation
   useEffect(() => {
@@ -1290,27 +1082,10 @@ export function StandaloneChat({
             // Cross-window dedup: compete for the right to handle this prefill.
             const imageKey = prefillImages.map((img) => img.slice(0, 96)).join("|");
             const dedupKey = `${fullMessage.trim().toLowerCase().replace(/\s+/g, " ").slice(0, 200)}|images:${imageKey}`;
-            const myWindowLabel = getCurrentWindow().label;
-            const myNonce = Math.random().toString(36).slice(2, 10);
-            const myClaim = { windowLabel: myWindowLabel, timestamp: Date.now(), nonce: myNonce };
-            const bucket = prefillClaimsRef.current.get(dedupKey) ?? [];
-            bucket.push(myClaim);
-            prefillClaimsRef.current.set(dedupKey, bucket);
-            try {
-              await emit("chat-prefill-claim", { dedupKey, ...myClaim });
-            } catch {}
-            // Wait the collection window so every competing window's claim lands.
-            await new Promise((r) => setTimeout(r, 250));
-            const claims = prefillClaimsRef.current.get(dedupKey) ?? [myClaim];
-            const winner = [...claims].sort((a, b) => {
-              if (a.windowLabel !== b.windowLabel) return a.windowLabel < b.windowLabel ? -1 : 1;
-              if (a.timestamp !== b.timestamp) return a.timestamp - b.timestamp;
-              return a.nonce < b.nonce ? -1 : a.nonce > b.nonce ? 1 : 0;
-            })[0];
-            setTimeout(() => prefillClaimsRef.current.delete(dedupKey), 5_000);
-            if (!winner || winner.nonce !== myNonce || winner.windowLabel !== myWindowLabel) {
+            const claim = await claimPrefillHandling(dedupKey);
+            if (!claim.claimed) {
               // Another window won the tie-break — drop this duplicate.
-              console.log(`[chat-prefill] dropped duplicate autoSend (winner=${winner?.windowLabel})`);
+              console.log(`[chat-prefill] dropped duplicate autoSend (winner=${claim.winnerWindowLabel})`);
               return;
             }
             // Clear all streaming state so sendPiMessage doesn't think a message is in-flight
@@ -1830,10 +1605,9 @@ export function StandaloneChat({
   const currentSessionPipeContext = useChatStore((s) =>
     s.currentId ? s.sessions[s.currentId]?.pipeContext : undefined,
   );
-  useChatPipeWatch({
+  const { activePipeExecution, startPipeExecution, clearPipeExecution } = useChatPipeWatch({
     currentSessionKind,
     currentSessionPipeContext,
-    setActivePipeExecution,
   });
 
   // If the Pi pool evicted the session we're currently viewing, swap the
@@ -1876,411 +1650,6 @@ export function StandaloneChat({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  const appMentionSuggestions = React.useMemo(
-    () => buildAppMentionSuggestions(appItems, APP_SUGGESTION_LIMIT),
-    [appItems]
-  );
-
-  const tagMentionSuggestions = React.useMemo(
-    () => buildTagMentionSuggestions(tagItems, TAG_SUGGESTION_LIMIT),
-    [tagItems]
-  );
-
-  const allTagMentionSuggestions = React.useMemo(
-    () => buildTagMentionSuggestions(tagItems, tagItems.length),
-    [tagItems]
-  );
-
-  const tagMentionSections = React.useMemo(() => {
-    type TagCountKey = "memory_count" | "audio_count" | "frame_count";
-    const used = new Set<string>();
-
-    const sourceCount = (item: (typeof tagItems)[number], key: TagCountKey) =>
-      item[key] ?? 0;
-
-    const pick = (key: TagCountKey) => {
-      const picked = tagItems
-        .filter((item) => sourceCount(item, key) > 0 && !used.has(item.name))
-        .sort((a, b) => {
-          const sourceDelta = sourceCount(b, key) - sourceCount(a, key);
-          if (sourceDelta !== 0) return sourceDelta;
-          const totalDelta = b.count - a.count;
-          if (totalDelta !== 0) return totalDelta;
-          return a.name.localeCompare(b.name);
-        })
-        .slice(0, TAG_SUGGESTION_LIMIT);
-
-      for (const item of picked) used.add(item.name);
-      return buildTagMentionSuggestions(picked, TAG_SUGGESTION_LIMIT);
-    };
-
-    return [
-      { label: "memory tags", suggestions: pick("memory_count") },
-      { label: "audio tags", suggestions: pick("audio_count") },
-      { label: "screen tags", suggestions: pick("frame_count") },
-    ].filter((section) => section.suggestions.length > 0);
-  }, [tagItems]);
-
-  const appTagMap = React.useMemo(() => {
-    const map: Record<string, string> = {};
-    for (const suggestion of appMentionSuggestions) {
-      if (suggestion.appName) {
-        map[suggestion.tag.slice(1).toLowerCase()] = suggestion.appName;
-      }
-    }
-    return map;
-  }, [appMentionSuggestions]);
-
-  const atMentionSuggestions = React.useMemo(
-    () => [...STATIC_MENTION_SUGGESTIONS, ...appMentionSuggestions],
-    [appMentionSuggestions]
-  );
-
-  // Parse current input to extract active filters for chip display
-  const activeFilters = React.useMemo(() => {
-    if (!input.trim()) return { timeRanges: [], contentType: null, appName: null, speakerName: null, tagNames: [] as string[] };
-    const parsed = parseMentions(input, { appTagMap });
-    return {
-      timeRanges: parsed.timeRanges,
-      contentType: parsed.contentType,
-      appName: parsed.appName,
-      speakerName: parsed.speakerName,
-      tagNames: parsed.tagNames,
-    };
-  }, [input, appTagMap]);
-
-  // Check if any filters are active
-  const hasActiveFilters = activeFilters.timeRanges.length > 0 ||
-    activeFilters.contentType ||
-    activeFilters.appName ||
-    activeFilters.speakerName ||
-    activeFilters.tagNames.length > 0;
-  const activeFilterCount = (activeFilters.timeRanges.length > 0 ? 1 : 0) +
-    (activeFilters.contentType ? 1 : 0) +
-    (activeFilters.appName ? 1 : 0) +
-    (activeFilters.speakerName ? 1 : 0) +
-    activeFilters.tagNames.length;
-  const activeFilterLabels = React.useMemo(
-    () => [
-      ...activeFilters.timeRanges.map((range) => range.label),
-      activeFilters.contentType,
-      activeFilters.appName,
-      activeFilters.speakerName,
-      ...activeFilters.tagNames.map((tag) => `#${tag}`),
-    ].filter((label): label is string => Boolean(label)),
-    [activeFilters]
-  );
-
-  const filterSearchGroups = React.useMemo(() => {
-    const groups: { label: string; suggestions: MentionSuggestion[] }[] = [];
-    if (filterTagResults.length > 0) {
-      groups.push({ label: "tags", suggestions: filterTagResults });
-    }
-    if (filterSpeakerResults.length > 0) {
-      groups.push({ label: "speakers", suggestions: filterSpeakerResults });
-    }
-    return groups;
-  }, [filterTagResults, filterSpeakerResults]);
-
-  const filterSearchResults = React.useMemo(
-    () => filterSearchGroups.flatMap((group) => group.suggestions),
-    [filterSearchGroups]
-  );
-
-  useEffect(() => {
-    setSelectedFilterResultIndex(0);
-  }, [filterSearch, filterSearchResults.length]);
-
-  // Remove a specific @mention from input
-  const removeFilter = (filterType: "time" | "content" | "app" | "speaker" | "tag", label?: string) => {
-    let newInput = input;
-    if (filterType === "time") {
-      // Remove time mentions like @today, @yesterday, @last-hour, etc.
-      if(label){
-        const timePatterns: Record<string, RegExp> = {
-          "today": /@today\b/gi,
-          "yesterday": /@yesterday\b/gi,
-          "last week": /@last[- ]?week\b/gi,
-          "last hour": /@last[- ]?hour\b/gi,
-          "this morning": /@this[- ]?morning\b/gi,
-        };
-        const pattern = timePatterns[label];
-        if (pattern) newInput = newInput.replace(pattern, "").trim();
-      }else{
-        newInput = newInput.replace(/@(today|yesterday|last[- ]?week|last[- ]?hour|this[- ]?morning)\b/gi, "").trim();
-      }
-    } else if (filterType === "content") {
-      newInput = newInput.replace(/@(audio|screen|input)\b/gi, "").trim();
-    } else if (filterType === "app" && activeFilters.appName) {
-      // Remove app mention - need to find the pattern
-      const appPattern = new RegExp(`@${activeFilters.appName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, "gi");
-      newInput = newInput.replace(appPattern, "").trim();
-      // Also try normalized versions
-      for (const [tag, name] of Object.entries(appTagMap)) {
-        if (name === activeFilters.appName) {
-          newInput = newInput.replace(new RegExp(`@${tag}\\b`, "gi"), "").trim();
-        }
-      }
-    } else if (filterType === "speaker" && activeFilters.speakerName) {
-      const speakerPattern = new RegExp(`@"?${activeFilters.speakerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"?\\b`, "gi");
-      newInput = newInput.replace(speakerPattern, "").trim();
-    } else if (filterType === "tag" && label) {
-      const tagPattern = new RegExp(`#${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "gi");
-      newInput = newInput.replace(tagPattern, "").trim();
-    }
-    // Clean up extra spaces
-    newInput = newInput.replace(/\s+/g, " ").trim();
-    setInput(newInput);
-  };
-
-  const getFilterSuggestionState = (suggestion: MentionSuggestion) => {
-    const tagName = suggestion.tag.slice(1);
-    const speakerName = suggestion.tag.startsWith('@"')
-      ? suggestion.tag.slice(2, -1)
-      : tagName;
-    const isActive =
-      suggestion.category === "tag"
-        ? activeFilters.tagNames.includes(tagName)
-        : suggestion.category === "speaker"
-          ? activeFilters.speakerName === speakerName
-          : false;
-
-    return { tagName, speakerName, isActive };
-  };
-
-  const applyFilterSuggestion = (suggestion: MentionSuggestion) => {
-    const { tagName, speakerName, isActive } = getFilterSuggestionState(suggestion);
-
-    if (suggestion.category === "tag") {
-      if (isActive) {
-        removeFilter("tag", tagName);
-      } else {
-        setInput((prev) => `${suggestion.tag} ${prev.trim()}`.trim() + " ");
-      }
-    } else if (suggestion.category === "speaker") {
-      if (isActive) {
-        removeFilter("speaker");
-      } else {
-        if (activeFilters.speakerName) removeFilter("speaker");
-        setInput((prev) => `${suggestion.tag} ${prev.trim()}`.trim() + " ");
-      }
-    }
-
-    setAppFilterOpen(false);
-    setFilterSearch("");
-  };
-
-  // Fetch speakers dynamically
-  useEffect(() => {
-    if (mentionTrigger !== "@") {
-      setSpeakerSuggestions([]);
-      return;
-    }
-
-    if (!mentionFilter || mentionFilter.length < 1) {
-      setSpeakerSuggestions([]);
-      return;
-    }
-
-    const matchesBase = atMentionSuggestions.some(
-      s => s.tag.toLowerCase().includes(`@${mentionFilter.toLowerCase()}`)
-    );
-    if (matchesBase && mentionFilter.length < 3) {
-      setSpeakerSuggestions([]);
-      return;
-    }
-
-    const searchSpeakers = async () => {
-      setIsLoadingSpeakers(true);
-      try {
-        const response = await localFetch(
-          `/speakers/search?name=${encodeURIComponent(mentionFilter)}&limit=${SPEAKER_SUGGESTION_LIMIT}&include_samples=false`
-        );
-        if (response.ok) {
-          const speakers: Speaker[] = await response.json();
-          const suggestions: MentionSuggestion[] = speakers
-            .filter(s => s.name)
-            .map(s => ({
-              tag: s.name.includes(" ") ? `@"${s.name}"` : `@${s.name}`,
-              description: `speaker`,
-              category: "speaker" as const,
-            }));
-          setSpeakerSuggestions(suggestions);
-        }
-      } catch (error) {
-        console.error("Error searching speakers:", error);
-      } finally {
-        setIsLoadingSpeakers(false);
-      }
-    };
-
-    const debounceTimeout = setTimeout(searchSpeakers, 300);
-    return () => clearTimeout(debounceTimeout);
-  }, [mentionFilter, mentionTrigger, atMentionSuggestions]);
-
-  useEffect(() => {
-    if (mentionTrigger !== "#" || !mentionFilter.trim()) {
-      setTagSearchSuggestions([]);
-      return;
-    }
-
-    const searchTags = async () => {
-      setIsLoadingTagSearch(true);
-      try {
-        const response = await localFetch(
-          `/tags/autocomplete?q=${encodeURIComponent(mentionFilter.trim())}&limit=${TAG_AUTOCOMPLETE_LIMIT}`
-        );
-        if (response.ok) {
-          const tags = await response.json();
-          if (Array.isArray(tags)) {
-            setTagSearchSuggestions(buildTagMentionSuggestions(tags, TAG_AUTOCOMPLETE_LIMIT));
-          }
-        }
-      } catch (error) {
-        console.error("Error searching tags:", error);
-      } finally {
-        setIsLoadingTagSearch(false);
-      }
-    };
-
-    const debounceTimeout = setTimeout(searchTags, 200);
-    return () => clearTimeout(debounceTimeout);
-  }, [mentionFilter, mentionTrigger]);
-
-  useEffect(() => {
-    const query = filterSearch.trim();
-    if (!appFilterOpen || !query) {
-      setFilterTagResults([]);
-      setFilterSpeakerResults([]);
-      setIsLoadingFilterSearch(false);
-      return;
-    }
-
-    let cancelled = false;
-    const searchFilters = async () => {
-      setIsLoadingFilterSearch(true);
-      try {
-        const [tagResponse, speakerResponse] = await Promise.all([
-          localFetch(`/tags/autocomplete?q=${encodeURIComponent(query)}&limit=${TAG_AUTOCOMPLETE_LIMIT}`),
-          localFetch(`/speakers/search?name=${encodeURIComponent(query)}&limit=${SPEAKER_SUGGESTION_LIMIT}&include_samples=false`),
-        ]);
-        if (cancelled) return;
-
-        if (tagResponse.ok) {
-          const tags = await tagResponse.json();
-          setFilterTagResults(
-            Array.isArray(tags)
-              ? buildTagMentionSuggestions(tags, TAG_AUTOCOMPLETE_LIMIT)
-              : []
-          );
-        } else {
-          setFilterTagResults([]);
-        }
-
-        if (speakerResponse.ok) {
-          const speakers: Speaker[] = await speakerResponse.json();
-          setFilterSpeakerResults(
-            Array.isArray(speakers)
-              ? speakers
-                  .filter((speaker) => speaker.name)
-                  .map((speaker) => ({
-                    tag: speaker.name.includes(" ") ? `@"${speaker.name}"` : `@${speaker.name}`,
-                    description: "speaker",
-                    category: "speaker" as const,
-                  }))
-              : []
-          );
-        } else {
-          setFilterSpeakerResults([]);
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setFilterTagResults([]);
-          setFilterSpeakerResults([]);
-          console.error("Error searching filters:", error);
-        }
-      } finally {
-        if (!cancelled) setIsLoadingFilterSearch(false);
-      }
-    };
-
-    const debounceTimeout = setTimeout(searchFilters, 200);
-    return () => {
-      cancelled = true;
-      clearTimeout(debounceTimeout);
-    };
-  }, [appFilterOpen, filterSearch]);
-
-  const filteredMentions = React.useMemo(() => {
-    return filterMentionSuggestions({
-      mentionTrigger,
-      mentionFilter,
-      atMentionSuggestions,
-      tagMentionSuggestions,
-      allTagMentionSuggestions,
-      tagSearchSuggestions,
-      speakerSuggestions,
-      recentSpeakers,
-    });
-  }, [
-    mentionFilter,
-    mentionTrigger,
-    atMentionSuggestions,
-    speakerSuggestions,
-    recentSpeakers,
-    tagMentionSuggestions,
-    allTagMentionSuggestions,
-    tagSearchSuggestions,
-  ]);
-
-  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const value = e.target.value;
-    setInput(value);
-
-    // Auto-resize textarea
-    const textarea = e.target;
-    textarea.style.height = "auto";
-    textarea.style.height = Math.min(textarea.scrollHeight, 150) + "px";
-    // Keep the inline connection prefix aligned with its line: typing can grow
-    // the textarea past maxHeight and scroll it without firing onScroll.
-    if (connectionChip) setChipScrollTop(textarea.scrollTop);
-
-    const cursorPos = e.target.selectionStart || 0;
-    const textBeforeCursor = value.slice(0, cursorPos);
-    const mentionMatch = textBeforeCursor.match(/([@#])([\w:.-]*)$/);
-
-    if (mentionMatch) {
-      setShowMentionDropdown(true);
-      setMentionTrigger(mentionMatch[1] as "@" | "#");
-      setMentionFilter(mentionMatch[2]);
-      setSelectedMentionIndex(0);
-    } else {
-      setShowMentionDropdown(false);
-      setMentionFilter("");
-      setMentionTrigger("@");
-    }
-  };
-
-  const insertMention = (tag: string) => {
-    const cursorPos = inputRef.current?.selectionStart || input.length;
-    const textBeforeCursor = input.slice(0, cursorPos);
-    const textAfterCursor = input.slice(cursorPos);
-
-    const mentionIndex = Math.max(
-      textBeforeCursor.lastIndexOf("@"),
-      textBeforeCursor.lastIndexOf("#")
-    );
-    if (mentionIndex !== -1) {
-      const newValue = textBeforeCursor.slice(0, mentionIndex) + tag + " " + textAfterCursor;
-      setInput(newValue);
-    }
-
-    setShowMentionDropdown(false);
-    setMentionFilter("");
-    setMentionTrigger("@");
-    inputRef.current?.focus();
-  };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Prevent '/' from triggering app shortcuts while typing
@@ -2469,34 +1838,6 @@ export function StandaloneChat({
     window.addEventListener("keydown", handleEscape);
     return () => window.removeEventListener("keydown", handleEscape);
   }, [showMentionDropdown, isLoading, isStreaming]);
-
-  // Preload recent speakers when filter popover opens or the composer @ menu opens.
-  useEffect(() => {
-    const shouldLoadRecentSpeakers =
-      appFilterOpen || (showMentionDropdown && mentionTrigger === "@");
-    if (!shouldLoadRecentSpeakers || recentSpeakers.length > 0) return;
-    (async () => {
-      try {
-        const response = await localFetch(
-          `/speakers/search?name=&limit=${SPEAKER_SUGGESTION_LIMIT}&include_samples=false`
-        );
-        if (response.ok) {
-          const speakers: Speaker[] = await response.json();
-          setRecentSpeakers(
-            speakers
-              .filter((s) => s.name)
-              .map((s) => ({
-                tag: s.name.includes(" ") ? `@"${s.name}"` : `@${s.name}`,
-                description: "speaker",
-                category: "speaker" as const,
-              }))
-          );
-        }
-      } catch {
-        // silent
-      }
-    })();
-  }, [appFilterOpen, showMentionDropdown, mentionTrigger, recentSpeakers.length]);
 
   // Apps/tags load on mount, but the first fetch often races server startup.
   // App names are stable enough to retry only when empty; tags can change
@@ -3590,7 +2931,7 @@ export function StandaloneChat({
           piStreamingTextRef.current = "";
           optimisticSteerRef.current = null;
           if (piMessageIdRef.current?.startsWith("pipe-")) {
-            setActivePipeExecution(null);
+            clearPipeExecution();
           }
           piMessageIdRef.current = null;
           piContentBlocksRef.current = [];
@@ -3610,7 +2951,7 @@ export function StandaloneChat({
             piContentBlocksRef.current = [];
             piLastErrorRef.current = null;
             piThinkingStartRef.current = null;
-            setActivePipeExecution(null);
+            clearPipeExecution();
             setIsLoading(false);
             setIsStreaming(false);
           }
@@ -3788,44 +3129,6 @@ export function StandaloneChat({
 
     setup();
 
-    // Subscribe to queue-pending updates emitted by the rust queue. Each
-    // event carries the full snapshot for ONE session — we filter to the
-    // session this panel is bound to. Single source of truth lives in
-    // `pi_command_queue.rs`; this listener just mirrors it into local state.
-    let unlistenQueue: UnlistenFn | undefined;
-    listen<{
-      sessionId?: string;
-      session_id?: string;
-      queued?: PiQueuedPrompt[];
-    }>("pi-queue-changed", (event) => {
-      if (!mounted) return;
-      const { sessionId, queued } = normalizeQueueEventPayload(event.payload);
-      if (!sessionId) return;
-      setQueuedPromptsBySession((prev) => {
-        const existing = prev[sessionId] ?? [];
-        if (queuedSnapshotsEqual(existing, queued)) return prev;
-        return { ...prev, [sessionId]: queued };
-      });
-    }).then(fn => { unlistenQueue = fn; });
-
-    // Initial fetch — closes the gap between component mount and first event.
-    (async () => {
-      const sidAtFetch = piSessionIdRef.current;
-      try {
-        const res = await commands.piPending(sidAtFetch);
-        if (!mounted) return;
-        const nextQueue = res.status === "ok" ? res.data : [];
-        setQueuedPromptsBySession((prev) => {
-          const existing = prev[sidAtFetch] ?? [];
-          if (queuedSnapshotsEqual(existing, nextQueue)) return prev;
-          return {
-            ...prev,
-            [sidAtFetch]: nextQueue,
-          };
-        });
-      } catch { /* ignore — queue may not be initialized yet */ }
-    })();
-
     // Restart the current session when a new auth token arrives (deeplink login).
     listen<{ apiKey: string }>("pi-reauth", async (event) => {
       if (!mounted) return;
@@ -3851,7 +3154,6 @@ export function StandaloneChat({
       }
       unlistenLog?.();
       unlistenReauth?.();
-      unlistenQueue?.();
       // Deliberately do NOT abort the Pi session here. Unmount happens when
       // the user navigates away from chat (e.g. into the standalone /settings
       // route, which unmounts the whole home page). Aborting would kill an
@@ -3922,7 +3224,7 @@ export function StandaloneChat({
     };
 
     const initWatch = async (pipeName: string, executionId: number, presetId?: string | null) => {
-      setActivePipeExecution({ name: pipeName, executionId });
+      startPipeExecution(pipeName, executionId);
 
       // Apply the pipe's AI preset so the chat header reflects it
       if (presetId && settings.aiPresets) {
@@ -4817,49 +4119,6 @@ export function StandaloneChat({
       cancelled = true;
     };
   }, [currentQueueSessionId]);
-
-  async function cancelQueuedPrompt(prompt: PiQueuedPrompt, options: { silent?: boolean } = {}) {
-    setQueuedActionPromptId(prompt.id);
-    try {
-      const result = await commands.piCancelQueued(piSessionIdRef.current, prompt.id);
-      if (result.status !== "ok") {
-        if (!options.silent) {
-          toast({ title: "failed to cancel queued message", description: result.error, variant: "destructive" });
-        }
-        return false;
-      }
-      if (!result.data) {
-        if (!options.silent) {
-          toast({
-            title: "message already started",
-            description: "Use stop if you want to interrupt the active reply.",
-          });
-        }
-        return false;
-      }
-      if (currentQueueSessionId) {
-        takeQueuedDisplayById(currentQueueSessionId, prompt.id);
-        setQueuedPromptsBySession((prev) => ({
-          ...prev,
-          [currentQueueSessionId]: (prev[currentQueueSessionId] ?? []).filter(
-            (queued) => queued.id !== prompt.id,
-          ),
-        }));
-      }
-      return true;
-    } catch (e) {
-      if (!options.silent) {
-        toast({
-          title: "failed to cancel queued message",
-          description: e instanceof Error ? e.message : String(e),
-          variant: "destructive",
-        });
-      }
-      return false;
-    } finally {
-      setQueuedActionPromptId((current) => current === prompt.id ? null : current);
-    }
-  }
 
   function setAssistantInterruptedState(activeAssistantId: string | null, interruptedBySteer: boolean) {
     if (!activeAssistantId) return;
@@ -6036,7 +5295,7 @@ export function StandaloneChat({
               <textarea
                 ref={inputRef}
                 value={input}
-                onChange={handleInputChange}
+                onChange={handleMentionInputChange}
                 onCompositionStart={() => setIsComposing(true)}
                 onCompositionEnd={() => setIsComposing(false)}
                 onScroll={connectionChip ? (e) => setChipScrollTop(e.currentTarget.scrollTop) : undefined}
