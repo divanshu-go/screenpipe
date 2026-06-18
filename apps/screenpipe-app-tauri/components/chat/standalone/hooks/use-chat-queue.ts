@@ -50,6 +50,7 @@ export function useChatQueue(currentQueueSessionId: string, piSessionIdRef: Muta
 
   useEffect(() => {
     let cancelled = false;
+    setQueuedActionPromptId(null);
     (async () => {
       try {
         const res = await commands.piPending(currentQueueSessionId);
@@ -104,8 +105,30 @@ export function useChatQueue(currentQueueSessionId: string, piSessionIdRef: Muta
     return takeQueuedDisplayById(sessionId, match[0]);
   }
 
+  function getQueuedDisplayBySession(sessionId: string | null) {
+    return sessionId ? queuedDisplayBySessionRef.current[sessionId] : undefined;
+  }
+
+  function beginQueuedAction(promptId: string) {
+    setQueuedActionPromptId(promptId);
+  }
+
+  function finishQueuedAction(promptId: string) {
+    setQueuedActionPromptId((current) => current === promptId ? null : current);
+  }
+
+  function removeQueuedPrompt(sessionId: string | null, promptId: string) {
+    if (!sessionId) return;
+    setQueuedPromptsBySession((prev) => ({
+      ...prev,
+      [sessionId]: (prev[sessionId] ?? []).filter(
+        (queued) => queued.id !== promptId,
+      ),
+    }));
+  }
+
   async function cancelQueuedPrompt(prompt: PiQueuedPrompt, options: { silent?: boolean } = {}) {
-    setQueuedActionPromptId(prompt.id);
+    beginQueuedAction(prompt.id);
     try {
       const result = await commands.piCancelQueued(piSessionIdRef.current, prompt.id);
       if (result.status !== "ok") {
@@ -124,12 +147,7 @@ export function useChatQueue(currentQueueSessionId: string, piSessionIdRef: Muta
         return false;
       }
       takeQueuedDisplayById(currentQueueSessionId, prompt.id);
-      setQueuedPromptsBySession((prev) => ({
-        ...prev,
-        [currentQueueSessionId]: (prev[currentQueueSessionId] ?? []).filter(
-          (queued) => queued.id !== prompt.id,
-        ),
-      }));
+      removeQueuedPrompt(currentQueueSessionId, prompt.id);
       return true;
     } catch (e) {
       if (!options.silent) {
@@ -141,21 +159,21 @@ export function useChatQueue(currentQueueSessionId: string, piSessionIdRef: Muta
       }
       return false;
     } finally {
-      setQueuedActionPromptId((current) => current === prompt.id ? null : current);
+      finishQueuedAction(prompt.id);
     }
   }
 
   return {
-    queuedPromptsBySession,
-    setQueuedPromptsBySession,
-    queuedDisplayBySessionRef,
     queuedActionPromptId,
-    setQueuedActionPromptId,
     queuedScrollRef,
     queuedPrompts,
     restoreQueuedDisplay,
     takeQueuedDisplayById,
     consumeQueuedDisplayForStartedMessage,
+    getQueuedDisplayBySession,
+    beginQueuedAction,
+    finishQueuedAction,
+    removeQueuedPrompt,
     cancelQueuedPrompt,
   };
 }

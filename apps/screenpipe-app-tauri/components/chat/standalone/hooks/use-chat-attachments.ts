@@ -29,7 +29,6 @@ interface UseChatAttachmentsOptions {
   dropRootRef: React.RefObject<HTMLDivElement>;
   inputRef: React.RefObject<HTMLTextAreaElement>;
   setInput: React.Dispatch<React.SetStateAction<string>>;
-  setIsDragging: React.Dispatch<React.SetStateAction<boolean>>;
   setShowMentionDropdown: React.Dispatch<React.SetStateAction<boolean>>;
   setMentionFilter: React.Dispatch<React.SetStateAction<string>>;
 }
@@ -41,10 +40,10 @@ export function useChatAttachments({
   dropRootRef,
   inputRef,
   setInput,
-  setIsDragging,
   setShowMentionDropdown,
   setMentionFilter,
 }: UseChatAttachmentsOptions) {
+  const [isDragging, setIsDragging] = useState(false);
   const [pastedImages, setPastedImages] = useState<string[]>([]);
   // Mirror for the per-conversation draft snapshot — see inputValueRef.
   const pastedImagesRef = useRef<string[]>([]);
@@ -310,6 +309,7 @@ export function useChatAttachments({
   }, [dropRootRef, handleDroppedPaths, isEmbedded, setIsDragging]);
 
   return {
+    isDragging,
     pastedImages,
     setPastedImages,
     pastedImagesRef,

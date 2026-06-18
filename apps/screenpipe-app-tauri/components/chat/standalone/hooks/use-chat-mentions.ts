@@ -29,6 +29,8 @@ type ActiveFilters = {
   tagNames: string[];
 };
 
+type FilterType = "time" | "content" | "app" | "speaker" | "tag";
+
 interface Speaker {
   name: string;
 }
@@ -136,7 +138,44 @@ export function useChatMentions({
     setSelectedFilterResultIndex(0);
   }, [filterSearch, filterSearchResults.length]);
 
-  const removeFilter = useCallback((filterType: "time" | "content" | "app" | "speaker" | "tag", label?: string) => {
+  const closeFilterMenu = useCallback(() => {
+    setAppFilterOpen(false);
+  }, []);
+
+  const handleFilterMenuOpenChange = useCallback((open: boolean) => {
+    setAppFilterOpen(open);
+    if (!open) setFilterSearch("");
+  }, []);
+
+  const updateFilterSearch = useCallback((value: string) => {
+    setFilterSearch(value);
+  }, []);
+
+  const clearFilterSearch = useCallback(() => {
+    setFilterSearch("");
+  }, []);
+
+  const selectFilterResultIndex = useCallback((index: number) => {
+    setSelectedFilterResultIndex(index);
+  }, []);
+
+  const selectNextFilterResult = useCallback(() => {
+    setSelectedFilterResultIndex((index) =>
+      filterSearchResults.length === 0
+        ? 0
+        : (index + 1) % filterSearchResults.length,
+    );
+  }, [filterSearchResults.length]);
+
+  const selectPreviousFilterResult = useCallback(() => {
+    setSelectedFilterResultIndex((index) =>
+      filterSearchResults.length === 0
+        ? 0
+        : (index - 1 + filterSearchResults.length) % filterSearchResults.length,
+    );
+  }, [filterSearchResults.length]);
+
+  const removeFilter = useCallback((filterType: FilterType, label?: string) => {
     let newInput = input;
     if (filterType === "time") {
       if (label) {
@@ -209,6 +248,92 @@ export function useChatMentions({
     setAppFilterOpen(false);
     setFilterSearch("");
   }, [activeFilters.speakerName, getFilterSuggestionState, removeFilter, setInput]);
+
+  const applySelectedFilterResult = useCallback(() => {
+    const selectedSuggestion = filterSearchResults[selectedFilterResultIndex];
+    if (selectedSuggestion) applyFilterSuggestion(selectedSuggestion);
+  }, [applyFilterSuggestion, filterSearchResults, selectedFilterResultIndex]);
+
+  const applyTimeFilterSuggestion = useCallback((suggestion: MentionSuggestion) => {
+    const timeLabels: Record<string, string> = {
+      "today's activity": "today",
+      yesterday: "yesterday",
+      "past 7 days": "last week",
+      "past hour": "last hour",
+      "this morning": "this morning",
+    };
+    const label = timeLabels[suggestion.description];
+    const isActive = activeFilters.timeRanges.some((range) => range.label === label);
+    if (isActive) {
+      removeFilter("time", label);
+    } else {
+      removeFilter("time");
+      setTimeout(() => {
+        setInput((prev) => `${suggestion.tag} ${prev.trim()}`.trim() + " ");
+      }, 0);
+    }
+    closeFilterMenu();
+  }, [activeFilters.timeRanges, closeFilterMenu, removeFilter, setInput]);
+
+  const applyContentFilterSuggestion = useCallback((suggestion: MentionSuggestion) => {
+    const contentTypeMap: Record<string, string> = {
+      screen: "screen",
+      audio: "audio",
+      input: "input",
+    };
+    const tagName = suggestion.tag.slice(1);
+    const isActive = activeFilters.contentType === (contentTypeMap[tagName] || tagName);
+    if (isActive) {
+      removeFilter("content");
+    } else {
+      removeFilter("content");
+      setTimeout(() => {
+        setInput((prev) => `${suggestion.tag} ${prev.trim()}`.trim() + " ");
+      }, 0);
+    }
+    closeFilterMenu();
+  }, [activeFilters.contentType, closeFilterMenu, removeFilter, setInput]);
+
+  const applyAppFilterSuggestion = useCallback((suggestion: MentionSuggestion) => {
+    const isActive = activeFilters.appName === suggestion.appName;
+    if (isActive) {
+      removeFilter("app");
+    } else {
+      if (activeFilters.appName) removeFilter("app");
+      setInput((prev) => `${suggestion.tag} ${prev.trim()}`.trim() + " ");
+    }
+    closeFilterMenu();
+  }, [activeFilters.appName, closeFilterMenu, removeFilter, setInput]);
+
+  const applyTagFilterSuggestion = useCallback((suggestion: MentionSuggestion) => {
+    const tagName = suggestion.tag.slice(1);
+    const isActive = activeFilters.tagNames.includes(tagName);
+    if (isActive) {
+      removeFilter("tag", tagName);
+    } else {
+      setInput((prev) => `${suggestion.tag} ${prev.trim()}`.trim() + " ");
+    }
+    closeFilterMenu();
+  }, [activeFilters.tagNames, closeFilterMenu, removeFilter, setInput]);
+
+  const applyConnectionFilterTag = useCallback((tag: string) => {
+    setInput((prev) => `${tag} ${prev.trim()}`.trim() + " ");
+    closeFilterMenu();
+  }, [closeFilterMenu, setInput]);
+
+  const applySpeakerFilterSuggestion = useCallback((suggestion: MentionSuggestion) => {
+    const speakerName = suggestion.tag.startsWith("@\"")
+      ? suggestion.tag.slice(2, -1)
+      : suggestion.tag.slice(1);
+    const isActive = activeFilters.speakerName === speakerName;
+    if (isActive) {
+      removeFilter("speaker");
+    } else {
+      if (activeFilters.speakerName) removeFilter("speaker");
+      setInput((prev) => `${suggestion.tag} ${prev.trim()}`.trim() + " ");
+    }
+    closeFilterMenu();
+  }, [activeFilters.speakerName, closeFilterMenu, removeFilter, setInput]);
 
   useEffect(() => {
     if (mentionTrigger !== "@") {
@@ -457,12 +582,9 @@ export function useChatMentions({
     isLoadingSpeakers,
     isLoadingTagSearch,
     appFilterOpen,
-    setAppFilterOpen,
     filterSearch,
-    setFilterSearch,
     isLoadingFilterSearch,
     selectedFilterResultIndex,
-    setSelectedFilterResultIndex,
     recentSpeakers,
     activeFilters,
     hasActiveFilters,
@@ -473,6 +595,20 @@ export function useChatMentions({
     removeFilter,
     getFilterSuggestionState,
     applyFilterSuggestion,
+    closeFilterMenu,
+    handleFilterMenuOpenChange,
+    updateFilterSearch,
+    clearFilterSearch,
+    selectFilterResultIndex,
+    selectNextFilterResult,
+    selectPreviousFilterResult,
+    applySelectedFilterResult,
+    applyTimeFilterSuggestion,
+    applyContentFilterSuggestion,
+    applyAppFilterSuggestion,
+    applyTagFilterSuggestion,
+    applyConnectionFilterTag,
+    applySpeakerFilterSuggestion,
     filteredMentions,
     handleMentionInputChange,
     insertMention,

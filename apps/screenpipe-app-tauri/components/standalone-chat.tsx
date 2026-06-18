@@ -101,7 +101,6 @@ import {
 } from "@/lib/chat/image-content";
 import {
   queuedPreviewForText,
-  queuedSnapshotsEqual,
 } from "@/lib/chat/queued-display";
 import { withConversationHistory } from "@/lib/chat/conversation-history";
 import { formatChatAsMarkdown } from "@/lib/chat/markdown-export";
@@ -481,12 +480,9 @@ export function StandaloneChat({
     isLoadingSpeakers,
     isLoadingTagSearch,
     appFilterOpen,
-    setAppFilterOpen,
     filterSearch,
-    setFilterSearch,
     isLoadingFilterSearch,
     selectedFilterResultIndex,
-    setSelectedFilterResultIndex,
     recentSpeakers,
     activeFilters,
     hasActiveFilters,
@@ -494,9 +490,22 @@ export function StandaloneChat({
     activeFilterLabels,
     filterSearchGroups,
     filterSearchResults,
-    removeFilter,
     getFilterSuggestionState,
     applyFilterSuggestion,
+    closeFilterMenu,
+    handleFilterMenuOpenChange,
+    updateFilterSearch,
+    clearFilterSearch,
+    selectFilterResultIndex,
+    selectNextFilterResult,
+    selectPreviousFilterResult,
+    applySelectedFilterResult,
+    applyTimeFilterSuggestion,
+    applyContentFilterSuggestion,
+    applyAppFilterSuggestion,
+    applyTagFilterSuggestion,
+    applyConnectionFilterTag,
+    applySpeakerFilterSuggestion,
     filteredMentions,
     handleMentionInputChange,
     insertMention,
@@ -523,9 +532,9 @@ export function StandaloneChat({
   const [prefillSource, setPrefillSource] = useState<string>("search");
   const [prefillFrameId, setPrefillFrameId] = useState<number | null>(null);
   const [isPreparingPrefill, setIsPreparingPrefill] = useState(false);
-  const [isDragging, setIsDragging] = useState(false);
   const isEmbedded = !!className; // embedded in settings vs overlay panel
   const {
+    isDragging,
     pastedImages,
     setPastedImages,
     pastedImagesRef,
@@ -544,7 +553,6 @@ export function StandaloneChat({
     dropRootRef,
     inputRef,
     setInput,
-    setIsDragging,
     setShowMentionDropdown,
     setMentionFilter,
   });
@@ -751,16 +759,16 @@ export function StandaloneChat({
     useChatFilePreview(conversationId);
   const currentQueueSessionId = conversationId ?? piSessionIdRef.current;
   const {
-    queuedPromptsBySession,
-    setQueuedPromptsBySession,
-    queuedDisplayBySessionRef,
     queuedActionPromptId,
-    setQueuedActionPromptId,
     queuedScrollRef,
     queuedPrompts,
     restoreQueuedDisplay,
     takeQueuedDisplayById,
     consumeQueuedDisplayForStartedMessage,
+    getQueuedDisplayBySession,
+    beginQueuedAction,
+    finishQueuedAction,
+    removeQueuedPrompt,
     cancelQueuedPrompt,
   } = useChatQueue(currentQueueSessionId, piSessionIdRef);
   useChatConversationEvents({ conversationId, inputRef });
@@ -4084,42 +4092,6 @@ export function StandaloneChat({
     return enqueuePiMessage(userMessage, displayLabel);
   }
 
-  // Queue UI is session-scoped. On chat switch, hydrate pending items for the
-  // active session key without mutating other session queues.
-  useEffect(() => {
-    const sid = currentQueueSessionId;
-    if (!sid) {
-      return;
-    }
-
-    let cancelled = false;
-    setQueuedActionPromptId(null);
-
-    (async () => {
-      try {
-        const queuedRes = await commands.piPending(sid);
-        if (cancelled) return;
-        const nextQueue = queuedRes.status === "ok" ? queuedRes.data : [];
-        setQueuedPromptsBySession((prev) => {
-          const existing = prev[sid] ?? [];
-          if (queuedSnapshotsEqual(existing, nextQueue)) return prev;
-          return {
-            ...prev,
-            [sid]: nextQueue,
-          };
-        });
-      } catch {
-        // Transient queue refresh failures should not erase the last known
-        // visible queue. The Rust-side `pi-queue-changed` subscription is the
-        // source of truth and will reconcile once IPC recovers.
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [currentQueueSessionId]);
-
   function setAssistantInterruptedState(activeAssistantId: string | null, interruptedBySteer: boolean) {
     if (!activeAssistantId) return;
     let changed = false;
@@ -4621,7 +4593,7 @@ export function StandaloneChat({
   }
 
   async function steerQueuedPrompt(prompt: PiQueuedPrompt) {
-    setQueuedActionPromptId(prompt.id);
+    beginQueuedAction(prompt.id);
     const queuedDisplay = takeQueuedDisplayById(currentQueueSessionId, prompt.id);
     const existingTurnIntent = queuedDisplay?.turnIntentId
       ? turnIntentLedgerRef.current.find((record) => record.sessionId === currentQueueSessionId && record.id === queuedDisplay.turnIntentId)
@@ -4728,12 +4700,7 @@ export function StandaloneChat({
         return;
       }
       if (currentQueueSessionId) {
-        setQueuedPromptsBySession((prev) => ({
-          ...prev,
-          [currentQueueSessionId]: (prev[currentQueueSessionId] ?? []).filter(
-            (queued) => queued.id !== prompt.id,
-          ),
-        }));
+        removeQueuedPrompt(currentQueueSessionId, prompt.id);
       }
     } catch (e) {
       pendingNextPiUserIntentRef.current = null;
@@ -4757,7 +4724,7 @@ export function StandaloneChat({
         variant: "destructive",
       });
     } finally {
-      setQueuedActionPromptId((current) => current === prompt.id ? null : current);
+      finishQueuedAction(prompt.id);
     }
   }
 
@@ -4837,6 +4804,73 @@ export function StandaloneChat({
       }),
     [isPipeSessionChat, messages],
   );
+
+  const toggleCollapsedSteerWork = useCallback((id: string) => {
+    setExpandedSteerWorkIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const cancelMessageEdit = useCallback((message: Message) => {
+    setEditingMessageId(null);
+    pendingCaretRef.current = null;
+    setEditDraft(message.content);
+  }, []);
+
+  const updateEditDraft = useCallback((value: string) => {
+    setEditDraft(value);
+  }, []);
+
+  const copyMessageToClipboard = useCallback(async (message: Message) => {
+    await commands.copyTextToClipboard(message.content);
+    setCopiedMessageId(message.id);
+    setTimeout(() => setCopiedMessageId(null), 2000);
+  }, []);
+
+  const handleMessageMenuOpenChange = useCallback((messageId: string, open: boolean) => {
+    setOpenMessageMenuId(open ? messageId : null);
+  }, []);
+
+  const closeMessageMenu = useCallback(() => {
+    setOpenMessageMenuId(null);
+  }, []);
+
+  const openChatImageViewer = useCallback((images: string[], index: number) => {
+    setImageViewer({ images, index });
+  }, []);
+
+  const retryAssistantMessage = useCallback((messageId: string) => {
+    const msgIndex = messages.findIndex((message) => message.id === messageId);
+    let userMsgIndex = -1;
+    for (let i = msgIndex - 1; i >= 0; i--) {
+      if (messages[i].role === "user") {
+        userMsgIndex = i;
+        break;
+      }
+    }
+    if (userMsgIndex === -1) return;
+    const userMsg = messages[userMsgIndex];
+    setMessages((prev) => prev.slice(0, userMsgIndex));
+    sendMessage(userMsg.content, userMsg.displayContent);
+  }, [messages]);
+
+  const openScheduleDialogForMessage = useCallback((messageId: string) => {
+    const msgIndex = messages.findIndex((message) => message.id === messageId);
+    if (msgIndex === -1) return;
+    const assistantMessage = messages[msgIndex];
+    const userMsg = messages
+      .slice(0, msgIndex)
+      .reverse()
+      .find((message) => message.role === "user");
+    if (!userMsg || !assistantMessage) return;
+    setScheduleDialogMessage({
+      prompt: userMsg.content,
+      response: assistantMessage.content,
+    });
+  }, [messages]);
 
   return (
     <div ref={dropRootRef} className={cn("flex flex-col bg-background", className ?? "h-screen")} data-testid="section-home">
@@ -5007,12 +5041,12 @@ export function StandaloneChat({
           isStreaming={isStreaming}
           activeSourceFooterMessageId={activeSourceFooterMessageId}
           expandedSteerWorkIds={expandedSteerWorkIds}
-          setExpandedSteerWorkIds={setExpandedSteerWorkIds}
+          onToggleCollapsedSteerWork={toggleCollapsedSteerWork}
           highlightedMessageId={highlightedMessageId}
           editingMessageId={editingMessageId}
-          setEditingMessageId={setEditingMessageId}
           editDraft={editDraft}
-          setEditDraft={setEditDraft}
+          onEditDraftChange={updateEditDraft}
+          onCancelEdit={cancelMessageEdit}
           pendingCaretRef={pendingCaretRef}
           pendingEditDownXYRef={pendingEditDownXYRef}
           editTextareaRef={editTextareaRef}
@@ -5021,12 +5055,13 @@ export function StandaloneChat({
           commitEditedMessage={commitEditedMessage}
           citationPlan={citationPlan}
           copiedMessageId={copiedMessageId}
-          setCopiedMessageId={setCopiedMessageId}
+          onCopyMessage={copyMessageToClipboard}
           openMessageMenuId={openMessageMenuId}
-          setOpenMessageMenuId={setOpenMessageMenuId}
-          setImageViewer={setImageViewer}
-          setMessages={setMessages}
-          setScheduleDialogMessage={setScheduleDialogMessage}
+          onMessageMenuOpenChange={handleMessageMenuOpenChange}
+          onCloseMessageMenu={closeMessageMenu}
+          onOpenImageViewer={openChatImageViewer}
+          onRetryAssistantMessage={retryAssistantMessage}
+          onOpenScheduleDialog={openScheduleDialogForMessage}
           sendMessage={sendMessage}
           openFilePreview={openFilePreview}
           branchConversation={branchConversation}
@@ -5244,7 +5279,7 @@ export function StandaloneChat({
           <QueuedPromptsList
             queuedPrompts={queuedPrompts}
             queuedActionPromptId={queuedActionPromptId}
-            queuedDisplayById={queuedDisplayBySessionRef.current[currentQueueSessionId]}
+            queuedDisplayById={getQueuedDisplayBySession(currentQueueSessionId)}
             queuedScrollRef={queuedScrollRef}
             isMac={isMac}
             onSteerQueuedPrompt={steerQueuedPrompt}
@@ -5382,10 +5417,7 @@ export function StandaloneChat({
           <div className="flex items-center gap-1.5 px-1 pt-2">
             <Popover
               open={appFilterOpen}
-              onOpenChange={(open) => {
-                setAppFilterOpen(open);
-                if (!open) setFilterSearch("");
-              }}
+              onOpenChange={handleFilterMenuOpenChange}
             >
               <PopoverTrigger asChild>
                 <Button
@@ -5418,12 +5450,16 @@ export function StandaloneChat({
                   activeFilterCount={activeFilterCount}
                   activeFilters={activeFilters}
                   filterSearch={filterSearch}
-                  setFilterSearch={setFilterSearch}
+                  onFilterSearchChange={updateFilterSearch}
+                  onClearFilterSearch={clearFilterSearch}
                   filterSearchGroups={filterSearchGroups}
                   filterSearchResults={filterSearchResults}
                   isLoadingFilterSearch={isLoadingFilterSearch}
                   selectedFilterResultIndex={selectedFilterResultIndex}
-                  setSelectedFilterResultIndex={setSelectedFilterResultIndex}
+                  onSelectFilterResultIndex={selectFilterResultIndex}
+                  onSelectNextFilterResult={selectNextFilterResult}
+                  onSelectPreviousFilterResult={selectPreviousFilterResult}
+                  onApplySelectedFilterResult={applySelectedFilterResult}
                   staticMentionSuggestions={STATIC_MENTION_SUGGESTIONS}
                   appMentionSuggestions={appMentionSuggestions}
                   allTagMentionSuggestions={allTagMentionSuggestions}
@@ -5433,11 +5469,15 @@ export function StandaloneChat({
                   tagsLoading={tagsLoading}
                   connections={connections}
                   isWindows={isWindows}
-                  setAppFilterOpen={setAppFilterOpen}
-                  setInput={setInput}
-                  removeFilter={removeFilter}
+                  onCloseFilterMenu={closeFilterMenu}
                   getFilterSuggestionState={getFilterSuggestionState}
                   applyFilterSuggestion={applyFilterSuggestion}
+                  applyTimeFilterSuggestion={applyTimeFilterSuggestion}
+                  applyContentFilterSuggestion={applyContentFilterSuggestion}
+                  applyAppFilterSuggestion={applyAppFilterSuggestion}
+                  applyTagFilterSuggestion={applyTagFilterSuggestion}
+                  applyConnectionFilterTag={applyConnectionFilterTag}
+                  applySpeakerFilterSuggestion={applySpeakerFilterSuggestion}
                   handleFilePicker={handleFilePicker}
                 />
               </PopoverContent>
