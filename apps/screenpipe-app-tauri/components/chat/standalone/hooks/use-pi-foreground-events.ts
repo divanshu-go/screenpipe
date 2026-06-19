@@ -19,7 +19,11 @@ import { registerPiLogListener } from "@/components/chat/standalone/hooks/pi-log
 import { registerPiReauthListener } from "@/components/chat/standalone/hooks/pi-reauth-listener";
 import {
   firstAgentEndAssistantError,
+  isRecord,
+  piEventDataFromUnknown,
+  stringValue,
   textFromAssistantMessages,
+  textFromMessageContent,
   textFromToolResult,
 } from "@/components/chat/standalone/hooks/pi-event-handlers";
 import type { Message, ToolCall } from "@/lib/chat/types";
@@ -169,7 +173,10 @@ export function usePiForegroundEvents({
       return true;
     };
 
-    const handlePiEventData = (data: any) => {
+    const handlePiEventData = (payload: unknown) => {
+      const data = piEventDataFromUnknown(payload);
+      if (!data) return;
+
         const emitSessionActivity = (
           partial: {
             status?: ReturnType<typeof statusForEvent>;
@@ -259,13 +266,14 @@ export function usePiForegroundEvents({
           data.assistantMessageEvent.type !== "error"
         ) {
           const evt = data.assistantMessageEvent;
-          if (evt.type === "text_delta" && evt.delta) {
+          const delta = stringValue(evt.delta);
+          if (evt.type === "text_delta" && delta) {
             // First delta of a queued turn → create the placeholder lazily.
             if (!ensureAssistantPlaceholder()) return;
-            piStreamingTextRef.current += evt.delta;
+            piStreamingTextRef.current += delta;
             emitSessionActivity({
               status: "streaming",
-              preview: evt.delta,
+              preview: delta,
               unreadHint: true,
             }, { throttleMs: 250 });
 
@@ -273,9 +281,9 @@ export function usePiForegroundEvents({
             const blocks = piContentBlocksRef.current;
             const lastBlock = blocks[blocks.length - 1];
             if (lastBlock && lastBlock.type === "text") {
-              lastBlock.text += evt.delta;
+              lastBlock.text += delta;
             } else {
-              blocks.push({ type: "text", text: evt.delta });
+              blocks.push({ type: "text", text: delta });
             }
 
             scheduleStreamingMessageRender();
@@ -292,11 +300,11 @@ export function usePiForegroundEvents({
                 prev.map((m) => m.id === msgId ? { ...m, content: m.content === "Processing..." ? "" : m.content, contentBlocks } : m)
               );
             }
-          } else if (evt.type === "thinking_delta" && evt.delta) {
+          } else if (evt.type === "thinking_delta" && delta) {
             const blocks = piContentBlocksRef.current;
             const thinkingBlock = blocks[blocks.length - 1];
             if (thinkingBlock && thinkingBlock.type === "thinking") {
-              thinkingBlock.text += evt.delta;
+              thinkingBlock.text += delta;
             }
             scheduleStreamingMessageRender();
           } else if (evt.type === "thinking_end") {
@@ -305,7 +313,8 @@ export function usePiForegroundEvents({
             if (thinkingBlock && thinkingBlock.type === "thinking") {
               thinkingBlock.isThinking = false;
               thinkingBlock.durationMs = piThinkingStartRef.current ? Date.now() - piThinkingStartRef.current : undefined;
-              if (evt.content) thinkingBlock.text = evt.content;
+              const thinkingContent = stringValue(evt.content);
+              if (thinkingContent) thinkingBlock.text = thinkingContent;
             }
             piThinkingStartRef.current = null;
             if (piMessageIdRef.current) {
@@ -321,9 +330,9 @@ export function usePiForegroundEvents({
           if (piMessageIdRef.current) {
             const msgId = piMessageIdRef.current;
             const toolCall: ToolCall = {
-              id: data.toolCallId || Date.now().toString(),
-              toolName: data.toolName || "unknown",
-              args: data.args || {},
+              id: stringValue(data.toolCallId, Date.now().toString()),
+              toolName: stringValue(data.toolName, "unknown"),
+              args: isRecord(data.args) ? data.args : {},
               isRunning: true,
             };
             // Add tool block (text before it is already its own block)
@@ -336,7 +345,7 @@ export function usePiForegroundEvents({
         } else if (data.type === "tool_execution_end") {
           if (piMessageIdRef.current) {
             const msgId = piMessageIdRef.current;
-            const toolCallId = data.toolCallId;
+            const toolCallId = stringValue(data.toolCallId);
             const resultText = textFromToolResult(data.result);
             const truncated = resultText.length > 2000
               ? resultText.slice(0, 2000) + "\n... (truncated)"
@@ -346,7 +355,7 @@ export function usePiForegroundEvents({
               if (block.type === "tool" && block.toolCall.id === toolCallId) {
                 block.toolCall.isRunning = false;
                 block.toolCall.result = truncated;
-                block.toolCall.isError = data.isError;
+                block.toolCall.isError = data.isError === true;
               }
             }
             const contentBlocks = [...piContentBlocksRef.current];
@@ -356,7 +365,7 @@ export function usePiForegroundEvents({
           }
         } else if (data.type === "auto_retry_end" && data.success === false) {
           // Pi exhausted retries on a transient error (rate limit, overloaded, etc.)
-          const errorStr = data.finalError || "Request failed after retries";
+          const errorStr = stringValue(data.finalError, "Request failed after retries");
           console.error("[Pi] Auto-retry failed:", errorStr);
           piLastErrorRef.current = errorStr;
           emitSessionActivity({ status: "error", lastError: errorStr });
@@ -398,8 +407,8 @@ export function usePiForegroundEvents({
           }
         } else if (data.type === "message_update" && data.assistantMessageEvent?.type === "error") {
           // Pi's LLM returned an error (e.g. rate limit, overloaded)
-          const reason = data.assistantMessageEvent.reason || "";
-          const errorDetail = data.assistantMessageEvent.error || "";
+          const reason = stringValue(data.assistantMessageEvent.reason);
+          const errorDetail = stringValue(data.assistantMessageEvent.error);
           console.error("[Pi] Message error:", reason, errorDetail);
           emitSessionActivity({ status: "error", lastError: `${reason} ${errorDetail}`.trim() || undefined });
 
@@ -467,17 +476,7 @@ export function usePiForegroundEvents({
             // processing the followUp turn.
           }
 
-          const rawText = (() => {
-            const c = data.message?.content;
-            if (typeof c === "string") return c;
-            if (Array.isArray(c)) {
-              return c
-                .filter((p: any) => p?.type === "text" && typeof p.text === "string")
-                .map((p: any) => p.text)
-                .join("");
-            }
-            return "";
-          })();
+          const rawText = textFromMessageContent(data.message?.content);
           const text = extractConversationHistorySyncUserText(rawText) ?? rawText;
           const eventImages = imageDataUrlsFromPiContent(data.message?.content);
           const pendingOptimisticSteer = optimisticSteerRef.current;
@@ -596,7 +595,7 @@ export function usePiForegroundEvents({
         } else if ((data.type === "message_start" || data.type === "message_end") &&
                    data.message?.role === "assistant" && data.message?.stopReason === "error") {
           // LLM returned an error (credits_exhausted, rate limit, provider error, etc.)
-          const errMsg = data.message.errorMessage || data.message.error || "Unknown error";
+          const errMsg = stringValue(data.message.errorMessage, stringValue(data.message.error, "Unknown error"));
           console.error("[Pi] LLM error via", data.type, ":", errMsg);
           piLastErrorRef.current = errMsg;
           emitSessionActivity({ status: "error", lastError: errMsg });
@@ -779,7 +778,7 @@ export function usePiForegroundEvents({
             }
           }
         } else if (data.type === "response" && data.success === false) {
-          const errorStr = data.error || "Unknown error";
+          const errorStr = stringValue(data.error, "Unknown error");
           emitSessionActivity({ status: "error", lastError: errorStr });
           // Pi agent first-call bug (pi-mono#2461) — first RPC prompt crashes.
           // Auto-retry the same prompt once. The second call works.

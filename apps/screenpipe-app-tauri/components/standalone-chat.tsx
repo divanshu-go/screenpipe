@@ -58,7 +58,7 @@ import {
 import { useChatExternalEvents } from "@/components/chat/standalone/hooks/use-chat-external-events";
 import { usePiSessionLifecycle } from "@/components/chat/standalone/hooks/use-pi-session-lifecycle";
 import { useChatTurnIntents } from "@/components/chat/standalone/hooks/use-chat-turn-intents";
-import { useChatSteering } from "@/components/chat/standalone/hooks/use-chat-steering";
+import { usePiSteeringRefs } from "@/components/chat/standalone/hooks/use-pi-steering-transport";
 import { useNextTurnAttachments } from "@/components/chat/standalone/hooks/use-next-turn-attachments";
 import { useChatComposerDraftSync } from "@/components/chat/standalone/hooks/use-chat-composer-draft-sync";
 import { usePipeWatchSession } from "@/components/chat/standalone/hooks/use-pipe-watch-session";
@@ -379,7 +379,7 @@ export function StandaloneChat({
     pendingNextPiUserIntentRef,
     pendingSteerBatchRef,
     pendingSteerFlushInFlightRef,
-  } = useChatSteering();
+  } = usePiSteeringRefs();
 
   const {
     cancelStreamingMessageRender,

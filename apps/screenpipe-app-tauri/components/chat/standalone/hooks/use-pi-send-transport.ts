@@ -5,86 +5,72 @@
 import { homeDir, join } from "@tauri-apps/api/path";
 import posthog from "posthog-js";
 import { toast } from "@/components/ui/use-toast";
-import { commands, type PiQueuedPrompt } from "@/lib/utils/tauri";
-import { localFetch } from "@/lib/api";
-import { docsToPromptText } from "@/lib/pi/extract-document";
-import { externalizeLargeContextIfNeeded } from "@/lib/chat/large-context";
-import { imageDataUrlsToPiImages } from "@/lib/chat/image-content";
-import { queuedPreviewForText } from "@/lib/chat/queued-display";
-import { withConversationHistory } from "@/lib/chat/conversation-history";
+import { commands } from "@/lib/utils/tauri";
 import { isPlaceholderConversationTitle } from "@/lib/chat/message-rendering";
 import { buildProviderErrorMessage, preflightChatProvider } from "@/lib/chat/provider-errors";
 import { useChatStore } from "@/lib/stores/chat-store";
 import { createPiMessageQueueTransport } from "@/components/chat/standalone/hooks/use-pi-message-queue-transport";
 import { usePiLiveSendControls } from "@/components/chat/standalone/hooks/use-pi-live-send";
-import { buildSteerPrompt } from "@/components/chat/standalone/hooks/pi-steering-helpers";
+import { usePiSteeringTransport } from "@/components/chat/standalone/hooks/use-pi-steering-transport";
+import {
+  externalizePreparedMessageIfNeeded,
+  foldAttachedDocsIntoMessage,
+  piImageFromDataUrl,
+  piImageFromFrameId,
+  promptWithConversationHistory,
+} from "@/components/chat/standalone/hooks/pi-message-preparation";
 import type { Message } from "@/lib/chat/types";
 import type { PiSendTransportOptions } from "@/components/chat/standalone/hooks/pi-types";
 
 export function usePiSendTransport(options: PiSendTransportOptions) {
   const {
-  abortControllerRef,
-  activePreset,
-  attachedDocsRef,
-  autoSendBypassRef,
-  buildProviderConfig,
-  canChat,
-  cancelStreamingMessageRender,
-  consumePendingAttachments,
-  currentQueueSessionId,
-  beginQueuedAction,
-  finishQueuedAction,
-  forceQueueModeRef,
-  inputRef,
-  isLoading,
-  isStreaming,
-  lastUserMessageRef,
-  messages,
-  optimisticSteerRef,
-  pastedImages,
-  pendingNextPiUserDisplayRef,
-  pendingNextPiUserIntentRef,
-  pendingSteerBatchRef,
-  pendingSteerFlushInFlightRef,
-  piActiveStopRequestedRef,
-  piContentBlocksRef,
-  piCrashCountRef,
-  piInfo,
-  piMessageIdRef,
-  piPresetSwitchPromiseRef,
-  piRateLimitRetries,
-  piSessionIdRef,
-  piSessionSyncedRef,
-  piStartInFlightRef,
-  piStreamingTextRef,
-  prefillContext,
-  prefillFrameId,
-  prefillSource,
-  registerTurnIntent,
-  markTurnIntentConsumed,
-  removeQueuedPrompt,
-  removeTurnIntent,
-  restartCurrentPiSession,
-  restoreQueuedDisplay,
-  saveConversation,
-  sendDispatchInFlightRef,
-  sendMessageRef,
-  setAttachedDocs,
-  setInput,
-  setIsLoading,
-  setIsStreaming,
-  setMessages,
-  setPastedImages,
-  setPiInfo,
-  setPiStarting,
-  setPrefillContext,
-  setPrefillFrameId,
-  setRunningConfigFromProviderConfig,
-  settings,
-  stagePendingAttachments,
-  syncThinkingLevelAfterStart,
-  takeQueuedDisplayById,
-  turnIntentLedgerRef,
+    abortControllerRef,
+    activePreset,
+    attachedDocsRef,
+    autoSendBypassRef,
+    buildProviderConfig,
+    canChat,
+    cancelStreamingMessageRender,
+    consumePendingAttachments,
+    forceQueueModeRef,
+    inputRef,
+    isLoading,
+    isStreaming,
+    lastUserMessageRef,
+    messages,
+    pastedImages,
+    piActiveStopRequestedRef,
+    piContentBlocksRef,
+    piCrashCountRef,
+    piInfo,
+    piMessageIdRef,
+    piPresetSwitchPromiseRef,
+    piRateLimitRetries,
+    piSessionIdRef,
+    piSessionSyncedRef,
+    piStartInFlightRef,
+    piStreamingTextRef,
+    prefillContext,
+    prefillFrameId,
+    prefillSource,
+    restartCurrentPiSession,
+    saveConversation,
+    sendDispatchInFlightRef,
+    sendMessageRef,
+    setAttachedDocs,
+    setInput,
+    setIsLoading,
+    setIsStreaming,
+    setMessages,
+    setPastedImages,
+    setPiInfo,
+    setPiStarting,
+    setPrefillContext,
+    setPrefillFrameId,
+    setRunningConfigFromProviderConfig,
+    settings,
+    stagePendingAttachments,
+    syncThinkingLevelAfterStart,
   } = options;
   const { enqueuePiMessage } = createPiMessageQueueTransport(
     options,
@@ -100,6 +86,15 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     setIsLoading,
     setIsStreaming,
   });
+  const {
+    clearPendingSteerTransportState,
+    flushPendingSteerBatch,
+    steerMessage,
+    steerQueuedPrompt,
+  } = usePiSteeringTransport(
+    options,
+    (message, displayLabel, imageDataUrls) => sendPiMessage(message, displayLabel, imageDataUrls),
+  );
 
   function clearActivePiTurnState() {
     cancelStreamingMessageRender();
@@ -314,20 +309,8 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
 
       if (prefillFrameId) {
         try {
-          const response = await localFetch(`/frames/${prefillFrameId}`);
-          if (response.ok) {
-            const blob = await response.blob();
-            const arrayBuffer = await blob.arrayBuffer();
-            const base64 = btoa(
-              new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
-            );
-            const mimeType = blob.type || 'image/png';
-            piImages.push({
-              type: "image",
-              mimeType,
-              data: base64,
-            });
-          }
+          const frameImage = await piImageFromFrameId(prefillFrameId);
+          if (frameImage) piImages.push(frameImage);
         } catch (error) {
           console.error("Failed to fetch frame image for Pi:", error);
         }
@@ -343,14 +326,8 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
       }
 
       for (const img of outgoingImages) {
-        const match = img.match(/^data:(image\/[^;]+);base64,(.+)$/);
-        if (match) {
-          piImages.push({
-            type: "image",
-            mimeType: match[1],
-            data: match[2],
-          });
-        }
+        const piImage = piImageFromDataUrl(img);
+        if (piImage) piImages.push(piImage);
       }
       if (shouldClearPastedImages) setPastedImages([]);
 
@@ -393,7 +370,7 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
       // `piSessionSyncedRef` is kept around because other code paths
       // (preset change, reauth, the conversation-load handler) still
       // toggle it for diagnostics, but it no longer gates injection.
-      const promptMessage = withConversationHistory(userMessage, messages);
+      const promptMessage = promptWithConversationHistory(userMessage, messages);
       piSessionSyncedRef.current = true;
 
       // E2E test hook — write to __e2ePiPromptCaptures when the recorder is installed
@@ -550,23 +527,18 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     // The raw `<attached file: ...>` payload never reaches the renderer:
     // when attachments are present the bubble's expand-chevron is
     // suppressed (see ChatMessage / CollapsibleUserMessage).
-    let outgoingMessage = trimmed;
-    let outgoingDisplay = displayLabel;
     const snapshotDocs = queuedDocs.length > 0 ? [...queuedDocs] : [];
+    let {
+      outgoingMessage,
+      outgoingDisplay,
+      attachmentMetadata,
+    } = foldAttachedDocsIntoMessage({
+      trimmed,
+      displayLabel,
+      docs: queuedDocs,
+    });
     if (queuedDocs.length > 0) {
-      const docText = docsToPromptText(queuedDocs);
-      outgoingMessage = [trimmed, docText].filter(Boolean).join("\n\n");
-      // Always set a clean displayContent when docs are attached.
-      // Without it, the bubble would render `outgoingMessage` directly
-      // — dumping the extracted PDF prose into the chat.
-      const cleanLabel = trimmed || `📎 ${queuedDocs.map((d) => d.name).join(", ")}`;
-      outgoingDisplay = displayLabel ?? cleanLabel;
-      stagePendingAttachments(queuedDocs.map((d) => ({
-        name: d.name,
-        ext: d.ext,
-        charCount: d.charCount,
-        truncated: d.truncated,
-      })));
+      stagePendingAttachments(attachmentMetadata);
       setAttachedDocs([]);
     }
 
@@ -581,26 +553,18 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     };
 
     try {
-      const taskHint = snapshotDocs.length > 0 && trimmed.length > 0 && trimmed.length <= 2_000
-        ? trimmed
-        : undefined;
-      const largeContext = await externalizeLargeContextIfNeeded(
+      const prepared = await externalizePreparedMessageIfNeeded({
         outgoingMessage,
-        piSessionIdRef.current,
-        taskHint,
-      );
-      if (largeContext) {
-        outgoingMessage = largeContext.prompt;
-        outgoingDisplay = outgoingDisplay ?? largeContext.displayLabel;
-        stagePendingAttachments([
-          ...queuedDocs.map((d) => ({
-            name: d.name,
-            ext: d.ext,
-            charCount: d.charCount,
-            truncated: d.truncated,
-          })),
-          largeContext.attachment,
-        ]);
+        outgoingDisplay,
+        sessionId: piSessionIdRef.current,
+        docs: queuedDocs,
+        trimmed,
+      });
+      outgoingMessage = prepared.outgoingMessage;
+      outgoingDisplay = prepared.outgoingDisplay;
+      attachmentMetadata = prepared.attachmentMetadata;
+      if (prepared.externalized) {
+        stagePendingAttachments(attachmentMetadata);
         toast({
           title: "large context saved as file",
           description: "Pi will use local chunk files instead of sending the full text inline.",
@@ -634,609 +598,6 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
       restoreDocsOnError(e);
     } finally {
       sendDispatchInFlightRef.current = false;
-    }
-  }
-
-  function setAssistantInterruptedState(activeAssistantId: string | null, interruptedBySteer: boolean) {
-    if (!activeAssistantId) return;
-    let changed = false;
-    let nextRows: Message[] | null = null;
-    setMessages((prev) => {
-      const next = prev.map((message) => {
-        if (
-          message.id !== activeAssistantId ||
-          message.role !== "assistant" ||
-          Boolean(message.interruptedBySteer) === interruptedBySteer
-        ) {
-          return message;
-        }
-        changed = true;
-        return { ...message, interruptedBySteer };
-      });
-      if (changed) nextRows = next;
-      return changed ? next : prev;
-    });
-    if (!changed || !nextRows) return;
-    void saveConversation(nextRows, {
-      refreshHistory: false,
-      syncActiveConversation: false,
-    });
-    const sidNow = piSessionIdRef.current;
-    if (sidNow) {
-      useChatStore.getState().actions.setMessages(sidNow, nextRows as any);
-    }
-  }
-
-  function markCurrentAssistantInterrupted() {
-    setAssistantInterruptedState(piMessageIdRef.current, true);
-  }
-
-  function clearPendingSteerTransportState(sessionId = piSessionIdRef.current) {
-    pendingNextPiUserIntentRef.current = null;
-    pendingNextPiUserDisplayRef.current = null;
-    optimisticSteerRef.current = null;
-    if (sessionId) {
-      pendingSteerBatchRef.current = pendingSteerBatchRef.current.filter((item) => item.sessionId !== sessionId);
-      turnIntentLedgerRef.current = turnIntentLedgerRef.current.filter((record) =>
-        record.sessionId !== sessionId ||
-        record.kind !== "steer" ||
-        Boolean(record.consumedAssistantId)
-      );
-    }
-  }
-
-  /**
-   * Extracts the pending steer batch for the given session, clears it from
-   * the ref, computes derived fields (prompt, preview, images), and sets
-   * the intent / display / optimistic refs needed by the message_start
-   * handler to recognise the steer echo. Returns null when there is no
-   * pending batch for the session.
-   */
-  function prepareSteerBatch(sessionId: string) {
-    const batch = pendingSteerBatchRef.current.filter(
-      (item) => item.sessionId === sessionId,
-    );
-    if (batch.length === 0) return null;
-    pendingSteerBatchRef.current = pendingSteerBatchRef.current.filter(
-      (item) => item.sessionId !== sessionId,
-    );
-
-    const latest = batch[batch.length - 1];
-    const prompt = buildSteerPrompt(batch);
-    const preview = queuedPreviewForText(latest.content);
-    const combinedImages = imageDataUrlsToPiImages(
-      batch.flatMap((item) => item.images),
-    );
-
-    // Remove earlier batch items' turn intents (only latest survives).
-    batch.slice(0, -1).forEach((item) => removeTurnIntent(item.turnIntentId));
-
-    // Set intent refs so the message_start handler recognises the
-    // steer echo and creates the assistant placeholder.
-    pendingNextPiUserIntentRef.current = "steer";
-    pendingNextPiUserDisplayRef.current = {
-      preview,
-      images: [...latest.images],
-      ...(latest.attachments?.length
-        ? { attachments: [...latest.attachments] }
-        : {}),
-      ...(latest.displayContent
-        ? { displayContent: latest.displayContent }
-        : {}),
-      optimisticUserId: latest.optimisticUserId,
-      turnIntentId: latest.turnIntentId,
-    };
-    optimisticSteerRef.current = {
-      id: latest.optimisticUserId,
-      content: prompt,
-      turnIntentId: latest.turnIntentId,
-    };
-    registerTurnIntent({
-      id: latest.turnIntentId,
-      sessionId,
-      kind: "steer",
-      content: prompt,
-      preview,
-      displayedUserId: latest.optimisticUserId,
-      createdAt: latest.createdAt,
-    });
-
-    return { batch, latest, prompt, preview, combinedImages };
-  }
-
-  async function flushPendingSteerBatch() {
-    const sessionId = piSessionIdRef.current;
-    if (!sessionId || pendingSteerFlushInFlightRef.current) return;
-
-    const prepared = prepareSteerBatch(sessionId);
-    if (!prepared) return;
-    pendingSteerFlushInFlightRef.current = true;
-
-    const { batch, latest, prompt, preview, combinedImages } = prepared;
-    const interruptedAssistantId = batch.find((item) => item.interruptedAssistantId)?.interruptedAssistantId ?? null;
-    const hasActiveAssistant = Boolean(piMessageIdRef.current);
-
-    const labelMarkers: Message[] = batch.slice(0, -1).map((item, index) => ({
-      id: `${item.turnIntentId}-label`,
-      role: "assistant",
-      content: "",
-      intent: "steer",
-      turnIntentId: item.turnIntentId,
-      timestamp: Date.now() + index,
-      model: activePreset?.model,
-      provider: activePreset?.provider,
-    }));
-    const labelMarkerIds = new Set(labelMarkers.map((marker) => marker.id));
-
-    let nextRowsAfterLabels: Message[] | null = null;
-    if (labelMarkers.length > 0) {
-      setMessages((prev) => {
-        const existingIds = new Set(prev.map((message) => message.id));
-        const markersToAppend = labelMarkers.filter((marker) => !existingIds.has(marker.id));
-        if (markersToAppend.length === 0) return prev;
-        const next = [...prev, ...markersToAppend];
-        nextRowsAfterLabels = next;
-        return next;
-      });
-      if (nextRowsAfterLabels) {
-        void saveConversation(nextRowsAfterLabels, {
-          refreshHistory: false,
-          syncActiveConversation: false,
-        });
-        useChatStore.getState().actions.setMessages(sessionId, nextRowsAfterLabels as any);
-      }
-    }
-
-    let precreatedSteerAssistantId: string | null = null;
-    if (hasActiveAssistant) {
-      const steerAssistantId = `${latest.turnIntentId}-assistant`;
-      precreatedSteerAssistantId = steerAssistantId;
-      const steerAssistantPlaceholder: Message = {
-        id: steerAssistantId,
-        role: "assistant",
-        content: "Processing...",
-        intent: "steer",
-        turnIntentId: latest.turnIntentId,
-        steeredResponse: true,
-        timestamp: Date.now(),
-        model: activePreset?.model,
-        provider: activePreset?.provider,
-      };
-      let nextRowsAfterAssistant: Message[] | null = null;
-      setMessages((prev) => {
-        if (prev.some((message) => message.id === steerAssistantId)) return prev;
-        const steerUserIndex = prev.findIndex((message) => message.id === latest.optimisticUserId);
-        const insertIndex = steerUserIndex >= 0 ? steerUserIndex + 1 : prev.length;
-        const next = [
-          ...prev.slice(0, insertIndex),
-          steerAssistantPlaceholder,
-          ...prev.slice(insertIndex),
-        ];
-        nextRowsAfterAssistant = next;
-        return next;
-      });
-      if (nextRowsAfterAssistant) {
-        void saveConversation(nextRowsAfterAssistant, {
-          refreshHistory: false,
-          syncActiveConversation: false,
-        });
-        useChatStore.getState().actions.setMessages(sessionId, nextRowsAfterAssistant as any);
-      }
-      markTurnIntentConsumed(latest.turnIntentId, steerAssistantId);
-      piMessageIdRef.current = steerAssistantId;
-      piStreamingTextRef.current = "";
-      piContentBlocksRef.current = [];
-      useChatStore.getState().actions.setStreaming(sessionId, {
-        streamingMessageId: steerAssistantId,
-        streamingText: "",
-        contentBlocks: [],
-        isStreaming: true,
-        isLoading: true,
-      });
-    }
-
-    lastUserMessageRef.current = latest.content;
-    setIsLoading(true);
-    setIsStreaming(true);
-
-    try {
-      const result = hasActiveAssistant
-        ? await commands.piSteer(
-            sessionId,
-            prompt,
-            combinedImages.length > 0 ? combinedImages : null,
-          )
-        : await commands.piPrompt(
-            sessionId,
-            prompt,
-            combinedImages.length > 0 ? combinedImages : null,
-            preview,
-          );
-
-      if (result.status !== "ok") {
-        pendingNextPiUserIntentRef.current = null;
-        pendingNextPiUserDisplayRef.current = null;
-        optimisticSteerRef.current = null;
-        removeTurnIntent(latest.turnIntentId);
-        setAssistantInterruptedState(interruptedAssistantId, false);
-        if (labelMarkerIds.size > 0) {
-          setMessages((prev) => prev.filter((message) => !labelMarkerIds.has(message.id)));
-        }
-        if (precreatedSteerAssistantId) {
-          setMessages((prev) => prev.filter((message) => message.id !== precreatedSteerAssistantId));
-          piMessageIdRef.current = null;
-          piStreamingTextRef.current = "";
-          piContentBlocksRef.current = [];
-        }
-        pendingSteerBatchRef.current = [...batch, ...pendingSteerBatchRef.current];
-        setIsLoading(false);
-        setIsStreaming(false);
-        toast({ title: "failed to send steered message", description: result.error, variant: "destructive" });
-      }
-    } catch (e) {
-      pendingNextPiUserIntentRef.current = null;
-      pendingNextPiUserDisplayRef.current = null;
-      optimisticSteerRef.current = null;
-      removeTurnIntent(latest.turnIntentId);
-      setAssistantInterruptedState(interruptedAssistantId, false);
-      if (labelMarkerIds.size > 0) {
-        setMessages((prev) => prev.filter((message) => !labelMarkerIds.has(message.id)));
-      }
-      if (precreatedSteerAssistantId) {
-        setMessages((prev) => prev.filter((message) => message.id !== precreatedSteerAssistantId));
-        piMessageIdRef.current = null;
-        piStreamingTextRef.current = "";
-        piContentBlocksRef.current = [];
-      }
-      pendingSteerBatchRef.current = [...batch, ...pendingSteerBatchRef.current];
-      setIsLoading(false);
-      setIsStreaming(false);
-      const description = e instanceof Error ? e.message : String(e);
-      toast({ title: "failed to send steered message", description, variant: "destructive" });
-    } finally {
-      pendingSteerFlushInFlightRef.current = false;
-    }
-  }
-
-  async function steerMessage(userMessage: string, displayLabel?: string, imageDataUrls?: string[]) {
-    const hasImages = imageDataUrls ? imageDataUrls.length > 0 : pastedImages.length > 0;
-    const trimmed = userMessage.trim();
-    if (!trimmed && !hasImages) return;
-
-    const hadActiveReply = isLoading || isStreaming || !!piMessageIdRef.current;
-    if (!hadActiveReply || !piInfo?.running) {
-      return sendPiMessage(trimmed, displayLabel, imageDataUrls);
-    }
-
-    posthog.capture("chat_message_steered", {
-      provider: activePreset?.provider,
-      model: activePreset?.model,
-      had_active_reply: hadActiveReply,
-      from_queue: !!imageDataUrls,
-    });
-
-    const outgoingImages = imageDataUrls ?? pastedImages;
-    const shouldClearPastedImages = imageDataUrls == null && pastedImages.length > 0;
-    const fallbackOriginalUserMessage = lastUserMessageRef.current;
-
-    piRateLimitRetries.current = 0;
-    lastUserMessageRef.current = trimmed;
-    const turnIntentId = `steer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const steerAttachments = consumePendingAttachments();
-    const optimisticUser: Message = {
-      id: turnIntentId,
-      role: "user",
-      content: trimmed,
-      ...(displayLabel ? { displayContent: displayLabel } : {}),
-      ...(outgoingImages.length ? { images: [...outgoingImages] } : {}),
-      ...(steerAttachments ? { attachments: steerAttachments } : {}),
-      intent: "steer",
-      turnIntentId,
-      timestamp: Date.now(),
-    };
-    markCurrentAssistantInterrupted();
-    const activeAssistantId = piMessageIdRef.current;
-    let originalUserMessage = fallbackOriginalUserMessage;
-    let nextRowsAfterOptimisticAppend: Message[] | null = null;
-    setMessages((prev) => {
-      const activeAssistantIndex = activeAssistantId
-        ? prev.findIndex((message) => message.id === activeAssistantId)
-        : -1;
-      if (activeAssistantIndex >= 0) {
-        for (let i = activeAssistantIndex - 1; i >= 0; i -= 1) {
-          const candidate = prev[i];
-          if (candidate?.role === "user" && candidate.intent !== "steer") {
-            originalUserMessage = candidate.content;
-            break;
-          }
-        }
-      }
-      if (activeAssistantIndex < 0) {
-        const next = [...prev, optimisticUser];
-        nextRowsAfterOptimisticAppend = next;
-        return next;
-      }
-
-      const activeAssistant = prev[activeAssistantIndex];
-      const hasVisibleAssistantContent = Boolean(
-        activeAssistant?.content &&
-        activeAssistant.content !== "Processing..."
-      ) || Boolean(activeAssistant?.contentBlocks?.length);
-      let insertIndex = hasVisibleAssistantContent
-        ? activeAssistantIndex + 1
-        : activeAssistantIndex;
-      while (
-        insertIndex < prev.length &&
-        prev[insertIndex]?.role === "user" &&
-        prev[insertIndex]?.intent === "steer"
-      ) {
-        insertIndex += 1;
-      }
-      const next = [
-        ...prev.slice(0, insertIndex),
-        optimisticUser,
-        ...prev.slice(insertIndex),
-      ];
-      nextRowsAfterOptimisticAppend = next;
-      return next;
-    });
-    if (nextRowsAfterOptimisticAppend) {
-      void saveConversation(nextRowsAfterOptimisticAppend, {
-        refreshHistory: false,
-        syncActiveConversation: false,
-      });
-    }
-    const sidNow = piSessionIdRef.current;
-    if (sidNow && nextRowsAfterOptimisticAppend) {
-      useChatStore.getState().actions.setMessages(sidNow, nextRowsAfterOptimisticAppend as any);
-    }
-    setInput("");
-    if (inputRef.current) inputRef.current.style.height = "auto";
-
-    if (shouldClearPastedImages) setPastedImages([]);
-
-    pendingSteerBatchRef.current = [
-      ...pendingSteerBatchRef.current,
-      {
-        turnIntentId,
-        sessionId: piSessionIdRef.current,
-        content: trimmed,
-        originalUserMessage,
-        interruptedAssistantId: activeAssistantId ?? undefined,
-        images: [...outgoingImages],
-        ...(steerAttachments ? { attachments: [...steerAttachments] } : {}),
-        ...(displayLabel ? { displayContent: displayLabel } : {}),
-        optimisticUserId: optimisticUser.id,
-        createdAt: Date.now(),
-      },
-    ];
-    if (hadActiveReply) {
-      const sid = piSessionIdRef.current;
-      if (sid) {
-        const prepared = prepareSteerBatch(sid);
-        if (!prepared) return;
-        const { batch, latest, prompt, combinedImages } = prepared;
-
-        piActiveStopRequestedRef.current = true;
-        const interruptedAssistantId =
-          latest.interruptedAssistantId ?? null;
-
-        // Send steer directly — no abort needed.
-        // send_immediate sets steer_in_flight in Rust, holding the
-        // drain loop until the steer turn's agent_start fires.
-        // If piSteer fails at the IPC layer, Pi never received the
-        // steer — revert is clean. Mid-stream failures surface as
-        // agent_end / response events, not IPC errors.
-        void commands
-          .piSteer(
-            sid,
-            prompt,
-            combinedImages.length > 0 ? combinedImages : null,
-          )
-          .then((result) => {
-            if (result.status !== "ok") {
-              console.warn("[steer] piSteer returned non-ok:", result);
-              revertFailedComposerSteer(
-                batch,
-                latest,
-                interruptedAssistantId,
-                result.error ?? "steer command rejected",
-              );
-            }
-          })
-          .catch((err: unknown) => {
-            console.warn("[steer] piSteer failed, reverting", err);
-            revertFailedComposerSteer(
-              batch,
-              latest,
-              interruptedAssistantId,
-              err instanceof Error ? err.message : String(err),
-            );
-          });
-      }
-      return;
-    }
-    if (!piMessageIdRef.current) {
-      void flushPendingSteerBatch();
-    }
-  }
-
-  /** Undo all side-effects of a failed composer steer. */
-  function revertFailedComposerSteer(
-    batch: typeof pendingSteerBatchRef.current,
-    latest: (typeof pendingSteerBatchRef.current)[number],
-    interruptedAssistantId: string | null,
-    errorDescription: string,
-  ) {
-    // Clear intent refs so message_start handler ignores the steer.
-    pendingNextPiUserIntentRef.current = null;
-    pendingNextPiUserDisplayRef.current = null;
-    optimisticSteerRef.current = null;
-    piActiveStopRequestedRef.current = false;
-    removeTurnIntent(latest.turnIntentId);
-
-    // Un-mark the assistant that was marked interrupted.
-    setAssistantInterruptedState(interruptedAssistantId, false);
-
-    // Remove only the optimistic steer user bubble inserted by steerMessage.
-    const optimisticId = latest.optimisticUserId;
-    setMessages((prev) =>
-      prev.filter(
-        (m) =>
-          !(
-            m.id === optimisticId &&
-            m.role === "user" &&
-            m.intent === "steer"
-          ),
-      ),
-    );
-
-    // Put the batch back so a retry or future steer can use it.
-    pendingSteerBatchRef.current = [
-      ...batch,
-      ...pendingSteerBatchRef.current,
-    ];
-
-    toast({
-      title: "failed to send steered message",
-      description: errorDescription,
-      variant: "destructive",
-    });
-  }
-
-  async function steerQueuedPrompt(prompt: PiQueuedPrompt) {
-    beginQueuedAction(prompt.id);
-    const queuedDisplay = takeQueuedDisplayById(currentQueueSessionId, prompt.id);
-    const existingTurnIntent = queuedDisplay?.turnIntentId
-      ? turnIntentLedgerRef.current.find((record) => record.sessionId === currentQueueSessionId && record.id === queuedDisplay.turnIntentId)
-      : turnIntentLedgerRef.current.find((record) => record.sessionId === currentQueueSessionId && record.queueId === prompt.id);
-    const turnIntentId = existingTurnIntent?.id ?? `queued-steer-${prompt.id}`;
-    const optimisticQueuedContent = existingTurnIntent?.kind === "steer"
-      ? existingTurnIntent.preview
-      : existingTurnIntent?.content ?? queuedDisplay?.preview ?? prompt.preview;
-    const optimisticQueuedUser: Message = {
-      id: turnIntentId,
-      role: "user",
-      content: optimisticQueuedContent,
-      ...(queuedDisplay?.displayContent ? { displayContent: queuedDisplay.displayContent } : {}),
-      ...(queuedDisplay?.images.length ? { images: [...queuedDisplay.images] } : {}),
-      ...(queuedDisplay?.attachments?.length ? { attachments: [...queuedDisplay.attachments] } : {}),
-      intent: "steer",
-      turnIntentId,
-      timestamp: Date.now(),
-    };
-    const interruptedAssistantBeforeSteer = piMessageIdRef.current;
-    try {
-      pendingNextPiUserIntentRef.current = "steer";
-      pendingNextPiUserDisplayRef.current = {
-        preview: existingTurnIntent?.preview ?? queuedDisplay?.preview ?? prompt.preview,
-        images: queuedDisplay?.images ? [...queuedDisplay.images] : [],
-        ...(queuedDisplay?.displayContent ? { displayContent: queuedDisplay.displayContent } : {}),
-        optimisticUserId: optimisticQueuedUser.id,
-        turnIntentId,
-      };
-      registerTurnIntent({
-        id: turnIntentId,
-        sessionId: currentQueueSessionId ?? piSessionIdRef.current,
-        kind: "steer",
-        content: existingTurnIntent?.content ?? queuedDisplay?.preview ?? prompt.preview,
-        preview: existingTurnIntent?.preview ?? queuedDisplay?.preview ?? prompt.preview,
-        displayedUserId: optimisticQueuedUser.id,
-        queueId: prompt.id,
-        createdAt: existingTurnIntent?.createdAt ?? Date.now(),
-      });
-      markCurrentAssistantInterrupted();
-      let nextRowsAfterQueuedSteer: Message[] | null = null;
-      setMessages((prev) => {
-        if (prev.some((message) => message.turnIntentId === turnIntentId || message.id === optimisticQueuedUser.id)) {
-          return prev;
-        }
-        const next = [...prev, optimisticQueuedUser];
-        nextRowsAfterQueuedSteer = next;
-        return next;
-      });
-      if (nextRowsAfterQueuedSteer) {
-        void saveConversation(nextRowsAfterQueuedSteer, {
-          refreshHistory: false,
-          syncActiveConversation: false,
-        });
-        const sidNow = piSessionIdRef.current;
-        if (sidNow) {
-          useChatStore.getState().actions.setMessages(sidNow, nextRowsAfterQueuedSteer as any);
-        }
-      }
-      const result = await commands.piSteerQueued(piSessionIdRef.current, prompt.id);
-      if (result.status !== "ok") {
-        pendingNextPiUserIntentRef.current = null;
-        pendingNextPiUserDisplayRef.current = null;
-        removeTurnIntent(turnIntentId);
-        setMessages((prev) =>
-          prev.filter(
-            (m) =>
-              !(
-                m.id === optimisticQueuedUser.id &&
-                m.role === "user" &&
-                m.intent === "steer"
-              ),
-          ),
-        );
-        restoreQueuedDisplay(currentQueueSessionId, prompt.id, queuedDisplay);
-        setAssistantInterruptedState(interruptedAssistantBeforeSteer, false);
-        toast({ title: "failed to steer queued message", description: result.error, variant: "destructive" });
-        return;
-      }
-      if (!result.data) {
-        // Benign race: the queued prompt already left the queue and will
-        // render via the normal message_start path. Only remove the
-        // steer-specific optimistic user bubble — do not remove or disturb
-        // any transcript state that the normal message_start path may need.
-        pendingNextPiUserIntentRef.current = null;
-        pendingNextPiUserDisplayRef.current = null;
-        removeTurnIntent(turnIntentId);
-        setMessages((prev) =>
-          prev.filter(
-            (m) =>
-              !(
-                m.id === optimisticQueuedUser.id &&
-                m.role === "user" &&
-                m.intent === "steer"
-              ),
-          ),
-        );
-        restoreQueuedDisplay(currentQueueSessionId, prompt.id, queuedDisplay);
-        setAssistantInterruptedState(interruptedAssistantBeforeSteer, false);
-        toast({
-          title: "message already started",
-          description: "That follow-up has moved out of the queue.",
-        });
-        return;
-      }
-      if (currentQueueSessionId) {
-        removeQueuedPrompt(currentQueueSessionId, prompt.id);
-      }
-    } catch (e) {
-      pendingNextPiUserIntentRef.current = null;
-      pendingNextPiUserDisplayRef.current = null;
-      removeTurnIntent(turnIntentId);
-      setMessages((prev) =>
-        prev.filter(
-          (m) =>
-            !(
-              m.id === optimisticQueuedUser.id &&
-              m.role === "user" &&
-              m.intent === "steer"
-            ),
-        ),
-      );
-      restoreQueuedDisplay(currentQueueSessionId, prompt.id, queuedDisplay);
-      setAssistantInterruptedState(interruptedAssistantBeforeSteer, false);
-      toast({
-        title: "failed to steer queued message",
-        description: e instanceof Error ? e.message : String(e),
-        variant: "destructive",
-      });
-    } finally {
-      finishQueuedAction(prompt.id);
     }
   }
 
