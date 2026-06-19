@@ -154,6 +154,7 @@ type PrefillActions = {
 
 export type PiSendTransportOptions = {
   abortControllerRef: PiTransportRefs["abortControllerRef"];
+  activePipeExecution: { name: string } | null;
   activePreset: AIPreset | undefined;
   attachedDocsRef: React.MutableRefObject<ExtractedDoc[]>;
   autoSendBypassRef: PiTransportRefs["autoSendBypassRef"];

@@ -723,6 +723,7 @@ export function StandaloneChat({
     steerQueuedPrompt,
   } = usePiSendTransport({
     abortControllerRef,
+    activePipeExecution,
     activePreset,
     attachedDocsRef,
     autoSendBypassRef,

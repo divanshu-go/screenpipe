@@ -25,6 +25,7 @@ import type { PiSendTransportOptions } from "@/components/chat/standalone/hooks/
 export function usePiSendTransport(options: PiSendTransportOptions) {
   const {
     abortControllerRef,
+    activePipeExecution,
     activePreset,
     attachedDocsRef,
     autoSendBypassRef,
@@ -78,6 +79,7 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
   );
   const { handleStop, openConnectionSetup } = usePiLiveSendControls({
     abortControllerRef,
+    activePipeExecution,
     piActiveStopRequestedRef,
     piContentBlocksRef,
     piMessageIdRef,
