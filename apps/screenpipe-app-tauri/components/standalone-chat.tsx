@@ -46,12 +46,8 @@ import {
   normalizeAppTag,
   extractConversationHistorySyncUserText,
   isInjectedTitleSourcePrompt,
-  type ChatLoadConversationPayload,
-  shouldHandleChatLoadConversationForWindow,
-  shouldHandleChatPrefillForWindow,
 } from "@/lib/chat-utils";
 import { useAutoSuggestions } from "@/lib/hooks/use-auto-suggestions";
-import { type CustomTemplate } from "@/lib/summary-templates";
 import {
   buildDailyLimitMessage,
   classifyQuotaError,
@@ -84,7 +80,6 @@ import {
 import {
   imageDataUrlsFromPiContent,
   imageDataUrlsToPiImages,
-  normalizeImageDataUrls,
 } from "@/lib/chat/image-content";
 import {
   queuedPreviewForText,
@@ -107,7 +102,6 @@ import { useChatMentions, type MentionSuggestion } from "@/components/chat/stand
 import { usePiChatState } from "@/components/chat/standalone/hooks/use-pi-chat-state";
 import { useChatQueue } from "@/components/chat/standalone/hooks/use-chat-queue";
 import { useChatStreamRender } from "@/components/chat/standalone/hooks/use-chat-stream-render";
-import { useChatPrefillEvents } from "@/components/chat/standalone/hooks/use-chat-prefill-events";
 import { useChatConversationEvents } from "@/components/chat/standalone/hooks/use-chat-conversation-events";
 import { useChatPipeWatch } from "@/components/chat/standalone/hooks/use-chat-pipe-watch";
 import { useChatMessageActions } from "@/components/chat/standalone/hooks/use-chat-message-actions";
@@ -117,6 +111,15 @@ import {
   useChatComposerShellActions,
 } from "@/components/chat/standalone/hooks/use-chat-composer-shell";
 import { useChatExternalEvents } from "@/components/chat/standalone/hooks/use-chat-external-events";
+import { useChatTemplateSettings } from "@/components/chat/standalone/hooks/use-chat-template-settings";
+import { useTryInChatEvent } from "@/components/chat/standalone/hooks/use-try-in-chat-event";
+import {
+  useChatConversationRoutingEvents,
+  useChatE2EGlobals,
+  useChatPrefillListener,
+  useChatWindowSyncEvents,
+  usePipeGenerationCompletion,
+} from "@/components/chat/standalone/hooks/use-chat-window-events";
 import type {
   ChatAttachment,
   ContentBlock,
@@ -217,49 +220,15 @@ export function StandaloneChat({
   // Uses a ref so the effect doesn't need startNewConversation as a dep (avoids
   // re-registering the listener on every render while still calling the latest fn).
   const tryInChatStartNewRef = useRef<(() => Promise<void> | void) | null>(null);
-  useEffect(() => {
-    const handler = async (e: Event) => {
-      const { connectionId, connectionName, prompt } = (e as CustomEvent<{
-        connectionId: string;
-        connectionName: string;
-        prompt: string;
-      }>).detail;
-      // Start a fresh conversation so the prompt doesn't pollute an existing chat.
-      await tryInChatStartNewRef.current?.();
-      setConnectionChip({ id: connectionId, name: connectionName, icon: connectionId });
-      setInput(prompt);
-      requestAnimationFrame(() => inputRef.current?.focus());
-    };
-    window.addEventListener("try-in-chat", handler);
-    return () => window.removeEventListener("try-in-chat", handler);
-  }, []);
-
-  // Custom summary templates (persisted in settings)
-  const [customTemplates, setCustomTemplates] = useState<CustomTemplate[]>([]);
-
-  // Load custom templates from settings
-  useEffect(() => {
-    if (isSettingsLoaded && (settings as any).customSummaryTemplates) {
-      try {
-        setCustomTemplates((settings as any).customSummaryTemplates);
-      } catch {
-        // ignore corrupt data
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isSettingsLoaded]);
-
-  const saveCustomTemplate = async (template: CustomTemplate) => {
-    const updated = [...customTemplates, template];
-    setCustomTemplates(updated);
-    await updateSettings({ customSummaryTemplates: updated } as any);
-  };
-
-  const deleteCustomTemplate = async (id: string) => {
-    const updated = customTemplates.filter((t) => t.id !== id);
-    setCustomTemplates(updated);
-    await updateSettings({ customSummaryTemplates: updated } as any);
-  };
+  const {
+    customTemplates,
+    saveCustomTemplate,
+    deleteCustomTemplate,
+  } = useChatTemplateSettings({
+    isSettingsLoaded,
+    settings,
+    updateSettings,
+  });
 
   const {
     input,
@@ -276,6 +245,12 @@ export function StandaloneChat({
     setChipScrollTop,
     clearConnectionChip,
   } = useChatComposerShell();
+  useTryInChatEvent({
+    startNewRef: tryInChatStartNewRef,
+    setConnectionChip,
+    setInput,
+    inputRef,
+  });
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -782,6 +757,10 @@ export function StandaloneChat({
     selectedPreset: activePreset ?? null,
     inlineHistoryEnabled: !hideInlineHistory,
   });
+  const loadConversationRef = useRef(loadConversation);
+  const startNewConversationRef = useRef(startNewConversation);
+  loadConversationRef.current = loadConversation;
+  startNewConversationRef.current = startNewConversation;
 
   const {
     handleKeyDown,
@@ -814,419 +793,51 @@ export function StandaloneChat({
     steerQueuedPrompt,
   });
 
-  // Pipe-generation funnel completion detector.
-  // Fires `pipe_generation_completed` the first time Pi's message stream
-  // ends (isLoading: true → false) AFTER we see a new pipe installed
-  // compared to the baseline captured when the user submitted the
-  // "describe a pipe to create" form. Single-shot per generation_id.
-  const prevIsLoadingRef = useRef(isLoading);
-  useEffect(() => {
-    const wasLoading = prevIsLoadingRef.current;
-    prevIsLoadingRef.current = isLoading;
-    if (!wasLoading || isLoading) return; // only fire on true → false edge
-
-    let cancelled = false;
-    (async () => {
-      let ctx: { generation_id: string; started_at: number; baseline_pipes: string[] } | null = null;
-      try {
-        const raw = sessionStorage.getItem("pipeGenerationContext");
-        if (!raw) return;
-        ctx = JSON.parse(raw);
-      } catch {
-        return;
-      }
-      if (!ctx?.generation_id) return;
-
-      try {
-        const res = await localFetch("/pipes");
-        if (!res.ok) return;
-        const data = await res.json();
-        if (cancelled) return;
-        const installedNames: string[] = (data?.data ?? [])
-          .map((p: any) => p?.config?.name ?? p?.name)
-          .filter((n: unknown): n is string => typeof n === "string");
-        const baseline = new Set(ctx.baseline_pipes ?? []);
-        const newPipes = installedNames.filter((n) => !baseline.has(n));
-        if (newPipes.length === 0) return;
-
-        posthog.capture("pipe_generation_completed", {
-          generation_id: ctx.generation_id,
-          pipe_name: newPipes[0],
-          new_pipes_count: newPipes.length,
-          duration_ms: Date.now() - ctx.started_at,
-        });
-        sessionStorage.removeItem("pipeGenerationContext");
-      } catch {
-        // Leave context in place — maybe the next assistant turn installs the pipe.
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [isLoading]);
-
-  // Guard against duplicate chat-prefill processing. The listener below
-  // re-subscribes when piInfo changes; during the brief overlap window
-  // (async unlisten hasn't resolved yet) both old and new listeners can
-  // receive the same event, causing duplicate abort→session→prompt sequences.
-  const prefillInFlightRef = useRef(false);
-
-  // Cross-window dedup for parallel-job autoSend prefills. Two parallel jobs
-  // can fire identical-content autoSend prefills targeting DIFFERENT windows
-  // ("home" + "chat"); each window mints its own session id and persists the
-  // same logical run twice (the duplicate sidebar rows). Each Tauri window has
-  // isolated localStorage, so we coordinate via Tauri events with a
-  // DETERMINISTIC tie-break (no atomic lock needed): every competing window
-  // broadcasts its claim, waits a fixed collection window to gather all claims
-  // for the same normalized prompt, then independently picks the SAME winner
-  // (smallest window label, then earliest ts, then nonce). Losers drop.
-  const { claimPrefillHandling } = useChatPrefillEvents();
-
-  // Listen for chat-prefill events from search modal and pipe creation
-  useEffect(() => {
-    const unlisten = listen<{ context: string; prompt?: string; displayLabel?: string; frameId?: number; images?: string[]; autoSend?: boolean; source?: string; targetWindow?: string }>("chat-prefill", (event) => {
-      const { context, prompt, displayLabel, frameId, images, autoSend, source, targetWindow } = event.payload;
-      const prefillImages = normalizeImageDataUrls(images);
-
-      // Route to exactly one window. An autoSend prefill with no targetWindow
-      // would otherwise be claimed by BOTH the home and overlay panels — each
-      // mints its own session id and sends, producing a duplicate conversation.
-      // shouldHandleChatPrefillForWindow pins an untargeted autoSend to home.
-      if (!shouldHandleChatPrefillForWindow({ targetWindow, autoSend }, getCurrentWindow().label)) return;
-
-      if (autoSend && prompt) {
-        // Deduplicate: skip if another listener instance is already handling this
-        if (prefillInFlightRef.current) return;
-        prefillInFlightRef.current = true;
-        setIsPreparingPrefill(true);
-
-        // Auto-send: compose full message (context above, user text below) and send immediately
-        const trimmedContext = context?.trim();
-        const fullMessage = trimmedContext ? `${trimmedContext}\n\n${prompt}` : prompt;
-        // Start a new conversation then send
-        (async () => {
-          try {
-            // Cross-window dedup: compete for the right to handle this prefill.
-            const imageKey = prefillImages.map((img) => img.slice(0, 96)).join("|");
-            const dedupKey = `${fullMessage.trim().toLowerCase().replace(/\s+/g, " ").slice(0, 200)}|images:${imageKey}`;
-            const claim = await claimPrefillHandling(dedupKey);
-            if (!claim.claimed) {
-              // Another window won the tie-break — drop this duplicate.
-              console.log(`[chat-prefill] dropped duplicate autoSend (winner=${claim.winnerWindowLabel})`);
-              return;
-            }
-            // Clear all streaming state so sendPiMessage doesn't think a message is in-flight
-            piStreamingTextRef.current = "";
-            piMessageIdRef.current = null;
-            piContentBlocksRef.current = [];
-            optimisticSteerRef.current = null;
-            piLastErrorRef.current = null;
-            setIsLoading(false);
-            setIsStreaming(false);
-            setMessages([]);
-            setPrefillContext(null);
-            setPrefillFrameId(null);
-            // Set input as fallback in case auto-send fails
-            setInput(fullMessage);
-            // Assign a fresh session ID — this is a brand-new conversation.
-            // Without this, the prefill would send to the previous conversation's
-            // Pi process which still has old context baked in. Set
-            // conversationId to the same value so the foreground bus key
-            // tracks Pi's emitted sessionId — see comment on
-            // initialSessionIdRef. Skipping setConversationId(null) here so
-            // there's no transient null-key window where Pi events could miss
-            // the panel's foreground handler.
-            const newSid = crypto.randomUUID();
-            piSessionIdRef.current = newSid;
-            setConversationId(newSid);
-            piSessionSyncedRef.current = true; // fresh session, no history to inject
-            // With multi-session, Pi starts fresh per conversation — sendPiMessage
-            // handles auto-starting it. Just bypass the canChat guard and send.
-            autoSendBypassRef.current = true;
-            await new Promise(r => setTimeout(r, 200));
-            if (sendMessageRef.current) {
-              await sendMessageRef.current(fullMessage, displayLabel, prefillImages);
-              setInput("");
-              if (inputRef.current) inputRef.current.style.height = "auto";
-            }
-          } finally {
-            autoSendBypassRef.current = false;
-            prefillInFlightRef.current = false;
-            setIsPreparingPrefill(false);
-          }
-        })();
-        return;
-      }
-
-      setIsPreparingPrefill(false);
-      setPrefillContext(context);
-      setPrefillSource(source || "search");
-      if (frameId) {
-        setPrefillFrameId(frameId);
-      }
-      if (prefillImages.length > 0) {
-        setPastedImages(prefillImages);
-      }
-      if (prompt) {
-        setInput(prompt);
-      }
-      // Focus the input
-      setTimeout(() => inputRef.current?.focus(), 100);
-    });
-
-    return () => {
-      unlisten.then((fn) => fn());
-    };
-    // Register once. The handler only touches refs and stable setters, so it
-    // doesn't need to re-subscribe on piInfo changes — and re-subscribing
-    // creates a teardown/attach gap where an in-flight chat-prefill event can
-    // be lost (e.g. meeting-notes Summarize → page reload → 120ms emit), which
-    // leaves isPreparingPrefill stuck true and the chat blank.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Listen for chat-load-conversation events. Sources:
-  //   - timeline (clicking a previous chat in the timeline view)
-  //   - chat sidebar (selecting a row, OR clicking "+ new chat" which
-  //     sends a freshly-generated id we've never seen before)
-  //   - pi_session_evicted handler below (fresh id when the pool kills
-  //     the current session)
-  //
-  // If the id corresponds to a saved conversation on disk, load it. If
-  // not, treat it as "start a new chat using THIS id" — the caller (e.g.
-  // the sidebar's + new chat button) generated the id and wants the chat
-  // panel to adopt it so both agree on the session id from message 1.
-  // CRITICAL: the listener registers ONCE (deps: []) but the functions
-  // it calls (loadConversation, startNewConversation) close over `messages`
-  // and other state from useChatConversations. If we called the functions
-  // directly here, the listener would forever invoke the FIRST render's
-  // versions — which captured `messages = []` at mount time. Every
-  // snapshot-on-switch would then write empty messages to the store, and
-  // the chat that "should be there when you click back" would actually be
-  // wiped. Route through refs that we update on every render so the
-  // listener always invokes the freshest closure.
-  const loadConversationRef = useRef(loadConversation);
-  const startNewConversationRef = useRef(startNewConversation);
-  loadConversationRef.current = loadConversation;
-  startNewConversationRef.current = startNewConversation;
-  // Keep the try-in-chat ref in sync so the event handler always calls the latest fn.
-  tryInChatStartNewRef.current = startNewConversation;
-
-  const openConversationLocally = useCallback(async (convId: string) => {
-    const { loadConversationFile } = await import("@/lib/chat-storage");
-    const { useChatStore } = await import("@/lib/stores/chat-store");
-
-    // Already on this conversation — keep the store/sidebar in sync without
-    // forcing a redundant snapshot+swap.
-    if (convId === piSessionIdRef.current) {
-      useChatStore.getState().actions.setCurrent(convId);
-      emit("chat-current-session", { id: convId });
-      return;
-    }
-
-    const conv = await loadConversationFile(convId);
-    if (conv) {
-      loadConversationRef.current(conv);
-      return;
-    }
-
-    const session = useChatStore.getState().sessions[convId];
-    if (session?.messages && session.messages.length > 0) {
-      // `loadConversation` will prefer the store's live message list for this
-      // id, but the metadata here should still mirror the session as closely
-      // as possible so this fallback stays behaviorally aligned with disk loads.
-      loadConversationRef.current({
-        id: convId,
-        title: session.title || "untitled",
-        messages: [],
-        createdAt: session.createdAt,
-        updatedAt: session.updatedAt,
-      });
-      return;
-    }
-
-    await startNewConversationRef.current(convId);
-    emit("chat-current-session", { id: convId });
-  }, []);
-
-  useEffect(() => {
-    const unlisten = listen<ChatLoadConversationPayload>("chat-load-conversation", async (event) => {
-      const { conversationId: convId, targetWindow, focusMessageId } = event.payload;
-      const windowLabel = getCurrentWindow().label;
-      if (!shouldHandleChatLoadConversationForWindow(
-        { conversationId: convId, targetWindow },
-        windowLabel === "chat" ? "chat" : "home",
-      )) {
-        return;
-      }
-      await openConversationLocally(convId);
-      if (focusMessageId) {
-        focusMessageById(focusMessageId);
-      }
-    });
-    return () => { unlisten.then((fn) => fn()); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [openConversationLocally, focusMessageById]);
-
-  // E2E hook: expose a function to seed a user message into a session.
-  // Required by chat-streaming-performance.spec.ts because
-  // `ensureAssistantPlaceholder` only creates an assistant bubble when
-  // the last message in LOCAL React state is `role: "user"`. Without a
-  // way to inject a user message, the test's pure pi_event-faking path
-  // can't materialize any assistant DOM.
-  //
-  // Three places get updated:
-  //   1. Local React state (`setMessages`) — what `ensureAssistantPlaceholder`
-  //      reads via `setMessages(prev => …)`. This is the critical one.
-  //   2. The chat-store via `upsert` — needed because `appendMessage` no-ops
-  //      when the session record doesn't exist yet (a brand-new session
-  //      created by `chat-load-conversation` → `startNewConversation` does
-  //      NOT seed a sessions[id] entry; that only happens on first save
-  //      after agent_end). Without upsert, the seed silently disappears.
-  //   3. `piSessionIdRef.current` — set if the panel hasn't yet caught up
-  //      to the requested session, so `text_delta` handlers (keyed by
-  //      sessionId) route correctly.
-  //
-  // Production impact: zero — only a non-functional reference on `window`,
-  // never read from production code paths.
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const seedE2eSessionMessage = (
-      sid: string,
-      message: any,
-      preview: string,
-    ) => {
-      const store = useChatStore.getState();
-      const existing = store.sessions[sid];
-      const existingMessages = Array.isArray(existing?.messages)
-        ? existing.messages
-        : [];
-      const nextMessages = [...existingMessages, message];
-
-      if (!existing) {
-        store.actions.upsert({
-          id: sid,
-          title: "e2e",
-          preview,
-          status: "idle",
-          messageCount: nextMessages.length,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-          pinned: false,
-          unread: false,
-          messages: nextMessages,
-        });
-      } else {
-        store.actions.appendMessage(sid, message, preview);
-      }
-
-      store.actions.setCurrent(sid);
-      store.actions.setPanelSession(sid);
-      setMessages(nextMessages as any);
-      setConversationId(sid);
-      piSessionIdRef.current = sid;
-      piSessionSyncedRef.current = true;
-      void emit("chat-current-session", { id: sid });
-    };
-
-    (window as any).__e2eSeedUserMessage = (sid: string, text: string) => {
-      const id = `e2e-user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const userMsg = {
-        id,
-        role: "user" as const,
-        content: text,
-        timestamp: Date.now(),
-      };
-
-      seedE2eSessionMessage(sid, userMsg as any, text.slice(0, 60));
-    };
-
-    // E2E hook: seed a finished assistant message carrying source citations,
-    // so chat-source-file-preview.spec.ts can render the "N sources" footer
-    // and click a file card without driving a real model run. Production
-    // impact: zero — only a non-functional reference on `window`.
-    (window as any).__e2eSeedAssistantMessage = (
-      sid: string,
-      payload: { content?: string; sourceCitations?: unknown[] },
-    ) => {
-      const id = `e2e-assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const assistantMsg = {
-        id,
-        role: "assistant" as const,
-        content: payload.content ?? "",
-        timestamp: Date.now(),
-        sourceCitations: payload.sourceCitations ?? [],
-      };
-
-      seedE2eSessionMessage(
-        sid,
-        assistantMsg as any,
-        (payload.content ?? "").slice(0, 60),
-      );
-      const store = useChatStore.getState();
-      store.actions.setStreaming(sid, {
-        streamingText: "",
-        streamingMessageId: null,
-        contentBlocks: [],
-        isLoading: false,
-        isStreaming: false,
-      });
-      store.actions.patch(sid, { status: "idle", lastError: undefined });
-      piStreamingTextRef.current = "";
-      piMessageIdRef.current = null;
-      piContentBlocksRef.current = [];
-      setIsLoading(false);
-      setIsStreaming(false);
-    };
-    return () => {
-      delete (window as any).__e2eSeedUserMessage;
-      delete (window as any).__e2eSeedAssistantMessage;
-    };
-  }, []);
-
-  // Cross-window rename sync. The chat-store is window-local (zustand
-  // lives in each WebView's JS context), so a rename done in the /chat
-  // overlay would otherwise never reach the chat-sidebar in /home. The
-  // canonical rename path (`renameConversation` in use-chat-conversations)
-  // emits this event to all windows; we patch the local store on receipt.
-  // Self-receipt is a harmless idempotent no-op (patch sets the same
-  // title we just wrote).
-  useEffect(() => {
-    const unlisten = listen<{ id: string; title: string }>(
-      "chat-renamed",
-      (event) => {
-        const { id, title } = event.payload;
-        if (!id || !title) return;
-        if (useChatStore.getState().sessions[id]) {
-          useChatStore.getState().actions.patch(id, { title });
-        }
-      },
-    );
-    return () => {
-      unlisten.then((fn) => fn()).catch(() => {});
-    };
-  }, []);
-
-  // Listen for preset restore events when switching chats.
-  // This ensures the model selector reflects the preset used in the
-  // conversation being loaded, preventing model bleed across chats.
-  useEffect(() => {
-    const unlisten = listen<{ presetId: string }>(
-      "chat-preset-restore",
-      (event) => {
-        const { presetId } = event.payload;
-        if (!presetId || !settings?.aiPresets) return;
-        const match = settings.aiPresets.find((p: any) => p.id === presetId);
-        if (match) {
-          setActivePreset(match);
-        }
-      },
-    );
-    return () => {
-      unlisten.then((fn) => fn()).catch(() => {});
-    };
-  }, [settings?.aiPresets]);
+  usePipeGenerationCompletion({ isLoading });
+  useChatPrefillListener({
+    setIsPreparingPrefill,
+    setPrefillContext,
+    setPrefillFrameId,
+    setPrefillSource,
+    setPastedImages,
+    setInput,
+    inputRef,
+    piStreamingTextRef,
+    piMessageIdRef,
+    piContentBlocksRef,
+    optimisticSteerRef,
+    piLastErrorRef,
+    piSessionIdRef,
+    piSessionSyncedRef,
+    autoSendBypassRef,
+    sendMessageRef,
+    setIsLoading,
+    setIsStreaming,
+    setMessages,
+    setConversationId,
+  });
+  useChatConversationRoutingEvents({
+    loadConversation,
+    startNewConversation,
+    tryInChatStartNewRef,
+    piSessionIdRef,
+    focusMessageById,
+  });
+  useChatE2EGlobals({
+    setMessages,
+    setConversationId,
+    piSessionIdRef,
+    piSessionSyncedRef,
+    piStreamingTextRef,
+    piMessageIdRef,
+    piContentBlocksRef,
+    setIsLoading,
+    setIsStreaming,
+  });
+  useChatWindowSyncEvents({
+    aiPresets: settings?.aiPresets,
+    setActivePreset,
+  });
 
   // Component-lifetime guard for bus handlers that fire across the
   // longer-lived useEffects (terminated, foreground registrations).
@@ -1459,23 +1070,6 @@ export function StandaloneChat({
       cancelled = true;
       try { off?.(); } catch { /* ignore */ }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Pick up pending conversation from pipe execution history (set via localStorage
-  // because the emit event is lost during page navigation/remount)
-  useEffect(() => {
-    const pendingId = localStorage.getItem("pending-chat-conversation");
-    if (pendingId) {
-      localStorage.removeItem("pending-chat-conversation");
-      (async () => {
-        const { loadConversationFile } = await import("@/lib/chat-storage");
-        const conv = await loadConversationFile(pendingId);
-        if (conv) {
-          loadConversationRef.current(conv);
-        }
-      })();
-    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
