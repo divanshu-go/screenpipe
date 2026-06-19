@@ -13,18 +13,11 @@ import {
   onEvicted as onAgentEvicted,
 } from "@/lib/events/bus";
 import { pipeSessionId } from "@/lib/events/types";
-import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
 import { useSettings, ChatConversation } from "@/lib/hooks/use-settings";
 import { cn } from "@/lib/utils";
-import { Loader2, Send, Square, X, ImageIcon, Search, ChevronDown, Plus, Paperclip, Filter, RefreshCw, Sparkles } from "lucide-react";
 import { SchedulePromptDialog } from "@/components/chat/schedule-prompt-dialog";
 import { BrowserSidebar } from "@/components/browser-sidebar";
 import { toast } from "@/components/ui/use-toast";
-import { motion, AnimatePresence } from "framer-motion";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { AIPresetsSelector } from "@/components/rewind/ai-presets-selector";
-import { ThinkingLevelSelector } from "@/components/thinking-level-selector";
 import { AIPreset, PiQueuedPrompt } from "@/lib/utils/tauri";
 // OpenAI SDK no longer used directly — all providers route through Pi agent
 import posthog from "posthog-js";
@@ -39,7 +32,6 @@ import { useChatStore } from "@/lib/stores/chat-store";
 import { useFeedbackStore } from "@/lib/stores/feedback-store";
 import { handlePiEvent, statusForEvent } from "@/lib/stores/pi-event-router";
 import { deriveFallbackConversationTitle } from "@/lib/utils/chat-title";
-import { buildChipModelContent, buildChipDisplayContent, parseConnectionChip } from "@/lib/utils/connection-chip";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { useHardcodedTiles } from "@/lib/hooks/use-hardcoded-tiles";
@@ -78,7 +70,7 @@ import {
 } from "@/lib/chat/provider-errors";
 import { buildSystemPrompt, buildConnectionsContext } from "@/lib/chat/system-prompt";
 import { usePipes } from "@/lib/hooks/use-pipes";
-import { localFetch, getApiBaseUrl } from "@/lib/api";
+import { localFetch } from "@/lib/api";
 import { connectionMentionTag } from "@/lib/chat/connection-suggestions";
 import {
   externalizeLargeContextIfNeeded,
@@ -103,21 +95,11 @@ import {
   formatSearchToolResults,
   type SearchToolResult,
 } from "@/lib/chat/search-tool-results";
-import { IntegrationIcon, INTEGRATION_ICON_KEYS } from "@/components/settings/connections-section";
-import {
-  getComposerPrimaryAction,
-  isComposerSteerShortcut,
-} from "@/lib/chat-queue-controls";
+import { INTEGRATION_ICON_KEYS } from "@/components/settings/connections-section";
 import { ImageViewerDialog } from "@/components/chat/standalone/image-viewer-dialog";
 import { StandaloneChatHeader } from "@/components/chat/standalone/standalone-chat-header";
-import { AttachmentTray } from "@/components/chat/standalone/attachment-tray";
-import { QueuedPromptsList } from "@/components/chat/standalone/queued-prompts-list";
-import { ComposerUtilityMenu } from "@/components/chat/standalone/composer-utility-menu";
 import { ChatMainPane } from "@/components/chat/standalone/chat-main-pane";
 import { ChatComposer } from "@/components/chat/standalone/chat-composer";
-import {
-  ConnectionToolIcon,
-} from "@/components/chat/standalone/message-content";
 import { useChatScroll } from "@/components/chat/standalone/hooks/use-chat-scroll";
 import { useChatConnections } from "@/components/chat/standalone/hooks/use-chat-connections";
 import { useChatAttachments } from "@/components/chat/standalone/hooks/use-chat-attachments";
@@ -130,7 +112,10 @@ import { useChatConversationEvents } from "@/components/chat/standalone/hooks/us
 import { useChatPipeWatch } from "@/components/chat/standalone/hooks/use-chat-pipe-watch";
 import { useChatMessageActions } from "@/components/chat/standalone/hooks/use-chat-message-actions";
 import { useChatExportMenu } from "@/components/chat/standalone/hooks/use-chat-export-menu";
-import { useChatComposerShell } from "@/components/chat/standalone/hooks/use-chat-composer-shell";
+import {
+  useChatComposerShell,
+  useChatComposerShellActions,
+} from "@/components/chat/standalone/hooks/use-chat-composer-shell";
 import { useChatExternalEvents } from "@/components/chat/standalone/hooks/use-chat-external-events";
 import type {
   ChatAttachment,
@@ -798,34 +783,36 @@ export function StandaloneChat({
     inlineHistoryEnabled: !hideInlineHistory,
   });
 
-  // Handle paste events for connection chips, files, and oversized text.
-  const handlePaste = useCallback((e: React.ClipboardEvent) => {
-    if (handlePastedFiles(e.clipboardData)) {
-      e.preventDefault();
-      return;
-    }
-
-    const text = e.clipboardData?.getData("text/plain") ?? "";
-
-    // Reconstruct the connection chip when pasting a copied chip message
-    // (content or display form). Restoring the pill keeps the connection
-    // context intact across copy/paste, including paste into a different chat
-    // window (handler runs per-window).
-    if (!connectionChip) {
-      const parsed = parseConnectionChip(text, (id) => INTEGRATION_ICON_KEYS.has(id));
-      if (parsed) {
-        e.preventDefault();
-        setConnectionChip({ ...parsed.chip, icon: parsed.chip.id });
-        setInput((prev) => prev + parsed.prompt);
-        requestAnimationFrame(() => inputRef.current?.focus());
-        return;
-      }
-    }
-
-    if (attachPastedText(text)) {
-      e.preventDefault();
-    }
-  }, [attachPastedText, connectionChip, handlePastedFiles]);
+  const {
+    handleKeyDown,
+    handlePaste,
+    handleSubmit,
+  } = useChatComposerShellActions({
+    input,
+    setInput,
+    inputRef,
+    connectionChip,
+    setConnectionChip,
+    isMac,
+    isComposing,
+    showMentionDropdown,
+    setShowMentionDropdown,
+    setSelectedMentionIndex,
+    selectedMentionIndex,
+    filteredMentions,
+    insertMention,
+    pastedImages,
+    pendingDocsRef,
+    attachedDocsRef,
+    queuedPrompts,
+    steerShortcutInFlightRef,
+    isKnownConnectionId: (id) => INTEGRATION_ICON_KEYS.has(id),
+    handlePastedFiles,
+    attachPastedText,
+    sendMessage,
+    steerMessage,
+    steerQueuedPrompt,
+  });
 
   // Pipe-generation funnel completion detector.
   // Fires `pipe_generation_completed` the first time Pi's message stream
@@ -1491,114 +1478,6 @@ export function StandaloneChat({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // Prevent '/' from triggering app shortcuts while typing
-    if (e.key === '/') {
-      e.stopPropagation();
-    }
-
-    const nativeEvent = e.nativeEvent as KeyboardEvent & { isComposing?: boolean; keyCode?: number };
-    const nativeIsComposing = nativeEvent.isComposing || nativeEvent.keyCode === 229;
-
-    // Ignore Enter while an IME composition is active so confirmation does not submit the message.
-    if (isComposing || nativeIsComposing) {
-      return;
-    }
-
-    // Backspace at the very start of the input deletes the connection prefix
-    // (icon+name), since it sits before the typed text.
-    if (
-      (e.key === "Backspace" || e.key === "Delete") &&
-      connectionChip &&
-      e.currentTarget.selectionStart === 0 &&
-      e.currentTarget.selectionEnd === 0
-    ) {
-      e.preventDefault();
-      setConnectionChip(null);
-      return;
-    }
-
-    if (isComposerSteerShortcut(e, isMac) && !showMentionDropdown) {
-      e.preventDefault();
-      e.stopPropagation();
-      if ((input.trim() || pastedImages.length > 0) && !steerShortcutInFlightRef.current) {
-        steerShortcutInFlightRef.current = true;
-        void Promise.resolve(steerMessage(input.trim())).finally(() => {
-          steerShortcutInFlightRef.current = false;
-        });
-      } else if (!input.trim() && pastedImages.length === 0 && pendingDocsRef.current.length === 0 && queuedPrompts.length > 0 && !steerShortcutInFlightRef.current) {
-        steerShortcutInFlightRef.current = true;
-        void Promise.resolve(steerQueuedPrompt(queuedPrompts[0])).finally(() => {
-          steerShortcutInFlightRef.current = false;
-        });
-      }
-      return;
-    }
-
-    // Enter without shift submits the form. While Pi is replying, submit maps
-    // to native steering so the correction applies to the current answer.
-    if (e.key === "Enter" && !e.shiftKey && !showMentionDropdown) {
-      e.preventDefault();
-      // Don't send while a document extraction is still in flight —
-      // otherwise the user's prompt ships without the file attached,
-      // which is the exact silent-drop bug the pending-chips fix.
-      if (pendingDocsRef.current.length > 0) return;
-      if (input.trim() || pastedImages.length > 0 || attachedDocsRef.current.length > 0) {
-        const chip = connectionChip;
-        setConnectionChip(null);
-        sendMessage(
-          chip ? buildChipModelContent(chip, input.trim()) : input.trim(),
-          chip ? buildChipDisplayContent(chip, input.trim()) : undefined,
-        );
-      }
-      return;
-    }
-
-    if (!showMentionDropdown) return;
-
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      setSelectedMentionIndex(i => Math.min(i + 1, filteredMentions.length - 1));
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setSelectedMentionIndex(i => Math.max(i - 1, 0));
-    } else if (e.key === "Enter" && filteredMentions.length > 0) {
-      e.preventDefault();
-      insertMention(filteredMentions[selectedMentionIndex].tag);
-    } else if (e.key === "Escape") {
-      setShowMentionDropdown(false);
-    } else if (e.key === "Tab" && filteredMentions.length > 0) {
-      e.preventDefault();
-      insertMention(filteredMentions[selectedMentionIndex].tag);
-    }
-  };
-
-  useEffect(() => {
-    const handleComposerSteerShortcut = (event: KeyboardEvent) => {
-      if (showMentionDropdown) return;
-      if (isComposing || event.isComposing || event.keyCode === 229) return;
-      if (!isComposerSteerShortcut(event, isMac)) return;
-      if (document.activeElement === inputRef.current || event.target === inputRef.current) return;
-
-      event.preventDefault();
-      event.stopPropagation();
-      if ((input.trim() || pastedImages.length > 0) && !steerShortcutInFlightRef.current) {
-        steerShortcutInFlightRef.current = true;
-        void Promise.resolve(steerMessage(input.trim())).finally(() => {
-          steerShortcutInFlightRef.current = false;
-        });
-      } else if (!input.trim() && pastedImages.length === 0 && pendingDocsRef.current.length === 0 && queuedPrompts.length > 0 && !steerShortcutInFlightRef.current) {
-        steerShortcutInFlightRef.current = true;
-        void Promise.resolve(steerQueuedPrompt(queuedPrompts[0])).finally(() => {
-          steerShortcutInFlightRef.current = false;
-        });
-      }
-    };
-
-    window.addEventListener("keydown", handleComposerSteerShortcut, true);
-    return () => window.removeEventListener("keydown", handleComposerSteerShortcut, true);
-  }, [input, isComposing, isMac, pastedImages, showMentionDropdown, queuedPrompts]);
 
   useEffect(() => {
     // Don't resolve preset until settings are loaded from the store —
@@ -4522,18 +4401,6 @@ export function StandaloneChat({
   // Keep ref in sync so useEffect callbacks can call sendMessage
   sendMessageRef.current = sendMessage;
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (pendingDocsRef.current.length > 0) return; // wait for extraction to finish
-    if (!input.trim() && pastedImages.length === 0 && attachedDocsRef.current.length === 0) return;
-    const chip = connectionChip;
-    setConnectionChip(null);
-    sendMessage(
-      chip ? buildChipModelContent(chip, input.trim()) : input.trim(),
-      chip ? buildChipDisplayContent(chip, input.trim()) : undefined,
-    );
-  };
-
   const handleStop = async () => {
     piActiveStopRequestedRef.current = true;
     try {
@@ -4682,113 +4549,131 @@ export function StandaloneChat({
       />
 
       <ChatComposer
-        inputSectionRef={inputSectionRef}
-        prefillContext={prefillContext}
-        prefillFrameId={prefillFrameId}
-        prefillSource={prefillSource}
-        onClearPrefill={() => {
-          setPrefillContext(null);
-          setPrefillFrameId(null);
+        prefill={{
+          context: prefillContext,
+          frameId: prefillFrameId,
+          source: prefillSource,
+          onClear: () => {
+            setPrefillContext(null);
+            setPrefillFrameId(null);
+          },
+          onClearFrame: () => setPrefillFrameId(null),
         }}
-        onClearPrefillFrame={() => setPrefillFrameId(null)}
-        messages={messages}
-        isLoading={isLoading}
-        isStreaming={isStreaming}
-        settings={settings}
-        connectionAwareSuggestions={connectionAwareSuggestions}
-        inputSectionWidth={inputSectionWidth}
-        sendMessage={sendMessage}
-        refreshVisibleSuggestions={refreshVisibleSuggestions}
-        suggestionsRefreshing={suggestionsRefreshing}
-        updateSettings={updateSettings}
-        pendingDocs={pendingDocs}
-        attachedDocs={attachedDocs}
-        pastedImages={pastedImages}
-        showPastedTextInField={showPastedTextInField}
-        onRemoveDoc={(index: number) => setAttachedDocs((prev) => prev.filter((_, idx) => idx !== index))}
-        imageViewerProps={imageViewerProps}
-        onRemoveImage={(index: number) => setPastedImages((prev) => prev.filter((_, idx) => idx !== index))}
-        handleSubmit={handleSubmit}
-        handlePaste={handlePaste}
-        isEmbedded={isEmbedded}
-        isDragging={isDragging}
-        queuedPrompts={queuedPrompts}
-        queuedActionPromptId={queuedActionPromptId}
-        getQueuedDisplayBySession={getQueuedDisplayBySession}
-        currentQueueSessionId={currentQueueSessionId}
-        queuedScrollRef={queuedScrollRef}
-        isMac={isMac}
-        steerQueuedPrompt={steerQueuedPrompt}
-        cancelQueuedPrompt={cancelQueuedPrompt}
-        disabledReason={disabledReason}
-        connectionChip={connectionChip}
-        chipPrefixRef={chipPrefixRef}
-        chipScrollTop={chipScrollTop}
-        onClearConnectionChip={() => setConnectionChip(null)}
-        inputRef={inputRef}
-        input={input}
-        handleMentionInputChange={handleMentionInputChange}
-        onCompositionStart={() => setIsComposing(true)}
-        onCompositionEnd={() => setIsComposing(false)}
-        onTextareaScroll={(e: React.UIEvent<HTMLTextAreaElement>) => setChipScrollTop(e.currentTarget.scrollTop)}
-        handleKeyDown={handleKeyDown}
-        canChat={canChat}
-        chipPrefixWidth={chipPrefixWidth}
-        showMentionDropdown={showMentionDropdown}
-        filteredMentions={filteredMentions}
-        dropdownRef={dropdownRef}
-        selectedMentionIndex={selectedMentionIndex}
-        insertMention={insertMention}
-        isLoadingSpeakers={isLoadingSpeakers}
-        isLoadingTagSearch={isLoadingTagSearch}
-        appFilterOpen={appFilterOpen}
-        handleFilterMenuOpenChange={handleFilterMenuOpenChange}
-        hasActiveFilters={hasActiveFilters}
-        activeFilterCount={activeFilterCount}
-        activeFilters={activeFilters}
-        filterSearch={filterSearch}
-        updateFilterSearch={updateFilterSearch}
-        clearFilterSearch={clearFilterSearch}
-        filterSearchGroups={filterSearchGroups}
-        filterSearchResults={filterSearchResults}
-        isLoadingFilterSearch={isLoadingFilterSearch}
-        selectedFilterResultIndex={selectedFilterResultIndex}
-        selectFilterResultIndex={selectFilterResultIndex}
-        selectNextFilterResult={selectNextFilterResult}
-        selectPreviousFilterResult={selectPreviousFilterResult}
-        applySelectedFilterResult={applySelectedFilterResult}
-        STATIC_MENTION_SUGGESTIONS={STATIC_MENTION_SUGGESTIONS}
-        appMentionSuggestions={appMentionSuggestions}
-        allTagMentionSuggestions={allTagMentionSuggestions}
-        tagMentionSections={tagMentionSections}
-        recentSpeakers={recentSpeakers}
-        appsLoading={appsLoading}
-        tagsLoading={tagsLoading}
-        connections={connections}
-        isWindows={isWindows}
-        closeFilterMenu={closeFilterMenu}
-        getFilterSuggestionState={getFilterSuggestionState}
-        applyFilterSuggestion={applyFilterSuggestion}
-        applyTimeFilterSuggestion={applyTimeFilterSuggestion}
-        applyContentFilterSuggestion={applyContentFilterSuggestion}
-        applyAppFilterSuggestion={applyAppFilterSuggestion}
-        applyTagFilterSuggestion={applyTagFilterSuggestion}
-        applyConnectionFilterTag={applyConnectionFilterTag}
-        applySpeakerFilterSuggestion={applySpeakerFilterSuggestion}
-        handleFilePicker={handleFilePicker}
-        activeFilterLabels={activeFilterLabels}
-        handlePiRestart={handlePiRestart}
-        activePreset={activePreset}
-        onSelectPreset={setActivePreset}
-        activePipeExecution={activePipeExecution}
-        showConnectBanner={showConnectBanner}
-        openConnectionSetup={openConnectionSetup}
-        suggestedConnectionTiles={suggestedConnectionTiles}
-        onDismissConnectBanner={() => {
-          setShowConnectBanner(false);
-          try { localStorage.setItem("screenpipe_connect_banner_dismissed", "true"); } catch {}
+        suggestions={{
+          show: messages.length > 0 && !isLoading && settings?.showChatSuggestions !== false,
+          suggestions: connectionAwareSuggestions,
+          inputSectionWidth,
+          isRefreshing: suggestionsRefreshing,
+          onSendSuggestion: sendMessage,
+          onRefresh: refreshVisibleSuggestions,
+          onHide: () => updateSettings({ showChatSuggestions: false }),
         }}
-        handleStop={handleStop}
+        attachments={{
+          pendingDocs,
+          attachedDocs,
+          pastedImages,
+          onShowPastedTextInField: showPastedTextInField,
+          onRemoveDoc: (index: number) => setAttachedDocs((prev) => prev.filter((_, idx) => idx !== index)),
+          onOpenImageViewer: (images, index) => imageViewerProps.onChange({ images, index }),
+          onRemoveImage: (index: number) => setPastedImages((prev) => prev.filter((_, idx) => idx !== index)),
+        }}
+        queue={{
+          queuedPrompts,
+          queuedActionPromptId,
+          queuedDisplayById: getQueuedDisplayBySession(currentQueueSessionId),
+          queuedScrollRef,
+          isMac,
+          onSteerQueuedPrompt: steerQueuedPrompt,
+          onCancelQueuedPrompt: cancelQueuedPrompt,
+        }}
+        input={{
+          sectionRef: inputSectionRef,
+          inputRef,
+          value: input,
+          disabledReason,
+          canChat: Boolean(canChat),
+          isLoading,
+          isStreaming,
+          isEmbedded,
+          isDragging,
+          connectionChip,
+          chipPrefixRef,
+          chipPrefixWidth,
+          chipScrollTop,
+          onClearConnectionChip: () => setConnectionChip(null),
+          onChange: handleMentionInputChange,
+          onCompositionStart: () => setIsComposing(true),
+          onCompositionEnd: () => setIsComposing(false),
+          onTextareaScroll: (e: React.UIEvent<HTMLTextAreaElement>) => setChipScrollTop(e.currentTarget.scrollTop),
+          onKeyDown: handleKeyDown,
+          onSubmit: handleSubmit,
+          onPaste: handlePaste,
+        }}
+        mentions={{
+          show: showMentionDropdown,
+          suggestions: filteredMentions,
+          dropdownRef,
+          selectedIndex: selectedMentionIndex,
+          onInsertMention: insertMention,
+          isLoadingSpeakers,
+          isLoadingTagSearch,
+        }}
+        filters={{
+          appFilterOpen,
+          onFilterMenuOpenChange: handleFilterMenuOpenChange,
+          hasActiveFilters: Boolean(hasActiveFilters),
+          activeFilterCount,
+          activeFilters,
+          activeFilterLabels,
+          filterSearch,
+          onFilterSearchChange: updateFilterSearch,
+          onClearFilterSearch: clearFilterSearch,
+          filterSearchGroups,
+          filterSearchResults,
+          isLoadingFilterSearch,
+          selectedFilterResultIndex,
+          onSelectFilterResultIndex: selectFilterResultIndex,
+          onSelectNextFilterResult: selectNextFilterResult,
+          onSelectPreviousFilterResult: selectPreviousFilterResult,
+          onApplySelectedFilterResult: applySelectedFilterResult,
+          staticMentionSuggestions: STATIC_MENTION_SUGGESTIONS,
+          appMentionSuggestions,
+          allTagMentionSuggestions,
+          tagMentionSections,
+          recentSpeakers,
+          appsLoading,
+          tagsLoading,
+          connections,
+          isWindows,
+          onCloseFilterMenu: closeFilterMenu,
+          getFilterSuggestionState,
+          applyFilterSuggestion,
+          applyTimeFilterSuggestion,
+          applyContentFilterSuggestion,
+          applyAppFilterSuggestion,
+          applyTagFilterSuggestion,
+          applyConnectionFilterTag,
+          applySpeakerFilterSuggestion,
+          onPickFiles: handleFilePicker,
+        }}
+        modelControls={{
+          settings,
+          activePreset,
+          activePipeExecution,
+          currentQueueSessionId,
+          onPresetSaved: handlePiRestart,
+          onSelectPreset: setActivePreset,
+        }}
+        connectBanner={{
+          show: showConnectBanner,
+          suggestedConnectionTiles,
+          onOpenConnectionSetup: openConnectionSetup,
+          onDismiss: () => {
+            setShowConnectBanner(false);
+            try { localStorage.setItem("screenpipe_connect_banner_dismissed", "true"); } catch {}
+          },
+        }}
+        onStop={handleStop}
       />
       </div> {/* End of chat column */}
 
