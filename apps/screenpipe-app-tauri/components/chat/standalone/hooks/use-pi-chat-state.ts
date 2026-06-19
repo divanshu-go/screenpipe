@@ -6,10 +6,6 @@ import { useRef, useState } from "react";
 import type { PiInfo } from "@/lib/utils/tauri";
 import type {
   ContentBlock,
-  OptimisticSteerPayload,
-  PendingSteerBatchItem,
-  QueuedDisplayPayload,
-  TurnIntentRecord,
 } from "@/lib/chat/types";
 
 type PiRunningConfig = {
@@ -30,12 +26,6 @@ export function usePiChatState() {
   const piStreamingTextRef = useRef<string>("");
   const piMessageIdRef = useRef<string | null>(null);
   const piContentBlocksRef = useRef<ContentBlock[]>([]);
-  const pendingNextPiUserIntentRef = useRef<"steer" | null>(null);
-  const pendingNextPiUserDisplayRef = useRef<QueuedDisplayPayload | null>(null);
-  const optimisticSteerRef = useRef<OptimisticSteerPayload | null>(null);
-  const turnIntentLedgerRef = useRef<TurnIntentRecord[]>([]);
-  const pendingSteerBatchRef = useRef<PendingSteerBatchItem[]>([]);
-  const pendingSteerFlushInFlightRef = useRef(false);
   // Last error text observed anywhere in the current Pi stream — used to surface
   // quota / credits_exhausted errors when agent_end arrives with no content and
   // no explicit stopReason=error on any message (some providers drop that flag).
@@ -81,12 +71,6 @@ export function usePiChatState() {
     piStreamingTextRef,
     piMessageIdRef,
     piContentBlocksRef,
-    pendingNextPiUserIntentRef,
-    pendingNextPiUserDisplayRef,
-    optimisticSteerRef,
-    turnIntentLedgerRef,
-    pendingSteerBatchRef,
-    pendingSteerFlushInFlightRef,
     piLastErrorRef,
     invalidatedAuthHandledRef,
     piStartInFlightRef,
