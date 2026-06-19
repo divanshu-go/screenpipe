@@ -97,7 +97,7 @@ export function usePiSessionLifecycle({
   }, [aiPresets, isSettingsLoaded, setActivePreset, shouldFreezePresetSelection]);
 
   const hasPresets = Boolean(aiPresets && aiPresets.length > 0);
-  const hasValidModel = activePreset?.model && activePreset.model.trim() !== "";
+  const hasValidModel = Boolean(activePreset?.model && activePreset.model.trim() !== "");
   const needsLogin = activePreset?.provider === "screenpipe-cloud" && !userToken;
   const canChat = hasPresets && hasValidModel && !piStarting;
 
