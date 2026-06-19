@@ -391,11 +391,11 @@ export function ChatMessageList({
 
           if (blocks && blocks.length > 0) {
             const lastBlock = blocks[blocks.length - 1];
-            if (lastBlock.type === "thinking" && (lastBlock as any).isThinking) {
+            if (lastBlock.type === "thinking" && lastBlock.isThinking) {
               loaderPhase = "thinking";
-            } else if (lastBlock.type === "tool" && (lastBlock as any).toolCall?.isRunning) {
+            } else if (lastBlock.type === "tool" && lastBlock.toolCall.isRunning) {
               loaderPhase = "tool";
-              toolName = (lastBlock as any).toolCall?.toolName;
+              toolName = lastBlock.toolCall.toolName;
             } else if (lastBlock.type === "text" && lastBlock.text) {
               loaderPhase = "streaming";
             }

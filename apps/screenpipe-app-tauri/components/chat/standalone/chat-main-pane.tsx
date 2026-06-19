@@ -11,6 +11,7 @@ import { PipeContextBanner } from "@/components/chat/pipe-context-banner";
 import { PipeAIIconLarge } from "@/components/pipe-ai-icon";
 import { InlineChatHistory } from "@/components/chat/standalone/inline-chat-history";
 import { ChatMessageList, type ChatMessageListProps } from "@/components/chat/standalone/chat-message-list";
+import type { ConversationMeta } from "@/lib/chat-storage";
 import { cn } from "@/lib/utils";
 import type { Message } from "@/lib/chat/types";
 
@@ -24,12 +25,12 @@ type ActivePipeExecution = {
 interface ChatMainPaneProps {
   hideInlineHistory?: boolean;
   showHistory: boolean;
-  onShowHistoryChange: React.Dispatch<React.SetStateAction<boolean>>;
+  onCloseHistory: () => void;
   historySearch: string;
-  onHistorySearchChange: React.Dispatch<React.SetStateAction<string>>;
-  groupedConversations: any;
+  onHistorySearchChange: (value: string) => void;
+  groupedConversations: { label: string; conversations: ConversationMeta[] }[];
   conversationId: string | null;
-  loadConversation: (conversation: any) => void | Promise<void>;
+  loadConversation: (conversation: ConversationMeta) => void | Promise<void>;
   deleteConversation: (id: string) => void | Promise<void>;
   renameConversation: (id: string, title: string) => void | Promise<void>;
   scrollContainerRef: React.RefObject<HTMLDivElement>;
@@ -56,7 +57,7 @@ interface ChatMainPaneProps {
 export function ChatMainPane({
   hideInlineHistory,
   showHistory,
-  onShowHistoryChange,
+  onCloseHistory,
   historySearch,
   onHistorySearchChange,
   groupedConversations,
@@ -89,9 +90,9 @@ export function ChatMainPane({
       <InlineChatHistory
         hideInlineHistory={hideInlineHistory}
         showHistory={showHistory}
-        setShowHistory={onShowHistoryChange}
+        onCloseHistory={onCloseHistory}
         historySearch={historySearch}
-        setHistorySearch={onHistorySearchChange}
+        onHistorySearchChange={onHistorySearchChange}
         groupedConversations={groupedConversations}
         conversationId={conversationId}
         loadConversation={loadConversation}

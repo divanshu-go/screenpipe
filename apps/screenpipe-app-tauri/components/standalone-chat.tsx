@@ -64,7 +64,6 @@ import {
   buildProviderErrorMessage,
   preflightChatProvider,
 } from "@/lib/chat/provider-errors";
-import { buildSystemPrompt, buildConnectionsContext } from "@/lib/chat/system-prompt";
 import { usePipes } from "@/lib/hooks/use-pipes";
 import { localFetch } from "@/lib/api";
 import { connectionMentionTag } from "@/lib/chat/connection-suggestions";
@@ -111,6 +110,7 @@ import {
   useChatComposerShellActions,
 } from "@/components/chat/standalone/hooks/use-chat-composer-shell";
 import { useChatExternalEvents } from "@/components/chat/standalone/hooks/use-chat-external-events";
+import { usePiSessionLifecycle } from "@/components/chat/standalone/hooks/use-pi-session-lifecycle";
 import { useChatTemplateSettings } from "@/components/chat/standalone/hooks/use-chat-template-settings";
 import { useTryInChatEvent } from "@/components/chat/standalone/hooks/use-try-in-chat-event";
 import {
@@ -256,7 +256,6 @@ export function StandaloneChat({
   const [isStreaming, setIsStreaming] = useState(false);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [activePreset, setActivePreset] = useState<AIPreset | undefined>();
-  const pendingPresetRef = useRef<AIPreset | null>(null);
   const isStreamingRef = useRef(false);
   // Mirrors of streaming-relevant state so the unmount-snapshot effect (which
   // runs with `[]` deps) can read the latest values instead of stale closures.
@@ -774,12 +773,17 @@ export function StandaloneChat({
     setConnectionChip,
     isMac,
     isComposing,
-    showMentionDropdown,
-    setShowMentionDropdown,
-    setSelectedMentionIndex,
-    selectedMentionIndex,
-    filteredMentions,
-    insertMention,
+    mentions: {
+      isOpen: showMentionDropdown,
+      selectedIndex: selectedMentionIndex,
+      suggestions: filteredMentions,
+    },
+    mentionActions: {
+      close: () => setShowMentionDropdown(false),
+      selectNext: () => setSelectedMentionIndex((index) => Math.min(index + 1, filteredMentions.length - 1)),
+      selectPrevious: () => setSelectedMentionIndex((index) => Math.max(index - 1, 0)),
+      insert: insertMention,
+    },
     pastedImages,
     pendingDocsRef,
     attachedDocsRef,
@@ -1073,57 +1077,38 @@ export function StandaloneChat({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => {
-    // Don't resolve preset until settings are loaded from the store —
-    // before that, settings.aiPresets contains only the hardcoded default,
-    // which would cause Pi to start with the wrong model then immediately restart.
-    if (!isSettingsLoaded) return;
-    // Don't overwrite pipe-specific preset when watching a pipe execution
-    if (activePipeExecution) return;
-    const presets = settings.aiPresets ?? [];
-    const fallback = presets.find((p) => p.defaultPreset) ?? presets[0];
-    setActivePreset((prev) => {
-      // First load — pick the default.
-      if (!prev) return fallback;
-      // User's selection still exists. Re-bind to the latest object so edits
-      // in the Settings tab flow through, but keep the same id (don't snap
-      // back to the default just because settings got rewritten by an
-      // unrelated update — loadUser, team sync, device discovery, etc).
-      const stillThere = presets.find((p) => p.id === prev.id);
-      if (stillThere) {
-        return stillThere.provider === prev.provider &&
-          stillThere.model === prev.model &&
-          stillThere.url === prev.url &&
-          (stillThere as any).apiKey === (prev as any).apiKey &&
-          (stillThere as any).maxTokens === (prev as any).maxTokens &&
-          stillThere.prompt === prev.prompt
-          ? prev
-          : stillThere;
-      }
-      // Preset was deleted — fall back to default.
-      return fallback;
-    });
-  }, [settings.aiPresets, isSettingsLoaded]);
-
-  const hasPresets = settings.aiPresets && settings.aiPresets.length > 0;
-  // All providers now route through Pi — isPi is always true when we have a preset
-  const isPi = true;
-  const hasValidModel = activePreset?.model && activePreset.model.trim() !== "";
-  const needsLogin = activePreset?.provider === "screenpipe-cloud" && !settings.user?.token;
-  // needsLogin is advisory only — chat is allowed without auth (the cloud
-  // backend accepts unauthenticated requests for now). The login warning is
-  // surfaced in the UI banner but does not gate sends.
-  // Pi auto-starts on first message, so don't block chat when Pi is not running
-  const canChat = hasPresets && hasValidModel && !piStarting;
-
-  const getDisabledReason = (): string | null => {
-    if (!hasPresets) return "No AI presets configured";
-    if (!activePreset) return "No preset selected";
-    if (!hasValidModel) return `No model selected in "${activePreset.id}" preset`;
-    if (piStarting) return "Starting Pi agent...";
-    return null;
-  };
-  const disabledReason = getDisabledReason();
+  const {
+    buildProviderConfig,
+    canChat,
+    disabledReason,
+    handlePiRestart,
+    hasPresets,
+    hasValidModel,
+    needsLogin,
+    restartCurrentPiSession,
+    setRunningConfigFromProviderConfig,
+    syncThinkingLevelAfterStart,
+  } = usePiSessionLifecycle({
+    activePreset,
+    setActivePreset,
+    aiPresets: settings.aiPresets,
+    isSettingsLoaded,
+    shouldFreezePresetSelection: Boolean(activePipeExecution),
+    userToken: settings.user?.token,
+    connections,
+    piStarting,
+    piInfo,
+    setPiInfo,
+    isStreaming,
+    isStreamingRef,
+    piSessionIdRef,
+    piSessionSyncedRef,
+    piMessageIdRef,
+    piRunningConfigRef,
+    piIntentionallyStoppedPidsRef,
+    piStoppedIntentionallyRef,
+    piPresetSwitchPromiseRef,
+  });
 
   // Focus input on mount
   useEffect(() => {
@@ -1165,237 +1150,6 @@ export function StandaloneChat({
       void refreshTagItems();
     }
   }, [appFilterOpen, appItems.length, appsLoading, tagsLoading, refreshAppItems, refreshTagItems]);
-
-  // Pi project dir is managed Rust-side at boot
-
-  // Build Pi provider config from active preset
-  const buildProviderConfig = useCallback((preset?: AIPreset | null) => {
-    const p = preset || activePreset;
-    if (!p) return null;
-    // Combine the screenpipe search instructions with the user's preset prompt.
-    // This is passed via --append-system-prompt to Pi, enabling Anthropic prompt
-    // caching (90% input cost reduction on subsequent messages).
-    const presetPrompt = p.prompt || "";
-    const connectionsCtx = buildConnectionsContext(connections);
-    const systemPrompt = `${buildSystemPrompt()}\n\n${presetPrompt}${connectionsCtx}`.trim() || null;
-    return {
-      provider: p.provider,
-      url: p.url || "",
-      model: p.model || "",
-      apiKey: ("apiKey" in p ? (p.apiKey as string) : null) || null,
-      maxTokens: (p as any).maxTokens ?? 4096,
-      systemPrompt,
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activePreset?.provider, activePreset?.url, activePreset?.model, activePreset?.apiKey, (activePreset as any)?.maxTokens, activePreset?.prompt, connections]);
-
-  const setRunningConfigFromProviderConfig = useCallback((providerConfig: NonNullable<ReturnType<typeof buildProviderConfig>>) => {
-    piRunningConfigRef.current = {
-      provider: providerConfig.provider,
-      model: providerConfig.model,
-      url: providerConfig.url,
-      apiKey: providerConfig.apiKey,
-      maxTokens: providerConfig.maxTokens,
-      systemPrompt: providerConfig.systemPrompt,
-      token: settings.user?.token ?? null,
-    };
-  }, [settings.user?.token]);
-
-  // After Pi starts, immediately push the saved thinking level via RPC so the
-  // running session is in sync from moment zero — not just on the next user action.
-  // Also calls piRequestState so the hook always learns the model's actual
-  // capabilities (e.g. disables button when model doesn't support thinking),
-  // even when the level didn't change and Pi emits no thinking_level_changed event.
-  const syncThinkingLevelAfterStart = useCallback(async (sessionId: string) => {
-    try {
-      const r = await commands.piGetThinkingLevel();
-      if (r.status === "ok") {
-        await commands.piSetThinkingLevel(sessionId, r.data).catch(() => {});
-      }
-    } catch { /* fire-and-forget */ }
-    commands.piRequestState(sessionId).catch(() => {});
-  }, []);
-
-  const restartCurrentPiSession = useCallback(async (providerConfig: NonNullable<ReturnType<typeof buildProviderConfig>>) => {
-    let currentPid = piInfo?.pid;
-    if (typeof currentPid !== "number") {
-      try {
-        const info = await commands.piInfo(piSessionIdRef.current);
-        if (info.status === "ok") {
-          currentPid = info.data.pid;
-        }
-      } catch {}
-    }
-    if (typeof currentPid === "number") {
-      piIntentionallyStoppedPidsRef.current.add(currentPid);
-      setTimeout(() => {
-        piIntentionallyStoppedPidsRef.current.delete(currentPid);
-      }, 30_000);
-    } else if (piInfo?.running) {
-      piStoppedIntentionallyRef.current = true;
-    }
-
-    const home = await homeDir();
-    const dir = await join(home, ".screenpipe", "pi-chat");
-    const result = await commands.piStart(
-      piSessionIdRef.current,
-      dir,
-      settings.user?.token ?? null,
-      providerConfig,
-    );
-    if (result.status !== "ok" || !result.data.running) {
-      throw new Error(result.status === "error" ? result.error : "Pi did not start");
-    }
-    setPiInfo(result.data);
-    piSessionSyncedRef.current = false;
-    setRunningConfigFromProviderConfig(providerConfig);
-    syncThinkingLevelAfterStart(piSessionIdRef.current);
-  }, [piInfo?.pid, piInfo?.running, setRunningConfigFromProviderConfig, settings.user?.token, syncThinkingLevelAfterStart]);
-
-  // When connections change (e.g., user connected Google Calendar in Settings),
-  // silently restart Pi if the system prompt changed and no message is in-flight.
-  useEffect(() => {
-    if (connections.length === 0) return;
-    const config = buildProviderConfig();
-    if (!config) return;
-    const running = piRunningConfigRef.current;
-    if (!running || running.systemPrompt === config.systemPrompt) return;
-    if (piMessageIdRef.current) return; // don't interrupt an active turn
-    restartCurrentPiSession(config)
-      .then(() => {
-        if (piRunningConfigRef.current) {
-          piRunningConfigRef.current = { ...piRunningConfigRef.current, systemPrompt: config.systemPrompt };
-        }
-      })
-      .catch(() => {});
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connections]);
-
-  // Check Pi status on mount — Pi is auto-started at app boot by Rust
-  useEffect(() => {
-    const checkPi = async () => {
-      try {
-        const result = await commands.piInfo(piSessionIdRef.current);
-        if (result.status === "ok") {
-          setPiInfo(result.data);
-        }
-      } catch (e) {
-        console.warn("[Pi] Failed to check status:", e);
-      }
-    };
-    checkPi();
-    // Keep polling Pi status — recovers from stale termination events and transient failures
-    const interval = setInterval(async () => {
-      try {
-        const result = await commands.piInfo(piSessionIdRef.current);
-        if (result.status === "ok") {
-          setPiInfo(result.data);
-        }
-      } catch {}
-    }, 3000);
-    return () => clearInterval(interval);
-  }, []);
-
-  // Apply a preset change to the running Pi process.
-  //
-  // - If ONLY provider/model changed: `pi_set_model` — keeps the subprocess
-  //   alive and preserves the full conversation, so the user can switch
-  //   haiku ↔ sonnet ↔ opus mid-session without losing context.
-  // - If any other spawn-time field changed (url, apiKey, maxTokens, systemPrompt):
-  //   restart the current Pi session — those are baked into Pi's CLI args
-  //   and models.json, so the subprocess has to be respawned to see them.
-  //
-  // Called directly from the AIPresetsSelector onPresetSaved callback.
-  const handlePiRestart = useCallback((preset: AIPreset) => {
-    if (isStreamingRef.current) {
-      pendingPresetRef.current = preset;
-      toast({ title: "model will switch after this response finishes" });
-      return;
-    }
-
-    const providerConfig = buildProviderConfig(preset);
-    if (!providerConfig) return;
-
-    // Compare against the currently-running config. If we only know
-    // provider+model (older ref shape), we can still decide on the hot-swap
-    // path as long as the non-tracked fields are unchanged from the last
-    // full restart — which is exactly the invariant we maintain here by
-    // updating the ref on every hot-swap/restart.
-    const running = piRunningConfigRef.current;
-    const providerChanged = !running || running.provider !== providerConfig.provider;
-    const modelChanged = !running || running.model !== providerConfig.model;
-    const spawnTimeFieldsChanged =
-      !running ||
-      running.url !== providerConfig.url ||
-      running.apiKey !== providerConfig.apiKey ||
-      running.maxTokens !== providerConfig.maxTokens ||
-      running.systemPrompt !== providerConfig.systemPrompt ||
-      running.token !== (settings.user?.token ?? null);
-
-    if (!providerChanged && !modelChanged && !spawnTimeFieldsChanged) {
-      // Preset save that didn't actually change anything Pi cares about.
-      return;
-    }
-
-    const enqueuePresetSwitch = (task: () => Promise<void>) => {
-      const previousSwitch = piPresetSwitchPromiseRef.current;
-      let switchPromise: Promise<void>;
-      switchPromise = (previousSwitch ?? Promise.resolve())
-        .catch(() => {})
-        .then(task)
-        .finally(() => {
-          if (piPresetSwitchPromiseRef.current === switchPromise) {
-            piPresetSwitchPromiseRef.current = null;
-          }
-        });
-      piPresetSwitchPromiseRef.current = switchPromise;
-      return switchPromise;
-    };
-
-    if (!spawnTimeFieldsChanged && (providerChanged || modelChanged)) {
-      // Hot-swap path — preserves conversation state.
-      console.log("[Pi] Hot-swap model:", providerConfig.provider, providerConfig.model);
-      enqueuePresetSwitch(async () => {
-        try {
-          await commands.piSetModel(piSessionIdRef.current, providerConfig);
-          setRunningConfigFromProviderConfig(providerConfig);
-          // Re-sync thinking-level capability after model swap: the new model
-          // may not support thinking (or may support different levels), and
-          // Pi only emits thinking_level_changed when the effective level
-          // actually changes — so without an explicit get_state the Brain
-          // icon's enabled/disabled state can be stale for the new model.
-          commands.piRequestState(piSessionIdRef.current).catch(() => {});
-        } catch (e) {
-          console.error("[Pi] Hot-swap failed, falling back to full restart:", e);
-          try {
-            await restartCurrentPiSession(providerConfig);
-          } catch (err) {
-            console.error("[Pi] Fallback restart also failed:", err);
-          }
-        }
-      });
-      return;
-    }
-
-    // Full restart — spawn-time field changed.
-    console.log("[Pi] Full restart (spawn-time field changed):", providerConfig.provider, providerConfig.model);
-    enqueuePresetSwitch(async () => {
-      try {
-        await restartCurrentPiSession(providerConfig);
-      } catch (e) {
-        console.error("[Pi] Preset switch failed:", e);
-      }
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settings.user?.token, setRunningConfigFromProviderConfig, restartCurrentPiSession]);
-
-  useEffect(() => {
-    if (!isStreaming && pendingPresetRef.current) {
-      const preset = pendingPresetRef.current;
-      pendingPresetRef.current = null;
-      handlePiRestart(preset);
-    }
-  }, [isStreaming, handlePiRestart]);
 
   // Listen for Pi / pipe events.
   //
@@ -4096,7 +3850,7 @@ export function StandaloneChat({
       <ChatMainPane
         hideInlineHistory={hideInlineHistory}
         showHistory={showHistory}
-        onShowHistoryChange={setShowHistory}
+        onCloseHistory={() => setShowHistory(false)}
         historySearch={historySearch}
         onHistorySearchChange={setHistorySearch}
         groupedConversations={groupedConversations}

@@ -31,12 +31,17 @@ interface UseChatComposerShellActionsOptions {
   setConnectionChip: React.Dispatch<React.SetStateAction<ConnectionChip | null>>;
   isMac: boolean;
   isComposing: boolean;
-  showMentionDropdown: boolean;
-  setShowMentionDropdown: React.Dispatch<React.SetStateAction<boolean>>;
-  setSelectedMentionIndex: React.Dispatch<React.SetStateAction<number>>;
-  selectedMentionIndex: number;
-  filteredMentions: MentionSuggestion[];
-  insertMention: (tag: string) => void;
+  mentions: {
+    isOpen: boolean;
+    selectedIndex: number;
+    suggestions: MentionSuggestion[];
+  };
+  mentionActions: {
+    close: () => void;
+    selectNext: () => void;
+    selectPrevious: () => void;
+    insert: (tag: string) => void;
+  };
   pastedImages: string[];
   pendingDocsRef: React.MutableRefObject<PendingDoc[]>;
   attachedDocsRef: React.MutableRefObject<ExtractedDoc[]>;
@@ -119,12 +124,8 @@ export function useChatComposerShellActions({
   setConnectionChip,
   isMac,
   isComposing,
-  showMentionDropdown,
-  setShowMentionDropdown,
-  setSelectedMentionIndex,
-  selectedMentionIndex,
-  filteredMentions,
-  insertMention,
+  mentions,
+  mentionActions,
   pastedImages,
   pendingDocsRef,
   attachedDocsRef,
@@ -247,54 +248,50 @@ export function useChatComposerShellActions({
       return;
     }
 
-    if (isComposerSteerShortcut(event, isMac) && !showMentionDropdown) {
+    if (isComposerSteerShortcut(event, isMac) && !mentions.isOpen) {
       event.preventDefault();
       event.stopPropagation();
       handleSteerShortcut();
       return;
     }
 
-    if (event.key === "Enter" && !event.shiftKey && !showMentionDropdown) {
+    if (event.key === "Enter" && !event.shiftKey && !mentions.isOpen) {
       event.preventDefault();
       sendComposerMessage();
       return;
     }
 
-    if (!showMentionDropdown) return;
+    if (!mentions.isOpen) return;
 
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      setSelectedMentionIndex((index) => Math.min(index + 1, filteredMentions.length - 1));
+      mentionActions.selectNext();
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
-      setSelectedMentionIndex((index) => Math.max(index - 1, 0));
-    } else if (event.key === "Enter" && filteredMentions.length > 0) {
+      mentionActions.selectPrevious();
+    } else if (event.key === "Enter" && mentions.suggestions.length > 0) {
       event.preventDefault();
-      insertMention(filteredMentions[selectedMentionIndex].tag);
+      mentionActions.insert(mentions.suggestions[mentions.selectedIndex].tag);
     } else if (event.key === "Escape") {
-      setShowMentionDropdown(false);
-    } else if (event.key === "Tab" && filteredMentions.length > 0) {
+      mentionActions.close();
+    } else if (event.key === "Tab" && mentions.suggestions.length > 0) {
       event.preventDefault();
-      insertMention(filteredMentions[selectedMentionIndex].tag);
+      mentionActions.insert(mentions.suggestions[mentions.selectedIndex].tag);
     }
   }, [
     connectionChip,
-    filteredMentions,
     handleSteerShortcut,
-    insertMention,
     isComposing,
     isMac,
-    selectedMentionIndex,
+    mentionActions,
+    mentions,
     sendComposerMessage,
     setConnectionChip,
-    setSelectedMentionIndex,
-    setShowMentionDropdown,
-    showMentionDropdown,
   ]);
 
   useEffect(() => {
     const handleComposerSteerShortcut = (event: KeyboardEvent) => {
-      if (showMentionDropdown) return;
+      if (mentions.isOpen) return;
       if (isComposing || event.isComposing || event.keyCode === 229) return;
       if (!isComposerSteerShortcut(event, isMac)) return;
       if (document.activeElement === inputRef.current || event.target === inputRef.current) return;
@@ -311,7 +308,7 @@ export function useChatComposerShellActions({
     inputRef,
     isComposing,
     isMac,
-    showMentionDropdown,
+    mentions.isOpen,
   ]);
 
   return {
