@@ -35,19 +35,16 @@ export const AUTO_WATERFALL_VISION = [
 ];
 
 // Background waterfall — for latency-tolerant traffic (pipes, daily summary,
-// suggestions) where no user is waiting. This is the lane to BUY intelligence:
-// latency is free, so lead with gpt-5.4 (AA ~54 at its default reasoning effort,
-// 0.1x cache discount) on the OpenAI credit pool — smarter pipes, and it bleeds
-// background load OFF the strained GCP/Vertex credits. gemini-3.5-flash (flex)
-// + glm-5 + gemini-3-flash are the cheaper fallbacks if OpenAI 429s/errors;
-// runChain cascades on transient failures, and flex applies to the gemini
-// entries only (gpt-5.4 has no Vertex flex tier — it runs standard OpenAI).
-// NOTE: gpt-5.4 is ~3-4x the per-token cost of gemini-flex, so watch the $30k
-// OpenAI credit burn — at full background volume it can run ~$1-2k/day.
+// suggestions) where no user is waiting. Leads with gemini-3.5-flash on the FLEX
+// tier: background is ~84% cache-reads, so flex's 0.1x cache discount makes it the
+// cheapest decent-quality option ($/Mtok ≈ glm-5 but with the cache discount glm-5
+// lacks). Measured (6/19): gpt-5.4 here cost $590/day vs $177 on flex for the SAME
+// traffic — 3.3x more, on the small OpenAI pool, for a marginal IQ gain (54 vs ~50-55)
+// that pipes don't need; reverted (#4285→). glm-5 + gemini-3-flash are standard-tier
+// fallbacks for when flex is throttled.
 export const AUTO_WATERFALL_BACKGROUND = [
-  'gpt-5.4',          // smart reasoning model on OpenAI credits — latency-tolerant lane
-  'gemini-3.5-flash', // flex fallback (cheap) if OpenAI throttles/errors
-  'glm-5',            // free Vertex MaaS fallback
+  'gemini-3.5-flash', // flex tier — cheapest on the cache-heavy background mix
+  'glm-5',            // free Vertex MaaS fallback, standard tier
   'gemini-3-flash',   // near-free safety net
 ];
 
@@ -223,25 +220,35 @@ async function tryModel(
       delete (reqBody as Partial<RequestBody>).tool_choice;
     }
 
-    // Flex tier applies only to the Vertex Gemini lane. Setting it on the body
-    // here (vs the shared request body) keeps it scoped to this attempt, so a
-    // cascade from flex-gemini → glm-5 runs glm-5 at standard tier.
+    // Flex tier applies only to the Vertex Gemini lane. Set per-attempt (not on
+    // the shared body) so a cascade to glm-5 runs standard tier.
     const useFlex = flexEligible && isGeminiModel(model);
-    if (useFlex) {
-      (reqBody as RequestBody).serviceTier = 'flex';
-    }
 
-    if (body.stream) {
-      const stream = await provider.createStreamingCompletion(reqBody);
-      return tagServedTier(new Response(stream, {
-        headers: {
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          'Connection': 'keep-alive',
-        },
-      }), useFlex);
+    const callOnce = async (withFlex: boolean): Promise<Response> => {
+      const rb = { ...reqBody } as RequestBody;
+      if (withFlex) rb.serviceTier = 'flex';
+      else delete (rb as Partial<RequestBody>).serviceTier;
+      if (body.stream) {
+        const stream = await provider.createStreamingCompletion(rb);
+        return tagServedTier(new Response(stream, {
+          headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' },
+        }), withFlex);
+      }
+      return tagServedTier(await provider.createCompletion(rb), withFlex);
+    };
+
+    try {
+      return await callOnce(useFlex);
+    } catch (flexErr: any) {
+      // Flex isn't enabled for our project/region on some Gemini models
+      // ("Flex API is not supported for project ... or selected region", 400 —
+      // SCREENPIPE-AI-PROXY-V/1A, 650+/day). Retry the SAME model at standard
+      // tier instead of 400'ing or cascading through more flex-rejecting siblings.
+      if (useFlex && /flex api is not supported/i.test(String(flexErr?.message || ''))) {
+        return await callOnce(false);
+      }
+      throw flexErr;
     }
-    return tagServedTier(await provider.createCompletion(reqBody), useFlex);
   } catch (error: any) {
     // Prefer error.status (UpstreamError, etc); fall back to parsing the
     // message for providers that throw plain Error("... 524 ..."). Defaults
