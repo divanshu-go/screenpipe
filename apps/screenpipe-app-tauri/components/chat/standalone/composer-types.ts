@@ -14,7 +14,7 @@ import type { Suggestion } from "@/lib/hooks/use-auto-suggestions";
 import type { ExtractedDoc } from "@/lib/pi/extract-document";
 import type { AIPreset, PiQueuedPrompt } from "@/lib/utils/tauri";
 
-export type ActiveChatFilters = {
+type ActiveChatFilters = {
   timeRanges: { label: string }[];
   contentType: string | null;
   appName: string | null;
@@ -22,13 +22,13 @@ export type ActiveChatFilters = {
   tagNames: string[];
 };
 
-export type ConnectionChip = {
+type ConnectionChip = {
   id: string;
   name: string;
   icon: string;
 };
 
-export type ComposerSettings = {
+type ComposerSettings = {
   showChatSuggestions?: boolean;
   aiPresets?: AIPreset[];
 };
@@ -51,7 +51,7 @@ export interface ComposerSuggestionsProps {
   onHide: () => void;
 }
 
-export interface ComposerAttachmentsProps {
+interface ComposerAttachmentsProps {
   pendingDocs: PendingDoc[];
   attachedDocs: ExtractedDoc[];
   pastedImages: string[];
@@ -61,7 +61,7 @@ export interface ComposerAttachmentsProps {
   onRemoveImage: (index: number) => void;
 }
 
-export interface ComposerQueueProps {
+interface ComposerQueueProps {
   queuedPrompts: PiQueuedPrompt[];
   queuedActionPromptId: string | null;
   queuedDisplayById?: Record<string, QueuedDisplayPayload>;

@@ -803,11 +803,6 @@ export function usePiSendTransport({
     );
   }, []);
 
-  async function queueFollowUpMessage(userMessage: string, displayLabel?: string) {
-    if ((!canChat && !autoSendBypassRef.current) || (!activePreset && !autoSendBypassRef.current)) return;
-    return enqueuePiMessage(userMessage, displayLabel);
-  }
-
   function setAssistantInterruptedState(activeAssistantId: string | null, interruptedBySteer: boolean) {
     if (!activeAssistantId) return;
     let changed = false;
@@ -840,10 +835,6 @@ export function usePiSendTransport({
 
   function markCurrentAssistantInterrupted() {
     setAssistantInterruptedState(piMessageIdRef.current, true);
-  }
-
-  function clearCurrentAssistantInterrupted() {
-    setAssistantInterruptedState(piMessageIdRef.current, false);
   }
 
   function buildSteerPrompt(batch: PendingSteerBatchItem[]) {
@@ -1470,7 +1461,6 @@ export function usePiSendTransport({
     flushPendingSteerBatch,
     handleStop,
     openConnectionSetup,
-    queueFollowUpMessage,
     sendMessage,
     steerMessage,
     steerQueuedPrompt,

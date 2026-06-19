@@ -4,61 +4,34 @@
 "use client";
 
 import * as React from "react";
-import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { cn } from "@/lib/utils";
 import { SchedulePromptDialog } from "@/components/chat/schedule-prompt-dialog";
 import { BrowserSidebar } from "@/components/browser-sidebar";
 import { toast } from "@/components/ui/use-toast";
-import { AIPreset, PiQueuedPrompt } from "@/lib/utils/tauri";
+import { AIPreset } from "@/lib/utils/tauri";
 // OpenAI SDK no longer used directly — all providers route through Pi agent
 import posthog from "posthog-js";
-import {
-  docsToPromptText,
-} from "@/lib/pi/extract-document";
 import { commands } from "@/lib/utils/tauri";
 import { useChatConversations } from "@/components/hooks/use-chat-conversations";
-import { useChatStore } from "@/lib/stores/chat-store";
-import { useFeedbackStore } from "@/lib/stores/feedback-store";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { useHardcodedTiles } from "@/lib/hooks/use-hardcoded-tiles";
 import { useIsFullscreen } from "@/lib/hooks/use-is-fullscreen";
 import { useChatFilePreview } from "@/lib/hooks/use-chat-file-preview";
 import { useSqlAutocomplete, useTagAutocomplete } from "@/lib/hooks/use-sql-autocomplete";
-import { homeDir, join } from "@tauri-apps/api/path";
 import {
   buildAppMentionSuggestions,
   buildTagMentionSuggestions,
-  normalizeAppTag,
 } from "@/lib/chat-utils";
 import { useAutoSuggestions } from "@/lib/hooks/use-auto-suggestions";
 import {
   buildInvalidatedAuthTokenMessage,
 } from "@/lib/chat/auth-errors";
-import {
-  buildProviderErrorMessage,
-  preflightChatProvider,
-} from "@/lib/chat/provider-errors";
 import { usePipes } from "@/lib/hooks/use-pipes";
-import { localFetch } from "@/lib/api";
-import { connectionMentionTag } from "@/lib/chat/connection-suggestions";
-import {
-  externalizeLargeContextIfNeeded,
-} from "@/lib/chat/large-context";
-import {
-  isPlaceholderConversationTitle,
-} from "@/lib/chat/message-rendering";
 import {
   computeChatCitationPlan,
 } from "@/lib/source-citations";
-import {
-  imageDataUrlsToPiImages,
-} from "@/lib/chat/image-content";
-import {
-  queuedPreviewForText,
-} from "@/lib/chat/queued-display";
-import { withConversationHistory } from "@/lib/chat/conversation-history";
 import { INTEGRATION_ICON_KEYS } from "@/components/settings/connections-section";
 import { ImageViewerDialog } from "@/components/chat/standalone/image-viewer-dialog";
 import { StandaloneChatHeader } from "@/components/chat/standalone/standalone-chat-header";
@@ -98,10 +71,7 @@ import {
   useChatWindowSyncEvents,
   usePipeGenerationCompletion,
 } from "@/components/chat/standalone/hooks/use-chat-window-events";
-import type {
-  Message,
-  PendingSteerBatchItem,
-} from "@/lib/chat/types";
+import type { Message } from "@/lib/chat/types";
 
 // Session ID is per-conversation — set on mount (new conv) and updated on load/new.
 // Stored as a ref so event listeners always see the current value without stale closures.
@@ -109,8 +79,6 @@ import type {
 const APP_SUGGESTION_LIMIT = 10;
 const TAG_SUGGESTION_LIMIT = 10;
 const STREAM_RENDER_THROTTLE_MS = 80;
-const CHAT_RAIL_CLASS = "max-w-4xl mx-auto w-full";
-
 
 const STATIC_MENTION_SUGGESTIONS: MentionSuggestion[] = [
   { tag: "@today", description: "today's activity", category: "time" },
@@ -121,14 +89,6 @@ const STATIC_MENTION_SUGGESTIONS: MentionSuggestion[] = [
   { tag: "@screen", description: "screen text only", category: "content" },
   { tag: "@input", description: "UI events (clicks, keys)", category: "content" },
 ];
-
-// TOOLS definition removed — search is now handled by Pi's screenpipe-search skill
-
-/**
- * Extract tier info from gateway error JSON embedded in error strings and
- * return a user-facing message appropriate to their actual subscription tier.
- */
-
 
 /**
  * Title + actions for the current chat. Click → menu with Rename
@@ -162,7 +122,7 @@ export function StandaloneChat({
   const { items: appItems, isLoading: appsLoading, refresh: refreshAppItems } = useSqlAutocomplete("app");
   const { items: tagItems, isLoading: tagsLoading, refresh: refreshTagItems } = useTagAutocomplete();
   const { suggestions: autoSuggestions, refreshing: suggestionsRefreshing, forceRefresh: refreshSuggestions } = useAutoSuggestions();
-  const { templatePipes, loading: pipesLoading } = usePipes();
+  const { templatePipes } = usePipes();
   // Connected integrations (gmail, google-sheets, slack, etc.) surfaced in the
   // filter popover so users can mention them directly with @id — helps the
   // agent pick the right connection for a query instead of having to guess.
@@ -294,9 +254,7 @@ export function StandaloneChat({
     setShowMentionDropdown,
     isComposing,
     setIsComposing,
-    mentionFilter,
     setMentionFilter,
-    mentionTrigger,
     selectedMentionIndex,
     setSelectedMentionIndex,
     isLoadingSpeakers,
@@ -388,8 +346,6 @@ export function StandaloneChat({
   const {
     piInfo,
     setPiInfo,
-    piProjectDir,
-    setPiProjectDir,
     piStarting,
     setPiStarting,
     piStreamingTextRef,
@@ -584,7 +540,6 @@ export function StandaloneChat({
     setShowHistory,
     historySearch,
     setHistorySearch,
-    filteredConversations,
     groupedConversations,
     saveConversation,
     loadConversation,
@@ -601,7 +556,6 @@ export function StandaloneChat({
     inputRef,
     isLoading,
     isStreaming,
-    piInfo,
     piStreamingTextRef,
     piMessageIdRef,
     piContentBlocksRef,
@@ -764,7 +718,6 @@ export function StandaloneChat({
     flushPendingSteerBatch,
     handleStop,
     openConnectionSetup,
-    queueFollowUpMessage,
     sendMessage,
     steerMessage,
     steerQueuedPrompt,
@@ -1033,7 +986,6 @@ export function StandaloneChat({
           onDeleteCustomTemplate: deleteCustomTemplate,
           userName: settings.userName,
           templatePipes,
-          pipesLoading,
         }}
         messageListProps={messageListProps}
         isUserScrolledUp={isUserScrolledUp}

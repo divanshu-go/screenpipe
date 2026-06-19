@@ -457,10 +457,7 @@ export function usePiForegroundEvents({
             const quotaErrorType = classifyQuotaError(fullError);
             if (quotaErrorType === "daily" || quotaErrorType === "rate") {
               if (quotaErrorType === "daily") {
-                try {
-                  const match = fullError.match(/"resets_at":\s*"([^"]+)"/);
-                } catch {}
-                                  setMessages((prev) =>
+                setMessages((prev) =>
                   prev.map((m) => m.id === msgId ? { ...m, content: buildDailyLimitMessage(fullError) } : m)
                 );
               } else {
@@ -664,10 +661,7 @@ export function usePiForegroundEvents({
                 prev.map((m) => m.id === msgId ? { ...m, content: buildInvalidatedAuthTokenMessage() } : m)
               );
             } else if (quotaErrorType === "daily") {
-              try {
-                const resetsAtMatch = errMsg.match(/"resets_at":\s*"([^"]+)"/);
-                } catch {}
-                            posthog.capture("wall_hit", { reason: "daily_limit", source: "chat" });
+              posthog.capture("wall_hit", { reason: "daily_limit", source: "chat" });
               setMessages((prev) =>
                 prev.map((m) => m.id === msgId ? { ...m, content: buildDailyLimitMessage(errMsg) } : m)
               );
@@ -739,10 +733,7 @@ export function usePiForegroundEvents({
                 void handleInvalidatedAuthToken();
                 content = buildInvalidatedAuthTokenMessage();
               } else if (quotaErrorType === "daily") {
-                try {
-                  const resetsAtMatch = errStr.match(/"resets_at":\s*"([^"]+)"/);
-                    } catch {}
-                                  content = buildDailyLimitMessage(errStr);
+                content = buildDailyLimitMessage(errStr);
               } else if (quotaErrorType === "rate") {
                 content = buildRateLimitMessage(errStr);
               } else if (errStr.includes("model_not_allowed")) {
@@ -906,10 +897,7 @@ export function usePiForegroundEvents({
             const quotaErrorType = classifyQuotaError(errorStr);
             if (quotaErrorType === "daily" || quotaErrorType === "rate") {
               if (quotaErrorType === "daily") {
-                try {
-                  const match = errorStr.match(/"resets_at":\s*"([^"]+)"/);
-                } catch {}
-                                  setMessages((prev) =>
+                setMessages((prev) =>
                   prev.map((m) => m.id === msgId ? { ...m, content: buildDailyLimitMessage(errorStr) } : m)
                 );
               } else {

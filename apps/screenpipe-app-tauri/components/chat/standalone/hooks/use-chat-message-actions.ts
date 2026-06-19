@@ -219,7 +219,6 @@ export function useChatMessageActions({
             scheduleMessage(message, displayLabel);
           },
           originalPrompt: scheduleDialogMessage.prompt,
-          responsePreview: scheduleDialogMessage.response,
         }
       : null,
   };
