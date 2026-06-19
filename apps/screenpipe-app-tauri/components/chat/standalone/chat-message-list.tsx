@@ -23,7 +23,7 @@ import { cn } from "@/lib/utils";
 import type { Message } from "@/lib/chat/types";
 import type { MarkdownCitationPlan } from "@/lib/chat/markdown-export";
 
-interface ChatMessageListProps {
+export interface ChatMessageListProps {
   messages: Message[];
   isLoading: boolean;
   isStreaming: boolean;

@@ -17,13 +17,11 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useSettings, ChatConversation } from "@/lib/hooks/use-settings";
 import { cn } from "@/lib/utils";
-import { Loader2, Send, Square, Settings, X, ImageIcon, Search, ChevronDown, Plus, Paperclip, Filter, RefreshCw, Sparkles } from "lucide-react";
+import { Loader2, Send, Square, X, ImageIcon, Search, ChevronDown, Plus, Paperclip, Filter, RefreshCw, Sparkles } from "lucide-react";
 import { SchedulePromptDialog } from "@/components/chat/schedule-prompt-dialog";
-import { PipeContextBanner } from "@/components/chat/pipe-context-banner";
 import { BrowserSidebar } from "@/components/browser-sidebar";
 import { toast } from "@/components/ui/use-toast";
 import { motion, AnimatePresence } from "framer-motion";
-import { PipeAIIconLarge } from "@/components/pipe-ai-icon";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { AIPresetsSelector } from "@/components/rewind/ai-presets-selector";
 import { ThinkingLevelSelector } from "@/components/thinking-level-selector";
@@ -31,8 +29,6 @@ import { AIPreset, PiQueuedPrompt } from "@/lib/utils/tauri";
 // OpenAI SDK no longer used directly — all providers route through Pi agent
 import posthog from "posthog-js";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
-import { save as saveDialog } from "@tauri-apps/plugin-dialog";
-import { writeTextFile, mkdir } from "@tauri-apps/plugin-fs";
 import {
   docsToPromptText,
 } from "@/lib/pi/extract-document";
@@ -63,7 +59,6 @@ import {
   shouldHandleChatPrefillForWindow,
 } from "@/lib/chat-utils";
 import { useAutoSuggestions } from "@/lib/hooks/use-auto-suggestions";
-import { SummaryCards } from "@/components/chat/summary-cards";
 import { type CustomTemplate } from "@/lib/summary-templates";
 import {
   buildDailyLimitMessage,
@@ -103,19 +98,23 @@ import {
   queuedPreviewForText,
 } from "@/lib/chat/queued-display";
 import { withConversationHistory } from "@/lib/chat/conversation-history";
-import { formatChatAsMarkdown } from "@/lib/chat/markdown-export";
+import {
+  formatSearchToolError,
+  formatSearchToolResults,
+  type SearchToolResult,
+} from "@/lib/chat/search-tool-results";
 import { IntegrationIcon, INTEGRATION_ICON_KEYS } from "@/components/settings/connections-section";
 import {
   getComposerPrimaryAction,
   isComposerSteerShortcut,
 } from "@/lib/chat-queue-controls";
-import { ImageViewerDialog, type ImageViewerState } from "@/components/chat/standalone/image-viewer-dialog";
+import { ImageViewerDialog } from "@/components/chat/standalone/image-viewer-dialog";
 import { StandaloneChatHeader } from "@/components/chat/standalone/standalone-chat-header";
-import { InlineChatHistory } from "@/components/chat/standalone/inline-chat-history";
 import { AttachmentTray } from "@/components/chat/standalone/attachment-tray";
 import { QueuedPromptsList } from "@/components/chat/standalone/queued-prompts-list";
-import { ChatMessageList } from "@/components/chat/standalone/chat-message-list";
 import { ComposerUtilityMenu } from "@/components/chat/standalone/composer-utility-menu";
+import { ChatMainPane } from "@/components/chat/standalone/chat-main-pane";
+import { ChatComposer } from "@/components/chat/standalone/chat-composer";
 import {
   ConnectionToolIcon,
 } from "@/components/chat/standalone/message-content";
@@ -129,6 +128,10 @@ import { useChatStreamRender } from "@/components/chat/standalone/hooks/use-chat
 import { useChatPrefillEvents } from "@/components/chat/standalone/hooks/use-chat-prefill-events";
 import { useChatConversationEvents } from "@/components/chat/standalone/hooks/use-chat-conversation-events";
 import { useChatPipeWatch } from "@/components/chat/standalone/hooks/use-chat-pipe-watch";
+import { useChatMessageActions } from "@/components/chat/standalone/hooks/use-chat-message-actions";
+import { useChatExportMenu } from "@/components/chat/standalone/hooks/use-chat-export-menu";
+import { useChatComposerShell } from "@/components/chat/standalone/hooks/use-chat-composer-shell";
+import { useChatExternalEvents } from "@/components/chat/standalone/hooks/use-chat-external-events";
 import type {
   ChatAttachment,
   ContentBlock,
@@ -167,20 +170,6 @@ const STATIC_MENTION_SUGGESTIONS: MentionSuggestion[] = [
  * return a user-facing message appropriate to their actual subscription tier.
  */
 
-
-interface SearchResult {
-  type: "OCR" | "Audio" | "UI";
-  content: {
-    text?: string;
-    transcription?: string;
-    timestamp: string;
-    app_name?: string;
-    window_name?: string;
-    device_name?: string;
-    file_path?: string;
-    audio_file_path?: string;
-  };
-}
 
 const TURN_INTENT_LEDGER_TTL_MS = 10 * 60 * 1000;
 
@@ -238,18 +227,6 @@ export function StandaloneChat({
     isWindows,
     refreshSuggestions,
   });
-  // Watch the input section's width so suggestion chips can collapse into
-  // a popover on narrow chat columns.
-  useEffect(() => {
-    const el = inputSectionRef.current;
-    if (!el) return;
-    const measure = () => setInputSectionWidth(el.getBoundingClientRect().width);
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
   // Pre-fill chat input when "Try in Chat" is clicked from the connections page.
   // Always opens a new chat so the prompt never lands in an existing conversation.
   // Uses a ref so the effect doesn't need startNewConversation as a dep (avoids
@@ -299,93 +276,25 @@ export function StandaloneChat({
     await updateSettings({ customSummaryTemplates: updated } as any);
   };
 
-  const [input, setInput] = useState("");
-  const [connectionChip, setConnectionChip] = useState<{ id: string; name: string; icon: string } | null>(null);
-  // Mirror `input` into a ref so the chat-switch logic in
-  // useChatConversations can snapshot the outgoing composer text
-  // without needing it as a dep (which would re-bind handlers every
-  // keystroke). Same pattern as attachedDocsRef / pendingDocsRef below.
-  const inputValueRef = useRef<string>("");
-  useEffect(() => { inputValueRef.current = input; }, [input]);
+  const {
+    input,
+    setInput,
+    inputValueRef,
+    inputSectionRef,
+    inputSectionWidth,
+    inputRef,
+    connectionChip,
+    setConnectionChip,
+    chipPrefixRef,
+    chipPrefixWidth,
+    chipScrollTop,
+    setChipScrollTop,
+    clearConnectionChip,
+  } = useChatComposerShell();
   const [messages, setMessages] = useState<Message[]>([]);
-  const [expandedSteerWorkIds, setExpandedSteerWorkIds] = useState<Set<string>>(() => new Set());
   const [isLoading, setIsLoading] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
-  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
-  const [openMessageMenuId, setOpenMessageMenuId] = useState<string | null>(null);
-  // Cursor-style inline edit: click a sent user message to tweak and resend
-  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
-  const [editDraft, setEditDraft] = useState<string>("");
-  // Character offset to seed the caret at when the textarea mounts. Computed
-  // from the click event so the cursor lands where the user pointed, not at
-  // the start of the text — matches Cursor / iMessage edit-in-place feel.
-  const pendingCaretRef = useRef<number | null>(null);
-  const editTextareaRef = useRef<HTMLTextAreaElement | null>(null);
-  // Tracks where mousedown landed on a user message bubble so the mouseup
-  // handler can distinguish a real click (enter edit mode) from a drag-
-  // select (let the browser select text — don't swallow it).
-  const pendingEditDownXYRef = useRef<{ x: number; y: number } | null>(null);
-
-  const enterEditMode = (message: Message, caretPos?: number) => {
-    setEditDraft(message.content);
-    pendingCaretRef.current = caretPos ?? message.content.length;
-    setEditingMessageId(message.id);
-  };
-
-  const commitEditedMessage = (message: Message, draft: string) => {
-    const trimmed = draft.trim();
-    setEditingMessageId(null);
-    pendingCaretRef.current = null;
-    if (!trimmed || trimmed === message.content) return;
-    const idx = messages.findIndex((m) => m.id === message.id);
-    if (idx === -1) return;
-    setMessages((prev) => prev.slice(0, idx));
-    sendMessage(trimmed, message.displayContent);
-  };
-
-  // Given a click on a rendered message bubble, compute the character offset
-  // into `content` that corresponds to where the user clicked. Falls back to
-  // end-of-text if the browser can't resolve a caret position (old Safari).
-  const caretOffsetFromClick = useCallback((e: React.MouseEvent, content: string): number => {
-    try {
-      // Firefox / WebView2: caretPositionFromPoint ; WebKit: caretRangeFromPoint.
-      const doc = document as Document & {
-        caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
-        caretRangeFromPoint?: (x: number, y: number) => Range | null;
-      };
-      let clickedNode: Node | null = null;
-      let clickedOffset = 0;
-      if (doc.caretPositionFromPoint) {
-        const pos = doc.caretPositionFromPoint(e.clientX, e.clientY);
-        if (pos) { clickedNode = pos.offsetNode; clickedOffset = pos.offset; }
-      } else if (doc.caretRangeFromPoint) {
-        const range = doc.caretRangeFromPoint(e.clientX, e.clientY);
-        if (range) { clickedNode = range.startContainer; clickedOffset = range.startOffset; }
-      }
-      if (!clickedNode) return content.length;
-
-      // Walk text nodes under the clicked bubble in document order, summing
-      // their lengths until we reach the clicked node. Gives a best-effort
-      // offset into the visible text — good enough for plain messages; for
-      // markdown it'll be off by the characters of any markup consumed by
-      // the rendered HTML, but the caret still lands near the click.
-      const bubble = (e.currentTarget as HTMLElement);
-      const walker = document.createTreeWalker(bubble, NodeFilter.SHOW_TEXT);
-      let offset = 0;
-      let n: Node | null;
-      while ((n = walker.nextNode())) {
-        if (n === clickedNode) {
-          offset += clickedOffset;
-          return Math.min(offset, content.length);
-        }
-        offset += (n.textContent || "").length;
-      }
-    } catch {
-      // Fall through to end-of-text fallback.
-    }
-    return content.length;
-  }, []);
   const [activePreset, setActivePreset] = useState<AIPreset | undefined>();
   const pendingPresetRef = useRef<AIPreset | null>(null);
   const isStreamingRef = useRef(false);
@@ -396,21 +305,6 @@ export function StandaloneChat({
   const abortControllerRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  // Tracks the input section's width so we can collapse the auto-suggestion
-  // chips into a popover when the chat column is narrow (e.g. when the
-  // BrowserSidebar opens and squeezes the chat). Updated by a ResizeObserver
-  // attached to the input wrapper.
-  const inputSectionRef = useRef<HTMLDivElement>(null);
-  const [inputSectionWidth, setInputSectionWidth] = useState(800);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
-  // Inline connection prefix: icon+name rendered as an absolute overlay on the
-  // textarea's first line. We measure its width and indent the textarea's first
-  // line so the typed text flows after the prefix. chipScrollTop tracks the
-  // textarea's scroll offset so the overlay scrolls with its line instead of
-  // staying pinned at the top once the input grows past maxHeight.
-  const chipPrefixRef = useRef<HTMLDivElement>(null);
-  const [chipPrefixWidth, setChipPrefixWidth] = useState(0);
-  const [chipScrollTop, setChipScrollTop] = useState(0);
   const appMentionSuggestions = React.useMemo(
     () => buildAppMentionSuggestions(appItems, APP_SUGGESTION_LIMIT),
     [appItems]
@@ -527,11 +421,16 @@ export function StandaloneChat({
   // (e.g. a meeting note) that would otherwise also stage into the composer.
   const dropRootRef = useRef<HTMLDivElement>(null);
 
-  const [scheduleDialogMessage, setScheduleDialogMessage] = useState<{ prompt: string; response: string } | null>(null);
-  const [prefillContext, setPrefillContext] = useState<string | null>(null);
-  const [prefillSource, setPrefillSource] = useState<string>("search");
-  const [prefillFrameId, setPrefillFrameId] = useState<number | null>(null);
-  const [isPreparingPrefill, setIsPreparingPrefill] = useState(false);
+  const {
+    prefillContext,
+    setPrefillContext,
+    prefillSource,
+    setPrefillSource,
+    prefillFrameId,
+    setPrefillFrameId,
+    isPreparingPrefill,
+    setIsPreparingPrefill,
+  } = useChatExternalEvents();
   const isEmbedded = !!className; // embedded in settings vs overlay panel
   const {
     isDragging,
@@ -571,7 +470,6 @@ export function StandaloneChat({
     pendingAttachmentsRef.current = [];
     return list;
   }
-  const [imageViewer, setImageViewer] = useState<ImageViewerState>(null);
   const steerShortcutInFlightRef = useRef(false);
 
   const {
@@ -815,20 +713,7 @@ export function StandaloneChat({
   }, [markUserScrolledUp]);
 
   // Clear the connection chip whenever the active conversation changes (new chat or history switch).
-  useEffect(() => { setConnectionChip(null); }, [conversationId]);
-
-  // Measure the inline connection prefix so the textarea first line can indent
-  // past it. Re-measure on chip change and container resize.
-  React.useLayoutEffect(() => {
-    if (!connectionChip) { setChipPrefixWidth(0); setChipScrollTop(0); return; }
-    const el = chipPrefixRef.current;
-    if (!el) return;
-    const measure = () => setChipPrefixWidth(el.offsetWidth);
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [connectionChip]);
+  useEffect(() => { clearConnectionChip(); }, [conversationId, clearConnectionChip]);
 
   useEffect(() => {
     void refreshConnectionState();
@@ -941,58 +826,6 @@ export function StandaloneChat({
       e.preventDefault();
     }
   }, [attachPastedText, connectionChip, handlePastedFiles]);
-
-  // Signal that this chat window is ready to receive prefill events.
-  // Other windows wait for "chat-ready" before emitting "chat-prefill"
-  // to avoid the event being lost when the chat webview is freshly created.
-  useEffect(() => {
-    const windowLabel = getCurrentWindow().label;
-    emit("chat-ready", { windowLabel });
-    // Also respond to "chat-ping" for when the chat is already open
-    const unlisten = listen<{ targetWindow?: string }>("chat-ping", (event) => {
-      const targetWindow = event.payload?.targetWindow;
-      if (targetWindow && targetWindow !== windowLabel) return;
-      emit("chat-ready", { windowLabel });
-    });
-    // Check for pending prefill from same-window navigation (e.g. pipes → home)
-    const pending = sessionStorage.getItem("pendingChatPrefill");
-    if (pending) {
-      setIsPreparingPrefill(true);
-      sessionStorage.removeItem("pendingChatPrefill");
-      try {
-        const data = JSON.parse(pending);
-        // Stamp targetWindow so an autoSend prefill is claimed by THIS window
-        // only. sessionStorage is per-window, so the window that stored the
-        // pending prefill (and navigated here) is the correct target. Without
-        // this, pipe-store / pipes-section store the prefill with no target,
-        // and the untargeted re-emit fires in BOTH windows → duplicate chat.
-        // An explicit targetWindow in `data` still wins (spread comes last).
-        const prefillData = { targetWindow: getCurrentWindow().label, ...data };
-        // Small delay to let the chat fully initialize without showing setup flashes.
-        setTimeout(() => emit("chat-prefill", prefillData), 120);
-      } catch {
-        setIsPreparingPrefill(false);
-      }
-    }
-    // Clean up stale pipe-generation markers (>30 min old) so they don't
-    // leak into a future unrelated chat session.
-    try {
-      const raw = sessionStorage.getItem("pipeGenerationContext");
-      if (raw) {
-        const ctx = JSON.parse(raw);
-        if (!ctx?.started_at || Date.now() - ctx.started_at > 30 * 60 * 1000) {
-          sessionStorage.removeItem("pipeGenerationContext");
-          if (ctx?.generation_id) {
-            posthog.capture("pipe_generation_abandoned", {
-              generation_id: ctx.generation_id,
-              age_ms: Date.now() - (ctx.started_at ?? Date.now()),
-            });
-          }
-        }
-      }
-    } catch {}
-    return () => { unlisten.then((fn) => fn()); };
-  }, []);
 
   // Pipe-generation funnel completion detector.
   // Fires `pipe_generation_completed` the first time Pi's message stream
@@ -3898,8 +3731,6 @@ export function StandaloneChat({
 
   async function executeSearchTool(args: Record<string, unknown>): Promise<string> {
     const MAX_LIMIT = 10;
-    const MAX_RESPONSE_CHARS = 4000;
-    const MAX_TEXT_PER_RESULT = 300;
 
     try {
       const params = new URLSearchParams();
@@ -3934,49 +3765,9 @@ export function StandaloneChat({
         return `Search failed: ${data.error}`;
       }
 
-      const searchResults = data.data || [];
-
-      if (searchResults.length === 0) {
-        return "No results found. Try broader search terms or wider time range.";
-      }
-
-      const formatted = searchResults.map((result: SearchResult) => {
-        const content = result.content;
-        if (!content) return null;
-
-        const truncateText = (text: string | undefined) => {
-          if (!text) return "";
-          if (text.length > MAX_TEXT_PER_RESULT) {
-            return text.substring(0, MAX_TEXT_PER_RESULT) + "...";
-          }
-          return text;
-        };
-
-        if (result.type === "OCR") {
-          const filePath = content.file_path ? `\nfile_path: ${content.file_path}` : "";
-          return `[OCR] ${content.app_name || "?"} | ${content.window_name || "?"}\n${content.timestamp}${filePath}\n${truncateText(content.text)}`;
-        } else if (result.type === "Audio") {
-          const audioPath = content.audio_file_path ? `\naudio_file_path: ${content.audio_file_path}` : "";
-          return `[Audio] ${content.device_name || "?"}\n${content.timestamp}${audioPath}\n${truncateText(content.transcription)}`;
-        } else if (result.type === "UI") {
-          const filePath = content.file_path ? `\nfile_path: ${content.file_path}` : "";
-          return `[UI] ${content.app_name || "?"} | ${content.window_name || "?"}\n${content.timestamp}${filePath}\n${truncateText(content.text)}`;
-        }
-        return null;
-      }).filter(Boolean);
-
-      const result = formatted.join("\n---\n");
-
-      if (result.length > MAX_RESPONSE_CHARS) {
-        return `Search returned too much data. Try a narrower time range.`;
-      }
-
-      return `Found ${searchResults.length} results:\n\n${result}`;
+      return formatSearchToolResults((data.data || []) as SearchToolResult[]);
     } catch (error) {
-      if (error instanceof Error && error.name === "AbortError") {
-        return "Search timed out. Retry with narrower time range and start_time within last 30-60 minutes.";
-      }
-      return `Search failed: ${error instanceof Error ? error.message : "Unknown error"}`;
+      return formatSearchToolError(error);
     }
   }
 
@@ -4731,31 +4522,6 @@ export function StandaloneChat({
   // Keep ref in sync so useEffect callbacks can call sendMessage
   sendMessageRef.current = sendMessage;
 
-  const copyFullChatAsMarkdown = async () => {
-    if (messages.length === 0) return;
-    const md = formatChatAsMarkdown(messages, citationPlan);
-    await commands.copyTextToClipboard(md);
-    toast({ title: "copied full chat as markdown" });
-  };
-
-  const exportChatAsMarkdownFile = async () => {
-    if (messages.length === 0) return;
-    const md = formatChatAsMarkdown(messages, citationPlan);
-    try {
-      const filePath = await saveDialog({
-        filters: [{ name: "Markdown", extensions: ["md"] }],
-        defaultPath: `screenpipe-chat-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.md`,
-      });
-      if (filePath) {
-        await writeTextFile(filePath, md);
-        toast({ title: "chat exported as markdown" });
-      }
-    } catch (e) {
-      console.error("Failed to export chat:", e);
-      toast({ title: "failed to export chat", variant: "destructive" });
-    }
-  };
-
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (pendingDocsRef.current.length > 0) return; // wait for extraction to finish
@@ -4805,72 +4571,30 @@ export function StandaloneChat({
     [isPipeSessionChat, messages],
   );
 
-  const toggleCollapsedSteerWork = useCallback((id: string) => {
-    setExpandedSteerWorkIds((current) => {
-      const next = new Set(current);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }, []);
-
-  const cancelMessageEdit = useCallback((message: Message) => {
-    setEditingMessageId(null);
-    pendingCaretRef.current = null;
-    setEditDraft(message.content);
-  }, []);
-
-  const updateEditDraft = useCallback((value: string) => {
-    setEditDraft(value);
-  }, []);
-
-  const copyMessageToClipboard = useCallback(async (message: Message) => {
-    await commands.copyTextToClipboard(message.content);
-    setCopiedMessageId(message.id);
-    setTimeout(() => setCopiedMessageId(null), 2000);
-  }, []);
-
-  const handleMessageMenuOpenChange = useCallback((messageId: string, open: boolean) => {
-    setOpenMessageMenuId(open ? messageId : null);
-  }, []);
-
-  const closeMessageMenu = useCallback(() => {
-    setOpenMessageMenuId(null);
-  }, []);
-
-  const openChatImageViewer = useCallback((images: string[], index: number) => {
-    setImageViewer({ images, index });
-  }, []);
-
-  const retryAssistantMessage = useCallback((messageId: string) => {
-    const msgIndex = messages.findIndex((message) => message.id === messageId);
-    let userMsgIndex = -1;
-    for (let i = msgIndex - 1; i >= 0; i--) {
-      if (messages[i].role === "user") {
-        userMsgIndex = i;
-        break;
-      }
-    }
-    if (userMsgIndex === -1) return;
-    const userMsg = messages[userMsgIndex];
-    setMessages((prev) => prev.slice(0, userMsgIndex));
-    sendMessage(userMsg.content, userMsg.displayContent);
-  }, [messages]);
-
-  const openScheduleDialogForMessage = useCallback((messageId: string) => {
-    const msgIndex = messages.findIndex((message) => message.id === messageId);
-    if (msgIndex === -1) return;
-    const assistantMessage = messages[msgIndex];
-    const userMsg = messages
-      .slice(0, msgIndex)
-      .reverse()
-      .find((message) => message.role === "user");
-    if (!userMsg || !assistantMessage) return;
-    setScheduleDialogMessage({
-      prompt: userMsg.content,
-      response: assistantMessage.content,
-    });
-  }, [messages]);
+  const {
+    messageListProps,
+    imageViewerProps,
+    scheduleDialogProps,
+  } = useChatMessageActions({
+    messages,
+    setMessages,
+    isLoading,
+    isStreaming,
+    activeSourceFooterMessageId,
+    highlightedMessageId,
+    citationPlan,
+    sendMessage,
+    openFilePreview,
+    branchConversation,
+    scheduleMessage: (message, displayLabel) => {
+      piMessageIdRef.current = null;
+      sendMessage(message, displayLabel);
+    },
+  });
+  const { handleChatContextMenu } = useChatExportMenu({
+    messages,
+    citationPlan,
+  });
 
   return (
     <div ref={dropRootRef} className={cn("flex flex-col bg-background", className ?? "h-screen")} data-testid="section-home">
@@ -4908,720 +4632,164 @@ export function StandaloneChat({
           extended underneath it. */}
       <div className="flex-1 flex min-h-0" data-browser-panel-host>
       <div className="flex-1 flex flex-col min-w-0">
-      <div className="flex-1 flex overflow-hidden">
-        <InlineChatHistory
-          hideInlineHistory={hideInlineHistory}
-          showHistory={showHistory}
-          setShowHistory={setShowHistory}
-          historySearch={historySearch}
-          setHistorySearch={setHistorySearch}
-          groupedConversations={groupedConversations}
-          conversationId={conversationId}
-          loadConversation={loadConversation}
-          deleteConversation={deleteConversation}
-          renameConversation={renameConversation}
-        />
+      <ChatMainPane
+        hideInlineHistory={hideInlineHistory}
+        showHistory={showHistory}
+        onShowHistoryChange={setShowHistory}
+        historySearch={historySearch}
+        onHistorySearchChange={setHistorySearch}
+        groupedConversations={groupedConversations}
+        conversationId={conversationId}
+        loadConversation={loadConversation}
+        deleteConversation={deleteConversation}
+        renameConversation={renameConversation}
+        scrollContainerRef={scrollContainerRef}
+        messagesEndRef={messagesEndRef}
+        onMessagesScroll={handleMessagesScroll}
+        onChatContextMenu={handleChatContextMenu}
+        messages={messages}
+        isPreparingPrefill={isPreparingPrefill}
+        activePipeExecution={activePipeExecution}
+        isLoading={isLoading}
+        isStreaming={isStreaming}
+        disabledReason={disabledReason}
+        hasPresets={Boolean(hasPresets)}
+        hasValidModel={hasValidModel}
+        needsLogin={needsLogin}
+        onOpenLogin={async () => {
+          await commands.openLoginWindow();
+        }}
+        onOpenSettings={async () => {
+          await commands.showWindow({ Home: { page: null } });
+        }}
+        summaryCardsProps={{
+          onSendMessage: sendMessage,
+          onOpenConnection: openConnectionSetup,
+          connectionSetupSuggestions,
+          autoSuggestions: connectionAwareSuggestions,
+          suggestionsRefreshing,
+          onRefreshSuggestions: refreshVisibleSuggestions,
+          customTemplates,
+          onSaveCustomTemplate: saveCustomTemplate,
+          onDeleteCustomTemplate: deleteCustomTemplate,
+          userName: settings.userName,
+          templatePipes,
+          pipesLoading,
+        }}
+        messageListProps={messageListProps}
+        isUserScrolledUp={isUserScrolledUp}
+        scrollToBottom={scrollToBottom}
+      />
 
-        {/* Messages */}
-        <div
-          ref={scrollContainerRef}
-          // min-w-0 lets this flex child shrink when the BrowserSidebar
-          // opens. Without it, flex's default `min-width: auto` keeps the
-          // chat content at content-width and the sidebar overflows past
-          // the right edge of the window — the native webview faithfully
-          // follows the placeholder rect off-screen.
-          className="relative flex-1 min-w-0 overflow-y-auto overflow-x-hidden"
-          onScroll={handleMessagesScroll}
-          onContextMenu={(e) => {
-            if (messages.length === 0) return;
-            e.preventDefault();
-            const menu = document.createElement("div");
-            menu.className =
-              "fixed z-[9999] bg-popover border border-border rounded-md shadow-md py-1 text-sm min-w-[180px]";
-            menu.style.left = `${e.clientX}px`;
-            menu.style.top = `${e.clientY}px`;
-            const item = document.createElement("button");
-            item.className =
-              "w-full text-left px-3 py-1.5 hover:bg-muted transition-colors text-foreground cursor-pointer";
-            item.textContent = "Copy full chat as markdown";
-            item.onclick = () => {
-              copyFullChatAsMarkdown();
-              menu.remove();
-            };
-            menu.appendChild(item);
-            const exportItem = document.createElement("button");
-            exportItem.className =
-              "w-full text-left px-3 py-1.5 hover:bg-muted transition-colors text-foreground cursor-pointer";
-            exportItem.textContent = "Export as markdown file";
-            exportItem.onclick = () => {
-              exportChatAsMarkdownFile();
-              menu.remove();
-            };
-            menu.appendChild(exportItem);
-            document.body.appendChild(menu);
-            const remove = (ev: MouseEvent) => {
-              if (!menu.contains(ev.target as Node)) {
-                menu.remove();
-                document.removeEventListener("mousedown", remove);
-              }
-            };
-            setTimeout(() => document.addEventListener("mousedown", remove), 0);
-          }}
-        >
-        <div className={cn(CHAT_RAIL_CLASS, "px-5 sm:px-6 py-4 space-y-4")}>
-        {/* Pipe-watch banner — shown when the user clicked through from
-            a running pipe execution. Replaces the prior synthetic
-            "Watching pipe: X" user-bubble sentinel. */}
-        {activePipeExecution && (
-          <PipeContextBanner
-            pipeName={activePipeExecution.name}
-            executionId={activePipeExecution.executionId}
-          />
-        )}
-        {messages.length === 0 && !isPreparingPrefill && !activePipeExecution && !isLoading && !isStreaming && disabledReason && (!hasPresets || !hasValidModel || needsLogin) && (
-          <div className="relative flex flex-col items-center justify-center py-12 space-y-4">
-            <div className="relative p-6 rounded-2xl border bg-muted/50 border-border/50">
-              {needsLogin ? (
-                <PipeAIIconLarge size={48} thinking={false} className="text-muted-foreground" />
-              ) : (
-                <Settings className="h-12 w-12 text-muted-foreground" />
-              )}
-            </div>
-            <div className="text-center space-y-2">
-              <h3 className="font-semibold tracking-tight">
-                {!hasPresets ? "No AI Presets" : !hasValidModel ? "No Model Selected" : needsLogin ? "Login to continue" : "Setup Required"}
-              </h3>
-              <p className="text-sm text-muted-foreground max-w-sm">
-                {needsLogin ? "Sign in to use the AI assistant" : disabledReason}
-              </p>
-            </div>
-            {needsLogin && (
-              <Button
-                variant="default"
-                size="lg"
-                onClick={() => commands.openLoginWindow()}
-                className="gap-2 font-medium bg-foreground text-background hover:bg-foreground/90 transition-colors duration-150 px-8"
-              >
-                Sign in
-              </Button>
-            )}
-            {!hasPresets && (
-              <Button
-                variant="outline"
-                onClick={async () => {
-                  await commands.showWindow({ Home: { page: null } });
-                }}
-                className="gap-2"
-              >
-                <Settings className="h-4 w-4" />
-                Go to Settings
-              </Button>
-            )}
-          </div>
-        )}
-        {messages.length === 0 && !isPreparingPrefill && !activePipeExecution && !isLoading && !isStreaming && hasPresets && hasValidModel && (
-          <SummaryCards
-            onSendMessage={sendMessage}
-            onOpenConnection={openConnectionSetup}
-            connectionSetupSuggestions={connectionSetupSuggestions}
-            autoSuggestions={connectionAwareSuggestions}
-            suggestionsRefreshing={suggestionsRefreshing}
-            onRefreshSuggestions={refreshVisibleSuggestions}
-            customTemplates={customTemplates}
-            onSaveCustomTemplate={saveCustomTemplate}
-            onDeleteCustomTemplate={deleteCustomTemplate}
-            userName={settings.userName}
-            templatePipes={templatePipes}
-            pipesLoading={pipesLoading}
-          />
-        )}
-        <ChatMessageList
-          messages={messages}
-          isLoading={isLoading}
-          isStreaming={isStreaming}
-          activeSourceFooterMessageId={activeSourceFooterMessageId}
-          expandedSteerWorkIds={expandedSteerWorkIds}
-          onToggleCollapsedSteerWork={toggleCollapsedSteerWork}
-          highlightedMessageId={highlightedMessageId}
-          editingMessageId={editingMessageId}
-          editDraft={editDraft}
-          onEditDraftChange={updateEditDraft}
-          onCancelEdit={cancelMessageEdit}
-          pendingCaretRef={pendingCaretRef}
-          pendingEditDownXYRef={pendingEditDownXYRef}
-          editTextareaRef={editTextareaRef}
-          caretOffsetFromClick={caretOffsetFromClick}
-          enterEditMode={enterEditMode}
-          commitEditedMessage={commitEditedMessage}
-          citationPlan={citationPlan}
-          copiedMessageId={copiedMessageId}
-          onCopyMessage={copyMessageToClipboard}
-          openMessageMenuId={openMessageMenuId}
-          onMessageMenuOpenChange={handleMessageMenuOpenChange}
-          onCloseMessageMenu={closeMessageMenu}
-          onOpenImageViewer={openChatImageViewer}
-          onRetryAssistantMessage={retryAssistantMessage}
-          onOpenScheduleDialog={openScheduleDialogForMessage}
-          sendMessage={sendMessage}
-          openFilePreview={openFilePreview}
-          branchConversation={branchConversation}
-        />
-
-        <div ref={messagesEndRef} />
-      </div> {/* End of max-w-4xl wrapper */}
-
-      {/* Floating scroll-to-bottom pill */}
-      {isUserScrolledUp && messages.length > 0 && (
-        <button
-          onClick={scrollToBottom}
-          className="sticky bottom-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-primary text-primary-foreground shadow-lg text-xs font-medium hover:bg-primary/90 transition-opacity animate-in fade-in slide-in-from-bottom-2 duration-200"
-        >
-          <ChevronDown className="h-3.5 w-3.5" />
-          new content
-        </button>
-      )}
-      </div>
-
-      </div> {/* End of main content area with history sidebar */}
-
-      {/* Input */}
-      <div
-        ref={inputSectionRef}
-        className="relative bg-gradient-to-t from-background via-background/80 to-transparent"
-      >
-        <div className={CHAT_RAIL_CLASS}>
-        {/* Prefill, filters, suggestions first; then attached images in gap; then agent bar; then form */}
-        {/* Prefill context indicator from search */}
-        {(prefillContext || prefillFrameId) && (
-          <div className="px-5 sm:px-6 py-2 border-b border-border/30 bg-muted/30">
-            <div className="flex items-start justify-between gap-2">
-              {prefillFrameId && (
-                <div className="flex-shrink-0">
-                  <div className="relative group">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={`${getApiBaseUrl()}/frames/${prefillFrameId}`}
-                      alt="Attached frame"
-                      className="w-16 h-12 object-cover rounded border border-border/50"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setPrefillFrameId(null)}
-                      className="absolute -top-1 -right-1 p-0.5 bg-background rounded-full border border-border shadow-sm opacity-0 group-hover:opacity-100 transition-opacity"
-                    >
-                      <X className="w-2.5 h-2.5 text-muted-foreground" />
-                    </button>
-                  </div>
-                </div>
-              )}
-              {prefillContext && (
-                <div className="flex-1 min-w-0">
-                  <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mb-1">
-                    context from {prefillSource === "timeline" ? "timeline selection" : "search"}
-                  </div>
-                  <p className="text-xs text-foreground font-mono line-clamp-2">
-                    {prefillContext.slice(0, 150)}{prefillContext.length > 150 ? "..." : ""}
-                  </p>
-                </div>
-              )}
-              <button
-                type="button"
-                onClick={() => {
-                  setPrefillContext(null);
-                  setPrefillFrameId(null);
-                }}
-                className="p-1 hover:bg-muted rounded text-muted-foreground"
-              >
-                <X className="w-3 h-3" />
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Persistent auto-suggestions above input. Inline chips when the
-            input is wide enough; collapses to a single trigger button that
-            opens a popover when narrow (e.g. BrowserSidebar squeezed the
-            chat column). 520px is the rough threshold below which 3 chips
-            wrap to multiple rows and eat too much vertical space. */}
-        {messages.length > 0 && !isLoading && settings?.showChatSuggestions !== false && connectionAwareSuggestions.length > 0 && (
-          inputSectionWidth >= 520 ? (
-            <div className="px-5 sm:px-6 pt-2 flex flex-wrap gap-1.5 items-center">
-              {connectionAwareSuggestions.slice(0, 3).map((s, i) => (
-                <button
-                  key={i}
-                  type="button"
-                  onClick={() => sendMessage(s.text)}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-mono bg-muted/20 hover:bg-foreground hover:text-background border border-border/20 hover:border-foreground text-muted-foreground transition-all duration-150 cursor-pointer max-w-[280px]"
-                  title={s.preview ? `${s.text} — ${s.preview}` : s.text}
-                >
-                  {s.connectionIcon ? (
-                    <ConnectionToolIcon name={s.connectionIcon} />
-                  ) : (
-                    <Sparkles className="w-3 h-3 shrink-0 text-muted-foreground/70" strokeWidth={1.5} aria-hidden />
-                  )}
-                  <span className="truncate">{s.text}</span>
-                </button>
-              ))}
-              <button
-                onClick={refreshVisibleSuggestions}
-                disabled={suggestionsRefreshing}
-                className="p-0.5 text-muted-foreground/30 hover:text-foreground transition-colors duration-150 disabled:opacity-30 cursor-pointer"
-                title="refresh suggestions"
-              >
-                <RefreshCw className={`w-3 h-3 ${suggestionsRefreshing ? 'animate-spin' : ''}`} strokeWidth={1.5} />
-              </button>
-              <button
-                type="button"
-                onClick={() => updateSettings({ showChatSuggestions: false })}
-                className="p-0.5 text-muted-foreground/30 hover:text-foreground transition-colors duration-150 cursor-pointer"
-                title="Hide chat suggestions — re-enable in Settings → Display"
-                aria-label="Hide chat suggestions"
-              >
-                <X className="w-3 h-3" strokeWidth={1.5} />
-              </button>
-            </div>
-          ) : (
-            <div className="px-5 sm:px-6 pt-2 flex items-center gap-1.5">
-              <Popover>
-                <PopoverTrigger asChild>
-                  <button
-                    type="button"
-                    className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-mono bg-muted/20 hover:bg-foreground hover:text-background border border-border/20 hover:border-foreground text-muted-foreground transition-all duration-150 cursor-pointer"
-                    title="Suggested prompts"
-                  >
-                    <Sparkles className="w-3 h-3" strokeWidth={1.5} />
-                    <span>suggestions</span>
-                    <ChevronDown className="w-3 h-3" strokeWidth={1.5} />
-                  </button>
-                </PopoverTrigger>
-                <PopoverContent
-                  className="w-72 p-1"
-                  align="start"
-                  side="top"
-                  sideOffset={6}
-                >
-                  <div className="flex flex-col gap-0.5">
-                    {connectionAwareSuggestions.slice(0, 3).map((s, i) => (
-                      <button
-                        key={i}
-                        type="button"
-                        onClick={() => sendMessage(s.text)}
-                        className="text-left px-2 py-1.5 text-[11px] font-mono rounded-sm hover:bg-muted text-muted-foreground hover:text-foreground transition-colors flex items-start gap-1.5"
-                        title={s.preview ? `${s.text} — ${s.preview}` : s.text}
-                      >
-                        {s.connectionIcon ? (
-                          <ConnectionToolIcon name={s.connectionIcon} />
-                        ) : (
-                          <Sparkles className="w-3 h-3 mt-0.5 shrink-0 text-muted-foreground/70" strokeWidth={1.5} aria-hidden />
-                        )}
-                        <span className="line-clamp-2">{s.text}</span>
-                      </button>
-                    ))}
-                  </div>
-                </PopoverContent>
-              </Popover>
-              <button
-                onClick={refreshVisibleSuggestions}
-                disabled={suggestionsRefreshing}
-                className="p-0.5 text-muted-foreground/30 hover:text-foreground transition-colors duration-150 disabled:opacity-30 cursor-pointer"
-                title="refresh suggestions"
-              >
-                <RefreshCw className={`w-3 h-3 ${suggestionsRefreshing ? 'animate-spin' : ''}`} strokeWidth={1.5} />
-              </button>
-              <button
-                type="button"
-                onClick={() => updateSettings({ showChatSuggestions: false })}
-                className="p-0.5 text-muted-foreground/30 hover:text-foreground transition-colors duration-150 cursor-pointer"
-                title="Hide chat suggestions — re-enable in Settings → Display"
-                aria-label="Hide chat suggestions"
-              >
-                <X className="w-3 h-3" strokeWidth={1.5} />
-              </button>
-            </div>
-          )
-        )}
-
-        <AttachmentTray
-          pendingDocs={pendingDocs}
-          attachedDocs={attachedDocs}
-          pastedImages={pastedImages}
-          onShowPastedTextInField={showPastedTextInField}
-          onRemoveDoc={(index) => setAttachedDocs((prev) => prev.filter((_, idx) => idx !== index))}
-          onImageClick={(images, index) => setImageViewer({ images, index })}
-          onRemoveImage={(index) => setPastedImages((prev) => prev.filter((_, idx) => idx !== index))}
-        />
-
-        <form
-          onSubmit={handleSubmit}
-          className="px-5 sm:px-6 pb-4 pt-3 relative"
-          onPaste={handlePaste}
-        >
-          {/* Drop zone overlay — only shown in embedded (non-overlay) chat */}
-          {isEmbedded && (
-            <AnimatePresence>
-              {isDragging && (
-                <motion.div
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.15 }}
-                  className="absolute inset-0 z-50 flex items-center justify-center bg-background/95 backdrop-blur-sm rounded-lg border-2 border-dashed border-primary m-1"
-                >
-                  <div className="flex flex-col items-center gap-2">
-                    <ImageIcon className="w-6 h-6 text-primary" />
-                    <p className="text-sm font-medium text-foreground">drop image here</p>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          )}
-
-          <QueuedPromptsList
-            queuedPrompts={queuedPrompts}
-            queuedActionPromptId={queuedActionPromptId}
-            queuedDisplayById={getQueuedDisplayBySession(currentQueueSessionId)}
-            queuedScrollRef={queuedScrollRef}
-            isMac={isMac}
-            onSteerQueuedPrompt={steerQueuedPrompt}
-            onCancelQueuedPrompt={cancelQueuedPrompt}
-          />
-
-          <div
-            className={cn(
-              "flex flex-col rounded-lg border bg-input ring-offset-background transition-colors focus-within:border-foreground focus-within:ring-foreground/10 focus-within:ring-1",
-              "bg-background/80 border-border/50 shadow-lg shadow-black/5",
-              disabledReason && "border-muted-foreground/30"
-            )}
-          >
-            {/* Textarea row: full width so scrollbar is above the buttons and no dead zone */}
-            <div className="relative flex-1 min-w-0">
-              {/* Connection chip — inline icon + name prefix on the
-                  textarea's first line. The prefix is an absolute overlay; the
-                  textarea's first line is indented past it so typed text flows
-                  after the name. X (absolute, top-right) clears it. */}
-              {connectionChip && (
-                <>
-                  {/* Clip wrapper: matches the textarea's visible box so the
-                      prefix never bleeds above the first line when scrolled. */}
-                  <div className="pointer-events-none absolute left-3 right-7 top-2.5 bottom-2.5 z-10 overflow-hidden">
-                    <div
-                      ref={chipPrefixRef}
-                      className="absolute left-0 top-0 flex h-5 items-center gap-1.5"
-                      style={{ transform: `translateY(${-chipScrollTop}px)` }}
-                    >
-                      <IntegrationIcon
-                        icon={connectionChip.icon}
-                        className="w-4 h-4 flex items-center justify-center overflow-hidden shrink-0 bg-transparent"
-                        fallbackClassName="h-3 w-3 text-muted-foreground"
-                      />
-                      <span className="text-sm font-mono font-semibold text-foreground/80 leading-5 whitespace-nowrap">{connectionChip.name}</span>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    aria-label="Remove connection context"
-                    onClick={() => setConnectionChip(null)}
-                    className="absolute right-2.5 top-2 z-10 text-muted-foreground/60 hover:text-foreground transition-colors shrink-0"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </>
-              )}
-              <textarea
-                ref={inputRef}
-                value={input}
-                onChange={handleMentionInputChange}
-                onCompositionStart={() => setIsComposing(true)}
-                onCompositionEnd={() => setIsComposing(false)}
-                onScroll={connectionChip ? (e) => setChipScrollTop(e.currentTarget.scrollTop) : undefined}
-                onKeyDown={handleKeyDown}
-                placeholder={
-                  disabledReason
-                    ? disabledReason
-                    : isLoading || isStreaming
-                      ? "Message will be queued..."
-                      : "Ask about your screen... (type @ for filters, paste images)"
-                }
-                disabled={!canChat}
-                spellCheck={false}
-                autoCorrect="off"
-                rows={1}
-                className={cn(
-                  "w-full min-h-[44px] border-0 bg-transparent px-3 text-sm font-mono placeholder:text-muted-foreground focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50 caret-foreground resize-none overflow-y-auto scrollbar-minimal py-2.5",
-                  connectionChip ? "pr-7" : "pr-3"
-                )}
-                style={{
-                  maxHeight: "150px",
-                  textIndent: connectionChip && chipPrefixWidth ? `${chipPrefixWidth + 8}px` : undefined,
-                }}
-              />
-
-              <AnimatePresence>
-                {showMentionDropdown && filteredMentions.length > 0 && (
-                  <motion.div
-                    ref={dropdownRef}
-                    initial={{ opacity: 0, y: 4 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: 4 }}
-                    transition={{ duration: 0.1 }}
-                    className="absolute bottom-full left-0 right-0 mb-1 bg-background border border-border rounded-lg shadow-lg overflow-hidden z-50 max-h-[240px] overflow-y-auto"
-                  >
-                    {["time", "content", "app", "tag", "speaker"].map(category => {
-                      const items = filteredMentions.filter(m => m.category === category);
-                      if (items.length === 0) return null;
-                      return (
-                        <div key={category}>
-                          <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground bg-muted/30 border-b border-border/50">
-                            {category === "time" ? "time" : category === "content" ? "content type" : category === "speaker" ? "speakers" : category === "tag" ? "tags" : "apps"}
-                          </div>
-                          {items.map((suggestion) => {
-                            const globalIndex = filteredMentions.indexOf(suggestion);
-                            return (
-                              <button
-                                key={suggestion.tag}
-                                type="button"
-                                onClick={() => insertMention(suggestion.tag)}
-                                className={cn(
-                                  "w-full px-3 py-1.5 text-left text-sm flex items-center justify-between gap-2 transition-colors",
-                                  globalIndex === selectedMentionIndex
-                                    ? "bg-muted text-foreground"
-                                    : "hover:bg-muted/50"
-                                )}
-                              >
-                                <span className="font-mono text-xs">{suggestion.tag}</span>
-                                <span className="text-[10px] text-muted-foreground truncate">{suggestion.description}</span>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      );
-                    })}
-                    {isLoadingSpeakers && (
-                      <div className="px-3 py-2 text-[10px] text-muted-foreground flex items-center gap-2">
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                        <span>Searching speakers...</span>
-                      </div>
-                    )}
-                    {isLoadingTagSearch && (
-                      <div className="px-3 py-2 text-[10px] text-muted-foreground flex items-center gap-2">
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                        <span>Searching tags...</span>
-                      </div>
-                    )}
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
-          </div>
-          {/* Controls row — sits below the input box, not inside it */}
-          <div className="flex items-center gap-1.5 px-1 pt-2">
-            <Popover
-              open={appFilterOpen}
-              onOpenChange={handleFilterMenuOpenChange}
-            >
-              <PopoverTrigger asChild>
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="ghost"
-                  className={cn(
-                    "h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-muted/50 relative shrink-0",
-                    hasActiveFilters && "text-foreground bg-muted/50"
-                  )}
-                  title="Add attachments and filters"
-                  aria-label="Add attachments and filters"
-                >
-                  <Plus className="h-4 w-4" />
-                  {activeFilterCount > 0 && (
-                    <span className="absolute -top-1 -right-1 min-w-[15px] h-[15px] px-1 rounded-full bg-foreground text-background text-[9px] font-mono font-semibold flex items-center justify-center">
-                      {activeFilterCount}
-                    </span>
-                  )}
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent
-                className="w-72 p-0 max-h-[420px] overflow-y-auto"
-                align="start"
-                side="top"
-                sideOffset={6}
-              >
-                <ComposerUtilityMenu
-                  canChat={Boolean(canChat)}
-                  activeFilterCount={activeFilterCount}
-                  activeFilters={activeFilters}
-                  filterSearch={filterSearch}
-                  onFilterSearchChange={updateFilterSearch}
-                  onClearFilterSearch={clearFilterSearch}
-                  filterSearchGroups={filterSearchGroups}
-                  filterSearchResults={filterSearchResults}
-                  isLoadingFilterSearch={isLoadingFilterSearch}
-                  selectedFilterResultIndex={selectedFilterResultIndex}
-                  onSelectFilterResultIndex={selectFilterResultIndex}
-                  onSelectNextFilterResult={selectNextFilterResult}
-                  onSelectPreviousFilterResult={selectPreviousFilterResult}
-                  onApplySelectedFilterResult={applySelectedFilterResult}
-                  staticMentionSuggestions={STATIC_MENTION_SUGGESTIONS}
-                  appMentionSuggestions={appMentionSuggestions}
-                  allTagMentionSuggestions={allTagMentionSuggestions}
-                  tagMentionSections={tagMentionSections}
-                  recentSpeakers={recentSpeakers}
-                  appsLoading={appsLoading}
-                  tagsLoading={tagsLoading}
-                  connections={connections}
-                  isWindows={isWindows}
-                  onCloseFilterMenu={closeFilterMenu}
-                  getFilterSuggestionState={getFilterSuggestionState}
-                  applyFilterSuggestion={applyFilterSuggestion}
-                  applyTimeFilterSuggestion={applyTimeFilterSuggestion}
-                  applyContentFilterSuggestion={applyContentFilterSuggestion}
-                  applyAppFilterSuggestion={applyAppFilterSuggestion}
-                  applyTagFilterSuggestion={applyTagFilterSuggestion}
-                  applyConnectionFilterTag={applyConnectionFilterTag}
-                  applySpeakerFilterSuggestion={applySpeakerFilterSuggestion}
-                  handleFilePicker={handleFilePicker}
-                />
-              </PopoverContent>
-            </Popover>
-            <div className="flex-1 min-w-0">
-              {hasActiveFilters && (
-              <div className="hidden sm:flex min-w-0 items-center gap-1 overflow-hidden">
-                {activeFilterLabels.slice(0, 2).map((label, idx) => (
-                  <span
-                    key={`${label}-${idx}`}
-                    className="inline-flex h-6 max-w-[140px] items-center rounded-md border border-border/50 px-2 text-[10px] font-medium text-muted-foreground truncate"
-                    title={label}
-                  >
-                    {label}
-                  </span>
-                ))}
-                {activeFilterLabels.length > 2 && (
-                  <span className="inline-flex h-6 items-center rounded-md border border-border/50 px-2 text-[10px] font-medium text-muted-foreground shrink-0">
-                    +{activeFilterLabels.length - 2}
-                  </span>
-                )}
-              </div>
-              )}
-            </div>
-            <AIPresetsSelector
-              compact
-              showModelOnly
-              containerClassName="w-[180px] max-w-[42vw] min-w-[120px] shrink-0 gap-0"
-              triggerClassName="h-8 border-0 bg-transparent px-1.5 text-xs text-muted-foreground shadow-none hover:bg-muted/50 hover:text-foreground"
-              onPresetSaved={handlePiRestart}
-              controlledPresetId={
-                activePreset?.id ??
-                settings.aiPresets?.find((p) => p.defaultPreset)?.id ??
-                settings.aiPresets?.[0]?.id ??
-                null
-              }
-              onControlledSelect={(id) => {
-                if (!id) return;
-                const match = settings.aiPresets?.find((p) => p.id === id);
-                if (!match) return;
-                setActivePreset(match);
-                if (!activePipeExecution) handlePiRestart(match);
-              }}
-            />
-            {/* Selector is shown for every preset. The Brain icon self-disables
-             *  (via `piThinkingUnsupported` from use-pi-thinking-level) when the
-             *  active model has no reasoning capability — Pi clamps to "off" and
-             *  emits thinking_level_changed/get_state with level="off".
-             *  Works for screenpipe-cloud, openai BYOK (gpt-5 / o-series),
-             *  openai-chatgpt (ChatGPT subscription via codex wire), anthropic,
-             *  native-ollama (thinking-capable models), and custom OpenAI-compat. */}
-            <ThinkingLevelSelector streaming={isLoading || isStreaming} sessionId={currentQueueSessionId} />
-            {(() => {
-              const hasInput = input.trim().length > 0 || pastedImages.length > 0 || attachedDocs.length > 0;
-              const primaryAction = getComposerPrimaryAction(isLoading || isStreaming, hasInput);
-              const isStopMode = primaryAction === "stop";
-              // Pending doc extraction blocks send (but not stop). The
-              // button stays visible but disabled — the spinning chip
-              // upstream is the affordance that explains why.
-              const hasPendingDocs = pendingDocs.length > 0;
-              const sendDisabled = (!hasInput && !isStopMode) || !canChat || (!isStopMode && hasPendingDocs);
-              return (
-                <>
-                  <Button
-                    type={isStopMode ? "button" : "submit"}
-                    size="icon"
-                    disabled={sendDisabled}
-                    onClick={isStopMode ? handleStop : undefined}
-                    className={cn(
-                      "h-8 w-8 transition-all duration-200 relative",
-                      "bg-foreground text-background hover:bg-foreground/80"
-                    )}
-                    title={
-                      isStopMode
-                        ? "stop"
-                        : hasPendingDocs
-                          ? "waiting for attachment to finish extracting"
-                          : "send"
-                    }
-                    aria-label={
-                      isStopMode
-                        ? "stop reply"
-                        : hasPendingDocs
-                          ? "send disabled while attachment is extracting"
-                          : "send message"
-                    }
-                  >
-                    {isStopMode ? (
-                      <Square className="h-4 w-4" />
-                    ) : hasPendingDocs ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <Send className="h-4 w-4" />
-                    )}
-                  </Button>
-                </>
-              );
-            })()}
-          </div>
-
-          {/* Connect apps nudge banner — inside the form, below the input box */}
-          {showConnectBanner && (
-            <div className="flex items-center gap-2 mt-2">
-              <button
-                type="button"
-                onClick={() => openConnectionSetup("connections")}
-                className="text-[11px] text-muted-foreground/70 hover:text-foreground transition-colors flex-1 text-left"
-              >
-                Connect your apps to get better answers
-              </button>
-              <div className="flex items-center gap-1">
-                {suggestedConnectionTiles
-                  .map((c) => (
-                    <button
-                      key={c.id}
-                      type="button"
-                      title={c.name}
-                      onClick={() => openConnectionSetup(c.id)}
-                      className="shrink-0 opacity-70 hover:opacity-100 transition-opacity"
-                    >
-                      <IntegrationIcon
-                        icon={c.icon || c.id}
-                        className="w-6 h-6 bg-muted/40 rounded-md flex items-center justify-center"
-                        fallbackClassName="h-3 w-3 text-muted-foreground"
-                      />
-                    </button>
-                  ))}
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowConnectBanner(false);
-                  try { localStorage.setItem("screenpipe_connect_banner_dismissed", "true"); } catch {}
-                }}
-                className="text-muted-foreground/50 hover:text-foreground transition-colors shrink-0"
-              >
-                <X className="w-3 h-3" />
-              </button>
-            </div>
-          )}
-        </form>
-
-        </div>
-      </div>
+      <ChatComposer
+        inputSectionRef={inputSectionRef}
+        prefillContext={prefillContext}
+        prefillFrameId={prefillFrameId}
+        prefillSource={prefillSource}
+        onClearPrefill={() => {
+          setPrefillContext(null);
+          setPrefillFrameId(null);
+        }}
+        onClearPrefillFrame={() => setPrefillFrameId(null)}
+        messages={messages}
+        isLoading={isLoading}
+        isStreaming={isStreaming}
+        settings={settings}
+        connectionAwareSuggestions={connectionAwareSuggestions}
+        inputSectionWidth={inputSectionWidth}
+        sendMessage={sendMessage}
+        refreshVisibleSuggestions={refreshVisibleSuggestions}
+        suggestionsRefreshing={suggestionsRefreshing}
+        updateSettings={updateSettings}
+        pendingDocs={pendingDocs}
+        attachedDocs={attachedDocs}
+        pastedImages={pastedImages}
+        showPastedTextInField={showPastedTextInField}
+        onRemoveDoc={(index: number) => setAttachedDocs((prev) => prev.filter((_, idx) => idx !== index))}
+        imageViewerProps={imageViewerProps}
+        onRemoveImage={(index: number) => setPastedImages((prev) => prev.filter((_, idx) => idx !== index))}
+        handleSubmit={handleSubmit}
+        handlePaste={handlePaste}
+        isEmbedded={isEmbedded}
+        isDragging={isDragging}
+        queuedPrompts={queuedPrompts}
+        queuedActionPromptId={queuedActionPromptId}
+        getQueuedDisplayBySession={getQueuedDisplayBySession}
+        currentQueueSessionId={currentQueueSessionId}
+        queuedScrollRef={queuedScrollRef}
+        isMac={isMac}
+        steerQueuedPrompt={steerQueuedPrompt}
+        cancelQueuedPrompt={cancelQueuedPrompt}
+        disabledReason={disabledReason}
+        connectionChip={connectionChip}
+        chipPrefixRef={chipPrefixRef}
+        chipScrollTop={chipScrollTop}
+        onClearConnectionChip={() => setConnectionChip(null)}
+        inputRef={inputRef}
+        input={input}
+        handleMentionInputChange={handleMentionInputChange}
+        onCompositionStart={() => setIsComposing(true)}
+        onCompositionEnd={() => setIsComposing(false)}
+        onTextareaScroll={(e: React.UIEvent<HTMLTextAreaElement>) => setChipScrollTop(e.currentTarget.scrollTop)}
+        handleKeyDown={handleKeyDown}
+        canChat={canChat}
+        chipPrefixWidth={chipPrefixWidth}
+        showMentionDropdown={showMentionDropdown}
+        filteredMentions={filteredMentions}
+        dropdownRef={dropdownRef}
+        selectedMentionIndex={selectedMentionIndex}
+        insertMention={insertMention}
+        isLoadingSpeakers={isLoadingSpeakers}
+        isLoadingTagSearch={isLoadingTagSearch}
+        appFilterOpen={appFilterOpen}
+        handleFilterMenuOpenChange={handleFilterMenuOpenChange}
+        hasActiveFilters={hasActiveFilters}
+        activeFilterCount={activeFilterCount}
+        activeFilters={activeFilters}
+        filterSearch={filterSearch}
+        updateFilterSearch={updateFilterSearch}
+        clearFilterSearch={clearFilterSearch}
+        filterSearchGroups={filterSearchGroups}
+        filterSearchResults={filterSearchResults}
+        isLoadingFilterSearch={isLoadingFilterSearch}
+        selectedFilterResultIndex={selectedFilterResultIndex}
+        selectFilterResultIndex={selectFilterResultIndex}
+        selectNextFilterResult={selectNextFilterResult}
+        selectPreviousFilterResult={selectPreviousFilterResult}
+        applySelectedFilterResult={applySelectedFilterResult}
+        STATIC_MENTION_SUGGESTIONS={STATIC_MENTION_SUGGESTIONS}
+        appMentionSuggestions={appMentionSuggestions}
+        allTagMentionSuggestions={allTagMentionSuggestions}
+        tagMentionSections={tagMentionSections}
+        recentSpeakers={recentSpeakers}
+        appsLoading={appsLoading}
+        tagsLoading={tagsLoading}
+        connections={connections}
+        isWindows={isWindows}
+        closeFilterMenu={closeFilterMenu}
+        getFilterSuggestionState={getFilterSuggestionState}
+        applyFilterSuggestion={applyFilterSuggestion}
+        applyTimeFilterSuggestion={applyTimeFilterSuggestion}
+        applyContentFilterSuggestion={applyContentFilterSuggestion}
+        applyAppFilterSuggestion={applyAppFilterSuggestion}
+        applyTagFilterSuggestion={applyTagFilterSuggestion}
+        applyConnectionFilterTag={applyConnectionFilterTag}
+        applySpeakerFilterSuggestion={applySpeakerFilterSuggestion}
+        handleFilePicker={handleFilePicker}
+        activeFilterLabels={activeFilterLabels}
+        handlePiRestart={handlePiRestart}
+        activePreset={activePreset}
+        onSelectPreset={setActivePreset}
+        activePipeExecution={activePipeExecution}
+        showConnectBanner={showConnectBanner}
+        openConnectionSetup={openConnectionSetup}
+        suggestedConnectionTiles={suggestedConnectionTiles}
+        onDismissConnectBanner={() => {
+          setShowConnectBanner(false);
+          try { localStorage.setItem("screenpipe_connect_banner_dismissed", "true"); } catch {}
+        }}
+        handleStop={handleStop}
+      />
       </div> {/* End of chat column */}
 
       {/* Agent-controlled embedded browser. Slides in from the right when
@@ -5641,21 +4809,10 @@ export function StandaloneChat({
       </div> {/* End of horizontal chat+browser split */}
 
 
-      {scheduleDialogMessage && (
-        <SchedulePromptDialog
-          open={!!scheduleDialogMessage}
-          onClose={() => setScheduleDialogMessage(null)}
-          onSchedule={(message, displayLabel) => {
-            setScheduleDialogMessage(null);
-            // Clear any stale Pi message ref so sendMessage doesn't reject
-            piMessageIdRef.current = null;
-            sendMessage(message, displayLabel);
-          }}
-          originalPrompt={scheduleDialogMessage.prompt}
-          responsePreview={scheduleDialogMessage.response}
-        />
+      {scheduleDialogProps && (
+        <SchedulePromptDialog {...scheduleDialogProps} />
       )}
-      <ImageViewerDialog imageViewer={imageViewer} onChange={setImageViewer} />
+      <ImageViewerDialog {...imageViewerProps} />
 
     </div>
   );
