@@ -5,14 +5,20 @@ import { Env, RequestBody } from '../types';
 import { createProvider, resolveModelAlias } from '../providers';
 import { addCorsHeaders } from '../utils/cors';
 import { logModelOutcome } from '../services/model-health';
+import { isFlexEligible } from '../utils/latency';
+import { routeTier, routerArm, TIER_HEAD } from './difficulty-router';
 import { captureException } from '@sentry/cloudflare';
 
-// Auto model waterfall — open-weight Vertex MaaS picks ordered by quality
-// (free for users, low GCP burn) with a cheap Gemini safety net at the tail.
+// Auto model waterfall (INTERACTIVE) — leads with glm-5. Interactive is
+// latency-bound (a user is waiting), and on these models intelligence == reasoning
+// effort == latency: gemini-3.5-flash / gpt-5.x are only "smarter" at high effort,
+// which is slow (3-10s+); at chat speed they drop BELOW glm-5's IQ. glm-5 is the
+// fast/smart sweet spot for chat (~1.2s, AA 50, free Vertex MaaS). Smart reasoning
+// models live on AUTO_WATERFALL_BACKGROUND where latency doesn't matter.
 // Exported so tests can pin that every chain entry has a MODEL_PRICING match
 // (otherwise served-model cost rows fall into the unknown-model estimate).
 export const AUTO_WATERFALL = [
-  'glm-5',            // closest Vertex match to gemini-3.5-flash (AA index 50 vs 55) at ~1/3 the output cost
+  'glm-5',            // fast (~1.2s) + AA 50, free Vertex MaaS — best fast/smart for latency-bound chat
   'kimi-k2.5',
   'deepseek-v3.2',
   'glm-4.7',
@@ -29,15 +35,16 @@ export const AUTO_WATERFALL_VISION = [
 ];
 
 // Background waterfall — for latency-tolerant traffic (pipes, daily summary,
-// suggestions) where no user is waiting. Leads with gemini-3.5-flash on the
-// FLEX tier: 50% off ($0.75/$4.50 per MTok) + implicit caching makes it land
-// BELOW glm-5 for screenpipe's input-heavy mix, at higher quality (AA 55 vs
-// 50). glm-5 + gemini-3-flash are standard-tier fallbacks for when flex is
-// throttled (best-effort tier 429s under load). Flex is applied per-request
-// by tryModel to the gemini entries only — glm-5 (MaaS) has no flex tier.
+// suggestions) where no user is waiting. Leads with gemini-3.5-flash on the FLEX
+// tier: background is ~84% cache-reads, so flex's 0.1x cache discount makes it the
+// cheapest decent-quality option ($/Mtok ≈ glm-5 but with the cache discount glm-5
+// lacks). Measured (6/19): gpt-5.4 here cost $590/day vs $177 on flex for the SAME
+// traffic — 3.3x more, on the small OpenAI pool, for a marginal IQ gain (54 vs ~50-55)
+// that pipes don't need; reverted (#4285→). glm-5 + gemini-3-flash are standard-tier
+// fallbacks for when flex is throttled.
 export const AUTO_WATERFALL_BACKGROUND = [
-  'gemini-3.5-flash', // flex tier — cheapest input once flex+cache stack
-  'glm-5',            // MaaS fallback, standard tier
+  'gemini-3.5-flash', // flex tier — cheapest on the cache-heavy background mix
+  'glm-5',            // free Vertex MaaS fallback, standard tier
   'gemini-3-flash',   // near-free safety net
 ];
 
@@ -213,25 +220,35 @@ async function tryModel(
       delete (reqBody as Partial<RequestBody>).tool_choice;
     }
 
-    // Flex tier applies only to the Vertex Gemini lane. Setting it on the body
-    // here (vs the shared request body) keeps it scoped to this attempt, so a
-    // cascade from flex-gemini → glm-5 runs glm-5 at standard tier.
+    // Flex tier applies only to the Vertex Gemini lane. Set per-attempt (not on
+    // the shared body) so a cascade to glm-5 runs standard tier.
     const useFlex = flexEligible && isGeminiModel(model);
-    if (useFlex) {
-      (reqBody as RequestBody).serviceTier = 'flex';
-    }
 
-    if (body.stream) {
-      const stream = await provider.createStreamingCompletion(reqBody);
-      return tagServedTier(new Response(stream, {
-        headers: {
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          'Connection': 'keep-alive',
-        },
-      }), useFlex);
+    const callOnce = async (withFlex: boolean): Promise<Response> => {
+      const rb = { ...reqBody } as RequestBody;
+      if (withFlex) rb.serviceTier = 'flex';
+      else delete (rb as Partial<RequestBody>).serviceTier;
+      if (body.stream) {
+        const stream = await provider.createStreamingCompletion(rb);
+        return tagServedTier(new Response(stream, {
+          headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' },
+        }), withFlex);
+      }
+      return tagServedTier(await provider.createCompletion(rb), withFlex);
+    };
+
+    try {
+      return await callOnce(useFlex);
+    } catch (flexErr: any) {
+      // Flex isn't enabled for our project/region on some Gemini models
+      // ("Flex API is not supported for project ... or selected region", 400 —
+      // SCREENPIPE-AI-PROXY-V/1A, 650+/day). Retry the SAME model at standard
+      // tier instead of 400'ing or cascading through more flex-rejecting siblings.
+      if (useFlex && /flex api is not supported/i.test(String(flexErr?.message || ''))) {
+        return await callOnce(false);
+      }
+      throw flexErr;
     }
-    return tagServedTier(await provider.createCompletion(reqBody), useFlex);
   } catch (error: any) {
     // Prefer error.status (UpstreamError, etc); fall back to parsing the
     // message for providers that throw plain Error("... 524 ..."). Defaults
@@ -314,9 +331,19 @@ async function tryModel(
 }
 
 /**
- * Run a chain of models in order, returning the first success. Each
- * model is wrapped in tryModel; only transient failures advance to the
- * next entry, fatal errors bubble out immediately.
+ * Run a chain of models in order, returning the first success.
+ *
+ * A chain exists precisely to fall back, so we try EVERY entry and only fail
+ * once the chain is exhausted — even on a "fatal" (non-transient) error. A
+ * model-specific reject (e.g. gpt-5.4's stricter tool_call-id length limit, a
+ * region block, or a model-not-enabled) routinely succeeds on the next entry
+ * (glm-5/Gemini accept what OpenAI rejected). Before, a 400 broke the loop and
+ * the whole request hard-failed despite a working fallback being one line down
+ * (gpt-5.4 background pipes, SCREENPIPE-AI-PROXY auto_fatal, 600+/day).
+ *
+ * The `transient` flag still governs Sentry noise inside tryModel; here it no
+ * longer controls cascade. Cost: a genuinely universal failure now tries the
+ * whole (short) chain before surfacing — acceptable for a fallback chain.
  */
 async function runChain(
   chain: string[],
@@ -335,7 +362,7 @@ async function runChain(
       return { response, model };
     } catch (error: any) {
       lastError = error;
-      if (!error?.transient) break; // fatal — don't keep trying
+      // keep going — the next model in the chain may accept this request.
     }
   }
   return { error: lastError, lastModel };
@@ -367,8 +394,8 @@ export function friendlyError(model: string, status: number, fellThrough: boolea
     // model won't help; point the user at the real fix instead of a bare
     // "request failed (404)". (#3786)
     return fellThrough
-      ? `No available model accepted the request. "${model}" and the fallbacks may not be enabled on your account or API key. Pick a different model, or check your provider access.`
-      : `"${model}" isn't available on your account or API key (${status}). Pick a different model, or check that your provider or key has access to it.`;
+      ? `No available model could complete this request (${status}). It may contain an unsupported parameter or a malformed tool call, or the models may not be enabled on your account or API key. Try simplifying the request or picking a different model.`
+      : `"${model}" couldn't complete this request (${status}) — it may contain an unsupported parameter or tool call, or not be enabled on your account or API key. Pick a different model, or check your provider access.`;
   }
   if (status === 401 || status === 403) {
     return `Your provider rejected the request for "${model}" (${status}). Check that the API key in your AI preset is valid and has access to this model.`;
@@ -434,6 +461,7 @@ export async function handleChatCompletions(
   body: RequestBody,
   env: Env,
   latency: 'interactive' | 'background' = 'interactive',
+  deviceId: string = '',
 ): Promise<Response> {
   // A request with no messages at all can never complete: OpenAI would
   // answer the injected system hint below, and Anthropic 400s outright once
@@ -445,19 +473,42 @@ export async function handleChatCompletions(
 
   body = ensureScreenpipeHint(body);
 
-  // Background (latency-tolerant) traffic gets the flex Gemini lane.
-  const flexEligible = latency === 'background';
+  // Flex (Vertex's 50%-off, cache-read-discounted Gemini lane) now applies to
+  // interactive Gemini too, not just background — see isFlexEligible. tryModel
+  // scopes it to Gemini attempts; a flex 429 cascades to a standard sibling.
+  const flexEligible = isFlexEligible(latency, env);
 
-  // Auto model: smart waterfall through curated chain. Background swaps to the
-  // flex-first chain; vision already leads with gemini-3.5-flash, so flex is
-  // applied to it via flexEligible without a separate chain.
+  // Chain selection keyed on latency: interactive 'auto' leads with glm-5 (fast,
+  // free MaaS) so chat stays low-latency; background 'auto' leads with gpt-5.4 (a
+  // smart reasoning model — latency-tolerant lane, OpenAI credits). Flex applies
+  // to Gemini entries only when flexEligible — background always, interactive only
+  // if GEMINI_FLEX_INTERACTIVE is "true" (set "false" to keep interactive snappy).
+  const useBackgroundChain = latency === 'background';
+
   if (body.model === 'auto') {
-    const chain = hasImages(body)
+    let chain = hasImages(body)
       ? AUTO_WATERFALL_VISION
-      : (flexEligible ? AUTO_WATERFALL_BACKGROUND : AUTO_WATERFALL);
+      : (useBackgroundChain ? AUTO_WATERFALL_BACKGROUND : AUTO_WATERFALL);
+    // Difficulty router (interactive text only). A/B by device: arm 'on' runs the
+    // router and promotes a tier head (opus for hard, gpt-5-nano for trivial), arm
+    // 'off' is the control baseline (chain unchanged = today's behavior). We tag
+    // router_tier on the response so the cost log can measure ON vs control.
+    let routerTier: string | null = null;
+    if (!hasImages(body) && !useBackgroundChain) {
+      if (routerArm(deviceId, env) === 'on') {
+        const hasTools = Array.isArray(body.tools) && body.tools.length > 0;
+        const tier = await routeTier(body.messages, env, { hasTools });
+        routerTier = tier;
+        if (tier !== 'normal') chain = [TIER_HEAD[tier], ...chain.filter((m) => m !== TIER_HEAD[tier])];
+      } else {
+        routerTier = 'control';
+      }
+    }
     const result = await runChain(chain, body, env, 'auto', flexEligible);
     if ('response' in result) {
-      return addCorsHeaders(addModelHeader(result.response, result.model));
+      const resp = addCorsHeaders(addModelHeader(result.response, result.model));
+      if (routerTier) resp.headers.set('x-screenpipe-router-tier', routerTier);
+      return resp;
     }
     const status = result.error?.status || 503;
     const message = result.error?.userMessage || friendlyError(result.lastModel, status, true);

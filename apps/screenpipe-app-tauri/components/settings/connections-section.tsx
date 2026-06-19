@@ -35,7 +35,6 @@ import { exists, writeFile, readTextFile, mkdir } from "@tauri-apps/plugin-fs";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { platform } from "@tauri-apps/plugin-os";
 import { join, homeDir, tempDir, dirname } from "@tauri-apps/api/path";
-import { AppleIntelligenceCard } from "./apple-intelligence-card";
 import { AppleCalendarCard } from "./apple-calendar-card";
 import { GoogleCalendarCard } from "./google-calendar-card";
 import { GoogleDocsCard } from "./google-docs-card";
@@ -184,9 +183,11 @@ import {
   getClaudeConfigPath,
   getCodexConfigPath,
   getCursorMcpConfigPath,
+  getGrokConfigPath,
   getInstalledMcpVersion,
   isCodexMcpInstalled,
   isCursorMcpInstalled,
+  isGrokMcpInstalled,
 } from "@/lib/hooks/use-hardcoded-tiles";
 
 type McpCommand = { command: string; args: string[]; env?: Record<string, string> };
@@ -221,6 +222,7 @@ async function detectInstalledConnectionIds(): Promise<Set<string>> {
       addIf("perplexity", macAppExists("Perplexity")),
       addIf("krisp", macAppExists("Krisp")),
       addIf("codex", getCodexConfigPath().then(pathExists)),
+      addIf("grok", getGrokConfigPath().then(pathExists)),
       addIf("claude-code", hasClaudeCode),
     ]);
     return detected;
@@ -290,6 +292,7 @@ async function detectInstalledConnectionIds(): Promise<Set<string>> {
         ...program("Krisp", "Krisp.exe"),
       ])),
       addIf("codex", getCodexConfigPath().then(pathExists)),
+      addIf("grok", getGrokConfigPath().then(pathExists)),
       addIf("obsidian", getObsidianConfigPath().then(path => !!path && pathExists(path))),
       addIf("claude-code", hasClaudeCode),
     ]);
@@ -375,6 +378,7 @@ async function detectInstalledConnectionIds(): Promise<Set<string>> {
         ...desktop("krisp.desktop", "Krisp.desktop"),
       ])),
       addIf("codex", getCodexConfigPath().then(pathExists)),
+      addIf("grok", getGrokConfigPath().then(pathExists)),
       addIf("claude-code", hasClaudeCode),
     ]);
     return detected;
@@ -485,6 +489,50 @@ async function uninstallCodexMcp(): Promise<void> {
   await writeFile(configPath, new TextEncoder().encode(next ? `${next}\n` : ""));
 }
 
+// Grok CLI stores MCP servers as an array under `mcp.servers[]` in
+// ~/.grok/user-settings.json, each entry tagged with `id`/`label`/`enabled`
+// (see superagent-ai/grok-cli src/utils/settings.ts McpServerConfig).
+function buildGrokMcpServer(config: McpCommand): Record<string, unknown> {
+  const server: Record<string, unknown> = {
+    id: "screenpipe",
+    label: "screenpipe",
+    enabled: true,
+    transport: "stdio",
+    command: config.command,
+    args: config.args,
+  };
+  if (config.env && Object.keys(config.env).length > 0) server.env = config.env;
+  return server;
+}
+
+function buildGrokMcpJson(config: McpCommand): string {
+  return JSON.stringify({ mcp: { servers: [buildGrokMcpServer(config)] } }, null, 2);
+}
+
+async function installGrokMcp(): Promise<void> {
+  const configPath = await getGrokConfigPath();
+  let config: Record<string, unknown> = {};
+  try { config = JSON.parse(await readTextFile(configPath)); } catch { /* fresh */ }
+  const mcp = (config.mcp && typeof config.mcp === "object" ? config.mcp : {}) as Record<string, unknown>;
+  const servers = (Array.isArray(mcp.servers) ? mcp.servers : []) as Record<string, unknown>[];
+  const next = servers.filter((s) => s?.id !== "screenpipe");
+  next.push(buildGrokMcpServer(await buildMcpConfig()));
+  mcp.servers = next;
+  config.mcp = mcp;
+  await mkdir(await dirname(configPath), { recursive: true });
+  await writeFile(configPath, new TextEncoder().encode(JSON.stringify(config, null, 2)));
+}
+
+async function uninstallGrokMcp(): Promise<void> {
+  const configPath = await getGrokConfigPath();
+  let config: Record<string, unknown> = {};
+  try { config = JSON.parse(await readTextFile(configPath)); } catch { return; }
+  const mcp = (config.mcp && typeof config.mcp === "object" ? config.mcp : null) as Record<string, unknown> | null;
+  if (!mcp || !Array.isArray(mcp.servers)) return;
+  mcp.servers = (mcp.servers as Record<string, unknown>[]).filter((s) => s?.id !== "screenpipe");
+  await writeFile(configPath, new TextEncoder().encode(JSON.stringify(config, null, 2)));
+}
+
 // ---------------------------------------------------------------------------
 // Grid tile icons
 // ---------------------------------------------------------------------------
@@ -534,11 +582,22 @@ function CursorLogo({ className }: { className?: string }) {
 }
 
 
+function GrokLogo({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" className={className}>
+      <rect width="512" height="512" rx="115" fill="#000"/>
+      <path fill="#fff" d="M318 150h54L216 362h-54z"/>
+      <path fill="#fff" d="M300 244h52v118h-52z"/>
+    </svg>
+  );
+}
+
 // Source of truth for integration glyphs; INTEGRATION_ICON_KEYS derives from it.
 const INTEGRATION_ICONS: Record<string, React.ReactNode> = {
     claude: <ClaudeLogo />,
     cursor: <CursorLogo className="w-5 h-5 rounded" />,
     codex: <img src="/images/codex.svg" alt="Codex" className="w-5 h-5 rounded" />,
+    grok: <GrokLogo className="w-5 h-5 rounded" />,
     "claude-code": <Terminal className="h-5 w-5" />,
     warp: <img src="/images/warp.png" alt="Warp" className="w-5 h-5 rounded" />,
     chatgpt: <img src="/images/openai.png" alt="ChatGPT" className="w-5 h-5 rounded" />,
@@ -560,7 +619,6 @@ const INTEGRATION_ICONS: Record<string, React.ReactNode> = {
         <path d="M20.32 4.37a19.8 19.8 0 00-4.89-1.52.07.07 0 00-.08.04c-.21.38-.44.87-.6 1.25a18.27 18.27 0 00-5.49 0 12.64 12.64 0 00-.62-1.25.08.08 0 00-.08-.04 19.74 19.74 0 00-4.89 1.52.07.07 0 00-.03.03C1.11 8.39.34 12.27.74 16.1a.08.08 0 00.03.06 19.9 19.9 0 005.99 3.03.08.08 0 00.08-.03c.46-.63.87-1.3 1.22-2a.08.08 0 00-.04-.11 13.1 13.1 0 01-1.87-.9.08.08 0 01-.01-.13c.13-.09.25-.19.37-.29a.08.08 0 01.08-.01c3.93 1.79 8.18 1.79 12.07 0a.08.08 0 01.08.01c.12.1.25.2.37.29a.08.08 0 01 0 .13c-.6.35-1.22.65-1.87.9a.08.08 0 00-.04.1c.36.7.77 1.37 1.22 2a.08.08 0 00.08.03 19.83 19.83 0 006-3.03.08.08 0 00.04-.05c.46-4.54-.78-8.38-3.36-11.77a.06.06 0 00-.03-.03zM8.02 13.72c-1.02 0-1.86-.93-1.86-2.08s.82-2.08 1.86-2.08c1.05 0 1.88.94 1.86 2.08 0 1.15-.82 2.08-1.86 2.08zm6.88 0c-1.02 0-1.86-.93-1.86-2.08s.82-2.08 1.86-2.08c1.05 0 1.88.94 1.86 2.08 0 1.15-.81 2.08-1.86 2.08z"/>
       </svg>
     ),
-    "apple-intelligence": <img src="/images/apple-intelligence.png" alt="Apple Intelligence" className="w-5 h-5 rounded" />,
     "input-monitoring": <Keyboard className="h-5 w-5 text-muted-foreground" />,
     "apple-calendar": (
       <svg
@@ -1301,12 +1359,73 @@ function CodexPanel({ onConnected, onDisconnected }: { onConnected?: () => void;
   );
 }
 
+function GrokPanel({ onConnected, onDisconnected }: { onConnected?: () => void; onDisconnected?: () => void }) {
+  const [state, setState] = useState<"idle" | "installing" | "installed">("idle");
+  useEffect(() => { isGrokMcpInstalled().then(ok => { if (ok) setState("installed"); }); }, []);
+
+  const manualConfig = useMemo(() => buildGrokMcpJson({
+    command: "npx",
+    args: ["-y", "screenpipe-mcp@latest"],
+  }), []);
+
+  const handleConnect = async () => {
+    try {
+      setState("installing");
+      await installGrokMcp();
+      setState("installed");
+      onConnected?.();
+    } catch (error) {
+      console.error("failed to install grok mcp:", error);
+      await message(
+        "Failed to write Grok CLI MCP config.\n\nManually add a screenpipe entry to the mcp.servers array in ~/.grok/user-settings.json with command npx and args [\"-y\", \"screenpipe-mcp@latest\"].",
+        { title: "Grok CLI MCP Setup", kind: "error" }
+      );
+      setState("idle");
+    }
+  };
+
+  const handleDisconnect = async () => {
+    try { await uninstallGrokMcp(); } catch (e) { console.warn("grok config remove failed:", e); }
+    setState("idle");
+    onDisconnected?.();
+  };
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-muted-foreground">Give Grok CLI access to your screen &amp; audio history via MCP.</p>
+      <div className="flex flex-wrap gap-2">
+        {state === "installed" ? (
+          <Button onClick={handleDisconnect} variant="outline" size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
+            <LogOut className="h-3 w-3" />disconnect
+          </Button>
+        ) : (
+          <Button onClick={handleConnect} disabled={state === "installing"} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
+            {state === "installing" ? (<><Loader2 className="h-3 w-3 animate-spin" />connecting...</>) : (<><Download className="h-3 w-3" />connect</>)}
+          </Button>
+        )}
+        <Button variant="outline" onClick={() => openUrl("https://github.com/superagent-ai/grok-cli")} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
+          <ExternalLink className="h-3 w-3" />grok cli
+        </Button>
+      </div>
+      {state === "installed" && (
+        <p className="text-xs text-muted-foreground">
+          <strong>connected!</strong> start a new <code>grok</code> session and ask: &quot;what did I do in the last 5 minutes?&quot;
+        </p>
+      )}
+      <details className="text-xs text-muted-foreground">
+        <summary className="cursor-pointer">manual config</summary>
+        <pre className="mt-2 bg-muted border border-border rounded-lg p-3 text-xs font-mono text-foreground overflow-x-auto whitespace-pre-wrap">{manualConfig}</pre>
+      </details>
+    </div>
+  );
+}
+
 function ClaudeCodePanel() {
   const [copied, setCopied] = useState(false);
   const cmd = "claude mcp add screenpipe -- npx -y screenpipe-mcp@latest";
   const handleCopy = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(cmd);
+      await commands.copyTextToClipboard(cmd);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {}
@@ -1330,6 +1449,26 @@ function ClaudeCodePanel() {
   );
 }
 
+// Render one `/memories/sync-external` per-destination outcome to a short
+// human string. Shared by every memory-sync subsection (claude code, codex,
+// obsidian) so the snake_case SyncOutcome parsing stays in exactly one place.
+// Rust serializes the SyncOutcome enum with `rename_all = "snake_case"`, so
+// the variant keys are lowercase (`wrote` / `unchanged` / `skipped`).
+function describeSyncOutcome(result: any): string {
+  if (result?.wrote) {
+    const n = result.wrote.entries;
+    return `wrote ${n} ${n === 1 ? "memory" : "memories"}`;
+  }
+  if (result?.unchanged) {
+    const n = result.unchanged.entries;
+    return `up to date · ${n} ${n === 1 ? "memory" : "memories"}`;
+  }
+  if (result?.skipped) {
+    return `skipped · ${result.skipped.reason}`;
+  }
+  return "synced";
+}
+
 // Shared subsection used by ClaudeCodePanel + CodexPanel. Surfaces the
 // memory-sync feature backed by the screenpipe-connect Integrations of
 // the same id ("claude-code", "codex"). Lives next to the MCP install
@@ -1340,91 +1479,19 @@ function ClaudeCodePanel() {
 // credentials map — connect() always writes the resolved home_path so
 // the backend `Integration::list()`'s `enabled && !credentials.is_empty()`
 // rule sees us as on.
-function MemorySyncSubsection({
-  integrationId,
-  defaultPath,
-  targetFilename,
-}: {
-  integrationId: "claude-code" | "codex";
-  defaultPath: string;
-  targetFilename: string;
-}) {
+// Shared connect/test/sync/disconnect lifecycle for a memory-sync destination
+// (claude code, codex, obsidian). Every destination drives the same
+// `/connections/:id` + `/memories/sync-external` flow and the same state
+// machine — only the stored credential shape and presentation differ — so this
+// hook owns the logic and a fix lands in exactly one place. Each consumer keeps
+// its own input state and supplies the credential payload at connect time.
+function useMemorySyncDestination(integrationId: string) {
   const { toast } = useToast();
   const [connected, setConnected] = useState<boolean | null>(null);
-  const [homePath, setHomePath] = useState(defaultPath);
   const [status, setStatus] = useState<"idle" | "connecting" | "syncing">("idle");
   const [error, setError] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<string | null>(null);
   const [lastResultAt, setLastResultAt] = useState<number | null>(null);
-
-  useEffect(() => {
-    localFetch(`/connections/${integrationId}`)
-      .then(r => r.json())
-      .then(data => {
-        const saved = data?.credentials?.home_path;
-        if (typeof saved === "string" && saved.length > 0) {
-          setHomePath(saved);
-          setConnected(true);
-        } else {
-          setConnected(false);
-        }
-      })
-      .catch(() => setConnected(false));
-  }, [integrationId]);
-
-  const persistedPath = homePath.trim() || defaultPath;
-
-  const handleConnect = useCallback(async () => {
-    setStatus("connecting");
-    setError(null);
-    try {
-      // `test` round-trips through the backend Integration::test() which
-      // creates the directory if missing and probes write access. This
-      // surfaces "read-only filesystem" / "no permission" up front rather
-      // than silently failing in the background scheduler later.
-      const testRes = await localFetch(`/connections/${integrationId}/test`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ credentials: { home_path: persistedPath } }),
-      });
-      const testData = await testRes.json();
-      if (!testRes.ok || testData.error) throw new Error(testData.error || "test failed");
-
-      const saveRes = await localFetch(`/connections/${integrationId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ credentials: { home_path: persistedPath } }),
-      });
-      const saveData = await saveRes.json();
-      if (!saveRes.ok || saveData.error) throw new Error(saveData.error || "save failed");
-
-      setConnected(true);
-      notifyConnectionsUpdated();
-      posthog.capture("connection_saved", { integration: integrationId });
-
-      // Kick off an immediate sync so the user sees the file populate
-      // before the next 5-minute scheduler tick.
-      await triggerSyncNow();
-    } catch (e: any) {
-      setError(e?.message || "connection failed");
-    } finally {
-      setStatus("idle");
-    }
-  }, [integrationId, persistedPath]);
-
-  const handleDisconnect = useCallback(async () => {
-    setError(null);
-    try {
-      const res = await localFetch(`/connections/${integrationId}`, { method: "DELETE" });
-      if (!res.ok && res.status !== 404) throw new Error("disconnect failed");
-      setConnected(false);
-      setLastResult(null);
-      setLastResultAt(null);
-      notifyConnectionsUpdated();
-    } catch (e: any) {
-      setError(e?.message || "disconnect failed");
-    }
-  }, [integrationId]);
 
   const triggerSyncNow = useCallback(async () => {
     setStatus("syncing");
@@ -1434,26 +1501,11 @@ function MemorySyncSubsection({
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "sync failed");
 
-      // The endpoint returns a list of per-destination outcomes — pick
-      // the one for this integration and render it. The other tile's
-      // panel will refresh independently when the user opens it.
-      // Rust serializes the SyncOutcome enum with `rename_all = "snake_case"`,
-      // so the variant keys are lowercase (`wrote` / `unchanged` / `skipped`).
+      // The endpoint returns a list of per-destination outcomes — pick the one
+      // for this integration and render it. Other tiles refresh independently.
       const me = (data?.results || []).find((r: any) => r.destination_id === integrationId);
       if (me?.outcome?.ok) {
-        const result = me.outcome.result;
-        let resultText: string;
-        if (result?.wrote) {
-          const n = result.wrote.entries;
-          resultText = `wrote ${n} ${n === 1 ? "memory" : "memories"}`;
-        } else if (result?.unchanged) {
-          const n = result.unchanged.entries;
-          resultText = `up to date · ${n} ${n === 1 ? "memory" : "memories"}`;
-        } else if (result?.skipped) {
-          resultText = `skipped · ${result.skipped.reason}`;
-        } else {
-          resultText = "synced";
-        }
+        const resultText = describeSyncOutcome(me.outcome.result);
         setLastResult(resultText);
         setLastResultAt(Date.now());
         toast({ title: "memory sync", description: resultText });
@@ -1468,6 +1520,90 @@ function MemorySyncSubsection({
       setStatus("idle");
     }
   }, [integrationId, toast]);
+
+  // Validate the credentials, persist them, then sync immediately so the file
+  // populates before the next scheduler tick. `test` round-trips through the
+  // backend Integration::test() (creates the dir, probes write access), so
+  // permission errors surface here instead of silently in the background.
+  const connect = useCallback(async (credentials: Record<string, string>) => {
+    setStatus("connecting");
+    setError(null);
+    try {
+      const testRes = await localFetch(`/connections/${integrationId}/test`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ credentials }),
+      });
+      const testData = await testRes.json();
+      if (!testRes.ok || testData.error) throw new Error(testData.error || "test failed");
+
+      const saveRes = await localFetch(`/connections/${integrationId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ credentials }),
+      });
+      const saveData = await saveRes.json();
+      if (!saveRes.ok || saveData.error) throw new Error(saveData.error || "save failed");
+
+      setConnected(true);
+      notifyConnectionsUpdated();
+      posthog.capture("connection_saved", { integration: integrationId });
+      await triggerSyncNow();
+    } catch (e: any) {
+      setError(e?.message || "connection failed");
+    } finally {
+      setStatus("idle");
+    }
+  }, [integrationId, triggerSyncNow]);
+
+  const disconnect = useCallback(async () => {
+    setError(null);
+    try {
+      const res = await localFetch(`/connections/${integrationId}`, { method: "DELETE" });
+      if (!res.ok && res.status !== 404) throw new Error("disconnect failed");
+      setConnected(false);
+      setLastResult(null);
+      setLastResultAt(null);
+      notifyConnectionsUpdated();
+    } catch (e: any) {
+      setError(e?.message || "disconnect failed");
+    }
+  }, [integrationId]);
+
+  return { connected, setConnected, status, error, setError, lastResult, lastResultAt, triggerSyncNow, connect, disconnect };
+}
+
+function MemorySyncSubsection({
+  integrationId,
+  defaultPath,
+  targetFilename,
+}: {
+  integrationId: "claude-code" | "codex";
+  defaultPath: string;
+  targetFilename: string;
+}) {
+  const [homePath, setHomePath] = useState(defaultPath);
+  const {
+    connected, setConnected, status, error,
+    lastResult, lastResultAt, triggerSyncNow, connect, disconnect,
+  } = useMemorySyncDestination(integrationId);
+
+  useEffect(() => {
+    localFetch(`/connections/${integrationId}`)
+      .then(r => r.json())
+      .then(data => {
+        const saved = data?.credentials?.home_path;
+        if (typeof saved === "string" && saved.length > 0) {
+          setHomePath(saved);
+          setConnected(true);
+        } else {
+          setConnected(false);
+        }
+      })
+      .catch(() => setConnected(false));
+  }, [integrationId, setConnected]);
+
+  const persistedPath = homePath.trim() || defaultPath;
 
   if (connected === null) {
     return null; // initial fetch in flight — avoid flicker
@@ -1503,7 +1639,7 @@ function MemorySyncSubsection({
             <Button onClick={triggerSyncNow} disabled={status === "syncing"} size="sm" variant="outline" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
               {status === "syncing" ? (<><Loader2 className="h-3 w-3 animate-spin" />syncing...</>) : (<><Send className="h-3 w-3" />sync now</>)}
             </Button>
-            <Button onClick={handleDisconnect} size="sm" variant="ghost" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
+            <Button onClick={disconnect} size="sm" variant="ghost" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
               <LogOut className="h-3 w-3" />stop syncing
             </Button>
           </div>
@@ -1520,7 +1656,166 @@ function MemorySyncSubsection({
               spellCheck={false}
             />
           </div>
-          <Button onClick={handleConnect} disabled={status === "connecting"} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
+          <Button onClick={() => connect({ home_path: persistedPath })} disabled={status === "connecting"} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
+            {status === "connecting" ? (<><Loader2 className="h-3 w-3 animate-spin" />enabling...</>) : (<><Download className="h-3 w-3" />enable memory sync</>)}
+          </Button>
+        </>
+      )}
+
+      {error && <p className="text-xs text-destructive">{error}</p>}
+    </div>
+  );
+}
+
+// Memory-sync subsection shown inside the Obsidian card. Mirrors
+// MemorySyncSubsection (claude code / codex) but targets the dedicated
+// `obsidian-memories` connection — kept separate from the vault-writing
+// `obsidian` connection so toggling memory sync never clobbers the vault a
+// user's pipes write to, and vice-versa. Writes a single screenpipe-owned
+// note `<vault>/<folder>/screenpipe-memories.md`, rewritten end-to-end on
+// each 5-minute scheduler tick.
+const OBSIDIAN_MEMORIES_ID = "obsidian-memories";
+const OBSIDIAN_DEFAULT_FOLDER = "screenpipe";
+
+// Mirror of the backend `sanitize_relative_folder` (obsidian_memories.rs) so the
+// previewed note path matches exactly where the digest will actually be written.
+// Drops empty / "." / ".." components and a leading separator (an absolute or
+// traversing folder is forced vault-relative); falls back to the default when
+// nothing usable remains. Splits on both separators for Windows-style input.
+function sanitizeVaultFolder(folder: string): string {
+  const parts = folder
+    .split(/[\\/]/)
+    .map((p) => p.trim())
+    .filter((p) => p !== "" && p !== "." && p !== "..");
+  return parts.length > 0 ? parts.join("/") : OBSIDIAN_DEFAULT_FOLDER;
+}
+
+function ObsidianMemorySyncSubsection() {
+  const [vaultPath, setVaultPath] = useState("");
+  const [folder, setFolder] = useState(OBSIDIAN_DEFAULT_FOLDER);
+  const {
+    connected, setConnected, status, error, setError,
+    lastResult, lastResultAt, triggerSyncNow, connect, disconnect,
+  } = useMemorySyncDestination(OBSIDIAN_MEMORIES_ID);
+
+  // Load any saved memory-sync config. If none, prefill the vault path from
+  // the user's default vault-writing `obsidian` connection so enabling sync
+  // is one click for the common single-vault case — they stay fully
+  // independent stores (we only read it as a suggestion).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await localFetch(`/connections/${OBSIDIAN_MEMORIES_ID}`);
+        const data = await r.json();
+        const savedVault = data?.credentials?.vault_path;
+        if (typeof savedVault === "string" && savedVault.length > 0) {
+          if (cancelled) return;
+          setVaultPath(savedVault);
+          const savedFolder = data?.credentials?.memories_folder;
+          if (typeof savedFolder === "string" && savedFolder.trim().length > 0) {
+            setFolder(savedFolder);
+          }
+          setConnected(true);
+          return;
+        }
+      } catch { /* fall through to suggestion */ }
+      try {
+        const r = await localFetch("/connections/obsidian");
+        const data = await r.json();
+        const suggested = data?.credentials?.vault_path;
+        if (!cancelled && typeof suggested === "string" && suggested.length > 0) {
+          setVaultPath(suggested);
+        }
+      } catch { /* no default vault — user types one in */ }
+      if (!cancelled) setConnected(false);
+    })();
+    return () => { cancelled = true; };
+  }, [setConnected]);
+
+  const folderClean = sanitizeVaultFolder(folder.trim() || OBSIDIAN_DEFAULT_FOLDER);
+  const notePath = `${vaultPath.replace(/[\\/]+$/, "")}/${folderClean}/screenpipe-memories.md`;
+
+  const handleEnable = useCallback(() => {
+    const vault = vaultPath.trim();
+    if (!vault) { setError("pick a vault folder first"); return; }
+    // Backend re-sanitizes the folder authoritatively; send the raw value.
+    return connect({ vault_path: vault, memories_folder: folder.trim() || OBSIDIAN_DEFAULT_FOLDER });
+  }, [vaultPath, folder, connect, setError]);
+
+  if (connected === null) {
+    return null; // initial fetch in flight — avoid flicker
+  }
+
+  return (
+    <div className="border-t border-border pt-3 mt-1 space-y-2">
+      <div className="space-y-0.5">
+        <p className="text-xs font-medium text-foreground">memory sync (beta)</p>
+        <p className="text-xs text-muted-foreground">
+          writes your screenpipe memories into a note in this vault so they show up
+          in your graph and search. updates automatically every 5 minutes.
+        </p>
+      </div>
+
+      {connected ? (
+        <>
+          <div className="p-2 bg-muted border border-border rounded-lg space-y-1">
+            <div className="space-y-0.5">
+              <p className="text-xs text-muted-foreground">note</p>
+              <p className="text-xs text-foreground font-mono break-all">{notePath}</p>
+            </div>
+            {lastResult && (
+              <div className="pt-1 border-t border-border space-y-0.5">
+                <p className="text-xs text-muted-foreground">last sync{lastResultAt && ` · ${formatRelativeTime(lastResultAt)}`}</p>
+                <p className="text-xs text-foreground break-all">{lastResult}</p>
+              </div>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={triggerSyncNow} disabled={status === "syncing"} size="sm" variant="outline" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
+              {status === "syncing" ? (<><Loader2 className="h-3 w-3 animate-spin" />syncing...</>) : (<><Send className="h-3 w-3" />sync now</>)}
+            </Button>
+            <Button onClick={disconnect} size="sm" variant="ghost" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
+              <LogOut className="h-3 w-3" />stop syncing
+            </Button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="space-y-1">
+            <Label className="text-xs text-muted-foreground">vault folder</Label>
+            <div className="relative">
+              <Input
+                value={vaultPath}
+                onChange={(e) => setVaultPath(e.target.value)}
+                placeholder={platform() === "windows" ? "C:\\Users\\you\\Documents\\MyVault" : "/Users/you/Documents/MyVault"}
+                className="h-7 text-xs font-mono pr-8"
+                spellCheck={false}
+              />
+              <button
+                type="button"
+                title="browse for vault folder"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                onClick={async () => {
+                  const selected = await openDialog({ directory: true, multiple: false, title: "Select Obsidian Vault Folder" });
+                  if (typeof selected === "string") setVaultPath(selected);
+                }}
+              >
+                <FolderOpen className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs text-muted-foreground">folder inside vault (optional)</Label>
+            <Input
+              value={folder}
+              onChange={(e) => setFolder(e.target.value)}
+              placeholder={OBSIDIAN_DEFAULT_FOLDER}
+              className="h-7 text-xs font-mono"
+              spellCheck={false}
+            />
+          </div>
+          <Button onClick={handleEnable} disabled={status === "connecting" || !vaultPath.trim()} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal">
             {status === "connecting" ? (<><Loader2 className="h-3 w-3 animate-spin" />enabling...</>) : (<><Download className="h-3 w-3" />enable memory sync</>)}
           </Button>
         </>
@@ -1543,7 +1838,7 @@ function AnythingLLMPanel() {
   }, null, 2);
   const handleCopy = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(config);
+      await commands.copyTextToClipboard(config);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {}
@@ -1581,7 +1876,7 @@ function MstyPanel() {
   }, null, 2);
   const handleCopy = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(config);
+      await commands.copyTextToClipboard(config);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {}
@@ -1627,7 +1922,7 @@ function WarpPanel() {
   }, null, 2);
   const handleCopy = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(config);
+      await commands.copyTextToClipboard(config);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {}
@@ -2047,14 +2342,32 @@ interface OAuthAccount {
   displayName: string | null;
 }
 
+// Integrations that let the user choose how much access to grant at connect
+// time. Only ids/labels live here — the actual OAuth scope strings stay
+// server-side (screenpipe-connect), so the UI can never request arbitrary
+// scopes. The selected `id` is passed to `oauthConnect` as the variant; the
+// backend resolves it against its whitelist. Keep ids in sync with each
+// integration's `oauth_scope_variants()`.
+const OAUTH_SCOPE_VARIANTS: Record<
+  string,
+  { id: string; label: string; description: string }[]
+> = {
+  slack: [
+    { id: "send", label: "Send only", description: "Post messages as you. Screenpipe can't read your Slack." },
+    { id: "read_write", label: "Send + read", description: "Also search & read your messages, DMs and channels." },
+  ],
+};
+
 function OAuthPanel({
   integrationId,
   integrationName,
+  supportsOAuthInstances,
   onConnected,
   onDisconnected,
 }: {
   integrationId: string;
   integrationName: string;
+  supportsOAuthInstances: boolean;
   onConnected?: () => void;
   onDisconnected?: () => void;
 }) {
@@ -2065,6 +2378,16 @@ function OAuthPanel({
   const [disconnecting, setDisconnecting] = useState<string | null>(null);
   // Ref guard so a cancelled or timed-out connect attempt doesn't update state after cancel.
   const connectingRef = useRef(false);
+  // Zendesk (and any future per-account provider) authorizes against the
+  // customer's own subdomain, so collect it up front and pass it as the OAuth
+  // instance. The token is then stored under oauth:zendesk:{subdomain}.
+  const isSubdomainProvider = integrationId === "zendesk";
+  const [subdomain, setSubdomain] = useState("");
+  // Optional access-level choice (e.g. Slack send-only vs send+read). Defaults
+  // to the first (least-privileged) variant; null when the integration offers
+  // no choice, in which case the backend uses its default scopes.
+  const scopeVariants = OAUTH_SCOPE_VARIANTS[integrationId];
+  const [scopeVariant, setScopeVariant] = useState(scopeVariants?.[0]?.id ?? null);
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -2095,10 +2418,12 @@ function OAuthPanel({
   useEffect(() => { fetchStatus(); }, [fetchStatus]);
 
   const handleConnect = async () => {
+    const instanceArg = isSubdomainProvider ? subdomain.trim() : null;
+    if (isSubdomainProvider && !instanceArg) return;
     setStatus("loading");
     connectingRef.current = true;
     try {
-      const res = await commands.oauthConnect(integrationId, null);
+      const res = await commands.oauthConnect(integrationId, instanceArg, scopeVariant);
       if (!connectingRef.current) return; // cancelled — handleCancel owns the UI
       if (res.status === "ok" && res.data.connected) {
         await fetchStatus();
@@ -2146,6 +2471,7 @@ function OAuthPanel({
   };
 
   const connected = accounts.length > 0;
+  const connectDisabled = isSubdomainProvider && !subdomain.trim();
 
   return (
     <div className="space-y-3">
@@ -2176,6 +2502,41 @@ function OAuthPanel({
           })}
         </div>
       )}
+      {isSubdomainProvider && (isPro || connected) && (
+        <div className="space-y-1">
+          <label className="text-[11px] text-muted-foreground">Zendesk subdomain</label>
+          <div className="flex items-center gap-1">
+            <Input
+              value={subdomain}
+              onChange={(e) => setSubdomain(e.target.value.trim())}
+              placeholder="yourcompany"
+              className="h-8 text-xs"
+              onKeyDown={(e) => { if (e.key === "Enter" && subdomain.trim() && status !== "loading") handleConnect(); }}
+            />
+            <span className="text-[11px] text-muted-foreground whitespace-nowrap">.zendesk.com</span>
+          </div>
+        </div>
+      )}
+      {scopeVariants && (isPro || connected) && status !== "loading" && (
+        <div className="space-y-1.5">
+          <p className="text-[11px] text-muted-foreground">Access level</p>
+          {scopeVariants.map((v) => (
+            <label key={v.id} className="flex items-start gap-2 text-xs cursor-pointer">
+              <input
+                type="radio"
+                name={`${integrationId}-scope`}
+                checked={scopeVariant === v.id}
+                onChange={() => setScopeVariant(v.id)}
+                className="mt-0.5 accent-foreground"
+              />
+              <span>
+                <span className="font-medium">{v.label}</span>
+                <span className="block text-[11px] text-muted-foreground">{v.description}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      )}
       <div className="flex flex-wrap gap-2">
         {!isPro && !connected ? (
           <div className="flex flex-col gap-1.5">
@@ -2199,9 +2560,11 @@ function OAuthPanel({
             </Button>
           </div>
         ) : (
-          <Button onClick={handleConnect} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal whitespace-nowrap">
-            {connected
+          <Button onClick={handleConnect} disabled={connectDisabled} size="sm" className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal whitespace-nowrap">
+            {connected && supportsOAuthInstances
               ? (<><Plus className="h-3 w-3" />add another account</>)
+              : connected
+                ? (<><LogIn className="h-3 w-3" />reconnect {integrationName}</>)
               : (<><LogIn className="h-3 w-3" />connect with {integrationName}</>)}
           </Button>
         )}
@@ -2231,6 +2594,7 @@ export interface IntegrationInfo {
   fields: IntegrationField[];
   connected: boolean;
   is_oauth: boolean;
+  supports_oauth_instances: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -2648,6 +3012,8 @@ function ObsidianPanel({ onConnected, onDisconnected }: { onConnected?: () => vo
       </div>
 
       {error && <p className="text-xs text-destructive">{error}</p>}
+
+      <ObsidianMemorySyncSubsection />
     </div>
   );
 }
@@ -2659,6 +3025,102 @@ function ObsidianPanel({ onConnected, onDisconnected }: { onConnected?: () => vo
 interface InstanceData {
   name: string;
   credentials: Record<string, string>;
+}
+
+/**
+ * One-click "connect with Bee" — drives the engine's device-pairing routes
+ * (POST /connections/bee/pair/{start,poll}). Bee has no redirect OAuth and no
+ * web token portal anymore, so we start a pairing, open the approve URL, and
+ * poll until the sealed token is decrypted + stored server-side.
+ */
+function BeePairPanel({ onConnected }: { onConnected: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [statusMsg, setStatusMsg] = useState<string | null>(null);
+  const cancelledRef = useRef(false);
+
+  useEffect(() => {
+    return () => {
+      cancelledRef.current = true;
+    };
+  }, []);
+
+  const handleConnect = async () => {
+    setBusy(true);
+    setStatusMsg(null);
+    cancelledRef.current = false;
+    try {
+      const res = await localFetch("/connections/bee/pair/start", { method: "POST" });
+      const body = await res.json();
+      if (!res.ok) {
+        setStatusMsg(body?.error ?? `Couldn't start pairing (HTTP ${res.status})`);
+        setBusy(false);
+        return;
+      }
+      const requestId = body.request_id as string;
+      await openUrl(body.pairing_url as string);
+      setStatusMsg("approve the connection in your browser, then come back…");
+
+      const deadline = Date.now() + 5 * 60 * 1000;
+      const poll = async () => {
+        if (cancelledRef.current) return;
+        if (Date.now() > deadline) {
+          setStatusMsg("pairing timed out — try again");
+          setBusy(false);
+          return;
+        }
+        try {
+          const pr = await localFetch("/connections/bee/pair/poll", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ request_id: requestId }),
+          });
+          const pb = await pr.json();
+          if (pb?.status === "completed") {
+            setStatusMsg(null);
+            setBusy(false);
+            onConnected();
+            return;
+          }
+          if (pb?.status === "expired" || pb?.status === "unknown") {
+            setStatusMsg("pairing expired — try again");
+            setBusy(false);
+            return;
+          }
+        } catch {
+          // transient — keep polling until the deadline
+        }
+        setTimeout(poll, 2000);
+      };
+      setTimeout(poll, 2000);
+    } catch (e) {
+      setStatusMsg(`pairing failed: ${e instanceof Error ? e.message : String(e)}`);
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      <Button
+        onClick={handleConnect}
+        disabled={busy}
+        size="sm"
+        className="gap-1.5 h-7 text-xs normal-case font-sans tracking-normal whitespace-nowrap"
+      >
+        {busy ? (
+          <>
+            <Loader2 className="h-3 w-3 animate-spin" />
+            waiting for approval…
+          </>
+        ) : (
+          <>
+            <LogIn className="h-3 w-3" />
+            connect with Bee
+          </>
+        )}
+      </Button>
+      {statusMsg && <p className="text-[11px] text-muted-foreground">{statusMsg}</p>}
+    </div>
+  );
 }
 
 function ApiIntegrationPanel({ integration, onRefresh }: {
@@ -3286,6 +3748,7 @@ export function ConnectionsSection({
   const [claudeInstalled, setClaudeInstalled] = useState(false);
   const [cursorInstalled, setCursorInstalled] = useState(false);
   const [codexInstalled, setCodexInstalled] = useState(false);
+  const [grokInstalled, setGrokInstalled] = useState(false);
   const [chatgptConnected, setChatgptConnected] = useState(false);
   const [browserUrlDetected, setBrowserUrlDetected] = useState(false);
   const [browserUrlConnected, setBrowserUrlConnected] = useState(false);
@@ -3326,6 +3789,7 @@ export function ConnectionsSection({
     });
     isCursorMcpInstalled().then(setCursorInstalled).catch(() => {});
     isCodexMcpInstalled().then(setCodexInstalled).catch(() => {});
+    isGrokMcpInstalled().then(setGrokInstalled).catch(() => {});
     commands.chatgptOauthStatus().then(res => {
       setChatgptConnected(res.status === "ok" && res.data.logged_in);
     }).catch(() => {});
@@ -3445,6 +3909,7 @@ export function ConnectionsSection({
       { id: "claude", name: "Claude Desktop", icon: "claude", connected: claudeInstalled, detected: detectedConnectionIds.has("claude") },
       { id: "cursor", name: "Cursor", icon: "cursor", connected: cursorInstalled, detected: detectedConnectionIds.has("cursor") },
       { id: "codex", name: "Codex", icon: "codex", connected: codexInstalled, detected: detectedConnectionIds.has("codex") },
+      { id: "grok", name: "Grok CLI", icon: "grok", connected: grokInstalled, detected: detectedConnectionIds.has("grok") },
       { id: "claude-code", name: "Claude Code", icon: "claude-code", connected: false, detected: detectedConnectionIds.has("claude-code") },
       { id: "warp", name: "Warp", icon: "warp", connected: false, detected: detectedConnectionIds.has("warp") },
       { id: "chatgpt", name: "ChatGPT", icon: "chatgpt", connected: chatgptConnected, detected: detectedConnectionIds.has("chatgpt") },
@@ -3452,7 +3917,6 @@ export function ConnectionsSection({
         { id: "browser-url", name: "Browser URL Capture", icon: "browser-url", connected: browserUrlConnected, detected: browserUrlDetected },
         { id: "voice-memos", name: "Voice Memos", icon: "voice-memos", connected: false },
       ] : []),
-      ...(os === "macos" ? [{ id: "apple-intelligence", name: "Apple Intelligence", icon: "apple-intelligence", connected: false }] : []),
       ...(os === "macos" ? [{ id: "input-monitoring", name: "Input Monitoring", icon: "input-monitoring", connected: inputMonitoringGranted }] : []),
       ...(os === "macos" ? [{ id: "apple-calendar", name: "Apple Calendar", icon: "apple-calendar", connected: appleCalendarConnected }] : []),
       { id: "google-calendar", name: "Google Calendar", icon: "google-calendar", connected: false },
@@ -3478,10 +3942,12 @@ export function ConnectionsSection({
     ];
     // Merge API tiles, skipping duplicates already in hardcoded.
     // owned-default is hidden from settings — the agent drives it via the
-    // embedded sidebar, no user-facing controls.
+    // embedded sidebar, no user-facing controls. obsidian-memories is hidden
+    // too: it's a memory-sync destination surfaced as a subsection inside the
+    // Obsidian card, not a standalone connection tile.
     const hardcodedIds = new Set(hardcoded.map(h => h.id));
     const apiTiles: ConnectionTile[] = integrations
-      .filter(i => !hardcodedIds.has(i.id) && i.id !== "owned-default")
+      .filter(i => !hardcodedIds.has(i.id) && i.id !== "owned-default" && i.id !== "obsidian-memories")
       .map(i => ({
         id: i.id,
         name: i.name,
@@ -3517,7 +3983,7 @@ export function ConnectionsSection({
       category: CONNECTION_CATEGORY_BY_ID[tile.id] ?? tile.category ?? "Other",
       description: tile.description ?? CONNECTION_HARDCODED_DESCRIPTIONS[tile.id],
     }));
-  }, [os, claudeInstalled, cursorInstalled, codexInstalled, chatgptConnected, browserUrlConnected, browserUrlDetected, integrations, appleCalendarConnected, googleCalendarConnected, googleDocsConnected, googleSheetsConnected, gmailConnected, customMcpConnected, customMcpServerCount, krispConnected, plaudConnected, excalidrawConnected, inputMonitoringGranted, importedSkillsCount, detectedConnectionIds]);
+  }, [os, claudeInstalled, cursorInstalled, codexInstalled, grokInstalled, chatgptConnected, browserUrlConnected, browserUrlDetected, integrations, appleCalendarConnected, googleCalendarConnected, googleDocsConnected, googleSheetsConnected, gmailConnected, customMcpConnected, customMcpServerCount, krispConnected, plaudConnected, excalidrawConnected, inputMonitoringGranted, importedSkillsCount, detectedConnectionIds]);
 
   const isDefaultView = !search.trim() && categoryFilter === ALL_CONNECTION_CATEGORIES;
 
@@ -3585,12 +4051,15 @@ export function ConnectionsSection({
         onConnected={() => setCodexInstalled(true)}
         onDisconnected={() => setCodexInstalled(false)}
       />;
+      case "grok": return <GrokPanel
+        onConnected={() => setGrokInstalled(true)}
+        onDisconnected={() => setGrokInstalled(false)}
+      />;
       case "claude-code": return <ClaudeCodePanel />;
       case "chatgpt": return <ChatGptPanel />;
       case "user-browser": return <UserBrowserCard />;
       case "browser-url": return <BrowserUrlCard onStatusChange={setBrowserUrlConnected} />;
       case "voice-memos": return <VoiceMemosCard />;
-      case "apple-intelligence": return <AppleIntelligenceCard />;
       case "input-monitoring": return <InputMonitoringPanel onStatusChange={setInputMonitoringGranted} />;
       case "apple-calendar": return <AppleCalendarCard onStatusChange={setAppleCalendarConnected} />;
       case "google-calendar": return <GoogleCalendarCard
@@ -3653,6 +4122,7 @@ export function ConnectionsSection({
                 <OAuthPanel
                   integrationId={selectedIntegration.id}
                   integrationName={selectedIntegration.name}
+                  supportsOAuthInstances={!!selectedIntegration.supports_oauth_instances}
                   onConnected={() => refreshIntegrationConnection(selectedIntegration.id, true)}
                   onDisconnected={() => refreshIntegrationConnection(selectedIntegration.id, false)}
                 />
@@ -3672,6 +4142,33 @@ export function ConnectionsSection({
                     </div>
                   </details>
                 )}
+              </div>
+            );
+          }
+          // Bee has no redirect OAuth, but supports one-click device pairing.
+          // Show the pairing button, keeping the manual token field as an
+          // advanced fallback (e.g. a token pasted from the bee CLI).
+          if (selectedIntegration.id === "bee") {
+            return (
+              <div className="space-y-3">
+                <BeePairPanel
+                  onConnected={() => {
+                    refreshIntegrationConnection("bee", true);
+                    notifyConnectionsUpdated();
+                    fetchIntegrations();
+                  }}
+                />
+                <details>
+                  <summary className="text-[11px] text-muted-foreground cursor-pointer select-none hover:text-foreground">
+                    advanced: connect with a token instead
+                  </summary>
+                  <div className="pt-2">
+                    <ApiIntegrationPanel
+                      integration={selectedIntegration}
+                      onRefresh={fetchIntegrations}
+                    />
+                  </div>
+                </details>
               </div>
             );
           }

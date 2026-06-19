@@ -306,7 +306,7 @@ async function sendHeartbeat(licenseKey: string): Promise<void> {
       pipeStatuses = await gatherPipeStatuses();
     } catch {}
 
-    await tauriFetch("https://screenpi.pe/api/enterprise/heartbeat", {
+    await tauriFetch("https://screenpipe.com/api/enterprise/heartbeat", {
       method: "POST",
       headers: {
         "X-License-Key": licenseKey,
@@ -423,7 +423,7 @@ export function useEnterprisePolicy() {
       if (cloudToken) {
         headers["Authorization"] = `Bearer ${cloudToken}`;
       }
-      const res = await tauriFetch("https://screenpi.pe/api/enterprise/policy", {
+      const res = await tauriFetch("https://screenpipe.com/api/enterprise/policy", {
         method: "GET",
         headers,
       });

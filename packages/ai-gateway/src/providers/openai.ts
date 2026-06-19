@@ -16,6 +16,40 @@ type OpenAIChatStream = AsyncIterable<ChatCompletionChunk> & {
 	controller: { abort: () => void };
 };
 
+/**
+ * OpenAI rejects tool_call ids longer than 40 chars. Other models mint longer
+ * ids that arrive in conversation history; remap any over-length id to a short
+ * stable id, applied IDENTICALLY to the assistant's tool_calls[].id and the
+ * matching tool-message tool_call_id so the required pairing is preserved.
+ * No-op (returns the same array) when every id already fits — the common case.
+ */
+const MAX_TOOL_CALL_ID = 40;
+export function sanitizeToolCallIds(messages: Message[]): Message[] {
+	const tooLong = (id?: string | null) => !!id && id.length > MAX_TOOL_CALL_ID;
+	const needs = messages.some(
+		(m) =>
+			(Array.isArray((m as any).tool_calls) && (m as any).tool_calls.some((c: any) => tooLong(c?.id))) ||
+			tooLong((m as any).tool_call_id),
+	);
+	if (!needs) return messages;
+
+	const map = new Map<string, string>();
+	let n = 0;
+	const short = (id?: string | null) => {
+		if (!tooLong(id)) return id;
+		let s = map.get(id as string);
+		if (!s) { s = `call_sp_${n++}`; map.set(id as string, s); }
+		return s;
+	};
+	return messages.map((m) => {
+		const tc = (m as any).tool_calls;
+		const out: any = { ...m };
+		if (Array.isArray(tc)) out.tool_calls = tc.map((c: any) => (tooLong(c?.id) ? { ...c, id: short(c.id) } : c));
+		if (tooLong((m as any).tool_call_id)) out.tool_call_id = short((m as any).tool_call_id);
+		return out;
+	});
+}
+
 export class OpenAIProvider implements AIProvider {
 	supportsTools = true;
 	supportsVision = true;
@@ -204,6 +238,24 @@ export class OpenAIProvider implements AIProvider {
 						if (choice?.finish_reason) {
 							finishReason = choice.finish_reason;
 						}
+						// Forward streamed tool-call fragments (delta.tool_calls:
+						// index/id/function.name + argument chunks). The content
+						// branch below only forwards delta.content, so without this
+						// a tool call (finish_reason "tool_calls") reached Pi as an
+						// empty assistant message → stopReason:"toolUse" with nothing
+						// to run, and background pipes silently no-op'd. Pi
+						// accumulates these in the same OpenAI shape the Anthropic
+						// provider already emits.
+						const toolCalls = choice?.delta?.tool_calls;
+						if (toolCalls && toolCalls.length > 0) {
+							controller.enqueue(
+								new TextEncoder().encode(
+									`data: ${JSON.stringify({
+										choices: [{ delta: { tool_calls: toolCalls } }],
+									})}\n\n`
+								)
+							);
+						}
 						if (body.response_format?.type === 'json_object' || body.response_format?.type === 'json_schema') {
 							const content = choice?.delta?.content;
 							if (content) {
@@ -304,6 +356,14 @@ export class OpenAIProvider implements AIProvider {
 	}
 
 	formatMessages(messages: Message[]): ChatCompletionMessageParam[] {
+		// Guard: OpenAI rejects tool_call ids longer than 40 chars ("tool_calls[0].id:
+		// string too long", 400). Other models (glm-5/Gemini) mint longer ids that
+		// arrive in history and 400'd every gpt-5.x tool turn (SCREENPIPE-AI-PROXY-21,
+		// 3k+/day, 1 stuck client). Remap any over-length id to a short stable id,
+		// consistently across the assistant tool_calls[].id AND the matching tool
+		// message tool_call_id so the pairing the API requires is preserved.
+		messages = sanitizeToolCallIds(messages);
+
 		// Strip orphan tool-role messages (tool_call_id with no matching
 		// assistant tool_calls earlier in the array). Happens after Pi/chat
 		// history pruning or edits and triggers OpenAI 400 "messages with role

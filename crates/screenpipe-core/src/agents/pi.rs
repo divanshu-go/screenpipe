@@ -7,7 +7,7 @@
 //! Implements [`AgentExecutor`] for the pi CLI (`@earendil-works/pi-coding-agent`).
 //! Pi is installed via bun and executed as a subprocess in "print" mode (`pi -p`).
 
-use super::{AgentExecutor, AgentOutput, ExecutionHandle};
+use super::{install_spawned_pid, AgentExecutor, AgentOutput, ExecutionHandle};
 use anyhow::{anyhow, Result};
 use arc_swap::ArcSwap;
 use serde_json::json;
@@ -371,6 +371,10 @@ impl PiExecutor {
                 "screenpipe-cli",
                 include_str!("../../assets/skills/screenpipe-cli/SKILL.md"),
             ),
+            (
+                "render-html-report",
+                include_str!("../../assets/skills/render-html-report/SKILL.md"),
+            ),
         ];
 
         // Clean up deprecated skills from the 8→2 consolidation.
@@ -430,8 +434,12 @@ impl PiExecutor {
     /// [`Self::USER_SKILL_MARKER`], be deleted by a later sync. The desktop
     /// importer already rejects these names; this guards any folder that reaches
     /// the store another way.
-    const BASELINE_SKILL_NAMES: [&'static str; 3] =
-        ["screenpipe-api", "screenpipe-cli", "screenpipe-team"];
+    const BASELINE_SKILL_NAMES: [&'static str; 4] = [
+        "screenpipe-api",
+        "screenpipe-cli",
+        "screenpipe-team",
+        "render-html-report",
+    ];
 
     /// Mirror the user's imported skills from the global store
     /// (`<data_dir>/skills/<name>/`) into `project_dir/.pi/skills/` so every
@@ -566,6 +574,13 @@ impl PiExecutor {
                 "screenpipe-cli",
                 include_str!("../../assets/skills/screenpipe-cli/SKILL.md"),
                 Box::new(|_| true), // always installed — pipe & connection management
+            ),
+            (
+                "render-html-report",
+                include_str!("../../assets/skills/render-html-report/SKILL.md"),
+                // Output-formatting skill, not endpoint-gated — always staged,
+                // loaded on-demand by the agent only when the task is visual.
+                Box::new(|_| true),
             ),
         ];
 
@@ -926,6 +941,14 @@ impl PiExecutor {
         std::fs::write(&models_tmp, serde_json::to_string_pretty(&models_config)?)?;
         std::fs::rename(&models_tmp, &models_path)?;
 
+        // models.json embeds the raw cloud JWT as the screenpipe provider's
+        // apiKey while signed in (#3943) — same hardening as auth.json below.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&models_path, std::fs::Permissions::from_mode(0o600));
+        }
+
         // -- auth.json: merge/remove screenpipe token, preserve other providers --
         // Only manage screenpipe auth when screenpipe provider is actually being used.
         if should_add_screenpipe {
@@ -1231,9 +1254,15 @@ impl PiExecutor {
         let child = cmd.spawn()?;
         let pid = child.id();
 
-        // Set PID synchronously — no async race
+        // Set PID synchronously. If a stop was requested before spawn
+        // completed, honor it immediately against the fresh process group.
         if let (Some(ref sp), Some(p)) = (&shared_pid, pid) {
-            sp.store(p, std::sync::atomic::Ordering::SeqCst);
+            if install_spawned_pid(sp, p) {
+                // If the child is still entering setsid(), this first TERM can
+                // race the new process group; kill_process_group's delayed
+                // SIGKILL pass covers that short window.
+                let _ = kill_process_group(p);
+            }
         }
 
         let output = child.wait_with_output().await?;
@@ -1266,6 +1295,7 @@ impl PiExecutor {
         line_tx: tokio::sync::mpsc::UnboundedSender<String>,
         continue_session: bool,
         pipe_system_prompt: Option<&str>,
+        mcp_server_allowlist: Option<&[String]>,
         session_owner: Option<&str>,
     ) -> Result<AgentOutput> {
         let mut cmd = build_async_command(pi_path);
@@ -1329,6 +1359,10 @@ impl PiExecutor {
             cmd.env("SCREENPIPE_API_AUTH_KEY", key); // deprecated alias
         }
 
+        if let Some(ids) = mcp_server_allowlist {
+            cmd.env("SCREENPIPE_MCP_SERVER_ALLOWLIST", ids.join(","));
+        }
+
         // Tag this run's local API calls with the owning chat/session so the
         // owned-browser sidebar can route navigations to the right chat (the
         // bash shim reads SCREENPIPE_SESSION_ID and adds x-screenpipe-session;
@@ -1339,7 +1373,8 @@ impl PiExecutor {
             cmd.env("SCREENPIPE_SESSION_ID", owner);
             // Expose the bare pipe name for extensions (e.g. register-artifact)
             // that need it without the "pipe:" routing prefix.
-            if let Some(name) = owner.strip_prefix("pipe:") {
+            if let Some(rest) = owner.strip_prefix("pipe:") {
+                let name = rest.rsplit_once(':').map_or(rest, |(n, _)| n);
                 cmd.env("SCREENPIPE_PIPE_NAME", name);
             }
         }
@@ -1370,9 +1405,15 @@ impl PiExecutor {
         let mut child = cmd.spawn()?;
         let pid = child.id();
 
-        // Set PID synchronously — no async race
+        // Set PID synchronously. If a stop was requested before spawn
+        // completed, honor it immediately against the fresh process group.
         if let (Some(ref sp), Some(p)) = (&shared_pid, pid) {
-            sp.store(p, std::sync::atomic::Ordering::SeqCst);
+            if install_spawned_pid(sp, p) {
+                // If the child is still entering setsid(), this first TERM can
+                // race the new process group; kill_process_group's delayed
+                // SIGKILL pass covers that short window.
+                let _ = kill_process_group(p);
+            }
         }
 
         // Take stdout for streaming reads; stderr will be read after exit
@@ -1588,6 +1629,7 @@ impl AgentExecutor for PiExecutor {
         line_tx: tokio::sync::mpsc::UnboundedSender<String>,
         continue_session: bool,
         pipe_system_prompt: Option<&str>,
+        mcp_server_allowlist: Option<&[String]>,
         session_owner: Option<&str>,
     ) -> Result<AgentOutput> {
         let resolved_provider = provider.unwrap_or("screenpipe").to_string();
@@ -1647,6 +1689,7 @@ impl AgentExecutor for PiExecutor {
                 line_tx.clone(),
                 continue_session,
                 pipe_system_prompt,
+                mcp_server_allowlist,
                 session_owner,
             )
             .await?;
@@ -1680,6 +1723,7 @@ impl AgentExecutor for PiExecutor {
                     line_tx.clone(),
                     continue_session,
                     pipe_system_prompt,
+                    mcp_server_allowlist,
                     session_owner,
                 )
                 .await?;
@@ -1728,6 +1772,7 @@ impl AgentExecutor for PiExecutor {
                     line_tx.clone(),
                     continue_session,
                     pipe_system_prompt,
+                    mcp_server_allowlist,
                     session_owner,
                 )
                 .await?;
@@ -1737,7 +1782,11 @@ impl AgentExecutor for PiExecutor {
     }
 
     fn kill(&self, handle: &ExecutionHandle) -> Result<()> {
-        kill_process_group(handle.pid)
+        let pid = handle.current_pid();
+        if pid == 0 {
+            return Ok(());
+        }
+        kill_process_group(pid)
     }
 
     fn is_available(&self) -> bool {
@@ -1789,9 +1838,13 @@ impl AgentExecutor for PiExecutor {
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
 
-        let output = cmd
-            .output()
-            .map_err(|e| anyhow!("pi installation failed: could not run bun at {}: {}", bun, e))?;
+        let output = cmd.output().map_err(|e| {
+            anyhow!(
+                "pi installation failed: could not run bun at {}: {}",
+                bun,
+                e
+            )
+        })?;
         if output.status.success() {
             info!("pi installed successfully into {}", install_dir.display());
             Ok(())
@@ -3389,10 +3442,7 @@ mod tests {
             stderr: Vec::new(),
         };
         let msg = format_subprocess_failure("bun add", &silent_failure);
-        assert_eq!(
-            msg,
-            "bun add exit code 1; stderr: (empty); stdout: (empty)"
-        );
+        assert_eq!(msg, "bun add exit code 1; stderr: (empty); stdout: (empty)");
 
         // Killed by a signal (raw status = signal number, no exit code).
         let sigill = Output {

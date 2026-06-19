@@ -6,11 +6,12 @@ exclude = [
     "apps/screenpipe-app-tauri/src-tauri",
     "crates/screenpipe-integrations",
     "ee/sdk",
+    ".github/ci/ort-smoke",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "0.4.19"
+version = "0.4.22"
 authors = ["louis030195 <hi@louis030195.com>"]
 description = ""
 repository = "https://github.com/screenpipe/screenpipe"
@@ -86,6 +87,7 @@ axum = { version = "0.7", features = ["ws", "multipart"] }
 hex = "0.4"
 base64 = "0.22"
 sha2 = "0.10"
+hmac = "0.12"
 
 # Database
 sqlx = { version = "0.7", features = ["sqlite", "runtime-tokio-rustls"] }
@@ -124,7 +126,7 @@ wiremock = "0.6"
 
 # Audio
 hound = "3.5"
-audiopipe = { git = "https://github.com/screenpipe/audiopipe.git", rev = "e22369a2f22ab49d72ad96cf4236aed980e61820", default-features = false }
+audiopipe = { git = "https://github.com/screenpipe/audiopipe.git", rev = "86aa0212d0b537496370ebbd65892ca70c6d2e24", default-features = false }
 mlx-rs = "0.25"
 
 # Privacy filter enclave attestation (shared by engine + redact)

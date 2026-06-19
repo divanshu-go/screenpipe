@@ -4,13 +4,9 @@
 
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { PrismAsyncLight as SyntaxHighlighter } from "react-syntax-highlighter";
-import {
-  coldarkCold,
-  coldarkDark,
-} from "react-syntax-highlighter/dist/cjs/styles/prism";
 import remarkGfm from "remark-gfm";
 import { commands } from "@/lib/utils/tauri";
 import { cn } from "@/lib/utils";
@@ -20,6 +16,15 @@ import {
   screenpipeViewerPathFromHref,
   viewerUrlTransform,
 } from "@/components/markdown";
+import {
+  createCodeMarkdownComponents,
+  useSyntaxTheme,
+} from "@/components/markdown/code-block";
+import {
+  isHtmlFileName,
+  shouldRenderHtmlByDefault,
+} from "@/lib/utils/html-sandbox";
+import { HtmlPreviewFrame } from "./file-viewer-html-frame";
 
 export type ViewerContent =
   | {
@@ -70,30 +75,6 @@ export function viewerDisplayText(content: ViewerContent | null): string {
   return detection.kind === "json" ? prettifyJson(content.text) : content.text;
 }
 
-function useDarkMode(): boolean {
-  const [isDark, setIsDark] = useState(false);
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const m = window.matchMedia("(prefers-color-scheme: dark)");
-    const update = () =>
-      setIsDark(
-        m.matches || document.documentElement.classList.contains("dark"),
-      );
-    update();
-    m.addEventListener("change", update);
-    const obs = new MutationObserver(update);
-    obs.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["class"],
-    });
-    return () => {
-      m.removeEventListener("change", update);
-      obs.disconnect();
-    };
-  }, []);
-  return isDark;
-}
-
 export function formatViewerBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
@@ -137,9 +118,9 @@ function ErrorState({ message, path }: { message: string; path: string }) {
       </div>
       <pre className="whitespace-pre-wrap break-words mb-4">{message}</pre>
       {path && (
-        <div className="text-foreground/40 break-all">
-          <span className="opacity-60">path: </span>
-          {path}
+        <div className="text-foreground/40 break-all" title={path}>
+          <span className="opacity-60">looked in: </span>
+          {viewerPathBreadcrumb(path)}
         </div>
       )}
     </div>
@@ -228,12 +209,42 @@ export function ViewerFileContent({
   onOpenViewerPath,
   className,
 }: ViewerFileContentProps) {
-  const isDark = useDarkMode();
+  const codeStyle = useSyntaxTheme();
+  const [showRendered, setShowRendered] = useState(false);
 
   const detection = useMemo(() => {
     if (!content || content.kind !== "text") return null;
     return detectKind(content.name);
   }, [content]);
+
+  // Any non-empty, fully-loaded .html can be rendered in the sandbox — the
+  // iframe + CSP (not a marker) are the security boundary, so we no longer
+  // require the producer to opt in just to OFFER a render. Two guards remain:
+  //  - empty file: nothing to render.
+  //  - truncated (>10MB cut server-side): could be sliced mid-tag, so we never
+  //    render a partial document; source view + the truncation banner cover it.
+  const canRenderHtml = useMemo(() => {
+    if (!content || content.kind !== "text" || content.text === "") return false;
+    if (content.truncated) return false;
+    return isHtmlFileName(content.name);
+  }, [content]);
+
+  // Choose the FIRST tab (rendered vs source) once the content for a path
+  // loads, then leave it under the user's control. Full documents / marked
+  // artifacts open rendered; bare snippets open as source. A ref keyed on the
+  // path makes this init-once so a user's later toggle is never overridden, and
+  // re-applies when navigating to a different file.
+  const defaultInitRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!content || content.kind !== "text") {
+      // Path changed and content is reloading — allow re-init for the new file.
+      if (defaultInitRef.current !== path) defaultInitRef.current = null;
+      return;
+    }
+    if (defaultInitRef.current === path) return;
+    defaultInitRef.current = path;
+    setShowRendered(canRenderHtml && shouldRenderHtmlByDefault(content.text));
+  }, [content, path, canRenderHtml]);
 
   const renderedText = useMemo(() => {
     return viewerDisplayText(content);
@@ -254,7 +265,6 @@ export function ViewerFileContent({
     [onOpenViewerPath],
   );
 
-  const codeStyle = isDark ? coldarkDark : coldarkCold;
   const isMarkdown = detection?.kind === "markdown";
   const isCode = detection?.kind === "code" || detection?.kind === "json";
 
@@ -311,6 +321,7 @@ export function ViewerFileContent({
 
       {content?.kind === "text" && content.text !== "" && isMarkdown && (
         <article
+          data-testid="file-preview-markdown"
           className="prose prose-sm dark:prose-invert max-w-none
                      prose-headings:font-mono prose-headings:tracking-tight
                      prose-pre:p-0 prose-pre:bg-transparent prose-pre:border-0
@@ -337,43 +348,12 @@ export function ViewerFileContent({
                   {children}
                 </a>
               ),
-              code: ({ className: codeClassName, children, ...rest }) => {
-                const match = /language-(\w+)/.exec(codeClassName || "");
-                const lang = match?.[1] ?? "";
-                const value = String(children).replace(/\n$/, "");
-                if (!match) {
-                  return (
-                    <code
-                      className="font-mono text-[12px] bg-foreground/5 px-1 py-[1px] border border-border"
-                      {...rest}
-                    >
-                      {children}
-                    </code>
-                  );
-                }
-                return (
-                  <SyntaxHighlighter
-                    language={lang}
-                    style={codeStyle as never}
-                    PreTag="div"
-                    customStyle={{
-                      margin: 0,
-                      padding: "12px 14px",
-                      background: "transparent",
-                      fontSize: "12px",
-                      fontFamily: "var(--font-mono, monospace)",
-                    }}
-                    codeTagProps={{ style: { fontFamily: "inherit" } }}
-                  >
-                    {value}
-                  </SyntaxHighlighter>
-                );
-              },
-              pre: ({ children }) => (
-                <pre className="bg-foreground/[0.04] border border-border my-3 overflow-x-auto">
-                  {children}
-                </pre>
-              ),
+              // Shared, theme-aware code rendering — identical to the chat
+              // transcript so a fenced block reads the same everywhere.
+              ...createCodeMarkdownComponents({
+                inlineCodeClassName:
+                  "font-mono text-[12px] text-foreground bg-foreground/10 px-1 py-[1px] rounded border border-border",
+              }),
             }}
           >
             {renderedText}
@@ -381,7 +361,43 @@ export function ViewerFileContent({
         </article>
       )}
 
-      {content?.kind === "text" && content.text !== "" && isCode && (
+      {content?.kind === "text" && canRenderHtml && (
+        <div className="space-y-3">
+          <div className="font-mono text-[10px] tracking-wide uppercase text-foreground/50 px-3 py-1 border border-border bg-foreground/[0.04] flex items-center justify-between gap-3">
+            <span>
+              html document · sandboxed{showRendered ? " · rendered" : " · source"}
+            </span>
+            <button
+              data-testid="html-render-toggle"
+              onClick={() => setShowRendered((v) => !v)}
+              className="underline opacity-80 hover:opacity-100"
+            >
+              {showRendered ? "view source" : "preview rendered ↗"}
+            </button>
+          </div>
+          {showRendered ? (
+            <HtmlPreviewFrame html={content.text} onOpenExternal={handleLinkOpen} />
+          ) : (
+            <SyntaxHighlighter
+              language="html"
+              style={codeStyle as never}
+              customStyle={{
+                margin: 0,
+                padding: 0,
+                background: "transparent",
+                fontSize: "12px",
+                fontFamily: "var(--font-mono, monospace)",
+              }}
+              codeTagProps={{ style: { fontFamily: "inherit" } }}
+              wrapLongLines={false}
+            >
+              {content.text}
+            </SyntaxHighlighter>
+          )}
+        </div>
+      )}
+
+      {content?.kind === "text" && content.text !== "" && isCode && !canRenderHtml && (
         <SyntaxHighlighter
           language={detection?.lang}
           style={codeStyle as never}
@@ -399,7 +415,10 @@ export function ViewerFileContent({
         </SyntaxHighlighter>
       )}
 
-      {content?.kind === "text" && content.text !== "" && detection?.kind === "text" && (
+      {content?.kind === "text" &&
+        content.text !== "" &&
+        detection?.kind === "text" &&
+        !canRenderHtml && (
         <pre className="whitespace-pre-wrap break-words text-[12px] leading-relaxed font-mono">
           {renderedText}
         </pre>

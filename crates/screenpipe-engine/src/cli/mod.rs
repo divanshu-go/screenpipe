@@ -14,6 +14,7 @@ pub mod login;
 pub mod mcp;
 pub mod pipe;
 pub mod presets;
+pub mod profile;
 pub mod search;
 pub mod status;
 mod store_file;
@@ -186,14 +187,25 @@ pub enum Command {
         port: u16,
     },
 
+    /// Show per-stage pipeline timing (OCR, DB write, capture FPS, audio
+    /// throughput) from the running server's /health endpoint
+    Profile {
+        /// Output format
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        /// Port of the running server
+        #[arg(short = 'p', long, default_value_t = 3030)]
+        port: u16,
+    },
+
     /// Search screen + audio history directly from the local SQLite DB
     /// (no daemon required — opens `~/.screenpipe/db.sqlite` read-side
     /// via WAL while sp may be writing).
     Search(SearchArgs),
 
     /// Enterprise: query teammates' screen + audio history via
-    /// `screenpi.pe/api/enterprise/v1/*`. Admin-only — needs a
-    /// `team_api_token` minted at https://screenpi.pe/enterprise?tab=tokens.
+    /// `screenpipe.com/api/enterprise/v1/*`. Admin-only — needs a
+    /// `team_api_token` minted at https://screenpipe.com/enterprise?tab=tokens.
     Team {
         #[command(subcommand)]
         subcommand: TeamCommand,
@@ -244,7 +256,7 @@ pub enum Command {
     /// Install a bundle of pipes from a manifest URL
     Install {
         /// Manifest URL (HTTPS, JSON). Defaults to the screenpipe starter bundle.
-        #[arg(default_value = "https://screenpi.pe/start.json")]
+        #[arg(default_value = "https://screenpipe.com/start.json")]
         url: String,
         /// Allow manifests hosted outside the trusted host list
         #[arg(long, default_value_t = false)]
@@ -442,6 +454,32 @@ pub struct RecordArgs {
     /// regardless. Default: secret.
     #[arg(long, value_delimiter = ',', default_value = "secret")]
     pub pii_redaction_labels: Vec<String>,
+
+    /// WHICH columns the redaction worker scrubs (comma-separated stable
+    /// keys; orthogonal to --pii-redaction-labels which picks categories).
+    /// Keys: accessibility_text, accessibility_tree, window_name,
+    /// browser_url, audio_transcription, ui_text_content, ui_element_value,
+    /// ui_window_title, ui_element_name, ui_element_description, element_text,
+    /// element_properties, a11y_url_field. The list is exact (key present →
+    /// on, absent → off); `full_text` is always redacted. Default leaves
+    /// browser_url / ui_element_name / ui_element_description / a11y_url_field
+    /// / element_properties OFF (opt-in).
+    #[arg(
+        long,
+        value_delimiter = ',',
+        default_value = "accessibility_text,accessibility_tree,window_name,audio_transcription,ui_text_content,ui_element_value,ui_window_title,element_text"
+    )]
+    pub pii_redaction_columns: Vec<String>,
+
+    /// Render redacted PII as consistent pseudonym tokens
+    /// (`[PERSON_1a2b3c4d5e6f]`) instead of static `[PERSON]` tags, so the
+    /// same value stays correlatable across rows without exposing it.
+    /// Irreversible (one-way keyed hash, random per-install key, no
+    /// reverse map). Applies to the text worker when
+    /// `--async-pii-redaction` is on, for newly-redacted rows only;
+    /// ignored for the Tinfoil backend. Off by default. See issue #4206.
+    #[arg(long, default_value_t = false)]
+    pub pii_redaction_pseudonyms: bool,
 
     /// Filter music-dominant audio before transcription (reduces Spotify/YouTube music noise)
     #[arg(long, default_value_t = false)]
@@ -700,6 +738,8 @@ pub struct RecordArgSources {
     pub async_image_pii_redaction: bool,
     pub pii_backend: bool,
     pub pii_redaction_labels: bool,
+    pub pii_redaction_columns: bool,
+    pub pii_redaction_pseudonyms: bool,
     pub filter_music: bool,
     pub disable_vision: bool,
     pub ignored_windows: bool,
@@ -751,6 +791,8 @@ impl RecordArgSources {
             async_image_pii_redaction: from_command_line(record, "async_image_pii_redaction"),
             pii_backend: from_command_line(record, "pii_backend"),
             pii_redaction_labels: from_command_line(record, "pii_redaction_labels"),
+            pii_redaction_columns: from_command_line(record, "pii_redaction_columns"),
+            pii_redaction_pseudonyms: from_command_line(record, "pii_redaction_pseudonyms"),
             filter_music: from_command_line(record, "filter_music"),
             disable_vision: from_command_line(record, "disable_vision"),
             ignored_windows: from_command_line(record, "ignored_windows"),
@@ -794,6 +836,8 @@ impl RecordArgSources {
             || self.async_image_pii_redaction
             || self.pii_backend
             || self.pii_redaction_labels
+            || self.pii_redaction_columns
+            || self.pii_redaction_pseudonyms
             || self.filter_music
             || self.disable_vision
             || self.ignored_windows
@@ -938,6 +982,8 @@ impl RecordArgs {
             async_image_pii_redaction: self.async_image_pii_redaction,
             pii_backend: self.pii_backend.clone(),
             pii_redaction_labels: self.pii_redaction_labels.clone(),
+            pii_redaction_columns: self.pii_redaction_columns.clone(),
+            pii_redaction_pseudonyms: self.pii_redaction_pseudonyms,
             filter_music: self.filter_music,
             audio_transcription_engine: engine_str.to_string(),
             transcription_mode: mode_str.to_string(),
@@ -1025,6 +1071,17 @@ impl RecordArgs {
         let mut settings = persisted_settings.unwrap_or_else(|| self.to_recording_settings());
         if loaded_from_store {
             self.apply_explicit_overrides(&mut settings, sources);
+        }
+
+        // #3943: the desktop app migrates the cloud token out of plaintext
+        // store.bin into the shared encrypted SecretStore. A standalone CLI
+        // run whose persisted settings carry no user token must look there,
+        // or cloud features (STT, screenpipe-cloud pipes) silently lose auth
+        // once the app has migrated.
+        if settings.effective_user_id().is_none() {
+            if let Some(token) = crate::auth_key::find_cloud_token(&data_dir).await {
+                settings.user_id = token;
+            }
         }
 
         // First-launch tier detection for CLI users
@@ -1201,6 +1258,12 @@ impl RecordArgs {
         }
         if sources.pii_redaction_labels {
             settings.pii_redaction_labels = self.pii_redaction_labels.clone();
+        }
+        if sources.pii_redaction_columns {
+            settings.pii_redaction_columns = self.pii_redaction_columns.clone();
+        }
+        if sources.pii_redaction_pseudonyms {
+            settings.pii_redaction_pseudonyms = self.pii_redaction_pseudonyms;
         }
         if sources.filter_music {
             settings.filter_music = self.filter_music;
@@ -1742,7 +1805,7 @@ pub struct SearchArgs {
 // =============================================================================
 
 /// Mirrors the `screenpipe-team` skill 1:1 — same endpoints, same vocabulary.
-/// All three variants hit `https://screenpi.pe/api/enterprise/v1/*` directly
+/// All three variants hit `https://screenpipe.com/api/enterprise/v1/*` directly
 /// with the admin's `team_api_token` from `~/.screenpipe/enterprise.json`
 /// (or `SCREENPIPE_TEAM_API_TOKEN` env override). No daemon needed.
 #[derive(Subcommand, Debug)]
@@ -2170,6 +2233,31 @@ mod tests {
         match cli.command {
             Command::Survey => {}
             _ => panic!("expected Survey command"),
+        }
+    }
+
+    #[test]
+    fn test_profile_command_parses_with_defaults() {
+        let cli = Cli::try_parse_from(["screenpipe", "profile"]).unwrap();
+        match cli.command {
+            Command::Profile { json, port } => {
+                assert!(!json);
+                assert_eq!(port, 3030);
+            }
+            _ => panic!("expected Profile command"),
+        }
+    }
+
+    #[test]
+    fn test_profile_command_parses_port_and_json() {
+        let cli =
+            Cli::try_parse_from(["screenpipe", "profile", "--port", "4040", "--json"]).unwrap();
+        match cli.command {
+            Command::Profile { json, port } => {
+                assert!(json);
+                assert_eq!(port, 4040);
+            }
+            _ => panic!("expected Profile command"),
         }
     }
 
