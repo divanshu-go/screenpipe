@@ -69,6 +69,16 @@ pub struct ScheduleRule {
     pub record_mode: String,
 }
 
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub enum AecMode {
+    #[default]
+    Screenpipe,
+    Macos,
+    Windows,
+}
+
 /// The single source of truth for recording/capture configuration.
 ///
 /// Used by:
@@ -161,8 +171,12 @@ pub struct RecordingSettings {
     pub macos_input_vpio_enabled: bool,
 
     /// Request Screenpipe's software Acoustic Echo Cancellation (via sonora WebRTC AEC3).
-    #[serde(rename = "screenpipeAecEnabled", default)]
+    #[serde(rename = "screenpipeAecEnabled", default = "default_true")]
     pub screenpipe_aec_enabled: bool,
+
+    /// Durable AEC engine choice. Missing legacy values intentionally migrate to Screenpipe AEC.
+    #[serde(rename = "aecMode", default)]
+    pub aec_mode: AecMode,
 
     /// Duration of each audio chunk in seconds before transcription.
     /// Stored as i32 to match existing store.bin schema (cast to u64 by engine).
@@ -621,6 +635,15 @@ impl RecordingSettings {
             .map(str::trim)
             .filter(|name| !name.is_empty())
     }
+
+    /// Returns effective AEC booleans as `(screenpipe, windows, macos)`.
+    pub fn effective_aec_flags(&self) -> (bool, bool, bool) {
+        match self.aec_mode {
+            AecMode::Screenpipe => (true, false, false),
+            AecMode::Windows => (false, true, false),
+            AecMode::Macos => (false, false, true),
+        }
+    }
 }
 
 impl Default for RecordingSettings {
@@ -639,6 +662,7 @@ impl Default for RecordingSettings {
             windows_input_aec_enabled: false,
             macos_input_vpio_enabled: false,
             screenpipe_aec_enabled: true,
+            aec_mode: AecMode::Screenpipe,
             audio_chunk_duration: 30,
             deepgram_api_key: String::new(),
             filter_music: false,
@@ -804,6 +828,41 @@ mod tests {
         assert_eq!(settings.video_quality, "balanced");
         assert!(settings.use_system_default_audio);
         assert!(settings.ignore_incognito_windows);
+        assert!(settings.screenpipe_aec_enabled);
+        assert!(!settings.windows_input_aec_enabled);
+        assert!(!settings.macos_input_vpio_enabled);
+        assert_eq!(settings.aec_mode, AecMode::Screenpipe);
+        assert_eq!(settings.effective_aec_flags(), (true, false, false));
+    }
+
+    #[test]
+    fn missing_aec_mode_migrates_legacy_flags_to_screenpipe() {
+        let settings: RecordingSettings = serde_json::from_str(
+            r#"{
+                "screenpipeAecEnabled": false,
+                "windowsInputAecEnabled": true,
+                "macosInputVpioEnabled": true
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(settings.aec_mode, AecMode::Screenpipe);
+        assert_eq!(settings.effective_aec_flags(), (true, false, false));
+    }
+
+    #[test]
+    fn explicit_aec_mode_wins_over_legacy_flags() {
+        let settings: RecordingSettings = serde_json::from_str(
+            r#"{
+                "aecMode": "windows",
+                "screenpipeAecEnabled": true,
+                "windowsInputAecEnabled": false,
+                "macosInputVpioEnabled": true
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(settings.effective_aec_flags(), (false, true, false));
     }
 
     #[test]

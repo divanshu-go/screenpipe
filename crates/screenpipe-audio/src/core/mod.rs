@@ -92,6 +92,7 @@ pub async fn record_and_transcribe(
         metrics,
         None,
         None,
+        false,
     )
     .await
 }
@@ -104,6 +105,7 @@ pub async fn record_and_transcribe_with_live_tap(
     metrics: Arc<crate::metrics::AudioPipelineMetrics>,
     live_audio_tap: Option<crate::meeting_streaming::MeetingAudioTap>,
     device_manager: Option<Arc<crate::device::device_manager::DeviceManager>>,
+    screenpipe_aec_enabled: bool,
 ) -> Result<()> {
     run_record_and_transcribe::run_record_and_transcribe(
         audio_stream,
@@ -113,6 +115,7 @@ pub async fn record_and_transcribe_with_live_tap(
         metrics,
         live_audio_tap,
         device_manager,
+        screenpipe_aec_enabled,
     )
     .await
 }

@@ -170,16 +170,21 @@ pub struct CentralHandlerRestartResult {
 
 impl AudioManager {
     pub async fn new(options: AudioManagerOptions, db: Arc<DatabaseManager>) -> Result<Self> {
+        let effective_windows_input_aec_enabled =
+            options.windows_input_aec_enabled && !options.screenpipe_aec_enabled;
+        let effective_macos_input_vpio_enabled =
+            options.macos_input_vpio_enabled && !options.screenpipe_aec_enabled;
+
         let device_manager = DeviceManager::new(
             options.experimental_coreaudio_system_audio,
-            options.windows_input_aec_enabled,
-            options.macos_input_vpio_enabled,
+            effective_windows_input_aec_enabled,
+            effective_macos_input_vpio_enabled,
         )
         .await?;
-        if options.windows_input_aec_enabled {
+        if effective_windows_input_aec_enabled {
             info!("screenpipe-audio: Windows WASAPI microphone AEC enabled in settings");
         }
-        if options.macos_input_vpio_enabled {
+        if effective_macos_input_vpio_enabled {
             info!(
                 "screenpipe-audio: macOS VoiceProcessingIO (AEC) enabled in settings (default input only)"
             );
@@ -281,8 +286,8 @@ impl AudioManager {
 
         self.device_manager.configure_backend_flags(
             options.experimental_coreaudio_system_audio,
-            options.windows_input_aec_enabled,
-            options.macos_input_vpio_enabled,
+            options.windows_input_aec_enabled && !options.screenpipe_aec_enabled,
+            options.macos_input_vpio_enabled && !options.screenpipe_aec_enabled,
         );
         *self.meeting_detector.write().await = options.meeting_detector.clone();
 
@@ -703,6 +708,7 @@ impl AudioManager {
         let device_clone = device.clone();
         let metrics = self.metrics.clone();
         let meeting_audio_tap = self.meeting_audio_tap.clone();
+        let screenpipe_aec_enabled = options.screenpipe_aec_enabled;
         // Used only on macOS to demote a runtime-dead VPIO device to the HAL path.
         #[cfg(target_os = "macos")]
         let device_manager = self.device_manager.clone();
@@ -718,6 +724,7 @@ impl AudioManager {
                 metrics,
                 Some(meeting_audio_tap),
                 Some(device_manager_clone),
+                screenpipe_aec_enabled,
             ))
             .await;
 

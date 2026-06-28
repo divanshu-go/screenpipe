@@ -256,6 +256,8 @@ impl RecordingConfig {
         // Sync the record_while_locked preference to the shared atomic flag
         // so the audio recording loop can read it without holding a config reference.
         screenpipe_config::set_record_while_locked(settings.record_while_locked);
+        let (screenpipe_aec_enabled, windows_input_aec_enabled, macos_input_vpio_enabled) =
+            settings.effective_aec_flags();
 
         Self {
             audio_chunk_duration: settings.audio_chunk_duration.max(0) as u64,
@@ -310,9 +312,9 @@ impl RecordingConfig {
             audio_devices: settings.audio_devices.clone(),
             use_system_default_audio: settings.use_system_default_audio,
             experimental_coreaudio_system_audio: settings.experimental_coreaudio_system_audio,
-            windows_input_aec_enabled: settings.windows_input_aec_enabled,
-            macos_input_vpio_enabled: settings.macos_input_vpio_enabled,
-            screenpipe_aec_enabled: settings.screenpipe_aec_enabled,
+            windows_input_aec_enabled,
+            macos_input_vpio_enabled,
+            screenpipe_aec_enabled,
             monitor_ids: settings.monitor_ids.clone(),
             use_all_monitors: settings.use_all_monitors,
             ignored_windows: settings.ignored_windows.clone(),
@@ -582,6 +584,32 @@ mod tests {
         let c = build(&settings_with(false, false));
         assert_eq!(c.listen_address, Ipv4Addr::LOCALHOST);
         assert!(!c.api_auth);
+    }
+
+    #[test]
+    fn aec_mode_produces_one_effective_backend() {
+        let legacy_conflict = screenpipe_config::RecordingSettings {
+            screenpipe_aec_enabled: false,
+            windows_input_aec_enabled: true,
+            macos_input_vpio_enabled: true,
+            ..Default::default()
+        };
+        let c = build(&legacy_conflict);
+        assert!(c.screenpipe_aec_enabled);
+        assert!(!c.windows_input_aec_enabled);
+        assert!(!c.macos_input_vpio_enabled);
+
+        let explicit_macos = screenpipe_config::RecordingSettings {
+            aec_mode: screenpipe_config::AecMode::Macos,
+            screenpipe_aec_enabled: true,
+            windows_input_aec_enabled: true,
+            macos_input_vpio_enabled: false,
+            ..Default::default()
+        };
+        let c = build(&explicit_macos);
+        assert!(!c.screenpipe_aec_enabled);
+        assert!(!c.windows_input_aec_enabled);
+        assert!(c.macos_input_vpio_enabled);
     }
 
     #[test]

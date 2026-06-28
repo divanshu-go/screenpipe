@@ -184,11 +184,12 @@ pub async fn run_record_and_transcribe(
     metrics: Arc<AudioPipelineMetrics>,
     live_audio_tap: Option<MeetingAudioTap>,
     device_manager: Option<Arc<crate::device::device_manager::DeviceManager>>,
+    screenpipe_aec_enabled: bool,
 ) -> Result<()> {
     let device_name = audio_stream.device.to_string();
     let is_input = audio_stream.device.device_type == DeviceType::Input;
 
-    if is_input {
+    if is_input && screenpipe_aec_enabled {
         // Microphone Always-On AEC / NS / AGC Stage
         let mut receiver = audio_stream.subscribe().await;
         let mic_sample_rate = audio_stream.device_config.sample_rate().0;
@@ -408,7 +409,8 @@ pub async fn run_record_and_transcribe(
             Ok(())
         }
     } else {
-        // Speaker Output Stream (Unchanged, Raw Independent Path)
+        // Raw recorder path. Used for output streams and for input streams when
+        // Screenpipe software AEC is off because an OS AEC backend was selected.
         let mut receiver = audio_stream.subscribe().await;
         let sample_rate = audio_stream.device_config.sample_rate().0 as usize;
 
@@ -418,8 +420,9 @@ pub async fn run_record_and_transcribe(
         let mut source_buffer = SourceBuffer::new(device_name.as_str(), sample_rate as u32);
 
         info!(
-            "starting continuous recording for speaker {} ({}s segments)",
+            "starting continuous recording for {} ({} / {}s segments)",
             device_name,
+            source_buffer.device_kind().label(),
             duration.as_secs()
         );
         let audio_samples_len = sample_rate * duration.as_secs() as usize;
@@ -965,6 +968,7 @@ mod tests {
                     metrics,
                     Some(meeting_tap),
                     None,
+                    false,
                 )
                 .await
             }
@@ -1046,6 +1050,7 @@ mod tests {
                     metrics,
                     None,
                     None,
+                    false,
                 )
                 .await
             }

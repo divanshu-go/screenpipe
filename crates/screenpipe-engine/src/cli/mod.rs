@@ -1016,6 +1016,15 @@ impl RecordArgs {
             CliTranscriptionMode::Realtime => "realtime",
             CliTranscriptionMode::Batch => "batch",
         };
+        let aec_mode = if self.screenpipe_aec_enabled {
+            screenpipe_config::AecMode::Screenpipe
+        } else if self.windows_input_aec_enabled {
+            screenpipe_config::AecMode::Windows
+        } else if self.macos_input_vpio_enabled {
+            screenpipe_config::AecMode::Macos
+        } else {
+            screenpipe_config::AecMode::Screenpipe
+        };
 
         screenpipe_config::RecordingSettings {
             audio_chunk_duration: self.audio_chunk_duration as i32,
@@ -1038,8 +1047,10 @@ impl RecordArgs {
             audio_devices: self.audio_device.clone(),
             use_system_default_audio: self.use_system_default_audio,
             experimental_coreaudio_system_audio: self.experimental_coreaudio_system_audio,
-            windows_input_aec_enabled: self.windows_input_aec_enabled,
-            macos_input_vpio_enabled: self.macos_input_vpio_enabled,
+            windows_input_aec_enabled: aec_mode == screenpipe_config::AecMode::Windows,
+            macos_input_vpio_enabled: aec_mode == screenpipe_config::AecMode::Macos,
+            screenpipe_aec_enabled: aec_mode == screenpipe_config::AecMode::Screenpipe,
+            aec_mode,
             monitor_ids: self.monitor_id.iter().map(|id| id.to_string()).collect(),
             // Explicit `--monitor-id` implies opting out of `--use-all-monitors`.
             // `use_all_monitors` has `default_value_t = true`, so without this
@@ -1266,14 +1277,21 @@ impl RecordArgs {
         if sources.experimental_coreaudio_system_audio {
             settings.experimental_coreaudio_system_audio = self.experimental_coreaudio_system_audio;
         }
-        if sources.windows_input_aec_enabled {
-            settings.windows_input_aec_enabled = self.windows_input_aec_enabled;
-        }
-        if sources.macos_input_vpio_enabled {
-            settings.macos_input_vpio_enabled = self.macos_input_vpio_enabled;
-        }
-        if sources.screenpipe_aec_enabled {
-            settings.screenpipe_aec_enabled = self.screenpipe_aec_enabled;
+        if sources.screenpipe_aec_enabled && self.screenpipe_aec_enabled {
+            settings.aec_mode = screenpipe_config::AecMode::Screenpipe;
+            settings.screenpipe_aec_enabled = true;
+            settings.windows_input_aec_enabled = false;
+            settings.macos_input_vpio_enabled = false;
+        } else if sources.windows_input_aec_enabled && self.windows_input_aec_enabled {
+            settings.aec_mode = screenpipe_config::AecMode::Windows;
+            settings.screenpipe_aec_enabled = false;
+            settings.windows_input_aec_enabled = true;
+            settings.macos_input_vpio_enabled = false;
+        } else if sources.macos_input_vpio_enabled && self.macos_input_vpio_enabled {
+            settings.aec_mode = screenpipe_config::AecMode::Macos;
+            settings.screenpipe_aec_enabled = false;
+            settings.windows_input_aec_enabled = false;
+            settings.macos_input_vpio_enabled = true;
         }
         if sources.audio_transcription_engine {
             settings.audio_transcription_engine =
