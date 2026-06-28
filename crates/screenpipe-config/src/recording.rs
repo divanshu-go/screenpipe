@@ -160,6 +160,10 @@ pub struct RecordingSettings {
     #[serde(rename = "macosInputVpioEnabled", default)]
     pub macos_input_vpio_enabled: bool,
 
+    /// Request Screenpipe's software Acoustic Echo Cancellation (via sonora WebRTC AEC3).
+    #[serde(rename = "screenpipeAecEnabled", default)]
+    pub screenpipe_aec_enabled: bool,
+
     /// Duration of each audio chunk in seconds before transcription.
     /// Stored as i32 to match existing store.bin schema (cast to u64 by engine).
     #[serde(rename = "audioChunkDuration")]
@@ -634,6 +638,7 @@ impl Default for RecordingSettings {
             experimental_coreaudio_system_audio: false,
             windows_input_aec_enabled: false,
             macos_input_vpio_enabled: false,
+            screenpipe_aec_enabled: true,
             audio_chunk_duration: 30,
             deepgram_api_key: String::new(),
             filter_music: false,

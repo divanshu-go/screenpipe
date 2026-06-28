@@ -3414,6 +3414,43 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
           );
         })()}
 
+        {/* Screenpipe Software AEC (sonora) */}
+        {!settings.disableAudio && (
+        <Card className={cn(
+          "border-border bg-card",
+          (settings.windowsInputAecEnabled || settings.macosInputVpioEnabled) && "opacity-60"
+        )}>
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <Mic className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <div className="flex items-center space-x-1.5">
+                    <h3 className="text-sm font-medium text-foreground">
+                      Software echo cancellation (AEC)
+                    </h3>
+                    <HelpTooltip content="Highly recommended to prevent speaker audio from bleeding into microphone transcripts. Uses pure-Rust WebRTC AEC3." />
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {(settings.windowsInputAecEnabled || settings.macosInputVpioEnabled)
+                      ? "Disabled because hardware-level OS echo cancellation is active"
+                      : "Removes speaker bleed from microphone transcripts"}
+                  </p>
+                </div>
+              </div>
+              <Switch
+                id="screenpipeAecEnabled"
+                disabled={Boolean(settings.windowsInputAecEnabled || settings.macosInputVpioEnabled)}
+                checked={Boolean(settings.screenpipeAecEnabled ?? true) && !settings.windowsInputAecEnabled && !settings.macosInputVpioEnabled}
+                onCheckedChange={(checked) =>
+                  handleSettingsChange({ screenpipeAecEnabled: checked }, true)
+                }
+              />
+            </div>
+          </CardContent>
+        </Card>
+        )}
+
         {/* Windows microphone AEC */}
         {!settings.disableAudio && isWindows && (
         <Card className="border-border bg-card">

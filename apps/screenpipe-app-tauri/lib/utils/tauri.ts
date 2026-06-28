@@ -2621,6 +2621,10 @@ windowsInputAecEnabled?: boolean;
  */
 macosInputVpioEnabled?: boolean;
 /**
+ * Request Screenpipe's software Acoustic Echo Cancellation (via sonora WebRTC AEC3).
+ */
+screenpipeAecEnabled?: boolean;
+/**
  * Duration of each audio chunk in seconds before transcription.
  * Stored as i32 to match existing store.bin schema (cast to u64 by engine).
  */

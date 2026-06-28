@@ -299,6 +299,8 @@ export type Settings = SettingsStore & {
 	windowsInputAecEnabled?: boolean;
 	/** Experimental: request Apple VoiceProcessingIO AEC on the default macOS microphone. */
 	macosInputVpioEnabled?: boolean;
+	/** Request Screenpipe's software Acoustic Echo Cancellation (via sonora WebRTC AEC3). */
+	screenpipeAecEnabled?: boolean;
 	/** Continue recording audio when the screen is locked (default: false) */
 	recordWhileLocked?: boolean;
 	/** Auto-delete local data older than retention days (free alternative to cloud archive) */
@@ -670,6 +672,7 @@ let DEFAULT_SETTINGS: Settings = {
 			experimentalCoreaudioSystemAudio: false,
 			windowsInputAecEnabled: false,
 			macosInputVpioEnabled: false,
+			screenpipeAecEnabled: true,
 			recordWhileLocked: false,
 			localRetentionEnabled: false,
 			localRetentionDays: 14,

@@ -689,6 +689,7 @@ impl AudioManager {
 
     async fn record_device(&self, device: &AudioDevice) -> Result<JoinHandle<Result<()>>> {
         let options = self.options.read().await;
+
         let stream = self
             .device_manager
             .stream(device)
@@ -706,6 +707,8 @@ impl AudioManager {
         #[cfg(target_os = "macos")]
         let device_manager = self.device_manager.clone();
 
+        let device_manager_clone = self.device_manager.clone();
+
         let recording_handle = tokio::spawn(async move {
             let record_result = tokio::spawn(record_and_transcribe_with_live_tap(
                 stream.clone(),
@@ -714,6 +717,7 @@ impl AudioManager {
                 is_running.clone(),
                 metrics,
                 Some(meeting_audio_tap),
+                Some(device_manager_clone),
             ))
             .await;
 
