@@ -588,13 +588,25 @@ mod tests {
 
     #[test]
     fn aec_mode_produces_one_effective_backend() {
-        let legacy_conflict = screenpipe_config::RecordingSettings {
+        let legacy_conflict_without_mode = screenpipe_config::RecordingSettings {
             screenpipe_aec_enabled: false,
             windows_input_aec_enabled: true,
             macos_input_vpio_enabled: true,
             ..Default::default()
         };
-        let c = build(&legacy_conflict);
+        let c = build(&legacy_conflict_without_mode);
+        assert!(!c.screenpipe_aec_enabled);
+        assert!(!c.windows_input_aec_enabled);
+        assert!(!c.macos_input_vpio_enabled);
+
+        let explicit_screenpipe = screenpipe_config::RecordingSettings {
+            aec_mode: screenpipe_config::AecMode::Screenpipe,
+            screenpipe_aec_enabled: false,
+            windows_input_aec_enabled: true,
+            macos_input_vpio_enabled: true,
+            ..Default::default()
+        };
+        let c = build(&explicit_screenpipe);
         assert!(c.screenpipe_aec_enabled);
         assert!(!c.windows_input_aec_enabled);
         assert!(!c.macos_input_vpio_enabled);

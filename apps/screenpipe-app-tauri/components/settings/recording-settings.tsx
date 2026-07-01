@@ -206,7 +206,7 @@ type AudioEngineResolution = {
   fallbackReason: AudioEngineFallbackReason | null;
 };
 
-type AecMode = "screenpipe" | "macos" | "windows";
+type AecMode = "off" | "screenpipe" | "macos" | "windows";
 
 type AudioEngineResolutionSettings = Pick<
   Settings,
@@ -221,9 +221,10 @@ const getAecMode = (
   isMacOS: boolean,
   isWindows: boolean
 ): AecMode => {
+  if (settings.aecMode === "screenpipe") return "screenpipe";
   if (settings.aecMode === "macos" && isMacOS) return "macos";
   if (settings.aecMode === "windows" && isWindows) return "windows";
-  return "screenpipe";
+  return "off";
 };
 
 const getAecModeSettings = (mode: AecMode) => ({
@@ -234,6 +235,10 @@ const getAecModeSettings = (mode: AecMode) => ({
 });
 
 const AEC_MODE_DETAILS: Record<AecMode, { label: string; description: string }> = {
+  off: {
+    label: "Off",
+    description: "Echo cancellation is disabled",
+  },
   screenpipe: {
     label: "Screenpipe software AEC",
     description: "Uses software AEC3 to remove speaker bleed from microphone transcripts",
@@ -3504,6 +3509,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="off">{AEC_MODE_DETAILS.off.label}</SelectItem>
                   <SelectItem value="screenpipe">{AEC_MODE_DETAILS.screenpipe.label}</SelectItem>
                   {isMacOS && (
                     <SelectItem value="macos">{AEC_MODE_DETAILS.macos.label}</SelectItem>

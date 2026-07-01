@@ -1023,7 +1023,7 @@ impl RecordArgs {
         } else if self.macos_input_vpio_enabled {
             screenpipe_config::AecMode::Macos
         } else {
-            screenpipe_config::AecMode::Screenpipe
+            screenpipe_config::AecMode::Off
         };
 
         screenpipe_config::RecordingSettings {
