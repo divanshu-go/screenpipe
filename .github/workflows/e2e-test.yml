@@ -229,6 +229,15 @@ jobs:
         Remove-Item -LiteralPath ./e2e/results -Recurse -Force -ErrorAction SilentlyContinue
         bun run test:e2e
 
+    - name: Run Windows Window UI E2E
+      shell: pwsh
+      working-directory: ./apps/screenpipe-app-tauri
+      env:
+        RECORD_VIDEO: "true"
+        SCREENPIPE_E2E_SEED: "onboarding,no-recording,search-fixture,window-ui"
+      run: |
+        bun run wdio run e2e/wdio.conf.ts --spec e2e/specs/main-overlay-visibility.spec.ts --spec e2e/specs/main-window-close-reopen.spec.ts --spec e2e/specs/main-window.spec.ts --spec e2e/specs/meeting-apps-picker.spec.ts
+
     - name: Run Windows Core Recording E2E
       shell: pwsh
       working-directory: ./apps/screenpipe-app-tauri

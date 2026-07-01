@@ -11,9 +11,12 @@
  */
 
 import { existsSync } from "node:fs";
+import { canRunWindowsWindowSpecs } from "../helpers/app-launcher.js";
 import { saveScreenshot } from "../helpers/screenshot-utils.js";
 import { openHomeWindow, waitForAppReady, t } from "../helpers/test-utils.js";
 import { closeWindow, invokeOrThrow, waitForWindowHandle } from "../helpers/tauri.js";
+
+const canRun = canRunWindowsWindowSpecs();
 
 const MAIN_LABELS = ["main", "main-window"] as const;
 type MainLabel = (typeof MAIN_LABELS)[number];
@@ -52,7 +55,7 @@ async function expectMainOverlayVisible(expected: boolean, timeoutMs = t(15_000)
   });
 }
 
-describe("Main overlay: visibility", function () {
+(canRun ? describe : describe.skip)("Main overlay: visibility", function () {
   this.timeout(150_000);
 
   afterEach(async () => {
