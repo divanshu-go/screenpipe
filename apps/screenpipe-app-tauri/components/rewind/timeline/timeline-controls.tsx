@@ -18,7 +18,8 @@ import { useEffect, useMemo, useState } from "react";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { Calendar } from "@/components/ui/calendar";
-import { listDaysWithFrames } from "@/lib/actions/has-frames-date";
+import { listDaysWithFrames, invalidateDaysWithFramesCache } from "@/lib/actions/has-frames-date";
+import type { DateChangeOptions } from "@/lib/timeline/date-navigation-utils";
 import { formatShortcutDisplay } from "@/lib/chat-utils";
 import {
 	Popover,
@@ -38,7 +39,7 @@ interface TimelineControlsProps {
 	// shown in the date pill so the label tracks the cursor minute-to-minute
 	// (currentDate only changes when the day changes). Null until frames load.
 	currentTime?: Date | null;
-	onDateChange: (date: Date) => Promise<any>;
+	onDateChange: (date: Date, options?: DateChangeOptions) => Promise<any>;
 	onJumpToday: () => void;
 	onSearchClick?: () => void;
 	onChatClick?: () => void;
@@ -84,11 +85,23 @@ export function TimelineControls({
 	// click a blank day and see an empty timeline. Refreshes whenever the
 	// popover opens, so newly-recorded frames register without a reload.
 	const [daysWithFrames, setDaysWithFrames] = useState<Set<string>>(new Set());
+	const [daysLoading, setDaysLoading] = useState(false);
+	const [daysLoadFailed, setDaysLoadFailed] = useState(false);
 	useEffect(() => {
 		if (!calendarOpen) return;
+		invalidateDaysWithFramesCache();
 		let cancelled = false;
+		setDaysLoading(true);
+		setDaysLoadFailed(false);
 		listDaysWithFrames().then((s) => {
-			if (!cancelled) setDaysWithFrames(s);
+			if (cancelled) return;
+			if (s === null) {
+				setDaysLoadFailed(true);
+				setDaysWithFrames(new Set());
+			} else {
+				setDaysWithFrames(s);
+			}
+			setDaysLoading(false);
 		});
 		return () => {
 			cancelled = true;
@@ -103,6 +116,14 @@ export function TimelineControls({
 		[settings.searchShortcut, settings.disabledShortcuts, isMac]
 	);
 
+	// Day the user is actually viewing (playhead), not just the store's fetch anchor.
+	// After scrolling into prefetched days, currentDate can lag behind currentTime —
+	// arrows + calendar must follow the visible day (#4690).
+	const anchorDate = useMemo(
+		() => startOfDay(currentTime ?? currentDate),
+		[currentTime, currentDate],
+	);
+
 	const chatShortcutDisplay = useMemo(
 		() => {
 			if (settings.disabledShortcuts.includes("showChatShortcut")) return "";
@@ -115,9 +136,7 @@ export function TimelineControls({
 	const jumpDay = async (days: number) => {
 		const today = startOfDay(new Date());
 
-		// Use startOfDay so the date passed to handleDateChange is a clean
-		// midnight — identical to what the Calendar picker sends.
-		const newDate = startOfDay(new Date(currentDate));
+		const newDate = startOfDay(new Date(anchorDate));
 		newDate.setDate(newDate.getDate() + days);
 
 		// Prevent jumping to future dates
@@ -131,16 +150,15 @@ export function TimelineControls({
 
 	// Disable forward button and jump-to-today if we're already at today
 	const isAtToday = useMemo(
-		() => isSameDay(new Date(), currentDate),
-		[currentDate],
+		() => isSameDay(startOfDay(new Date()), anchorDate),
+		[anchorDate],
 	);
 
 	// Disable back button if we're at or before the earliest recorded date
 	const isAtEarliestDate = useMemo(() => {
-		const previousDay = subDays(currentDate, 1);
-		// Disabled if previous day would be before the start date
+		const previousDay = subDays(anchorDate, 1);
 		return isAfter(startOfDay(startAndEndDates.start), startOfDay(previousDay));
-	}, [startAndEndDates.start, currentDate]);
+	}, [startAndEndDates.start, anchorDate]);
 
 	return (
 		<div
@@ -190,25 +208,19 @@ export function TimelineControls({
 					>
 						<Calendar
 							mode="single"
-							selected={currentDate}
-							fromMonth={startOfDay(startAndEndDates.start)} toMonth={new Date()} onSelect={(date) => {
-								console.log("[Calendar] onSelect called with:", date?.toISOString(), "currentDate:", currentDate.toISOString());
+							selected={anchorDate}
+							fromMonth={startOfDay(startAndEndDates.start)} toMonth={new Date()} 							onSelect={(date) => {
 								if (date) {
-									onDateChange(date);
+									onDateChange(startOfDay(date), { preferExactDay: true });
 									setCalendarOpen(false);
 								}
 							}}
 							disabled={(date) => {
 								const day = startOfDay(date);
-								// Future dates and dates before the user's earliest
-								// recording always disabled.
 								if (isAfter(day, startOfDay(new Date()))) return true;
 								if (isAfter(startOfDay(startAndEndDates.start), day)) return true;
-								// Empty days disabled IF we've loaded the day set.
-								// Skip the check on first render (set is empty)
-								// so the picker is functional during the brief
-								// fetch window.
-								if (daysWithFrames.size === 0) return false;
+								if (daysLoading) return true;
+								if (daysLoadFailed || daysWithFrames.size === 0) return false;
 								return !daysWithFrames.has(format(date, "yyyy-MM-dd"));
 							}}
 						/>

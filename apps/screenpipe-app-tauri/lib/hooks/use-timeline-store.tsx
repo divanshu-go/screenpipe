@@ -4,8 +4,9 @@
 
 import { create } from "zustand";
 import { StreamTimeSeriesResponse } from "@/components/rewind/timeline";
-import { hasFramesForDate } from "../actions/has-frames-date";
-import { subDays } from "date-fns";
+import { hasFramesForDate, findNearestDateWithFrames } from "../actions/has-frames-date";
+import { MAX_DATE_SEARCH_DAYS, formatLocalDayString, buildFetchRequestKey, frameBatchMatchesSwapTarget, fetchRangeMatchesSwapTarget, isActiveDateSwapRequest, shouldRejectStaleCancelledBatch, batchCompleteMatchesGeneration, parseFetchRequestKey, type DateSwapTarget } from "../timeline/date-navigation-utils";
+import { endOfDay, isSameDay, startOfDay } from "date-fns";
 import { saveFramesToCache, loadCachedFrames } from "./use-timeline-cache";
 import {
 	appendAuthToken,
@@ -15,6 +16,11 @@ import {
 } from "@/lib/api";
 import { mergeTimelineFrames } from "./timeline-frame-merge";
 import { evaluateTimelineLiveness } from "./timeline-liveness";
+import {
+	EMPTY_STATE_MESSAGE_TIMEOUT_MS,
+	shouldArmEmptyStateMessageTimeout,
+	shouldClearMessageOnEmptyStateTimeout,
+} from "./timeline-empty-state";
 
 // Frame buffer for batching updates - reduces 68 re-renders to ~3-5
 let frameBuffer: StreamTimeSeriesResponse[] = [];
@@ -35,13 +41,96 @@ let requestRetryCount = 0;
 const REQUEST_TIMEOUT_BASE_MS = 5000; // Initial timeout: 5 seconds
 const REQUEST_TIMEOUT_MAX_MS = 60000; // Cap at 60 seconds
 const MAX_REQUEST_RETRIES = 5;
-const TIMELINE_STREAM_FRAME_LIMIT = 2500;
+// Must match MAX_STREAM_FRAME_LIMIT in crates/screenpipe-engine/src/routes/streaming.rs
+const TIMELINE_STREAM_FRAME_LIMIT = 10_000;
 
 // Reconnect timeout - must be tracked to prevent cascade
 let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
 let reconnectAttempts = 0;
 const RECONNECT_BASE_DELAY_MS = 2000;
 const RECONNECT_MAX_DELAY_MS = 30000;
+
+let emptyStateMessageTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Active date-swap target; stale WS batches are ignored by day + generation. */
+let dateSwapTarget: DateSwapTarget | null = null;
+/** Reject orphaned batches for a cancelled swap until this timestamp. */
+let staleRejectDay: string | null = null;
+let staleRejectUntil = 0;
+/** Batches rejected during swap — wait before failing if batch_complete had count>0. */
+let rejectedSwapBatchCount = 0;
+let rejectedSwapBatchTimer: ReturnType<typeof setTimeout> | null = null;
+
+function normalizeIncomingFrame(frame: StreamTimeSeriesResponse): StreamTimeSeriesResponse {
+	for (const device of frame.devices ?? []) {
+		if (device.frame_id != null && typeof device.frame_id !== "number") {
+			const parsed = Number(device.frame_id);
+			if (Number.isFinite(parsed)) {
+				device.frame_id = parsed;
+			}
+		}
+	}
+	return frame;
+}
+
+function normalizeIncomingFrames(frames: StreamTimeSeriesResponse[]): StreamTimeSeriesResponse[] {
+	return frames.map(normalizeIncomingFrame);
+}
+
+function requestKeyOverlapsDay(requestKey: string, targetDay: string): boolean {
+	const { startIso, endIso } = parseFetchRequestKey(requestKey);
+	return fetchRangeMatchesSwapTarget(startIso, endIso, targetDay);
+}
+
+function clearEmptyStateMessageTimer() {
+	if (emptyStateMessageTimer) {
+		clearTimeout(emptyStateMessageTimer);
+		emptyStateMessageTimer = null;
+	}
+}
+
+function armEmptyStateMessageTimer(
+	get: () => {
+		frames: StreamTimeSeriesResponse[];
+		message: string | null;
+		pendingDateSwap: boolean;
+	},
+	set: (partial: { message: string | null; isLoading: boolean }) => void,
+) {
+	clearEmptyStateMessageTimer();
+	emptyStateMessageTimer = setTimeout(() => {
+		emptyStateMessageTimer = null;
+		const state = get();
+		if (
+			shouldClearMessageOnEmptyStateTimeout({
+				framesLength: state.frames.length,
+				message: state.message,
+				pendingDateSwap: state.pendingDateSwap,
+			})
+		) {
+			set({ message: null, isLoading: false });
+		}
+	}, EMPTY_STATE_MESSAGE_TIMEOUT_MS);
+}
+
+function trackEmptyStateMessage(
+	prevMessage: string | null,
+	get: () => {
+		frames: StreamTimeSeriesResponse[];
+		message: string | null;
+		pendingDateSwap: boolean;
+	},
+	set: (partial: { message: string | null; isLoading: boolean }) => void,
+) {
+	const { message, frames } = get();
+	if (frames.length > 0) {
+		clearEmptyStateMessageTimer();
+		return;
+	}
+	if (shouldArmEmptyStateMessageTimeout(prevMessage, message, frames.length)) {
+		armEmptyStateMessageTimer(get, set);
+	}
+}
 
 // Guards connectWebSocket against re-entry. connectWebSocket awaits
 // ensureApiReady() before it bumps currentWsId / closes the old socket, so two
@@ -100,6 +189,12 @@ interface TimelineState {
 	hasCachedData: boolean; // Whether we loaded from cache
 	// When true, next flushFrameBuffer replaces frames instead of merging (date swap)
 	pendingDateSwap: boolean;
+	navigationGeneration: number;
+	navigationIntent: "nearest" | "exact" | null;
+	/** Bumped when a date-swap fetch fails or returns empty — hooks subscribe to abort nav. */
+	navigationFetchFailedAt: number;
+	/** Bumped when batch_complete reports frames for an in-flight date swap — extends nav timeout. */
+	navigationFetchConfirmedAt: number;
 
 	// Deep link navigation — persists across component mounts
 	pendingNavigation: { timestamp: string; frameId?: string } | null;
@@ -113,13 +208,16 @@ interface TimelineState {
 	setCurrentDate: (date: Date) => void;
 	connectWebSocket: () => void;
 	fetchTimeRange: (startTime: Date, endTime: Date) => void;
-	fetchNextDayData: (date: Date) => void;
+	fetchNextDayData: (date: Date, direction?: "forward" | "backward") => void;
 	hasDateBeenFetched: (date: Date) => boolean;
 	flushFrameBuffer: () => void;
 	onWindowFocus: () => void;
 	clearNewFramesCount: () => void;
 	clearSentRequestForDate: (date: Date) => void;
-	clearFramesForNavigation: () => void; // Clear frames when navigating to new date
+	clearFramesForNavigation: (targetDate?: Date, intent?: "nearest" | "exact") => void;
+	abortPendingDateSwap: (reason: "empty" | "failed") => void;
+	/** Cancel an in-flight date swap without clearing visible frames (nav aborted). */
+	cancelPendingDateSwap: () => void;
 	loadFromCache: () => Promise<void>; // Load cached frames on startup
 }
 
@@ -138,6 +236,10 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 	isConnected: false,
 	hasCachedData: false,
 	pendingDateSwap: false,
+	navigationGeneration: 0,
+	navigationIntent: null,
+	navigationFetchFailedAt: 0,
+	navigationFetchConfirmedAt: 0,
 	pendingNavigation: null,
 
 	setPendingNavigation: (nav) => set({ pendingNavigation: nav }),
@@ -149,15 +251,11 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 	clearNewFramesCount: () => set({ newFramesCount: 0 }),
 
 	clearSentRequestForDate: (date: Date) => {
-		const targetDay = date.toDateString();
+		const targetDay = formatLocalDayString(date);
 		set((state) => {
 			const newSentRequests = new Set<string>();
 			for (const key of state.sentRequests) {
-				// Key format: "startISO_endISO" — check if start date matches
-				const startIso = key.split('_')[0];
-				try {
-					if (new Date(startIso).toDateString() === targetDay) continue;
-				} catch { /* keep non-matching keys */ }
+				if (requestKeyOverlapsDay(key, targetDay)) continue;
 				newSentRequests.add(key);
 			}
 			return { sentRequests: newSentRequests };
@@ -194,7 +292,18 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 
 	// Prepare for date navigation — keep old frames visible while new ones load.
 	// Sets pendingDateSwap so flushFrameBuffer replaces frames atomically on first batch.
-	clearFramesForNavigation: () => {
+	clearFramesForNavigation: (targetDate?: Date, intent: "nearest" | "exact" = "nearest") => {
+		const generation = get().navigationGeneration + 1;
+		dateSwapTarget = targetDate
+			? { day: formatLocalDayString(targetDate), generation }
+			: null;
+		staleRejectDay = null;
+		staleRejectUntil = 0;
+		rejectedSwapBatchCount = 0;
+		if (rejectedSwapBatchTimer) {
+			clearTimeout(rejectedSwapBatchTimer);
+			rejectedSwapBatchTimer = null;
+		}
 		// Clear the frame buffer too
 		frameBuffer = [];
 		if (flushTimer) {
@@ -212,6 +321,8 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 		set(() => ({
 			sentRequests: new Set<string>(),
 			pendingDateSwap: true,
+			navigationGeneration: generation,
+			navigationIntent: intent,
 			isLoading: true,
 			loadingProgress: { loaded: 0, isStreaming: false },
 			error: null,
@@ -219,14 +330,80 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 		}));
 	},
 
+	abortPendingDateSwap: (reason: "empty" | "failed") => {
+		if (dateSwapTarget) {
+			staleRejectDay = dateSwapTarget.day;
+			staleRejectUntil = Date.now() + 30_000;
+		}
+		dateSwapTarget = null;
+		frameBuffer = [];
+		if (flushTimer) {
+			clearTimeout(flushTimer);
+			flushTimer = null;
+		}
+		if (requestTimeoutTimer) {
+			clearTimeout(requestTimeoutTimer);
+			requestTimeoutTimer = null;
+		}
+		requestRetryCount = 0;
+		set((state) => {
+			if (!state.pendingDateSwap) {
+				return { navigationFetchFailedAt: Date.now() };
+			}
+			return {
+				frames: reason === "empty" ? [] : state.frames,
+				frameTimestamps: reason === "empty" ? new Set<string>() : state.frameTimestamps,
+				pendingDateSwap: false,
+				isLoading: false,
+				loadingProgress: { loaded: 0, isStreaming: false },
+				message:
+					reason === "empty"
+						? "No recordings loaded for this day"
+						: "Couldn't load recordings for this day",
+				navigationFetchFailedAt: Date.now(),
+			};
+		});
+	},
+
+	cancelPendingDateSwap: () => {
+		if (dateSwapTarget) {
+			staleRejectDay = dateSwapTarget.day;
+			staleRejectUntil = Date.now() + 30_000;
+		}
+		dateSwapTarget = null;
+		rejectedSwapBatchCount = 0;
+		if (rejectedSwapBatchTimer) {
+			clearTimeout(rejectedSwapBatchTimer);
+			rejectedSwapBatchTimer = null;
+		}
+		frameBuffer = [];
+		if (flushTimer) {
+			clearTimeout(flushTimer);
+			flushTimer = null;
+		}
+		if (requestTimeoutTimer) {
+			clearTimeout(requestTimeoutTimer);
+			requestTimeoutTimer = null;
+		}
+		requestRetryCount = 0;
+		set((state) => {
+			if (!state.pendingDateSwap) {
+				return {};
+			}
+			return {
+				pendingDateSwap: false,
+				navigationIntent: null,
+				isLoading: false,
+				loadingProgress: { loaded: state.frames.length, isStreaming: state.frames.length > 0 },
+			};
+		});
+	},
+
 	hasDateBeenFetched: (date: Date) => {
 		const { sentRequests } = get();
-		const targetDay = date.toDateString();
+		const targetDay = formatLocalDayString(date);
 		for (const key of sentRequests) {
-			const startIso = key.split('_')[0];
-			try {
-				if (new Date(startIso).toDateString() === targetDay) return true;
-			} catch { /* skip malformed keys */ }
+			if (requestKeyOverlapsDay(key, targetDay)) return true;
 		}
 		return false;
 	},
@@ -235,8 +412,36 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 	flushFrameBuffer: () => {
 		if (frameBuffer.length === 0) return;
 
-		const framesToFlush = frameBuffer;
+		const framesToFlush = normalizeIncomingFrames(frameBuffer);
 		frameBuffer = [];
+
+		if (shouldRejectStaleCancelledBatch(framesToFlush, staleRejectDay, staleRejectUntil)) {
+			console.warn("[timeline] ignoring orphaned batch for cancelled swap", staleRejectDay);
+			return;
+		}
+
+		if (
+			get().pendingDateSwap &&
+			!frameBatchMatchesSwapTarget(framesToFlush, dateSwapTarget)
+		) {
+			rejectedSwapBatchCount++;
+			if (!rejectedSwapBatchTimer) {
+				rejectedSwapBatchTimer = setTimeout(() => {
+					rejectedSwapBatchTimer = null;
+					if (get().pendingDateSwap && rejectedSwapBatchCount > 0) {
+						get().abortPendingDateSwap("failed");
+					}
+					rejectedSwapBatchCount = 0;
+				}, 2000);
+			}
+			console.warn("[timeline] ignoring stale date-swap frame batch for", dateSwapTarget?.day);
+			return;
+		}
+		rejectedSwapBatchCount = 0;
+		if (rejectedSwapBatchTimer) {
+			clearTimeout(rejectedSwapBatchTimer);
+			rejectedSwapBatchTimer = null;
+		}
 
 		set((state) => {
 			const merged = mergeTimelineFrames({
@@ -248,6 +453,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 
 			// If pendingDateSwap, replace frames entirely with new batch (date changed)
 			if (state.pendingDateSwap) {
+				clearEmptyStateMessageTimer();
 				// Frames received - clear the request timeout (no need to retry)
 				if (requestTimeoutTimer) {
 					clearTimeout(requestTimeoutTimer);
@@ -266,6 +472,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					frames: merged.frames,
 					frameTimestamps: merged.timestamps,
 					pendingDateSwap: false,
+					navigationIntent: null,
 					isLoading: false,
 					loadingProgress: { loaded: merged.frames.length, isStreaming: true },
 					message: null,
@@ -286,6 +493,8 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					error: null,
 				};
 			}
+
+			clearEmptyStateMessageTimer();
 
 			// Frames received - clear the request timeout (no need to retry)
 			if (requestTimeoutTimer) {
@@ -366,6 +575,9 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 				message: currentFrames.length > 0 ? null : "connecting...",
 				isConnected: false,
 			});
+			if (currentFrames.length === 0) {
+				trackEmptyStateMessage(null, get, (partial) => set(partial));
+			}
 			
 			frameBuffer = [];
 			requestRetryCount = 0; // Reset retry counter on reconnection
@@ -443,7 +655,10 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 			// After successful connection/reconnection, trigger a fetch for current date
 			// This ensures data is requested even after reconnection
 			setTimeout(() => {
-				const { currentDate, fetchTimeRange } = get();
+				const { currentDate, fetchTimeRange, pendingDateSwap } = get();
+				if (pendingDateSwap) {
+					return;
+				}
 				const startTime = new Date(currentDate);
 				startTime.setHours(0, 0, 0, 0);
 				const endTime = new Date(currentDate);
@@ -470,11 +685,13 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					// Flush any pending frames when we get keep-alive
 					get().flushFrameBuffer();
 					const currentFrames = get().frames;
+					const prevMessage = get().message;
 					set((state) => ({
 						error: null,
 						isLoading: false,
 						message: currentFrames.length === 0 ? "waiting for data..." : null,
 					}));
+					trackEmptyStateMessage(prevMessage, get, (partial) => set(partial));
 					return;
 				}
 
@@ -485,6 +702,34 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					const currentFrames = get().frames;
 					if (currentFrames.length === 0) {
 						set({ error: data.error, isLoading: false });
+					}
+					return;
+				}
+
+				// Explicit fetch completion (including zero-frame ranges).
+				if (data.type === "batch_complete") {
+					if (requestTimeoutTimer) {
+						clearTimeout(requestTimeoutTimer);
+						requestTimeoutTimer = null;
+					}
+					requestRetryCount = 0;
+					const count = typeof data.count === "number" ? data.count : 0;
+					const msgGen = typeof data.generation === "number" ? data.generation : undefined;
+					if (!batchCompleteMatchesGeneration(msgGen, dateSwapTarget)) {
+						return;
+					}
+					const rangeMatches = fetchRangeMatchesSwapTarget(
+						typeof data.start_time === "string" ? data.start_time : undefined,
+						typeof data.end_time === "string" ? data.end_time : undefined,
+						dateSwapTarget,
+					);
+					if (!rangeMatches) {
+						return;
+					}
+					if (count === 0 && get().pendingDateSwap) {
+						get().abortPendingDateSwap("empty");
+					} else if (get().pendingDateSwap && count > 0) {
+						set({ navigationFetchConfirmedAt: Date.now() });
 					}
 					return;
 				}
@@ -515,17 +760,57 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					// Trigger re-render with a new timestamp (no array clone needed)
 					if (updated) {
 						set({ lastFlushTimestamp: Date.now() });
+					} else {
+						// No nearby frame — synthesize audio-only entry (live mic-only recording).
+						const synthetic: StreamTimeSeriesResponse = {
+							timestamp: data.timestamp,
+							devices: [{
+								device_id: "audio-only",
+								frame_id: String(data.audio.audio_chunk_id ?? data.timestamp),
+								frame: "",
+								offset_index: 0,
+								fps: 0.5,
+								metadata: {
+									file_path: "",
+									app_name: "Audio Recording",
+									window_name: "",
+									text: data.audio.transcription ?? "",
+									timestamp: data.timestamp,
+								},
+								audio: [data.audio],
+							}],
+						};
+						frameBuffer.push(synthetic);
+						if (!flushTimer) {
+							flushTimer = setTimeout(() => {
+								flushTimer = null;
+								get().flushFrameBuffer();
+							}, FLUSH_INTERVAL_MS);
+						}
 					}
 					return;
 				}
 
 				// Handle batched frames - OPTIMIZED: buffer and flush periodically
 				if (Array.isArray(data)) {
-					if (data.length > 0) {
+					if (data.length === 0) {
+						return;
+					}
+					const normalized = normalizeIncomingFrames(data);
+					if (shouldRejectStaleCancelledBatch(normalized, staleRejectDay, staleRejectUntil)) {
+						return;
+					}
+					if (
+						get().pendingDateSwap &&
+						!frameBatchMatchesSwapTarget(normalized, dateSwapTarget)
+					) {
+						rejectedSwapBatchCount++;
+						return;
+					}
+					if (normalized.length > 0) {
 						requestRetryCount = 0;
 					}
-					// Add to buffer instead of immediate state update
-					frameBuffer.push(...data);
+					frameBuffer.push(...normalized);
 
 					// Schedule flush if not already scheduled
 					if (!flushTimer) {
@@ -554,8 +839,18 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 
 				// Handle single frame (legacy support)
 				if (data.timestamp && data.devices) {
+					const normalized = normalizeIncomingFrame(data);
+					if (shouldRejectStaleCancelledBatch([normalized], staleRejectDay, staleRejectUntil)) {
+						return;
+					}
+					if (
+						get().pendingDateSwap &&
+						!frameBatchMatchesSwapTarget([normalized], dateSwapTarget)
+					) {
+						return;
+					}
 					requestRetryCount = 0;
-					frameBuffer.push(data);
+					frameBuffer.push(normalized);
 
 					if (!flushTimer) {
 						flushTimer = setTimeout(() => {
@@ -698,9 +993,8 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 
 	fetchTimeRange: async (startTime: Date, endTime: Date) => {
 		const sendOrRetry = (attempt: number) => {
-			const { websocket, sentRequests } = get();
-			// Use ISO range as key so narrow-window and full-day fetches get distinct keys
-			const requestKey = `${startTime.toISOString()}_${endTime.toISOString()}`;
+			const { websocket, sentRequests, navigationGeneration } = get();
+			const requestKey = buildFetchRequestKey(navigationGeneration, startTime, endTime);
 
 			if (sentRequests.has(requestKey)) {
 				return;
@@ -713,6 +1007,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 						end_time: endTime.toISOString(),
 						order: "descending",
 						limit: TIMELINE_STREAM_FRAME_LIMIT,
+						generation: navigationGeneration,
 					}),
 				);
 
@@ -732,18 +1027,29 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					requestTimeoutTimer = null;
 					const { frames: currentFrames, pendingDateSwap: stillSwapping } = get();
 
+					if (
+						stillSwapping &&
+						!isActiveDateSwapRequest(requestKey, dateSwapTarget)
+					) {
+						return;
+					}
+
 					// Retry forever with backoff if no frames arrived
 					if (currentFrames.length === 0 || stillSwapping) {
 						requestRetryCount++;
 
 						if (requestRetryCount > MAX_REQUEST_RETRIES) {
-							set({
-								isLoading: false,
-								pendingDateSwap: false,
-								message: currentFrames.length === 0
-									? "Timeline is still warming up. Try again in a moment."
-									: null,
-							});
+							if (stillSwapping) {
+								get().abortPendingDateSwap("empty");
+							} else {
+								set({
+									isLoading: false,
+									pendingDateSwap: false,
+									message: currentFrames.length === 0
+										? "Timeline is still warming up. Try again in a moment."
+										: null,
+								});
+							}
 							return;
 						}
 
@@ -771,97 +1077,102 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 				setTimeout(() => sendOrRetry(attempt + 1), delay);
 			} else {
 				console.error("[fetchTimeRange] WebSocket not open after 5 retries, giving up");
-				set({
-					isLoading: false,
-					message: "Connection lost — please try again",
-				});
+				if (get().pendingDateSwap) {
+					get().abortPendingDateSwap("failed");
+				} else {
+					set({
+						isLoading: false,
+						message: "Connection lost — please try again",
+					});
+				}
 			}
 		};
 
 		sendOrRetry(0);
 	},
 
-	fetchNextDayData: async (date: Date) => {
-		const hasFrames = await hasFramesForDate(date);
+	fetchNextDayData: async (date: Date, direction: "forward" | "backward" = "backward") => {
+		let targetDay = startOfDay(new Date(date));
 
+		const hasFrames = await hasFramesForDate(targetDay);
 		if (!hasFrames) {
-			date = subDays(date, 1);
-		}
-
-		const nextDay = new Date(date);
-		nextDay.setDate(nextDay.getDate());
-		nextDay.setHours(0, 0, 0, 0);
-
-		const endTime = new Date(nextDay);
-		endTime.setHours(23, 59, 59, 999);
-
-		const { websocket, sentRequests } = get();
-		const requestKey = `${nextDay.toISOString()}_${endTime.toISOString()}`;
-
-		if (sentRequests.has(requestKey)) {
-			return;
-		}
-
-		if (websocket && websocket.readyState === WebSocket.OPEN) {
-			websocket.send(
-				JSON.stringify({
-					start_time: nextDay.toISOString(),
-					end_time: endTime.toISOString(),
-					order: "descending",
-					limit: TIMELINE_STREAM_FRAME_LIMIT,
-				}),
+			const nearest = await findNearestDateWithFrames(
+				targetDay,
+				direction,
+				MAX_DATE_SEARCH_DAYS,
 			);
-			set((state) => ({
-				sentRequests: new Set(state.sentRequests).add(requestKey),
-			}));
+			if (!nearest || isSameDay(nearest, targetDay)) {
+				return;
+			}
+			targetDay = startOfDay(nearest);
 		}
+
+		const endTime = endOfDay(targetDay);
+		const requestKey = buildFetchRequestKey(
+			get().navigationGeneration,
+			targetDay,
+			endTime,
+		);
+
+		const sendPrefetch = (attempt: number) => {
+			const { websocket, sentRequests } = get();
+			if (sentRequests.has(requestKey)) {
+				return;
+			}
+			if (websocket && websocket.readyState === WebSocket.OPEN) {
+				websocket.send(
+					JSON.stringify({
+						start_time: targetDay.toISOString(),
+						end_time: endTime.toISOString(),
+						order: "descending",
+						limit: TIMELINE_STREAM_FRAME_LIMIT,
+						generation: get().navigationGeneration,
+					}),
+				);
+				set((state) => ({
+					sentRequests: new Set(state.sentRequests).add(requestKey),
+				}));
+			} else if (attempt < 5) {
+				const delay = 500 * (attempt + 1);
+				setTimeout(() => sendPrefetch(attempt + 1), delay);
+			}
+		};
+
+		sendPrefetch(0);
 	},
 
 	onWindowFocus: () => {
-		const { websocket, fetchTimeRange, connectWebSocket } = get();
+		if (get().pendingDateSwap) {
+			return;
+		}
 
-		// Always reset to today when the window is focused.
-		// The window is hidden/shown (not destroyed), so stale dates persist.
+		const { websocket, fetchTimeRange, connectWebSocket, currentDate } = get();
+
 		const today = new Date();
-		const todayStr = today.toDateString();
-
-		// Also clear the old date's sentRequests in case it was different
-		const { currentDate: oldDate } = get();
-		const oldDateStr = oldDate.toDateString();
+		const viewingToday = formatLocalDayString(currentDate) === formatLocalDayString(today);
+		const refreshDate = viewingToday ? today : currentDate;
+		const refreshDay = formatLocalDayString(refreshDate);
 
 		set((state) => {
 			const newSentRequests = new Set<string>();
 			for (const key of state.sentRequests) {
-				const startIso = key.split('_')[0];
-				try {
-					const keyDateStr = new Date(startIso).toDateString();
-					if (keyDateStr === todayStr || keyDateStr === oldDateStr) continue;
-				} catch { /* keep non-matching keys */ }
+				if (requestKeyOverlapsDay(key, refreshDay)) continue;
 				newSentRequests.add(key);
 			}
 			return {
 				sentRequests: newSentRequests,
-				currentDate: today,
-				// Signal that position should reset to latest (index 0)
-				// by clearing pendingNavigation and setting a flag
-				pendingNavigation: null,
+				...(viewingToday ? { currentDate: today } : {}),
 			};
 		});
 
-		// If the socket is open AND actually alive, just fetch today's data.
-		// If it looks open but has gone silent past the stale threshold it's a
-		// zombie (the machine slept and the close event never fired) — a fetch
-		// would vanish into a dead socket, so reconnect instead for instant
-		// recovery on return.
 		const isStale = Date.now() - lastMessageAt > LIVENESS_STALE_THRESHOLD_MS;
 		if (websocket && websocket.readyState === WebSocket.OPEN && !isStale) {
-			const startTime = new Date(today);
+			const startTime = new Date(refreshDate);
 			startTime.setHours(0, 0, 0, 0);
-			const endTime = new Date(today);
+			const endTime = new Date(refreshDate);
 			endTime.setHours(23, 59, 59, 999);
 			fetchTimeRange(startTime, endTime);
 		} else {
-			// WebSocket is closed or a zombie — reconnect (which fetches on open).
 			resetBackoffCounters();
 			connectWebSocket();
 		}

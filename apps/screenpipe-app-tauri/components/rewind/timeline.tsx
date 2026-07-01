@@ -24,6 +24,8 @@ import { useMeetings } from "@/lib/hooks/use-meetings";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
 import { shiftIndexForPrependedFrames } from "@/lib/hooks/timeline-live-edge";
 import { findNearestDateWithFrames } from "@/lib/actions/has-frames-date";
+import { MAX_DATE_SEARCH_DAYS, navigationDirection, shouldBootstrapFetchDay, shouldBootstrapProbeNearestDay, getFullDayBackfillRangeIfNeeded } from "@/lib/timeline/date-navigation-utils";
+import { toast } from "@/components/ui/use-toast";
 import { CurrentFrameTimeline } from "@/components/rewind/current-frame-timeline";
 import { useSearchHighlight } from "@/lib/hooks/use-search-highlight";
 import { useKeywordSearchStore } from "@/lib/hooks/use-keyword-search-store";
@@ -48,7 +50,7 @@ export interface StreamTimeSeriesResponse {
 
 export interface DeviceFrameResponse {
 	device_id: string;
-	frame_id: string;
+	frame_id: string | number;
 	frame: string; // base64 encoded image
 	offset_index: number;
 	fps: number;
@@ -248,6 +250,16 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		setCurrentFrame,
 	});
 
+	const visibleDayAnchor = useMemo(
+		() =>
+			startOfDay(
+				currentFrame
+					? new Date(currentFrame.timestamp)
+					: currentDate,
+			),
+		[currentFrame, currentDate],
+	);
+
 	const {
 		navigateDirectToDate,
 		handleDateChange,
@@ -269,10 +281,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		clearFramesForNavigation,
 		setSearchNavFrame,
 		fetchTimeRange,
-		hasDateBeenFetched,
-		fetchNextDayData,
 		startAndEndDates,
-		pendingNavigation,
 		setPendingNavigation,
 		clearSentRequestForDate,
 		isNavigatingRef,
@@ -283,6 +292,10 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		resetFilters,
 		pausePlayback,
 		dateChangesRef,
+		visibleDayAnchor,
+		onCrossDateNav: () => {
+			lastSearchNavRef.current = Date.now();
+		},
 	});
 
 	const { zoomLevel, targetZoom, setTargetZoom, onContainerWheel } = useScrollZoom({
@@ -390,14 +403,16 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 				debounceTimer = setTimeout(() => {
 					debounceTimer = null;
 
-					// Don't reset if a search/calendar navigation is in progress —
-					// onWindowFocus resets currentDate to today, which cancels the
-					// cross-date navigation and discards the pending fetch.
-					// Also skip if a search navigation completed recently (within 2s) —
-					// pendingNavigationRef and seekingTimestamp get cleared on completion
-					// but the focus debounce (500ms) may still be pending.
+					// Don't reset if navigation is in progress — focus refresh must not
+					// cancel cross-date fetches or discard pending jumps.
 					const recentSearchNav = Date.now() - lastSearchNavRef.current < 2000;
 					if (isNavigatingRef.current || pendingNavigationRef.current || seekingTimestamp || searchNavFrame || recentSearchNav) {
+						return;
+					}
+
+					const viewingToday = isSameDay(visibleDayAnchor, new Date());
+					if (!viewingToday) {
+						onWindowFocus();
 						return;
 					}
 
@@ -408,9 +423,9 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 					resetFilters();
 
 					// Reset position to latest (index 0 = newest frame)
-					// Window is hidden/shown not destroyed, so old position persists
+					const liveFrames = useTimelineStore.getState().frames;
 					setCurrentIndex(0);
-					setCurrentFrame(frames.length > 0 ? frames[0] : null);
+					setCurrentFrame(liveFrames.length > 0 ? liveFrames[0] : null);
 					isNavigatingRef.current = false;
 					setIsNavigating(false);
 					pendingNavigationRef.current = null;
@@ -428,7 +443,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			if (debounceTimer) clearTimeout(debounceTimer);
 			unlisten.then((fn) => fn());
 		};
-	}, [onWindowFocus, frames, setCurrentFrame, pausePlayback, seekingTimestamp, searchNavFrame, resetFilters]);
+	}, [onWindowFocus, setCurrentFrame, pausePlayback, seekingTimestamp, searchNavFrame, resetFilters, visibleDayAnchor, setIsNavigating]);
 
 	// Pause audio when page becomes hidden (covers embedded mode + browser tab switch)
 	useEffect(() => {
@@ -508,6 +523,8 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		const targetDate = new Date(targetTimestamp);
 		if (isNaN(targetDate.getTime())) return;
 
+		lastSearchNavRef.current = Date.now();
+
 		// Pause playback so the jump settles on a still moment. Preserves the
 		// prior cross-day behavior (handleDateChange paused; navigateDirectToDate
 		// does not). resetFilters still runs via the pending-navigation effect.
@@ -525,6 +542,13 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			);
 			if (hasTargetDayFrames) {
 				jumpToTime(targetDate);
+				const backfill = getFullDayBackfillRangeIfNeeded({
+					targetDate,
+					seekingTimestamp: targetTimestamp,
+				});
+				if (backfill) {
+					fetchTimeRange(backfill.start, backfill.end);
+				}
 				pendingNavigationRef.current = null;
 				setSeekingTimestamp(null);
 				return;
@@ -538,7 +562,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		// nearest *day* (local midnight), landing the jump at the start of the
 		// day instead of the captured moment.
 		await navigateDirectToDate(targetDate);
-	}, [currentDate, frames, jumpToTime, navigateDirectToDate, pausePlayback]); // eslint-disable-line react-hooks/exhaustive-deps
+	}, [currentDate, frames, jumpToTime, navigateDirectToDate, pausePlayback, fetchTimeRange]); // eslint-disable-line react-hooks/exhaustive-deps
 
 	// Listen for navigate-to-timestamp events from search window / deep links
 	useEffect(() => {
@@ -624,10 +648,26 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 	useEffect(() => {
 		if (!pendingNavigation) return;
 
-		const consume = async () => {
+		let cancelled = false;
+		const MAX_CONSUME_ATTEMPTS = 40; // ~20s waiting for in-app nav to finish
+
+		const consume = async (attempt = 0) => {
+			if (cancelled) return;
+			if (isNavigatingRef.current || pendingNavigationRef.current) {
+				if (attempt < MAX_CONSUME_ATTEMPTS) {
+					setTimeout(() => consume(attempt + 1), 500);
+					return;
+				}
+				toast({
+					title: "Link navigation delayed",
+					description:
+						"Timeline was busy. Try opening the link again or pick the date from the calendar.",
+					variant: "destructive",
+				});
+				setPendingNavigation(null);
+				return;
+			}
 			if (pendingNavigation.frameId) {
-				// Frame navigation — emit so listener fetches metadata and navigates
-				// Longer delay for frame: API + websocket may still be initializing
 				await emit("navigate-to-frame", pendingNavigation.frameId);
 			} else if (pendingNavigation.timestamp) {
 				setPendingNavigation(null);
@@ -636,8 +676,11 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		};
 
 		const delay = pendingNavigation.frameId ? 1500 : 500;
-		const timer = setTimeout(consume, delay);
-		return () => clearTimeout(timer);
+		const timer = setTimeout(() => consume(0), delay);
+		return () => {
+			cancelled = true;
+			clearTimeout(timer);
+		};
 	}, [pendingNavigation, navigateToTimestamp, setPendingNavigation]);
 
 	// Progressive loading: show UI immediately once we have any frames.
@@ -883,7 +926,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		return () => clearInterval(interval);
 	}, []);
 
-	const MAX_DATE_RETRIES = 7; // Don't walk back more than 7 days
+	const MAX_DATE_RETRIES = MAX_DATE_SEARCH_DAYS;
 
 	useEffect(() => {
 		// Wait for websocket to be ready before fetching
@@ -894,30 +937,61 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		let cancelled = false;
 
 		const findDateWithFrames = async () => {
-			let dateToCheck = new Date(currentDate);
+			let dateToCheck = startOfDay(new Date(currentDate));
 			const isToday = isSameDay(dateToCheck, new Date());
+			const storeFrames = useTimelineStore.getState().frames;
 
-			// For today, always fetch — live polling will push new frames.
-			// For other dates, find nearest date with frames in a single query.
-			// Skip when navigating — handleDateChange already resolved the date.
-			if (!isToday && !isNavigatingRef.current) {
+			if (
+				shouldBootstrapProbeNearestDay({
+					isToday,
+					isNavigating: isNavigatingRef.current,
+					hasPendingNavigation: !!pendingNavigationRef.current,
+					frames: storeFrames,
+					dateToCheck,
+				})
+			) {
 				if (cancelled) return;
-				const nearest = await findNearestDateWithFrames(dateToCheck, "backward", MAX_DATE_RETRIES);
+				const direction = navigationDirection(visibleDayAnchor, dateToCheck);
+				const nearest = await findNearestDateWithFrames(
+					dateToCheck,
+					direction,
+					MAX_DATE_RETRIES,
+				);
 				if (cancelled) return;
 
 				if (!nearest) {
-					console.warn("no frames found within", MAX_DATE_RETRIES, "days back, stopping");
-					return;
-				}
-
-				// If nearest date differs from current, update and let effect re-run
-				if (!isSameDay(nearest, dateToCheck)) {
-					setCurrentDate(nearest);
+					console.warn(
+						"no frames found within",
+						MAX_DATE_RETRIES,
+						"days",
+						direction,
+						"from",
+						dateToCheck.toISOString(),
+						"— fetching requested day anyway",
+					);
+				} else if (!isSameDay(nearest, dateToCheck)) {
+					toast({
+						title: "Jumped to nearest day with data",
+						description: `No recordings on ${dateToCheck.toLocaleDateString()}.`,
+					});
+					setCurrentDate(startOfDay(nearest));
 					return;
 				}
 			}
 
 			if (cancelled) return;
+
+			if (
+				!shouldBootstrapFetchDay({
+					dateToCheck,
+					isToday,
+					isNavigating: isNavigatingRef.current,
+					hasPendingNavigation: !!pendingNavigationRef.current,
+					frames: useTimelineStore.getState().frames,
+				})
+			) {
+				return;
+			}
 
 			// Always fetch full day. For search navigation, the narrow ±5min
 			// fetch was already fired synchronously in navigateDirectToDate().
@@ -933,7 +1007,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			cancelled = true;
 		};
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [currentDate, websocket]); // Re-run when websocket connects or date changes
+	}, [currentDate, websocket, visibleDayAnchor]); // Re-run when websocket connects or date changes
 
 	// Sync currentDate to frame's date - but NOT during intentional navigation
 	// This effect helps when scrolling across day boundaries, but must not fight
@@ -942,18 +1016,26 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 	// to break the circular dependency: this effect sets currentDate, which would
 	// re-trigger this effect if currentDate were in the dep array.
 	useEffect(() => {
-		// Skip if we're in the middle of intentional navigation
-		if (isNavigatingRef.current) {
+		if (
+			isNavigatingRef.current ||
+			pendingNavigationRef.current ||
+			seekingTimestamp ||
+			isNavigating
+		) {
+			return;
+		}
+		const { pendingDateSwap } = useTimelineStore.getState();
+		if (pendingDateSwap) {
 			return;
 		}
 		if (currentFrame) {
-			const frameDate = new Date(currentFrame.timestamp);
-			const storeDate = useTimelineStore.getState().currentDate;
+			const frameDate = startOfDay(new Date(currentFrame.timestamp));
+			const storeDate = startOfDay(useTimelineStore.getState().currentDate);
 			if (!isSameDay(frameDate, storeDate)) {
 				setCurrentDate(frameDate);
 			}
 		}
-	}, [currentFrame]); // eslint-disable-line react-hooks/exhaustive-deps
+	}, [currentFrame, seekingTimestamp, isNavigating]); // eslint-disable-line react-hooks/exhaustive-deps
 
 	const handleRefresh = useCallback(() => {
 		// Full page reload - simpler and more reliable than WebSocket reconnection
@@ -1050,6 +1132,14 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 				);
 				if (hasTargetDayFrames) {
 					jumpToTime(targetDate, frameId);
+					const backfill = getFullDayBackfillRangeIfNeeded({
+						targetDate,
+						seekingTimestamp: timestamp,
+						pendingFrameId: frameId,
+					});
+					if (backfill) {
+						fetchTimeRange(backfill.start, backfill.end);
+					}
 					pendingNavigationRef.current = null;
 					setSeekingTimestamp(null);
 					return;
@@ -1058,7 +1148,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			navigateDirectToDate(targetDate, frameId);
 		});
 		return () => { unlisten.then(fn => fn()); };
-	}, [navigateDirectToDate, currentDate, frames, jumpToTime, setHighlight]);
+	}, [navigateDirectToDate, currentDate, frames, jumpToTime, setHighlight, fetchTimeRange]);
 
 	// The same Timeline component is used in both overlay and window mode.
 	// The window sizing/decoration is handled by Rust (window_api.rs).
@@ -1108,7 +1198,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			>
 				{/* Main Image - Full Screen - Should fill entire viewport */}
 				<div className={`absolute inset-0 z-10 ${embedded ? "bg-background" : "bg-black"}`} onWheel={onContainerWheel}>
-					{currentFrame ? (
+					{currentFrame && frames.length > 0 ? (
 						<CurrentFrameTimeline
 							currentFrame={currentFrame}
 							isPlaying={isPlaying}
@@ -1195,7 +1285,16 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 	
 					{!currentFrame && !showBlockingLoader && !error && frames.length === 0 && !isLoading ? (
 						<div className="absolute inset-0 flex items-center justify-center bg-gradient-to-b from-background via-background to-muted/20">
-							{health?.frame_status === "disabled" ? (
+							{message ? (
+								<div className="text-center p-8 max-w-md">
+									<h3 className="text-xl font-semibold text-foreground mb-3 font-mono uppercase tracking-wide">
+										{message}
+									</h3>
+									<p className="text-sm text-muted-foreground">
+										Try another day or check that screenpipe is recording.
+									</p>
+								</div>
+							) : health?.frame_status === "disabled" ? (
 								<div className="text-center p-8 max-w-md">
 									<div className="mx-auto mb-8 w-24 h-24 flex items-center justify-center">
 										<div className="w-16 h-16 rounded-full bg-muted/50 border border-border flex items-center justify-center">
@@ -1519,6 +1618,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 							}}
 							fetchNextDayData={fetchNextDayData}
 							currentDate={currentDate}
+							scrollAnchorDate={visibleDayAnchor}
 							startAndEndDates={startAndEndDates}
 							isSearchModalOpen={showSearchModal}
 							zoomLevel={zoomLevel}
@@ -1606,9 +1706,11 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 								onClose={() => setShowSearchModal(false)}
 								onNavigateToTimestamp={(timestamp, frameId) => {
 									setShowSearchModal(false);
+									lastSearchNavRef.current = Date.now();
 									const targetDate = new Date(timestamp);
 									setSeekingTimestamp(timestamp);
 									if (!isSameDay(targetDate, currentDate)) {
+										setSearchNavFrame(true);
 										navigateDirectToDate(targetDate, frameId);
 									} else {
 										pendingNavigationRef.current = targetDate;
@@ -1618,8 +1720,18 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 										if (hasTargetDayFrames) {
 											setSearchNavFrame(true);
 											jumpToTime(targetDate, frameId);
+											const backfill = getFullDayBackfillRangeIfNeeded({
+												targetDate,
+												seekingTimestamp: timestamp,
+												pendingFrameId: frameId,
+											});
+											if (backfill) {
+												fetchTimeRange(backfill.start, backfill.end);
+											}
 											pendingNavigationRef.current = null;
 											setSeekingTimestamp(null);
+										} else {
+											navigateDirectToDate(targetDate, frameId);
 										}
 									}
 								}}

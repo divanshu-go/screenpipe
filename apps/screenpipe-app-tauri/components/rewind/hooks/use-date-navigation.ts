@@ -4,17 +4,29 @@
 
 import { useEffect, useState, useRef, useCallback } from "react";
 import { isSameDay, isAfter, startOfDay, endOfDay } from "date-fns";
-import { findNearestDateWithFrames } from "@/lib/actions/has-frames-date";
+import {
+	findFirstFrameIndexForDay,
+	needsFullDayBackfillAfterPendingNav,
+	canResolvePendingNavigation,
+	getFullDayBackfillRangeIfNeeded,
+	NAV_SLOW_LOADING_MS,
+	SEARCH_NAV_TIMEOUT_MS,
+	type DateChangeOptions,
+} from "@/lib/timeline/date-navigation-utils";
+import {
+	navTimeoutForTarget,
+	narrowSearchFetchRange,
+	fullDayFetchRange,
+	resolveNavigationTargetDay,
+	tryFastPathNavigation,
+	intentFromOptions,
+} from "@/lib/timeline/navigate-to-day";
 import { useSearchHighlight } from "@/lib/hooks/use-search-highlight";
 import { useKeywordSearchStore } from "@/lib/hooks/use-keyword-search-store";
+import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
+import { toast } from "@/components/ui/use-toast";
 import posthog from "posthog-js";
 import type { StreamTimeSeriesResponse } from "@/components/rewind/timeline";
-
-// How far the arrow keys walk past empty days. The underlying SQL uses
-// the timestamp index (O(log n)) so a wider window costs nothing. 7 was
-// too tight — users with >7 day recording gaps would dead-end on the
-// arrow and have to use the calendar instead.
-const MAX_DATE_RETRIES = 365;
 
 export function useDateNavigation(opts: {
 	frames: StreamTimeSeriesResponse[];
@@ -23,14 +35,11 @@ export function useDateNavigation(opts: {
 	currentIndex: number;
 	setCurrentIndex: (i: number) => void;
 	setCurrentFrame: (f: StreamTimeSeriesResponse | null) => void;
-	clearFramesForNavigation: () => void;
+	clearFramesForNavigation: (targetDate?: Date, intent?: "nearest" | "exact") => void;
 	setSearchNavFrame: (v: boolean) => void;
 	fetchTimeRange: (start: Date, end: Date) => void;
-	hasDateBeenFetched: any;
-	fetchNextDayData: any;
 	startAndEndDates: { start: Date; end: Date };
-	pendingNavigation: any;
-	setPendingNavigation: (v: any) => void;
+	setPendingNavigation: (v: { timestamp: string; frameId?: string } | null) => void;
 	clearSentRequestForDate: (d: Date) => void;
 	isNavigatingRef: React.MutableRefObject<boolean>;
 	pendingNavigationRef: React.MutableRefObject<Date | null>;
@@ -40,64 +49,196 @@ export function useDateNavigation(opts: {
 	resetFilters: () => void;
 	pausePlayback: () => void;
 	dateChangesRef: React.MutableRefObject<number>;
+	/** Local calendar day under the playhead (may differ from currentDate after scroll). */
+	visibleDayAnchor: Date;
+	/** Called after any cross-date navigation attempt (calendar, arrows, search). */
+	onCrossDateNav?: () => void;
 }) {
 	const {
 		frames,
 		currentDate,
 		setCurrentDate,
-		currentIndex,
 		setCurrentIndex,
 		setCurrentFrame,
 		clearFramesForNavigation,
 		setSearchNavFrame,
 		fetchTimeRange,
-		hasDateBeenFetched,
-		fetchNextDayData,
 		startAndEndDates,
-		pendingNavigation,
-		setPendingNavigation,
 		clearSentRequestForDate,
 		isNavigatingRef,
 		pendingNavigationRef,
 		setHighlight,
-		clearSearchHighlight,
 		snapToDevice,
 		resetFilters,
 		pausePlayback,
 		dateChangesRef,
+		visibleDayAnchor,
+		onCrossDateNav,
 	} = opts;
 
-	// Seeking state for UX feedback when navigating from search
 	const [seekingTimestamp, setSeekingTimestamp] = useState<string | null>(null);
-
-	// Frame ID to match when pending navigation resolves (exact match > timestamp)
 	const pendingFrameIdRef = useRef<number | undefined>(undefined);
-
-	// Navigation in progress — disables day arrows to prevent double-clicks
+	const navGenerationRef = useRef(0);
+	const revertDateRef = useRef<Date>(startOfDay(new Date()));
 	const [isNavigating, setIsNavigating] = useState(false);
+	const navTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const navTimeoutMsRef = useRef(navTimeoutForTarget(new Date()));
+	const slowLoadingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const lastFlushTimestamp = useTimelineStore((s) => s.lastFlushTimestamp);
+
+	const clearNavTimeout = useCallback(() => {
+		if (navTimeoutRef.current) {
+			clearTimeout(navTimeoutRef.current);
+			navTimeoutRef.current = null;
+		}
+	}, []);
+
+	const finishNavigation = useCallback(() => {
+		useTimelineStore.getState().cancelPendingDateSwap();
+		pendingNavigationRef.current = null;
+		pendingFrameIdRef.current = undefined;
+		setSeekingTimestamp(null);
+		// Don't clear zustand pendingNavigation here — external deeplinks (screenpipe://)
+		// must survive in-app calendar/search nav; consume effect clears when handled.
+		setIsNavigating(false);
+		isNavigatingRef.current = false;
+		clearNavTimeout();
+	}, [clearNavTimeout, pendingNavigationRef, isNavigatingRef]);
+
+	const restoreFramesForDay = useCallback((revertDay: Date) => {
+		const dayStart = startOfDay(revertDay);
+		const storeFrames = useTimelineStore.getState().frames;
+		const dayFrames = storeFrames.filter((f) =>
+			isSameDay(new Date(f.timestamp), dayStart),
+		);
+		if (dayFrames.length > 0) {
+			useTimelineStore.setState({
+				frames: dayFrames,
+				frameTimestamps: new Set(dayFrames.map((f) => f.timestamp)),
+			});
+			const idx = findFirstFrameIndexForDay(dayFrames, dayStart);
+			if (idx >= 0) {
+				const snapped = snapToDevice(idx);
+				setCurrentIndex(snapped);
+				setCurrentFrame(dayFrames[snapped]);
+				return;
+			}
+		}
+		setCurrentFrame(null);
+		setCurrentIndex(0);
+	}, [snapToDevice, setCurrentIndex, setCurrentFrame]);
+
+	const abortNavigation = useCallback(
+		(options?: { revertDate?: Date; showToast?: boolean; message?: string; skipRevert?: boolean }) => {
+			if (!isNavigatingRef.current && !pendingNavigationRef.current) {
+				return;
+			}
+			navGenerationRef.current += 1;
+			if (options?.revertDate && !options.skipRevert) {
+				const revertDay = startOfDay(options.revertDate);
+				setCurrentDate(revertDay);
+				restoreFramesForDay(revertDay);
+			}
+			if (options?.showToast) {
+				toast({
+					title: options.message ?? "Couldn't load that day",
+					description: "Try another date or check that screenpipe is recording.",
+					variant: "destructive",
+				});
+			}
+			if (slowLoadingTimerRef.current) {
+				clearTimeout(slowLoadingTimerRef.current);
+				slowLoadingTimerRef.current = null;
+			}
+			finishNavigation();
+		},
+		[finishNavigation, setCurrentDate, restoreFramesForDay, isNavigatingRef, pendingNavigationRef],
+	);
+
+	const scheduleNavTimeout = useCallback(
+		(ms: number, targetDate?: Date) => {
+			navTimeoutMsRef.current = ms;
+			clearNavTimeout();
+			if (slowLoadingTimerRef.current) {
+				clearTimeout(slowLoadingTimerRef.current);
+				slowLoadingTimerRef.current = null;
+			}
+			if (targetDate) {
+				slowLoadingTimerRef.current = setTimeout(() => {
+					if (pendingNavigationRef.current) {
+						useTimelineStore.setState({ message: "Still loading…" });
+					}
+				}, NAV_SLOW_LOADING_MS);
+			}
+			navTimeoutRef.current = setTimeout(() => {
+				navTimeoutRef.current = null;
+				if (pendingNavigationRef.current) {
+					console.warn("[date-nav] timeout clearing navigation state");
+					abortNavigation({
+						revertDate: revertDateRef.current,
+						showToast: true,
+					});
+				}
+			}, ms);
+		},
+		[clearNavTimeout, abortNavigation, pendingNavigationRef],
+	);
+
+	useEffect(() => () => clearNavTimeout(), [clearNavTimeout]);
+
+	// Store fetch failure (empty day / retry exhaustion) → abort or finish exact-day pick.
+	useEffect(() => {
+		return useTimelineStore.subscribe((state, prev) => {
+			if (
+				state.navigationFetchFailedAt !== prev.navigationFetchFailedAt &&
+				state.navigationFetchFailedAt > 0 &&
+				pendingNavigationRef.current
+			) {
+				if (state.navigationIntent === "exact") {
+					finishNavigation();
+					toast({
+						title: "No captures this day",
+						description: "screenpipe has no recordings for the date you selected.",
+					});
+					return;
+				}
+				abortNavigation({
+					revertDate: revertDateRef.current,
+					showToast: true,
+					message: state.message ?? "Couldn't load that day",
+				});
+			}
+		});
+	}, [abortNavigation, finishNavigation, pendingNavigationRef]);
+
+	// batch_complete with count>0 — server confirmed data; extend timeout while batches flush.
+	useEffect(() => {
+		return useTimelineStore.subscribe((state, prev) => {
+			if (
+				state.navigationFetchConfirmedAt !== prev.navigationFetchConfirmedAt &&
+				state.navigationFetchConfirmedAt > 0 &&
+				pendingNavigationRef.current
+			) {
+				scheduleNavTimeout(navTimeoutMsRef.current);
+			}
+		});
+	}, [scheduleNavTimeout, pendingNavigationRef]);
 
 	const searchResults = useKeywordSearchStore((s) => s.searchResults);
 	const highlightTerms = useSearchHighlight((s) => s.highlightTerms);
-
-	// Ref to hold navigateToSearchResult so arrow-key effect doesn't depend on it directly
 	const navigateToSearchResultRef = useRef<(index: number) => void>(() => {});
 
 	const jumpToTime = useCallback((targetDate: Date, frameId?: number) => {
-		// Find the closest frame to the target date
 		if (frames.length === 0) {
 			console.warn("[jumpToTime] No frames loaded, cannot jump");
 			return;
 		}
 
-		// If we have a frame_id, try exact match first — this avoids
-		// off-by-one errors when multiple frames share similar timestamps
 		if (frameId != null) {
 			const exactIdx = frames.findIndex((f) =>
 				f.devices.some((d) => String(d.frame_id) === String(frameId))
 			);
 			if (exactIdx >= 0) {
-				// Use exact match directly — don't snapToDevice() which would
-				// override with a nearby frame from the filtered device
 				setCurrentIndex(exactIdx);
 				if (frames[exactIdx]) {
 					setCurrentFrame(frames[exactIdx]);
@@ -106,7 +247,6 @@ export function useDateNavigation(opts: {
 			}
 		}
 
-		// Fallback: find closest by timestamp
 		const targetTime = targetDate.getTime();
 		let closestIndex = -1;
 		let closestDiff = Infinity;
@@ -125,7 +265,6 @@ export function useDateNavigation(opts: {
 			return;
 		}
 
-		// Update cursor position, snap to matching device
 		const snapped = snapToDevice(closestIndex);
 		setCurrentIndex(snapped);
 		if (frames[snapped]) {
@@ -133,58 +272,63 @@ export function useDateNavigation(opts: {
 		}
 	}, [frames, snapToDevice, setCurrentIndex, setCurrentFrame]);
 
-	// Fast navigation to a date we already know has frames (e.g. from search results).
-	// Skips the hasFramesForDate() HTTP round-trip and adjacent-date probing.
 	const navigateDirectToDate = useCallback((targetDate: Date, frameId?: number) => {
+		const normalized = startOfDay(targetDate);
+		const navGeneration = ++navGenerationRef.current;
+		revertDateRef.current = startOfDay(visibleDayAnchor);
+		onCrossDateNav?.();
 		pendingFrameIdRef.current = frameId;
+
+		const fastPath = tryFastPathNavigation({ targetDate: normalized, frames, frameId });
+		if (fastPath) {
+			resetFilters();
+			const finalIndex =
+				frameId != null &&
+				frames[fastPath.index]?.devices.some((d) => String(d.frame_id) === String(frameId))
+					? fastPath.index
+					: snapToDevice(fastPath.index);
+			setCurrentIndex(finalIndex);
+			setCurrentFrame(frames[finalIndex]);
+			setCurrentDate(normalized);
+			if (frameId != null) setSearchNavFrame(true);
+			const shouldBackfill = needsFullDayBackfillAfterPendingNav({
+				seekingTimestamp: targetDate.toISOString(),
+				pendingFrameId: frameId,
+			});
+			finishNavigation();
+			if (shouldBackfill) {
+				const range = fullDayFetchRange(normalized);
+				fetchTimeRange(range.start, range.end);
+			}
+			return;
+		}
+
+		if (navGeneration !== navGenerationRef.current) return;
+
 		isNavigatingRef.current = true;
 		setIsNavigating(true);
-
 		dateChangesRef.current += 1;
 		posthog.capture("timeline_date_changed", {
 			from_date: currentDate.toISOString(),
 			to_date: targetDate.toISOString(),
 		});
 
-		clearFramesForNavigation();
-		clearSentRequestForDate(targetDate);
-
+		clearFramesForNavigation(normalized, "nearest");
+		clearSentRequestForDate(normalized);
 		pendingNavigationRef.current = targetDate;
 		setSeekingTimestamp(targetDate.toISOString());
 
-		// Fire narrow ±5min fetch IMMEDIATELY via the store's websocket
-		// (don't wait for React effect cycle — that delays by 100ms+ and
-		// can get cancelled by dependency changes)
-		const targetMs = targetDate.getTime();
-		const narrowStart = new Date(targetMs - 5 * 60 * 1000);
-		const narrowEnd = new Date(targetMs + 5 * 60 * 1000);
-		fetchTimeRange(narrowStart, narrowEnd);
-
-		// Don't clear currentFrame — keep old frame visible while new ones load
+		const narrow = narrowSearchFetchRange(targetDate);
+		fetchTimeRange(narrow.start, narrow.end);
 		setCurrentIndex(0);
-		setCurrentDate(targetDate);
+		setCurrentDate(normalized);
+		scheduleNavTimeout(SEARCH_NAV_TIMEOUT_MS, normalized);
+	}, [currentDate, visibleDayAnchor, frames, clearFramesForNavigation, clearSentRequestForDate, fetchTimeRange, setCurrentIndex, setCurrentFrame, setCurrentDate, isNavigatingRef, pendingNavigationRef, dateChangesRef, resetFilters, snapToDevice, setSearchNavFrame, setIsNavigating, setSeekingTimestamp, finishNavigation, scheduleNavTimeout, onCrossDateNav]);
 
-		// Past-day queries can take 60s+ on large DBs (legacy data with
-		// correlated subqueries). The [currentDate, websocket] effect already
-		// fires a full-day fetch, so we just need to wait long enough.
-		// Give up after 90s — if the query hasn't finished by then, it won't.
-		setTimeout(() => {
-			if (pendingNavigationRef.current && isSameDay(pendingNavigationRef.current, targetDate)) {
-				console.warn("[navigateDirectToDate] Timeout after 90s: clearing navigation state");
-				pendingNavigationRef.current = null;
-				setSeekingTimestamp(null);
-				setIsNavigating(false);
-				isNavigatingRef.current = false;
-			}
-		}, 90000);
-	}, [currentDate, clearFramesForNavigation, clearSentRequestForDate, fetchTimeRange, setCurrentIndex, setCurrentDate, isNavigatingRef, pendingNavigationRef, dateChangesRef]);
-
-	// Navigate to a specific search result by index (arrow keys in search review mode)
 	const navigateToSearchResult = useCallback((index: number) => {
 		const result = searchResults[index];
 		if (!result) return;
 
-		// Update highlight to new frame
 		setHighlight(highlightTerms, result.frame_id);
 
 		const targetDate = new Date(result.timestamp);
@@ -201,223 +345,205 @@ export function useDateNavigation(opts: {
 			if (hasTargetDayFrames) {
 				setSearchNavFrame(true);
 				jumpToTime(targetDate, result.frame_id);
+				const backfill = getFullDayBackfillRangeIfNeeded({
+					targetDate,
+					seekingTimestamp: result.timestamp,
+					pendingFrameId: result.frame_id,
+				});
+				if (backfill) {
+					fetchTimeRange(backfill.start, backfill.end);
+				}
 				pendingNavigationRef.current = null;
 				pendingFrameIdRef.current = undefined;
 				setSeekingTimestamp(null);
+			} else {
+				navigateDirectToDate(targetDate, result.frame_id);
 			}
 		}
-	}, [searchResults, highlightTerms, setHighlight, currentDate, frames, setSeekingTimestamp, navigateDirectToDate, pendingNavigationRef, setSearchNavFrame, jumpToTime]); // eslint-disable-line react-hooks/exhaustive-deps
+	}, [searchResults, highlightTerms, setHighlight, currentDate, frames, setSeekingTimestamp, navigateDirectToDate, pendingNavigationRef, setSearchNavFrame, jumpToTime, fetchTimeRange]);
 	navigateToSearchResultRef.current = navigateToSearchResult;
 
-	const handleDateChange = useCallback(async (newDate: Date) => {
-		// If a previous navigation is stuck (e.g. frames never arrived),
-		// force-clear so the user isn't locked out of date picking.
+	const handleDateChange = useCallback(async (newDate: Date, options?: DateChangeOptions) => {
 		if (isNavigatingRef.current) {
 			console.warn("[handleDateChange] Clearing stale navigation lock");
-			isNavigatingRef.current = false;
-			pendingNavigationRef.current = null;
+			finishNavigation();
 		}
 
-		// Pause playback and reset filters on date change
+		const requestedDate = startOfDay(newDate);
+		const preferExactDay = options?.preferExactDay ?? false;
+		const navGeneration = ++navGenerationRef.current;
+		revertDateRef.current = startOfDay(visibleDayAnchor);
+
 		pausePlayback();
 		resetFilters();
 
-		// Set navigation flag to prevent frame-date sync from fighting
 		isNavigatingRef.current = true;
 		setIsNavigating(true);
+		setSeekingTimestamp(requestedDate.toISOString());
 
-		// Show loading feedback IMMEDIATELY (before any HTTP calls)
-		setSeekingTimestamp(newDate.toISOString());
+		const jumpToFirstFrameOfDay = (targetDate: Date): boolean => {
+			const targetIndex = findFirstFrameIndexForDay(frames, targetDate);
+			if (targetIndex === -1) return false;
+			resetFilters();
+			const snapped = snapToDevice(targetIndex);
+			setCurrentIndex(snapped);
+			setCurrentFrame(frames[snapped]);
+			finishNavigation();
+			return true;
+		};
 
 		try {
-			// For today, skip any HTTP checks — hot cache guarantees frames
-			const isToday = isSameDay(newDate, new Date());
+			const isToday = isSameDay(requestedDate, new Date());
+			const resolved = await resolveNavigationTargetDay({
+				requestedDate,
+				preferExactDay,
+				visibleDayAnchor,
+				isGenerationCurrent: () => navGeneration === navGenerationRef.current,
+			});
 
-			// Determine the actual target date (may differ if newDate has no frames)
-			let targetDate = newDate;
-
-			if (!isToday) {
-				// Single query to find nearest date with frames (replaces recursive loop)
-				const direction = isAfter(currentDate, newDate) ? "backward" : "forward";
-				const nearest = await findNearestDateWithFrames(newDate, direction, MAX_DATE_RETRIES);
-
-				if (!nearest) {
-					isNavigatingRef.current = false;
-					setIsNavigating(false);
-					setSeekingTimestamp(null);
-					return;
-				}
-
-				targetDate = nearest;
+			if (!resolved || navGeneration !== navGenerationRef.current) {
+				finishNavigation();
+				return;
 			}
 
-			// Already on this day - jump to first frame of the day
-			if (isSameDay(targetDate, currentDate)) {
-				const targetDayStart = startOfDay(targetDate);
-				const targetDayEnd = endOfDay(targetDate);
-				const targetIndex = frames.findIndex((frame) => {
-					const frameDate = new Date(frame.timestamp);
-					return frameDate >= targetDayStart && frameDate <= targetDayEnd;
+			const targetDate = resolved;
+			const redirected = !isSameDay(targetDate, requestedDate);
+			if (redirected && !preferExactDay) {
+				toast({
+					title: "Jumped to nearest day with data",
+					description: `No recordings on ${requestedDate.toLocaleDateString()}.`,
 				});
-				if (targetIndex !== -1) {
-					const snapped = snapToDevice(targetIndex);
-					setCurrentIndex(snapped);
-					setCurrentFrame(frames[snapped]);
+			}
+
+			if (jumpToFirstFrameOfDay(targetDate)) {
+				setCurrentDate(targetDate);
+				if (!isSameDay(targetDate, currentDate)) {
+					dateChangesRef.current += 1;
+					posthog.capture("timeline_date_changed", {
+						from_date: currentDate.toISOString(),
+						to_date: targetDate.toISOString(),
+					});
 				}
-				isNavigatingRef.current = false;
-				setIsNavigating(false);
-				setSeekingTimestamp(null);
 				return;
 			}
 
-			// Don't go before start date
-			if (isAfter(startAndEndDates.start, targetDate)) {
-				isNavigatingRef.current = false;
-				setIsNavigating(false);
-				setSeekingTimestamp(null);
+			if (isAfter(startOfDay(startAndEndDates.start), targetDate)) {
+				abortNavigation({
+					showToast: true,
+					message: "Before your first recording",
+				});
 				return;
 			}
 
-			// Track date change
 			dateChangesRef.current += 1;
 			posthog.capture("timeline_date_changed", {
 				from_date: currentDate.toISOString(),
 				to_date: targetDate.toISOString(),
 			});
 
-			// CRITICAL: Clear old frames before navigating to prevent confusion
-			// This ensures we wait for the new date's frames to load
-			clearFramesForNavigation();
-
-			// Clear the sent request cache for this date to force a fresh fetch
+			clearFramesForNavigation(startOfDay(targetDate), intentFromOptions(preferExactDay));
 			clearSentRequestForDate(targetDate);
-
-			// Store pending navigation - will be processed when frames arrive
-			pendingNavigationRef.current = targetDate;
-
-			// Keep old frame visible while new date's frames load
-			// This triggers the effect that fetches frames for the new date
+			pendingNavigationRef.current = startOfDay(targetDate);
 			setCurrentIndex(0);
-			setCurrentDate(targetDate);
+			setCurrentDate(startOfDay(targetDate));
 
-			// DON'T try to find frames here - they won't be loaded yet!
-			// The pending navigation effect handles jumping to the
-			// correct frame once the new date's frames arrive via WebSocket.
-
-			// Safety timeout: clear navigation state if frames don't arrive within 10s
-			setTimeout(() => {
-				if (pendingNavigationRef.current && isSameDay(pendingNavigationRef.current, targetDate)) {
-					console.warn("[handleDateChange] Timeout: frames didn't arrive, clearing navigation state");
-					pendingNavigationRef.current = null;
-					setSeekingTimestamp(null);
-					setIsNavigating(false);
-					isNavigatingRef.current = false;
-				}
-			}, 10000);
+			const range = fullDayFetchRange(targetDate);
+			fetchTimeRange(range.start, range.end);
+			scheduleNavTimeout(navTimeoutForTarget(targetDate), targetDate);
 
 		} catch (error) {
 			console.error("[handleDateChange] Error:", error);
-			isNavigatingRef.current = false;
-			setIsNavigating(false);
-			pendingNavigationRef.current = null;
-			setSeekingTimestamp(null);
+			abortNavigation({ revertDate: revertDateRef.current, showToast: true });
 		}
-	}, [currentDate, frames, startAndEndDates, snapToDevice, clearFramesForNavigation, clearSentRequestForDate, setCurrentIndex, setCurrentFrame, setCurrentDate, isNavigatingRef, pendingNavigationRef, pausePlayback, resetFilters, dateChangesRef]);
+	}, [currentDate, frames, startAndEndDates, snapToDevice, clearFramesForNavigation, clearSentRequestForDate, setCurrentIndex, setCurrentFrame, setCurrentDate, isNavigatingRef, pendingNavigationRef, pausePlayback, resetFilters, dateChangesRef, visibleDayAnchor, finishNavigation, clearNavTimeout, scheduleNavTimeout, abortNavigation, fetchTimeRange]);
 
-	const handleJumpToday = useCallback(async () => {
-		const today = new Date();
+	const handleJumpToday = useCallback(() => {
+		return handleDateChange(startOfDay(new Date()));
+	}, [handleDateChange]);
 
-		// Set navigation flag to prevent frame-date sync from fighting
-		isNavigatingRef.current = true;
-
-		try {
-			// Clear current state
-			setCurrentFrame(null);
-			setCurrentIndex(0);
-			setCurrentDate(today);
-		} finally {
-			// Clear navigation flag after state settles
-			setTimeout(() => {
-				isNavigatingRef.current = false;
-			}, 500);
-		}
-	}, [setCurrentFrame, setCurrentDate, isNavigatingRef]);
-
-	// Process pending navigation when frames load after date change
 	useEffect(() => {
-		if (pendingNavigationRef.current && frames.length > 0) {
-			const targetDate = pendingNavigationRef.current;
-			// Only jump if we're on the correct date AND frames for that day have loaded
-			// Check that at least one frame is from the target date
-			const hasFramesForTargetDate = frames.some(frame =>
-				isSameDay(new Date(frame.timestamp), targetDate)
+		if (!pendingNavigationRef.current || frames.length === 0) {
+			return;
+		}
+
+		const targetDay = startOfDay(pendingNavigationRef.current);
+		const hasFramesForTargetDate = frames.some((frame) =>
+			isSameDay(new Date(frame.timestamp), targetDay),
+		);
+		const { pendingDateSwap } = useTimelineStore.getState();
+
+		if (
+			!canResolvePendingNavigation({
+				hasPendingTarget: true,
+				framesLength: frames.length,
+				pendingDateSwap,
+				targetDayMatchesStoreDate: isSameDay(targetDay, startOfDay(currentDate)),
+				hasFramesForTargetDay: hasFramesForTargetDate,
+			})
+		) {
+			return;
+		}
+
+		const pendingFrameId = pendingFrameIdRef.current;
+
+		let closestIndex = -1;
+		if (pendingFrameId != null) {
+			closestIndex = frames.findIndex((f) =>
+				isSameDay(new Date(f.timestamp), targetDay) &&
+				f.devices.some((d) => String(d.frame_id) === String(pendingFrameId))
 			);
-			if (isSameDay(targetDate, currentDate) && hasFramesForTargetDate) {
-				const pendingFrameId = pendingFrameIdRef.current;
+		}
 
-				// Try exact frame_id match first (avoids off-by-one from timestamp rounding)
-				let closestIndex = -1;
-				if (pendingFrameId != null) {
-					closestIndex = frames.findIndex((f) =>
-						isSameDay(new Date(f.timestamp), targetDate) &&
-						f.devices.some((d) => String(d.frame_id) === String(pendingFrameId))
-					);
+		if (closestIndex < 0) {
+			const targetTime = seekingTimestamp
+				? new Date(seekingTimestamp).getTime()
+				: pendingNavigationRef.current!.getTime();
+			let closestDiff = Infinity;
+			closestIndex = 0;
+
+			frames.forEach((frame, index) => {
+				if (!isSameDay(new Date(frame.timestamp), targetDay)) return;
+				const frameTime = new Date(frame.timestamp).getTime();
+				const diff = Math.abs(frameTime - targetTime);
+				if (diff < closestDiff) {
+					closestDiff = diff;
+					closestIndex = index;
 				}
+			});
+		}
 
-				// Fallback: find the closest frame by timestamp
-				if (closestIndex < 0) {
-					const targetTime = targetDate.getTime();
-					let closestDiff = Infinity;
-					closestIndex = 0;
+		if (
+			closestIndex < 0 ||
+			!frames[closestIndex] ||
+			!isSameDay(new Date(frames[closestIndex].timestamp), targetDay)
+		) {
+			closestIndex = findFirstFrameIndexForDay(frames, targetDay);
+		}
+		if (closestIndex < 0) {
+			return;
+		}
 
-					frames.forEach((frame, index) => {
-						if (!isSameDay(new Date(frame.timestamp), targetDate)) return;
-						const frameTime = new Date(frame.timestamp).getTime();
-						const diff = Math.abs(frameTime - targetTime);
-						if (diff < closestDiff) {
-							closestDiff = diff;
-							closestIndex = index;
-						}
-					});
-				}
+		resetFilters();
+		const finalIndex = (pendingFrameId != null && closestIndex >= 0 &&
+			frames[closestIndex]?.devices.some((d) => String(d.frame_id) === String(pendingFrameId)))
+			? closestIndex
+			: snapToDevice(closestIndex);
+		setCurrentIndex(finalIndex);
+		setCurrentFrame(frames[finalIndex]);
+		if (pendingFrameId != null) {
+			setSearchNavFrame(true);
+		}
 
-				resetFilters();
-				// If we matched by exact frame_id, use that index directly
-				// (don't snapToDevice which overrides with a nearby frame)
-				const finalIndex = (pendingFrameId != null && closestIndex >= 0 &&
-					frames[closestIndex]?.devices.some((d) => String(d.frame_id) === String(pendingFrameId)))
-					? closestIndex
-					: snapToDevice(closestIndex);
-				setCurrentIndex(finalIndex);
-				setCurrentFrame(frames[finalIndex]);
-				// Use HTTP JPEG fallback for this first frame (skip slow video seek)
-				setSearchNavFrame(true);
-
-				// Clear pending navigation and UI state
-				pendingNavigationRef.current = null;
-				pendingFrameIdRef.current = undefined;
-				setSeekingTimestamp(null);
-				setPendingNavigation(null);
-				setIsNavigating(false);
-				isNavigatingRef.current = false;
-			}
+		const shouldBackfill = needsFullDayBackfillAfterPendingNav({
+			seekingTimestamp,
+			pendingFrameId: pendingFrameId ?? undefined,
+		});
+		finishNavigation();
+		if (shouldBackfill) {
+			fetchTimeRange(startOfDay(targetDay), endOfDay(targetDay));
 		}
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [frames, currentDate, setPendingNavigation]);
-
-	// Timeout: clear seeking overlay if navigation doesn't resolve within 10s
-	useEffect(() => {
-		if (!seekingTimestamp) return;
-		const timer = setTimeout(() => {
-			console.warn("Navigation timeout — clearing seeking state");
-			setSeekingTimestamp(null);
-			pendingNavigationRef.current = null;
-			setPendingNavigation(null);
-			setIsNavigating(false);
-			isNavigatingRef.current = false;
-		}, 10000);
-		return () => clearTimeout(timer);
-	}, [seekingTimestamp, setPendingNavigation]);
+	}, [frames, currentDate, seekingTimestamp, finishNavigation, fetchTimeRange, lastFlushTimestamp]);
 
 	return {
 		navigateDirectToDate,

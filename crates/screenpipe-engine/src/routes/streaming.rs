@@ -17,6 +17,7 @@ use screenpipe_db::{DatabaseManager, FrameData, Order};
 
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{sync::Arc, time::Duration};
 use tracing::{debug, error, info, warn};
 
@@ -27,6 +28,14 @@ use crate::{
 };
 
 use super::websocket::{try_acquire_ws_connection, WsConnectionGuard};
+
+#[derive(Clone, Debug)]
+struct StreamBatchComplete {
+    start_time: DateTime<Utc>,
+    end_time: DateTime<Utc>,
+    frame_count: usize,
+    generation: u64,
+}
 
 use tokio::sync::{broadcast, mpsc, Mutex};
 use tokio::time::Instant as TokioInstant;
@@ -42,6 +51,9 @@ pub struct StreamFramesRequest {
     order: Order,
     #[serde(default)]
     limit: Option<usize>,
+    /// Client navigation generation — superseded requests stop sending frames.
+    #[serde(default)]
+    generation: u64,
 }
 
 const MAX_STREAM_FRAME_LIMIT: usize = 10_000;
@@ -312,14 +324,20 @@ async fn handle_stream_frames_socket(
 
     // Channel for initial batch results (from cache or DB)
     let (frame_tx, frame_rx) = tokio::sync::mpsc::channel::<TimeSeriesFrame>(100);
+    let (complete_tx, mut complete_rx) =
+        tokio::sync::mpsc::channel::<StreamBatchComplete>(32);
 
     // Shared flag: should we subscribe to live cache updates?
     let live_subscribe: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
+
+    // Supersede in-flight fetches when the client sends a newer generation.
+    let active_generation = Arc::new(AtomicU64::new(0));
 
     let sent_ids_clone = sent_frame_ids.clone();
     let live_sub_clone = live_subscribe.clone();
     let cache_clone = cache.clone();
     let db_clone = db.clone();
+    let complete_tx_recv = complete_tx.clone();
 
     // Handle incoming messages for time range requests
     let receive_handle = tokio::spawn(async move {
@@ -332,6 +350,9 @@ async fn handle_stream_frames_socket(
                         let is_descending = request.order == Order::Descending;
                         let limit = stream_frame_limit(request.limit);
                         let db_fetch_limit = stream_db_fetch_limit(limit);
+                        let req_generation = request.generation;
+                        active_generation.store(req_generation, Ordering::SeqCst);
+                        let active_gen = active_generation.clone();
 
                         // Clear sent IDs for new request
                         sent_ids_clone.lock().await.clear();
@@ -391,8 +412,15 @@ async fn handle_stream_frames_socket(
                             } // lock dropped
 
                             for frame in sorted {
+                                if active_gen.load(Ordering::SeqCst) != req_generation {
+                                    break;
+                                }
                                 let _ = frame_tx.send(frame).await;
                             }
+
+                            let complete_tx_today = complete_tx_recv.clone();
+                            let today_start = start_time;
+                            let today_end = end_time;
 
                             // Only backfill from DB if the hot cache doesn't
                             // cover the requested range. The cache knows its
@@ -420,7 +448,10 @@ async fn handle_stream_frames_socket(
                                 let frame_tx_db = frame_tx.clone();
                                 let db_backfill = db_clone.clone();
                                 let sent_ids_backfill = sent_ids_clone.clone();
+                                let complete_tx_backfill = complete_tx_recv.clone();
+                                let active_gen_backfill = active_gen.clone();
                                 tokio::spawn(async move {
+                                    let mut backfill_count = 0usize;
                                     match db_backfill
                                         .find_video_chunks_limited(
                                             start_time,
@@ -442,6 +473,11 @@ async fn handle_stream_frames_socket(
                                             }
                                             downsample_in_place(&mut chunks.frames, backfill_limit);
                                             for chunk in chunks.frames {
+                                                if active_gen_backfill.load(Ordering::SeqCst)
+                                                    != req_generation
+                                                {
+                                                    break;
+                                                }
                                                 let should_send = {
                                                     let mut sent = sent_ids_backfill.lock().await;
                                                     sent.insert(chunk.frame_id)
@@ -456,25 +492,48 @@ async fn handle_stream_frames_socket(
                                                 if frame_tx_db.send(frame).await.is_err() {
                                                     break;
                                                 }
+                                                backfill_count += 1;
                                             }
                                             info!("Today DB backfill complete");
                                         }
                                         Err(e) => warn!("Today DB backfill failed: {}", e),
                                     }
+                                    let _ = complete_tx_backfill
+                                        .send(StreamBatchComplete {
+                                            start_time: today_start,
+                                            end_time: today_end,
+                                            frame_count: initial_count + backfill_count,
+                                            generation: req_generation,
+                                        })
+                                        .await;
                                 });
                             } else {
                                 info!(
                                     "skipping DB backfill — hot cache covers full range or stream limit reached"
                                 );
+                                let _ = complete_tx_today
+                                    .send(StreamBatchComplete {
+                                        start_time: today_start,
+                                        end_time: today_end,
+                                        frame_count: initial_count,
+                                        generation: req_generation,
+                                    })
+                                    .await;
                             }
                         } else {
                             // Past day — one-shot DB query (acceptable, rare)
                             let frame_tx = frame_tx.clone();
                             let db = db_clone.clone();
                             let sent_ids = sent_ids_clone.clone();
+                            let complete_tx_past = complete_tx_recv.clone();
 
+                            let active_gen_past = active_gen.clone();
                             tokio::spawn(async move {
-                                let fetch_result = tokio::time::timeout(
+                                if active_gen_past.load(Ordering::SeqCst) != req_generation {
+                                    return;
+                                }
+                                let active_gen_fetch = active_gen_past.clone();
+                                let frame_count = match tokio::time::timeout(
                                     std::time::Duration::from_secs(120),
                                     fetch_and_process_frames_with_tracking(
                                         db,
@@ -484,15 +543,34 @@ async fn handle_stream_frames_socket(
                                         is_descending,
                                         limit,
                                         sent_ids,
+                                        active_gen_fetch,
+                                        req_generation,
                                     ),
                                 )
-                                .await;
-
-                                match fetch_result {
-                                    Ok(Ok(_)) => info!("Past-day fetch complete"),
-                                    Ok(Err(e)) => error!("Past-day fetch failed: {}", e),
-                                    Err(_) => warn!("Past-day fetch timed out after 120s"),
+                                .await
+                                {
+                                    Ok(Ok((_, count))) => count,
+                                    Ok(Err(e)) => {
+                                        error!("Past-day fetch failed: {}", e);
+                                        0
+                                    }
+                                    Err(_) => {
+                                        warn!("Past-day fetch timed out after 120s");
+                                        0
+                                    }
+                                };
+                                if active_gen_past.load(Ordering::SeqCst) != req_generation {
+                                    return;
                                 }
+                                let _ = complete_tx_past
+                                    .send(StreamBatchComplete {
+                                        start_time,
+                                        end_time,
+                                        frame_count,
+                                        generation: req_generation,
+                                    })
+                                    .await;
+                                info!("Past-day fetch complete ({} frames)", frame_count);
                             });
                         }
                     }
@@ -549,6 +627,33 @@ async fn handle_stream_frames_socket(
                         None => {
                             debug!("initial frame channel closed");
                             frame_rx_channel = None;
+                        }
+                    }
+                }
+
+                // Fetch completion — tells client when a range returned zero frames
+                complete = complete_rx.recv() => {
+                    match complete {
+                        Some(c) => {
+                            if let Err(e) = send_batch(&mut sender, &mut frame_buffer).await {
+                                error!("failed to send batch before complete: {}", e);
+                                break;
+                            }
+                            next_batch_flush_at = None;
+                            let msg = serde_json::json!({
+                                "type": "batch_complete",
+                                "count": c.frame_count,
+                                "start_time": c.start_time.to_rfc3339(),
+                                "end_time": c.end_time.to_rfc3339(),
+                                "generation": c.generation,
+                            });
+                            if let Err(e) = sender.send(Message::Text(msg.to_string())).await {
+                                warn!("failed to send batch_complete: {}", e);
+                                break;
+                            }
+                        }
+                        None => {
+                            debug!("batch complete channel closed");
                         }
                     }
                 }
@@ -714,7 +819,9 @@ async fn fetch_and_process_frames_with_tracking(
     is_descending: bool,
     limit: usize,
     sent_frame_ids: Arc<Mutex<std::collections::HashSet<i64>>>,
-) -> Result<Option<DateTime<Utc>>, anyhow::Error> {
+    active_generation: Arc<AtomicU64>,
+    req_generation: u64,
+) -> Result<(Option<DateTime<Utc>>, usize), anyhow::Error> {
     let mut chunks = db
         .find_video_chunks_limited(
             start_time,
@@ -735,7 +842,11 @@ async fn fetch_and_process_frames_with_tracking(
     }
     downsample_in_place(&mut chunks.frames, limit);
 
+    let mut frame_count = 0usize;
     for chunk in chunks.frames {
+        if active_generation.load(Ordering::SeqCst) != req_generation {
+            break;
+        }
         {
             let mut sent = sent_frame_ids.lock().await;
             sent.insert(chunk.frame_id);
@@ -749,9 +860,10 @@ async fn fetch_and_process_frames_with_tracking(
             latest_timestamp = Some(ts);
         }
         frame_tx.send(frame).await?;
+        frame_count += 1;
     }
 
-    Ok(latest_timestamp)
+    Ok((latest_timestamp, frame_count))
 }
 
 fn request_order(is_descending: bool) -> Order {
