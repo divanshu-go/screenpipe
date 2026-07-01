@@ -47,11 +47,7 @@ pub struct CaptureSession {
     audio_disabled: bool,
     /// Cleared on stop so `/vision/device/*` stops pointing at a shut-down manager.
     vision_manager_handle: Option<
-        Arc<
-            arc_swap::ArcSwap<
-                Option<Arc<screenpipe_engine::vision_manager::VisionManager>>,
-            >,
-        >,
+        Arc<arc_swap::ArcSwap<Option<Arc<screenpipe_engine::vision_manager::VisionManager>>>>,
     >,
 }
 

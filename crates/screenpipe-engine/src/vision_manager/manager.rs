@@ -840,7 +840,9 @@ mod tests {
         assert!(vm.is_monitor_user_disabled(id));
         assert_eq!(vm.status().await, VisionManagerStatus::Stopped);
 
-        vm.resume_monitor(id).await.expect("resume while stopped is Ok");
+        vm.resume_monitor(id)
+            .await
+            .expect("resume while stopped is Ok");
         assert!(!vm.is_monitor_user_disabled(id));
         assert!(
             !vm.recording_tasks.contains_key(&id),

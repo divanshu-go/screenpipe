@@ -44,11 +44,8 @@ pub struct ServerCore {
     /// Runtime handle to the active VisionManager. CaptureSession registers
     /// its instance on start and clears on stop so `/vision/device/*` routes
     /// hit the manager that is actually capturing.
-    pub vision_manager_handle: Arc<
-        arc_swap::ArcSwap<
-            Option<Arc<screenpipe_engine::vision_manager::VisionManager>>,
-        >,
-    >,
+    pub vision_manager_handle:
+        Arc<arc_swap::ArcSwap<Option<Arc<screenpipe_engine::vision_manager::VisionManager>>>>,
     pub data_dir: PathBuf,
     pub data_path: PathBuf,
     pub port: u16,
