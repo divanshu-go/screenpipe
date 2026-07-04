@@ -56,7 +56,7 @@ pub fn clear_registrations() {
 }
 
 /// Read the latest latched SCK frame before building the tray menu (main thread safe).
-pub fn sync_refresh_monitors(_app: &AppHandle, monitor_ids: &[u32]) {
+pub fn sync_refresh_monitors(monitor_ids: &[u32]) {
     for &monitor_id in monitor_ids {
         if refresh_monitor_from_sck(monitor_id) {
             if let Some(seq) = screenpipe_screen::stream_invalidation::monitor_frame_seq(monitor_id)
@@ -86,7 +86,7 @@ pub fn preview_image_or_placeholder(monitor_id: u32) -> Image<'static> {
     preview_image(monitor_id).unwrap_or_else(|| PLACEHOLDER.clone())
 }
 
-pub fn preview_image(monitor_id: u32) -> Option<Image<'static>> {
+fn preview_image(monitor_id: u32) -> Option<Image<'static>> {
     let cache = CACHE.lock().ok()?;
     let entry = cache.get(&monitor_id)?;
     Some(Image::new_owned(

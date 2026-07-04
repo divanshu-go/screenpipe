@@ -21,10 +21,12 @@ use std::sync::Mutex;
 use tauri::async_runtime::JoinHandle;
 use tauri::tray::{TrayIcon, TrayIconBuilder};
 use tauri::Emitter;
+#[cfg(target_os = "macos")]
+use tauri::menu::IconMenuItemBuilder;
 use tauri::{
     menu::{
-        CheckMenuItemBuilder, IconMenuItemBuilder, MenuBuilder, MenuItem, MenuItemBuilder,
-        PredefinedMenuItem, SubmenuBuilder,
+        CheckMenuItemBuilder, MenuBuilder, MenuItem, MenuItemBuilder, PredefinedMenuItem,
+        SubmenuBuilder,
     },
     AppHandle, Manager, Wry,
 };
@@ -426,14 +428,13 @@ fn apply_pending_tray_menu(app: &AppHandle) -> Result<()> {
     Ok(())
 }
 
-/// Rebuild the tray menu after a monitor preview image arrives (macOS only).
-#[cfg(target_os = "macos")]
-pub(crate) fn queue_tray_menu_refresh_for_preview(app: &AppHandle) {
-    let data = prefetch_tray_menu_data(app);
+/// Snapshot current recording/HD/device state into a `MenuState`. Shared by
+/// the periodic refresh loop and the macOS preview-driven rebuild so change
+/// detection can't drift between the two.
+fn snapshot_menu_state(data: &TrayMenuData, effective_status: RecordingStatus) -> MenuState {
     let recording_info = get_recording_info();
-    let effective_status = get_effective_recording_status();
     let hd = get_high_fps_status();
-    let state = MenuState {
+    MenuState {
         shortcuts: {
             let mut m = HashMap::new();
             m.insert("show".to_string(), data.show_shortcut.clone());
@@ -455,7 +456,14 @@ pub(crate) fn queue_tray_menu_refresh_for_preview(app: &AppHandle) {
         hd_remaining_secs: hd.remaining_secs,
         hd_session_kind: hd.session_kind,
         hd_interval_ms: hd.interval_ms,
-    };
+    }
+}
+
+/// Rebuild the tray menu after a monitor preview image arrives (macOS only).
+#[cfg(target_os = "macos")]
+pub(crate) fn queue_tray_menu_refresh_for_preview(app: &AppHandle) {
+    let data = prefetch_tray_menu_data(app);
+    let state = snapshot_menu_state(&data, get_effective_recording_status());
     queue_pending_tray_menu(state, data);
 }
 
@@ -847,14 +855,8 @@ fn create_dynamic_menu(
         #[cfg(target_os = "macos")]
         {
             crate::tray_monitor_preview::clear_registrations();
-        }
-        let monitor_ids: Vec<u32> = monitors
-            .iter()
-            .filter_map(|d| d.monitor_id)
-            .collect();
-        #[cfg(target_os = "macos")]
-        {
-            crate::tray_monitor_preview::sync_refresh_monitors(app, &monitor_ids);
+            let monitor_ids: Vec<u32> = monitors.iter().filter_map(|d| d.monitor_id).collect();
+            crate::tray_monitor_preview::sync_refresh_monitors(&monitor_ids);
         }
         for device in monitors {
             let label = format!("  ▣ {}", device.name);
@@ -1615,32 +1617,8 @@ async fn update_menu_if_needed(
     // main-thread closure only does lightweight menu-item construction.
     let data = prefetch_tray_menu_data(app);
 
-    let recording_info = get_recording_info();
     let effective_status = get_effective_recording_status();
-    let hd = get_high_fps_status();
-    let new_state = MenuState {
-        shortcuts: {
-            let mut m = HashMap::new();
-            m.insert("show".to_string(), data.show_shortcut.clone());
-            m.insert("search".to_string(), data.search_shortcut.clone());
-            m.insert("chat".to_string(), data.chat_shortcut.clone());
-            m
-        },
-        recording_status: Some(effective_status),
-        onboarding_completed: data.onboarding_completed,
-        has_permission_issue: data.has_permission_issue,
-        devices: recording_info
-            .devices
-            .iter()
-            .map(|d| (d.name.clone(), d.active))
-            .collect(),
-        cloud_subscribed: data.cloud_subscribed,
-        subscription_plan: data.subscription_plan.clone(),
-        hd_active: hd.active,
-        hd_remaining_secs: hd.remaining_secs,
-        hd_session_kind: hd.session_kind,
-        hd_interval_ms: hd.interval_ms,
-    };
+    let new_state = snapshot_menu_state(&data, effective_status);
 
     // Compare with last state (poison-safe: run handler must not panic)
     let should_update = {

@@ -318,7 +318,7 @@ ignored = ["tauri-utils", "screenpipe-redact", "thiserror", "screenpipe-sync", "
 # of a raw pointer so stale AppKit items keep their Rust click data alive.
 # Pinned by commit (not branch) for reproducible builds; drop once
 # upstream tauri-apps/muda#361 merges and ships in a released muda.
-muda = { git = "https://github.com/divanshu-go/muda", rev = "260ebe1d053db8e7f8f7ab344a067121ae40d306" }
+muda = { git = "https://github.com/divanshu-go/muda", rev = "1a70eee415b08da121cbb8934f97c7938ea62cb9" }
 
 [profile.release]
 codegen-units = 1
