@@ -23,8 +23,8 @@ use tauri::tray::{TrayIcon, TrayIconBuilder};
 use tauri::Emitter;
 use tauri::{
     menu::{
-        CheckMenuItemBuilder, MenuBuilder, MenuItem, MenuItemBuilder, PredefinedMenuItem,
-        SubmenuBuilder,
+        CheckMenuItemBuilder, IconMenuItemBuilder, MenuBuilder, MenuItem, MenuItemBuilder,
+        PredefinedMenuItem, SubmenuBuilder,
     },
     AppHandle, Manager, Wry,
 };
@@ -426,6 +426,39 @@ fn apply_pending_tray_menu(app: &AppHandle) -> Result<()> {
     Ok(())
 }
 
+/// Rebuild the tray menu after a monitor preview image arrives (macOS only).
+#[cfg(target_os = "macos")]
+pub(crate) fn queue_tray_menu_refresh_for_preview(app: &AppHandle) {
+    let data = prefetch_tray_menu_data(app);
+    let recording_info = get_recording_info();
+    let effective_status = get_effective_recording_status();
+    let hd = get_high_fps_status();
+    let state = MenuState {
+        shortcuts: {
+            let mut m = HashMap::new();
+            m.insert("show".to_string(), data.show_shortcut.clone());
+            m.insert("search".to_string(), data.search_shortcut.clone());
+            m.insert("chat".to_string(), data.chat_shortcut.clone());
+            m
+        },
+        recording_status: Some(effective_status),
+        onboarding_completed: data.onboarding_completed,
+        has_permission_issue: data.has_permission_issue,
+        devices: recording_info
+            .devices
+            .iter()
+            .map(|d| (d.name.clone(), d.active))
+            .collect(),
+        cloud_subscribed: data.cloud_subscribed,
+        subscription_plan: data.subscription_plan.clone(),
+        hd_active: hd.active,
+        hd_remaining_secs: hd.remaining_secs,
+        hd_session_kind: hd.session_kind,
+        hd_interval_ms: hd.interval_ms,
+    };
+    queue_pending_tray_menu(state, data);
+}
+
 /// Installs the queued tray menu while no menu is open — the only flash-free,
 /// crash-free moment to call `set_menu` on macOS (see the `ACTIVE_TRAY_MENU`
 /// doc above for the two hazards).
@@ -545,6 +578,9 @@ pub fn setup_tray(app: &AppHandle, update_item: Option<&tauri::menu::MenuItem<Wr
         // open (flash-free, crash-free). Once-guarded, so recreate_tray is fine.
         #[cfg(target_os = "macos")]
         menu_refresh_observer::install(app);
+
+        #[cfg(target_os = "macos")]
+        crate::tray_monitor_preview::install(app);
 
         // Setup click handlers
         setup_tray_click_handlers(&main_tray)?;
@@ -808,6 +844,18 @@ fn create_dynamic_menu(
             .filter(|d| d.kind == DeviceKind::Monitor)
             .collect();
         monitors.sort_by(|a, b| a.name.cmp(&b.name));
+        #[cfg(target_os = "macos")]
+        {
+            crate::tray_monitor_preview::clear_registrations();
+        }
+        let monitor_ids: Vec<u32> = monitors
+            .iter()
+            .filter_map(|d| d.monitor_id)
+            .collect();
+        #[cfg(target_os = "macos")]
+        {
+            crate::tray_monitor_preview::sync_refresh_monitors(app, &monitor_ids);
+        }
         for device in monitors {
             let label = format!("  ▣ {}", device.name);
             if let Some(monitor_id) = device.monitor_id {
@@ -816,13 +864,42 @@ fn create_dynamic_menu(
                     .find(|d| d.id == monitor_id)
                     .map(|d| !d.user_disabled)
                     .unwrap_or(device.active);
-                let toggle = CheckMenuItemBuilder::with_id(
-                    format!("toggle_vision_device_{}", monitor_id),
-                    label,
-                )
-                .checked(is_active)
-                .build(app)?;
-                menu_builder = menu_builder.item(&toggle);
+
+                #[cfg(target_os = "macos")]
+                {
+                    crate::tray_monitor_preview::register_monitor_submenu(monitor_id, is_active);
+                    crate::tray_monitor_preview::register_preview_item(monitor_id);
+
+                    let preview =
+                        crate::tray_monitor_preview::preview_image_or_placeholder(monitor_id);
+                    let preview_row = IconMenuItemBuilder::with_id(
+                        format!("monitor_preview_{monitor_id}"),
+                        " ",
+                    )
+                    .enabled(false)
+                    .icon(preview)
+                    .build(app)?;
+
+                    let submenu = SubmenuBuilder::with_id(
+                        app,
+                        format!("toggle_vision_device_{monitor_id}"),
+                        label,
+                    )
+                    .item(&preview_row)
+                    .build()?;
+                    menu_builder = menu_builder.item(&submenu);
+                }
+
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let toggle = CheckMenuItemBuilder::with_id(
+                        format!("toggle_vision_device_{}", monitor_id),
+                        label,
+                    )
+                    .checked(is_active)
+                    .build(app)?;
+                    menu_builder = menu_builder.item(&toggle);
+                }
             } else {
                 let dot = if device.active { "●" } else { "○" };
                 let fallback_label = format!("  {} ▣ {}", dot, device.name);
