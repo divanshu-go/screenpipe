@@ -51,6 +51,13 @@ struct TrayMenuData {
     /// Internal plan id from /api/user (standard|pro|team|enterprise|lifetime|none).
     subscription_plan: Option<String>,
     has_permission_issue: bool,
+    /// Screen recording specifically is denied — capture is producing nothing.
+    /// Sourced from both the TCC preflight and the permission monitor's
+    /// last-known state (which carries ScreenCaptureKit ground truth from the
+    /// vision watcher, catching stale-preflight cases like the macOS 26
+    /// monthly re-approval expiring). The tray must never claim "Recording"
+    /// while this is true (#4819).
+    screen_permission_denied: bool,
     app_ui_hidden: bool,
     disable_timeline: bool,
 }
@@ -118,18 +125,28 @@ fn prefetch_tray_menu_data(app: &AppHandle) -> TrayMenuData {
 
     let app_ui_hidden = is_app_ui_hidden();
 
-    let has_permission_issue = if onboarding_completed || app_ui_hidden {
+    let (has_permission_issue, screen_permission_denied) = if onboarding_completed || app_ui_hidden
+    {
         #[cfg(target_os = "macos")]
         {
             let perms = crate::permissions::do_permissions_check(false);
-            !perms.screen_recording.permitted() || !perms.microphone.permitted()
+            // The preflight can report stale "granted" while ScreenCaptureKit
+            // is actually denied (macOS 26 monthly re-approval); the permission
+            // monitor's last-known state carries the eager capture-module
+            // reports, so OR the two signals.
+            let screen_denied = !perms.screen_recording.permitted()
+                || !screenpipe_engine::permission_monitor::snapshot().screen;
+            (
+                screen_denied || !perms.microphone.permitted(),
+                screen_denied,
+            )
         }
         #[cfg(not(target_os = "macos"))]
         {
-            false
+            (false, false)
         }
     } else {
-        false
+        (false, false)
     };
 
     TrayMenuData {
@@ -140,6 +157,7 @@ fn prefetch_tray_menu_data(app: &AppHandle) -> TrayMenuData {
         cloud_subscribed,
         subscription_plan,
         has_permission_issue,
+        screen_permission_denied,
         app_ui_hidden,
         disable_timeline,
     }
@@ -445,6 +463,7 @@ fn snapshot_menu_state(data: &TrayMenuData, effective_status: RecordingStatus) -
         recording_status: Some(effective_status),
         onboarding_completed: data.onboarding_completed,
         has_permission_issue: data.has_permission_issue,
+        screen_permission_denied: data.screen_permission_denied,
         devices: recording_info
             .devices
             .iter()
@@ -550,6 +569,10 @@ struct MenuState {
     recording_status: Option<RecordingStatus>,
     onboarding_completed: bool,
     has_permission_issue: bool,
+    /// Mirrors `TrayMenuData::screen_permission_denied` so the "⚠ Not
+    /// recording — no screen permission" status line appears/disappears
+    /// without waiting for another state change to trigger a rebuild.
+    screen_permission_denied: bool,
     /// Device names + active status for change detection
     devices: Vec<(String, bool)>,
     /// Whether user has a cloud (Business+) subscription (triggers menu rebuild on login)
@@ -814,18 +837,31 @@ fn create_dynamic_menu(
 
     // --- Recording status + devices ---
     let effective_status = get_effective_recording_status();
-    let status_text = match effective_status {
-        RecordingStatus::Starting => "○ Starting…",
-        RecordingStatus::Recording => "● Recording",
-        RecordingStatus::Paused => "◐ Paused",
-        RecordingStatus::ScheduledPause => "○ Outside work hours",
-        RecordingStatus::Stopped => "○ Stopped",
-        RecordingStatus::Error => "○ Error",
+    // Screen permission denied trumps Recording/Starting: vision captures
+    // nothing on a TCC denial, so a green "Recording" would be a lie — the
+    // exact lie behind multi-day silent gaps in #4726/#4819.
+    let screen_denied_while_on = data.screen_permission_denied
+        && matches!(
+            effective_status,
+            RecordingStatus::Recording | RecordingStatus::Starting
+        );
+    let status_text = if screen_denied_while_on {
+        "⚠ Not recording — no screen permission"
+    } else {
+        match effective_status {
+            RecordingStatus::Starting => "○ Starting…",
+            RecordingStatus::Recording => "● Recording",
+            RecordingStatus::Paused => "◐ Paused",
+            RecordingStatus::ScheduledPause => "○ Outside work hours",
+            RecordingStatus::Stopped => "○ Stopped",
+            RecordingStatus::Error => "○ Error",
+        }
     };
     menu_builder = menu_builder.item(&PredefinedMenuItem::separator(app)?);
 
-    if effective_status == RecordingStatus::Recording
-        || effective_status == RecordingStatus::Starting
+    if !screen_denied_while_on
+        && (effective_status == RecordingStatus::Recording
+            || effective_status == RecordingStatus::Starting)
     {
         menu_builder = menu_builder.item(
             &MenuItemBuilder::with_id("privacy_info", "Your data stays local")
@@ -949,8 +985,11 @@ fn create_dynamic_menu(
         }
     }
 
-    // Show "fix permissions" when recording is in error state
-    if effective_status == RecordingStatus::Error && data.has_permission_issue {
+    // Show "fix permissions" whenever a required permission is missing — not
+    // only in Error state. A TCC denial leaves the status at Recording/Starting
+    // while capturing nothing (#4819), so gating on Error hid the only escape
+    // hatch exactly when it was needed.
+    if data.has_permission_issue {
         menu_builder = menu_builder
             .item(&MenuItemBuilder::with_id("fix_permissions", "⚠ Fix permissions").build(app)?);
     }

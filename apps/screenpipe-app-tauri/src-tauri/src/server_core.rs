@@ -140,6 +140,20 @@ impl ServerCore {
         info!("Starting server core on port {}", config.port);
         crate::health::set_boot_phase("starting", Some("starting server"));
 
+        // Permission monitor: poll for TCC transitions + re-notify while screen
+        // recording stays denied (#4819). The CLI engine starts this in its own
+        // main; the desktop app never did, so a boot with the permission already
+        // denied produced no event, no recovery modal, and days of silent
+        // recording gaps (#4726). PreflightOnly: the capture probe false-positives
+        // for windowed apps on macOS 15+, and stale preflight "granted" answers
+        // must never be reported as restorations (the vision watcher reports
+        // those from ScreenCaptureKit ground truth). Called on every server
+        // (re)start because the poll task dies with this runtime; start_with
+        // detects a dead poller and respawns it.
+        screenpipe_engine::permission_monitor::start_with(
+            screenpipe_engine::permission_monitor::ScreenCheckMode::PreflightOnly,
+        );
+
         // --- Environment setup ---
         std::env::set_var("SCREENPIPE_FD_LIMIT", "8192");
         if !config.analytics_id.is_empty() {

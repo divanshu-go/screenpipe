@@ -90,6 +90,26 @@ fn handle_needed(app: &AppHandle, data: &Value) {
         debug!("permission_needed received during onboarding — suppressed");
         return;
     }
+    // Suppress while recording is deliberately off (tray stop / stop_screenpipe).
+    // The engine re-emits permission_needed periodically while screen recording
+    // stays denied (#4819); nagging a user who isn't trying to record is noise.
+    if let Some(state) = app.try_state::<crate::recording::RecordingState>() {
+        if !state.capture_intended() {
+            debug!("permission_needed while capture intent is off — suppressed");
+            return;
+        }
+    }
+    // The recovery window is already in the user's face — don't re-emit (the
+    // webview hook would call showWindow again and steal focus). The periodic
+    // re-notification only needs to bring the window back if it was closed
+    // without the permission being fixed, or was never shown (boot race where
+    // this bridge wasn't connected yet).
+    if let Some(win) = tauri::Manager::get_webview_window(app, "permission-recovery") {
+        if win.is_visible().unwrap_or(false) {
+            debug!("permission_needed while recovery window already visible — suppressed");
+            return;
+        }
+    }
     let kind = data.get("kind").and_then(|v| v.as_str()).unwrap_or("");
     info!(kind = %kind, "permission_needed (from engine)");
     // Forward raw payload — frontend PermissionNeededPayload expects { kind }.

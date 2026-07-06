@@ -20,6 +20,12 @@ interface PermissionState {
  */
 export function PermissionBanner() {
   const [permissions, setPermissions] = useState<PermissionState | null>(null);
+  // Screen denial reported by the engine's capture modules (ScreenCaptureKit
+  // ground truth). The polled doPermissionsCheck below rides
+  // CGPreflightScreenCaptureAccess, whose per-process cached answer can stay
+  // "granted" after macOS actually revoked capture (e.g. macOS 26 monthly
+  // re-approval) — the exact silent-gap scenario of #4819/#4726.
+  const [engineScreenDenied, setEngineScreenDenied] = useState(false);
 
   const { isMac } = usePlatform();
 
@@ -45,20 +51,38 @@ export function PermissionBanner() {
   }, [checkPermissions]);
 
   // Also listen for permission-lost events for instant response
-  useTauriEvent("permission-lost", () => {
+  useTauriEvent("permission-lost", (event) => {
+    const payload = event.payload as { screen_recording?: boolean } | undefined;
+    if (payload?.screen_recording) setEngineScreenDenied(true);
+    checkPermissions();
+  });
+
+  // permission_needed re-fires periodically while screen recording stays
+  // denied (#4819) — including when the denial predates this webview.
+  useTauriEvent("permission_needed", (event) => {
+    const payload = event.payload as { kind?: string } | undefined;
+    if (payload?.kind === "screen_recording") setEngineScreenDenied(true);
+    checkPermissions();
+  });
+
+  useTauriEvent("permission-restored", (event) => {
+    const payload = event.payload as { kind?: string } | undefined;
+    if (payload?.kind === "screen_recording") setEngineScreenDenied(false);
     checkPermissions();
   });
 
   // Don't render on non-Mac or while loading
   if (!isMac || !permissions) return null;
 
+  const screenOk = permissions.screenOk && !engineScreenDenied;
+
   // Don't render if all permissions are granted
-  if (permissions.screenOk && permissions.micOk && permissions.accessibilityOk) return null;
+  if (screenOk && permissions.micOk && permissions.accessibilityOk) return null;
 
 
 
   const missingPerms: string[] = [];
-  if (!permissions.screenOk) missingPerms.push("screen recording");
+  if (!screenOk) missingPerms.push("screen recording");
   if (!permissions.micOk) missingPerms.push("microphone");
   if (!permissions.accessibilityOk) missingPerms.push("accessibility");
 
@@ -85,12 +109,12 @@ export function PermissionBanner() {
             // (e.g. mic prompt, accessibility prompt). If the permission was already
             // denied, it falls back to opening System Settings internally.
             try {
-              if (!permissions.screenOk) await requestPermissionWithFlow("screenRecording");
+              if (!screenOk) await requestPermissionWithFlow("screenRecording");
               else if (!permissions.micOk) await commands.requestPermission("microphone");
               else if (!permissions.accessibilityOk) await requestPermissionWithFlow("accessibility");
             } catch {
               // fallback to opening settings directly
-              if (!permissions.screenOk) await openPermissionSettingsWithFlow("screenRecording");
+              if (!screenOk) await openPermissionSettingsWithFlow("screenRecording");
               else if (!permissions.micOk) await commands.openPermissionSettings("microphone");
               else if (!permissions.accessibilityOk) await openPermissionSettingsWithFlow("accessibility");
             }

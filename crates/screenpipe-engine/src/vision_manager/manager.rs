@@ -7,7 +7,9 @@
 use anyhow::Result;
 use dashmap::{DashMap, DashSet};
 use screenpipe_db::DatabaseManager;
-use screenpipe_screen::monitor::{get_monitor_by_id, list_monitors};
+use screenpipe_screen::monitor::{
+    get_monitor_by_id, list_monitors, list_monitors_detailed, MonitorListError,
+};
 use screenpipe_screen::PipelineMetrics;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -262,8 +264,34 @@ impl VisionManager {
         *status = VisionManagerStatus::Running;
         drop(status);
 
-        // Get all monitors and start recording on each (filtered by user selection)
-        let monitors = list_monitors().await;
+        // Get all monitors and start recording on each (filtered by user selection).
+        // Permission denial is handled explicitly: 0 monitors from a TCC denial
+        // used to fall through to the "stale monitor_ids?" diagnosis below,
+        // sending triage down the wrong path (#4819).
+        let monitors = match list_monitors_detailed().await {
+            Ok(monitors) => monitors,
+            Err(MonitorListError::PermissionDenied) => {
+                *self.status.write().await = VisionManagerStatus::Stopped;
+                crate::permission_monitor::report_state(
+                    screenpipe_events::PermissionKind::ScreenRecording,
+                    false,
+                    Some("VisionManager::start list_monitors PermissionDenied"),
+                );
+                warn!(
+                    "VisionManager: screen recording permission denied — vision capture \
+                     is disabled. Grant access in System Settings > Privacy & Security > \
+                     Screen Recording"
+                );
+                return Err(anyhow::anyhow!(
+                    "screen recording permission denied (0 monitors enumerable)"
+                ));
+            }
+            Err(e) => {
+                *self.status.write().await = VisionManagerStatus::Stopped;
+                warn!("VisionManager: failed to enumerate monitors: {e}");
+                return Err(anyhow::anyhow!("failed to enumerate monitors: {e}"));
+            }
+        };
         let total_monitors = monitors.len();
         for monitor in monitors {
             if !self.is_monitor_allowed(&monitor) {
@@ -317,6 +345,18 @@ impl VisionManager {
             // Roll status back so the next .start() attempt isn't blocked by the
             // idempotency guard above.
             *self.status.write().await = VisionManagerStatus::Stopped;
+            if total_monitors == 0 {
+                // Permission denial was already handled at enumeration above;
+                // an empty-but-successful listing means the displays are gone
+                // (screen locked at boot, clamshell, displays asleep).
+                warn!(
+                    "VisionManager: 0 monitors enumerated (screen locked or displays \
+                     unavailable?) — the monitor watcher will retry"
+                );
+                return Err(anyhow::anyhow!(
+                    "no monitors enumerated (0 enumerated, 0 started)"
+                ));
+            }
             warn!(
                 "VisionManager: no monitors matched the allowed list \
                  ({} enumerated, 0 started) — stale monitor_ids?",

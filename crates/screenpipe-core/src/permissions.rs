@@ -26,6 +26,18 @@ impl PermissionStatus {
     }
 }
 
+/// Test hook: `SCREENPIPE_SIMULATE_SCREEN_PERMISSION_DENIED=1` forces every
+/// screen-recording check to report `Denied`. Lets e2e tests (and manual QA)
+/// exercise the boot-with-permission-denied path — recovery modal, tray
+/// "not recording" state, `permission_needed` re-notification (#4819) —
+/// without mutating the machine's real TCC database via `tccutil reset`,
+/// which would revoke the developer's actual grant.
+fn simulate_screen_denied() -> bool {
+    std::env::var("SCREENPIPE_SIMULATE_SCREEN_PERMISSION_DENIED")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
 /// Result of checking all required permissions.
 #[derive(Debug)]
 pub struct PermissionsCheck {
@@ -216,6 +228,9 @@ mod macos_screen_recording {
 /// CLI: always uses `preflight() || capture_probe()` on every macOS version.
 #[cfg(target_os = "macos")]
 pub fn check_screen_recording() -> PermissionStatus {
+    if simulate_screen_denied() {
+        return PermissionStatus::Denied;
+    }
     if macos_screen_recording::preflight() || macos_screen_recording::capture_probe() {
         PermissionStatus::Granted
     } else {
@@ -230,6 +245,9 @@ pub fn check_screen_recording() -> PermissionStatus {
 /// and benefit from the full probe chain to avoid false-negative preflight stalls.
 #[cfg(target_os = "macos")]
 pub fn check_screen_recording_tauri() -> PermissionStatus {
+    if simulate_screen_denied() {
+        return PermissionStatus::Denied;
+    }
     let ok = if macos_screen_recording::is_sequoia_or_later() && !cfg!(debug_assertions) {
         macos_screen_recording::preflight()
     } else {
@@ -244,6 +262,9 @@ pub fn check_screen_recording_tauri() -> PermissionStatus {
 
 #[cfg(not(target_os = "macos"))]
 pub fn check_screen_recording_tauri() -> PermissionStatus {
+    if simulate_screen_denied() {
+        return PermissionStatus::Denied;
+    }
     PermissionStatus::NotNeeded
 }
 
@@ -306,6 +327,9 @@ pub fn check_microphone() -> PermissionStatus {
 
 #[cfg(not(target_os = "macos"))]
 pub fn check_screen_recording() -> PermissionStatus {
+    if simulate_screen_denied() {
+        return PermissionStatus::Denied;
+    }
     PermissionStatus::NotNeeded
 }
 
