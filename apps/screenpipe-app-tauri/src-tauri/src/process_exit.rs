@@ -330,17 +330,48 @@ pub fn setup_terminate_interceptor(app_handle: AppHandle) {
     }
 }
 
-/// Hide the whole app (all windows) and return focus to the previous app —
-/// the "Minimize to Tray" choice in the quit dialog. The tray icon stays.
+/// True when any screenpipe window is showing. Decides whether the quit
+/// dialog offers "Minimize to Tray" — pointless when everything is already
+/// hidden (e.g. quitting from the tray with no windows open).
+///
+/// The main overlay panel is checked via the logical [`MAIN_PANEL_SHOWN`]
+/// flag because `is_visible()` returns true even at alpha 0 (see panel.rs).
+#[cfg(target_os = "macos")]
+fn any_window_visible(app: &AppHandle) -> bool {
+    if crate::window::MAIN_PANEL_SHOWN.load(Ordering::SeqCst) {
+        return true;
+    }
+    app.webview_windows().iter().any(|(label, window)| {
+        !matches!(label.as_str(), "main" | "main-window")
+            && window.is_visible().unwrap_or(false)
+    })
+}
+
+/// Hide every window — the "Minimize to Tray" choice in the quit dialog.
+/// The tray icon stays and recording keeps running.
+///
+/// Mirrors the window-close (X) path in main.rs rather than `[NSApp hide:]`:
+/// the main overlay is a tauri_nspanel NSPanel (alpha/ordering semantics)
+/// that does not participate in app-hide, so it must go through its own
+/// close machinery.
 #[cfg(target_os = "macos")]
 fn hide_app_to_tray(app: &AppHandle) {
-    let _ = app.run_on_main_thread(|| {
-        use objc::{msg_send, sel, sel_impl};
-        use tauri_nspanel::cocoa::base::{id, nil};
-        unsafe {
-            let ns_app: id = msg_send![objc::class!(NSApplication), sharedApplication];
-            let _: () = msg_send![ns_app, hide: nil];
+    let app = app.clone();
+    let _ = app.clone().run_on_main_thread(move || {
+        crate::commands::hide_main_window(app.clone());
+
+        for (label, window) in app.webview_windows() {
+            if matches!(label.as_str(), "main" | "main-window") {
+                continue; // handled by hide_main_window above
+            }
+            if window.is_visible().unwrap_or(false) {
+                let _ = window.set_always_on_top(false);
+                let _ = window.set_visible_on_all_workspaces(false);
+                let _ = window.hide();
+            }
         }
+
+        crate::window::reset_to_regular_and_refresh_tray(&app);
     });
 }
 
@@ -366,6 +397,9 @@ pub fn confirm_and_request_app_quit(app: AppHandle) {
         DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult,
     };
 
+    // NSAlert binds Return to the first button and Escape only to a button
+    // titled exactly "Cancel" (rfd sets no key equivalents of its own) —
+    // renaming/localizing the cancel label would silently drop Escape.
     const QUIT_BUTTON: &str = "Quit screenpipe";
     const MINIMIZE_BUTTON: &str = "Minimize to Tray";
     const CANCEL_BUTTON: &str = "Cancel";
@@ -400,16 +434,24 @@ pub fn confirm_and_request_app_quit(app: AppHandle) {
         }
     });
 
+    // Offer "Minimize to Tray" only when there is something to minimize;
+    // with all windows already hidden it would be a dead button.
+    let buttons = if any_window_visible(&app) {
+        MessageDialogButtons::YesNoCancelCustom(
+            QUIT_BUTTON.to_string(),
+            MINIMIZE_BUTTON.to_string(),
+            CANCEL_BUTTON.to_string(),
+        )
+    } else {
+        MessageDialogButtons::OkCancelCustom(QUIT_BUTTON.to_string(), CANCEL_BUTTON.to_string())
+    };
+
     app.clone()
         .dialog()
         .message("Screen and audio recording will stop.")
         .title("Quit screenpipe?")
         .kind(MessageDialogKind::Warning)
-        .buttons(MessageDialogButtons::YesNoCancelCustom(
-            QUIT_BUTTON.to_string(),
-            MINIMIZE_BUTTON.to_string(),
-            CANCEL_BUTTON.to_string(),
-        ))
+        .buttons(buttons)
         .show_with_result(move |result| {
             QUIT_CONFIRM_SHOWING.store(false, Ordering::SeqCst);
             match result {
