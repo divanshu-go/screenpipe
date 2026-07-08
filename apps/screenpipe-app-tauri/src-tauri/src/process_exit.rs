@@ -199,6 +199,50 @@ pub fn request_app_relaunch(app: AppHandle, reason: &'static str, delay: Duratio
 /// Guards against stacking confirmation dialogs on repeated Cmd+Q presses.
 static QUIT_CONFIRM_SHOWING: AtomicBool = AtomicBool::new(false);
 
+/// True when the in-flight `terminate:` request comes from OS shutdown,
+/// restart, or logout. Mirrors ghostty's `applicationShouldTerminate` check of
+/// the AppleEvent `why?` attribute (kAEShutDown / kAERestart / kAEReallyLogOut)
+/// — a confirmation dialog there would invisibly block the session from
+/// ending. Must be called on the main thread while the terminate request is
+/// being dispatched (i.e. from the `ExitRequested` handler).
+#[cfg(target_os = "macos")]
+pub fn os_session_is_ending() -> bool {
+    use objc::{class, msg_send, sel, sel_impl};
+    use tauri_nspanel::cocoa::base::id;
+    unsafe {
+        let manager: id = msg_send![class!(NSAppleEventManager), sharedAppleEventManager];
+        if manager.is_null() {
+            return false;
+        }
+        let event: id = msg_send![manager, currentAppleEvent];
+        if event.is_null() {
+            return false;
+        }
+        const WHY_KEYWORD: u32 = u32::from_be_bytes(*b"why?");
+        let descriptor: id = msg_send![event, attributeDescriptorForKeyword: WHY_KEYWORD];
+        if descriptor.is_null() {
+            return false;
+        }
+        let reason: u32 = msg_send![descriptor, typeCodeValue];
+        // kAEShutDown, kAERestart, kAEReallyLogOut, kAELogOut
+        matches!(&reason.to_be_bytes(), b"shut" | b"rest" | b"rlgo" | b"logo")
+    }
+}
+
+/// Hide the whole app (all windows) and return focus to the previous app —
+/// the "Minimize to Tray" choice in the quit dialog. The tray icon stays.
+#[cfg(target_os = "macos")]
+fn hide_app_to_tray(app: &AppHandle) {
+    let _ = app.run_on_main_thread(|| {
+        use objc::{msg_send, sel, sel_impl};
+        use tauri_nspanel::cocoa::base::{id, nil};
+        unsafe {
+            let ns_app: id = msg_send![objc::class!(NSApplication), sharedApplication];
+            let _: () = msg_send![ns_app, hide: nil];
+        }
+    });
+}
+
 /// Ask the user to confirm before quitting (native dialog), then run
 /// [`request_app_quit`] on confirm.
 ///
@@ -208,13 +252,22 @@ static QUIT_CONFIRM_SHOWING: AtomicBool = AtomicBool::new(false);
 /// command; our equivalent is an active recording (`capture_intended`). A
 /// stopped or never-started capture quits silently.
 ///
-/// Only user-initiated quit paths (app menu Cmd+Q, tray Quit) go through
-/// here — programmatic paths (updater restart, relaunch) call
-/// [`request_app_quit`] / [`request_app_relaunch`] directly so they never
-/// block on a dialog.
+/// Offers Quit / Minimize to Tray / Cancel — this is a tray app, so backing
+/// out into the tray is a first-class choice.
+///
+/// Only user-initiated quit paths (app menu Cmd+Q, tray Quit, dock Quit via
+/// `ExitRequested`) go through here — programmatic paths (updater restart,
+/// relaunch) call [`request_app_quit`] / [`request_app_relaunch`] directly so
+/// they never block on a dialog.
 #[cfg(target_os = "macos")]
 pub fn confirm_and_request_app_quit(app: AppHandle) {
-    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+    use tauri_plugin_dialog::{
+        DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult,
+    };
+
+    const QUIT_BUTTON: &str = "Quit screenpipe";
+    const MINIMIZE_BUTTON: &str = "Minimize to Tray";
+    const CANCEL_BUTTON: &str = "Cancel";
 
     if QUIT_TEARDOWN_STARTED.load(Ordering::SeqCst) {
         return;
@@ -251,16 +304,22 @@ pub fn confirm_and_request_app_quit(app: AppHandle) {
         .message("Screen and audio recording will stop.")
         .title("Quit screenpipe?")
         .kind(MessageDialogKind::Warning)
-        .buttons(MessageDialogButtons::OkCancelCustom(
-            "Quit screenpipe".to_string(),
-            "Cancel".to_string(),
+        .buttons(MessageDialogButtons::YesNoCancelCustom(
+            QUIT_BUTTON.to_string(),
+            MINIMIZE_BUTTON.to_string(),
+            CANCEL_BUTTON.to_string(),
         ))
-        .show(move |confirmed| {
+        .show_with_result(move |result| {
             QUIT_CONFIRM_SHOWING.store(false, Ordering::SeqCst);
-            if confirmed {
-                request_app_quit(app);
-            } else {
-                info!("Quit cancelled by user");
+            match result {
+                MessageDialogResult::Custom(label) if label == QUIT_BUTTON => {
+                    request_app_quit(app);
+                }
+                MessageDialogResult::Custom(label) if label == MINIMIZE_BUTTON => {
+                    info!("Quit dialog: minimizing to tray instead");
+                    hide_app_to_tray(&app);
+                }
+                _ => info!("Quit cancelled by user"),
             }
         });
 }

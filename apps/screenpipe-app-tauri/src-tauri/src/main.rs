@@ -2052,8 +2052,25 @@ async fn main() {
                     } else if process_exit::QUIT_REQUESTED.load(std::sync::atomic::Ordering::SeqCst) {
                         info!("ExitRequested event — quit was requested, allowing exit");
                     } else {
-                        info!("ExitRequested event — preventing (app stays in tray)");
-                        api.prevent_exit();
+                        // Native terminate: (dock right-click → Quit, AppleScript
+                        // quit, OS shutdown). During shutdown/logout a dialog
+                        // would invisibly block the session, so let those exit
+                        // cleanly (RunEvent::Exit still runs teardown).
+                        #[cfg(target_os = "macos")]
+                        {
+                            if process_exit::os_session_is_ending() {
+                                info!("ExitRequested event — OS session ending, allowing exit");
+                            } else {
+                                info!("ExitRequested event — preventing, showing quit confirmation");
+                                api.prevent_exit();
+                                process_exit::confirm_and_request_app_quit(app_handle.app_handle().clone());
+                            }
+                        }
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            info!("ExitRequested event — preventing (app stays in tray)");
+                            api.prevent_exit();
+                        }
                     }
                 }
 
