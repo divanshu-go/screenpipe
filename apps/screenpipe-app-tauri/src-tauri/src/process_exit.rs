@@ -393,17 +393,6 @@ fn hide_app_to_tray(app: &AppHandle) {
 /// they never block on a dialog.
 #[cfg(target_os = "macos")]
 pub fn confirm_and_request_app_quit(app: AppHandle) {
-    use tauri_plugin_dialog::{
-        DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult,
-    };
-
-    // NSAlert binds Return to the first button and Escape only to a button
-    // titled exactly "Cancel" (rfd sets no key equivalents of its own) —
-    // renaming/localizing the cancel label would silently drop Escape.
-    const QUIT_BUTTON: &str = "Quit screenpipe";
-    const MINIMIZE_BUTTON: &str = "Minimize to Tray";
-    const CANCEL_BUTTON: &str = "Cancel";
-
     if QUIT_TEARDOWN_STARTED.load(Ordering::SeqCst) {
         return;
     }
@@ -422,49 +411,95 @@ pub fn confirm_and_request_app_quit(app: AppHandle) {
         return;
     }
 
+    // Offer "Minimize to Tray" only when there is something to minimize;
+    // with all windows already hidden it would be a dead button.
+    let show_minimize = any_window_visible(&app);
+
     // Tray quit can fire while the app is inactive (or Accessory / tray-only),
     // which would leave the alert buried behind other apps.
     crate::space_monitor::suppress_space_monitor(500);
-    let _ = app.run_on_main_thread(|| {
-        use objc::{msg_send, sel, sel_impl};
-        use tauri_nspanel::cocoa::base::id;
-        unsafe {
-            let ns_app: id = msg_send![objc::class!(NSApplication), sharedApplication];
-            let _: () = msg_send![ns_app, activateIgnoringOtherApps: true];
-        }
+
+    let app_for_closure = app.clone();
+    let dispatched = app.run_on_main_thread(move || {
+        // A hand-rolled NSAlert, not tauri_plugin_dialog: a parentless plugin
+        // dialog routes through rfd's CFUserNotificationDisplayAlert, which
+        // ignores the app icon and renders a generic caution triangle. NSAlert
+        // uses the app icon and gives the centered, app-modal look.
+        show_quit_alert(&app_for_closure, show_minimize);
     });
+    if dispatched.is_err() {
+        QUIT_CONFIRM_SHOWING.store(false, Ordering::SeqCst);
+    }
+}
 
-    // Offer "Minimize to Tray" only when there is something to minimize;
-    // with all windows already hidden it would be a dead button.
-    let buttons = if any_window_visible(&app) {
-        MessageDialogButtons::YesNoCancelCustom(
-            QUIT_BUTTON.to_string(),
-            MINIMIZE_BUTTON.to_string(),
-            CANCEL_BUTTON.to_string(),
-        )
-    } else {
-        MessageDialogButtons::OkCancelCustom(QUIT_BUTTON.to_string(), CANCEL_BUTTON.to_string())
-    };
+/// Build and run the quit-confirmation NSAlert on the main thread, then act on
+/// the choice. Must be called on the main thread (via `run_on_main_thread`);
+/// `runModal` spins a nested modal loop until the user responds.
+#[cfg(target_os = "macos")]
+fn show_quit_alert(app: &AppHandle, show_minimize: bool) {
+    use objc::{class, msg_send, sel, sel_impl};
+    use tauri_nspanel::cocoa::base::{id, nil};
+    use tauri_nspanel::cocoa::foundation::NSString;
 
-    app.clone()
-        .dialog()
-        .message("Screen and audio recording will stop.")
-        .title("Quit screenpipe?")
-        .kind(MessageDialogKind::Warning)
-        .buttons(buttons)
-        .show_with_result(move |result| {
-            QUIT_CONFIRM_SHOWING.store(false, Ordering::SeqCst);
-            match result {
-                MessageDialogResult::Custom(label) if label == QUIT_BUTTON => {
-                    request_app_quit(app);
+    // NSAlert binds Return to the first button and Escape only to a button
+    // titled exactly "Cancel", so the order and the literal label matter.
+    const QUIT_BUTTON: &str = "Quit screenpipe";
+    const MINIMIZE_BUTTON: &str = "Minimize to Tray";
+    const CANCEL_BUTTON: &str = "Cancel";
+
+    // NSModalResponse for the first/second added button.
+    const FIRST_BUTTON: i64 = 1000;
+    const SECOND_BUTTON: i64 = 1001;
+
+    unsafe {
+        let ns_app: id = msg_send![class!(NSApplication), sharedApplication];
+        let _: () = msg_send![ns_app, activateIgnoringOtherApps: true];
+
+        let alert: id = msg_send![class!(NSAlert), new];
+        // NSAlertStyleInformational — app icon, never a caution-triangle badge.
+        let _: () = msg_send![alert, setAlertStyle: 1i64];
+
+        let title = NSString::alloc(nil).init_str("Quit screenpipe?");
+        let _: () = msg_send![alert, setMessageText: title];
+        let message = NSString::alloc(nil).init_str("Screen and audio recording will stop.");
+        let _: () = msg_send![alert, setInformativeText: message];
+
+        let quit = NSString::alloc(nil).init_str(QUIT_BUTTON);
+        let _: id = msg_send![alert, addButtonWithTitle: quit];
+        if show_minimize {
+            let minimize = NSString::alloc(nil).init_str(MINIMIZE_BUTTON);
+            let _: id = msg_send![alert, addButtonWithTitle: minimize];
+        }
+        let cancel = NSString::alloc(nil).init_str(CANCEL_BUTTON);
+        let _: id = msg_send![alert, addButtonWithTitle: cancel];
+
+        // Packaged builds inherit the bundle icon automatically; a bare dev
+        // binary has none, so load the repo icon explicitly.
+        #[cfg(debug_assertions)]
+        {
+            let icns = concat!(env!("CARGO_MANIFEST_DIR"), "/icons/dev/icon.icns");
+            if std::path::Path::new(icns).exists() {
+                let path = NSString::alloc(nil).init_str(icns);
+                let image: id = msg_send![class!(NSImage), alloc];
+                let image: id = msg_send![image, initWithContentsOfFile: path];
+                if image != nil {
+                    let _: () = msg_send![alert, setIcon: image];
                 }
-                MessageDialogResult::Custom(label) if label == MINIMIZE_BUTTON => {
-                    info!("Quit dialog: minimizing to tray instead");
-                    hide_app_to_tray(&app);
-                }
-                _ => info!("Quit cancelled by user"),
             }
-        });
+        }
+
+        let response: i64 = msg_send![alert, runModal];
+        QUIT_CONFIRM_SHOWING.store(false, Ordering::SeqCst);
+
+        match response {
+            FIRST_BUTTON => request_app_quit(app.clone()),
+            SECOND_BUTTON if show_minimize => {
+                info!("Quit dialog: minimizing to tray instead");
+                hide_app_to_tray(app);
+            }
+            _ => info!("Quit cancelled by user"),
+        }
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
