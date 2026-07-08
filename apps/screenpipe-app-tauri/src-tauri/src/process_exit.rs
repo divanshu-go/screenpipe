@@ -196,6 +196,80 @@ pub fn request_app_relaunch(app: AppHandle, reason: &'static str, delay: Duratio
     });
 }
 
+/// Guards against stacking confirmation dialogs on repeated Cmd+Q presses.
+static QUIT_CONFIRM_SHOWING: AtomicBool = AtomicBool::new(false);
+
+/// Ask the user to confirm before quitting (native dialog), then run
+/// [`request_app_quit`] on confirm.
+///
+/// Modeled on Ghostty's quit flow (`applicationShouldTerminate` →
+/// `needsConfirmQuit`): the dialog only appears when quitting would actually
+/// interrupt something. Ghostty confirms when a terminal still has a running
+/// command; our equivalent is an active recording (`capture_intended`). A
+/// stopped or never-started capture quits silently.
+///
+/// Only user-initiated quit paths (app menu Cmd+Q, tray Quit) go through
+/// here — programmatic paths (updater restart, relaunch) call
+/// [`request_app_quit`] / [`request_app_relaunch`] directly so they never
+/// block on a dialog.
+#[cfg(target_os = "macos")]
+pub fn confirm_and_request_app_quit(app: AppHandle) {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+
+    if QUIT_TEARDOWN_STARTED.load(Ordering::SeqCst) {
+        return;
+    }
+
+    let recording_active = app
+        .try_state::<RecordingState>()
+        .map(|state| state.capture_intended())
+        .unwrap_or(false);
+    if !recording_active {
+        info!("Quit requested with no active recording — skipping confirmation");
+        request_app_quit(app);
+        return;
+    }
+
+    if QUIT_CONFIRM_SHOWING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    // Tray quit can fire while the app is inactive (or Accessory / tray-only),
+    // which would leave the alert buried behind other apps.
+    crate::space_monitor::suppress_space_monitor(500);
+    let _ = app.run_on_main_thread(|| {
+        use objc::{msg_send, sel, sel_impl};
+        use tauri_nspanel::cocoa::base::id;
+        unsafe {
+            let ns_app: id = msg_send![objc::class!(NSApplication), sharedApplication];
+            let _: () = msg_send![ns_app, activateIgnoringOtherApps: true];
+        }
+    });
+
+    app.clone()
+        .dialog()
+        .message("Screen and audio recording will stop.")
+        .title("Quit screenpipe?")
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Quit screenpipe".to_string(),
+            "Cancel".to_string(),
+        ))
+        .show(move |confirmed| {
+            QUIT_CONFIRM_SHOWING.store(false, Ordering::SeqCst);
+            if confirmed {
+                request_app_quit(app);
+            } else {
+                info!("Quit cancelled by user");
+            }
+        });
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn confirm_and_request_app_quit(app: AppHandle) {
+    request_app_quit(app);
+}
+
 /// Shared quit entry point for tray menu, app menu (Cmd+Q), etc.
 pub fn request_app_quit(app: AppHandle) {
     QUIT_REQUESTED.store(true, Ordering::SeqCst);

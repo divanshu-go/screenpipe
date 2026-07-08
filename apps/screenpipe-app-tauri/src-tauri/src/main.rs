@@ -1047,7 +1047,7 @@ async fn main() {
                             });
                         }
                         "quit_app" => {
-                            process_exit::request_app_quit(app_handle.clone());
+                            process_exit::confirm_and_request_app_quit(app_handle.clone());
                         }
                         _ => {}
                     }
