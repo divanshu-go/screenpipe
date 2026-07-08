@@ -414,6 +414,7 @@ pub fn confirm_and_request_app_quit(app: AppHandle) {
     // Offer "Minimize to Tray" only when there is something to minimize;
     // with all windows already hidden it would be a dead button.
     let show_minimize = any_window_visible(&app);
+    let message = quit_message(&app, show_minimize);
 
     // Tray quit can fire while the app is inactive (or Accessory / tray-only),
     // which would leave the alert buried behind other apps.
@@ -425,10 +426,36 @@ pub fn confirm_and_request_app_quit(app: AppHandle) {
         // dialog routes through rfd's CFUserNotificationDisplayAlert, which
         // ignores the app icon and renders a generic caution triangle. NSAlert
         // uses the app icon and gives the centered, app-modal look.
-        show_quit_alert(&app_for_closure, show_minimize);
+        show_quit_alert(&app_for_closure, show_minimize, &message);
     });
     if dispatched.is_err() {
         QUIT_CONFIRM_SHOWING.store(false, Ordering::SeqCst);
+    }
+}
+
+/// Informative text for the quit dialog. Names exactly what stops (so the user
+/// is not warned about recording they turned off), then nudges toward Minimize
+/// to Tray as the keep-recording option when that button is offered. Falls back
+/// to the both-on wording when settings can't be read.
+#[cfg(target_os = "macos")]
+fn quit_message(app: &AppHandle, show_minimize: bool) -> String {
+    let (audio_on, vision_on) = crate::store::SettingsStore::get(app)
+        .ok()
+        .flatten()
+        .map(|s| (!s.recording.disable_audio, !s.recording.disable_vision))
+        .unwrap_or((true, true));
+
+    let stops = match (vision_on, audio_on) {
+        (true, true) => "Screen and audio recording will stop",
+        (true, false) => "Screen recording will stop",
+        (false, true) => "Audio recording will stop",
+        (false, false) => "All recording will stop",
+    };
+
+    if show_minimize {
+        format!("{stops}. Minimize to Tray to keep recording in the background.")
+    } else {
+        format!("{stops} when you quit.")
     }
 }
 
@@ -436,7 +463,7 @@ pub fn confirm_and_request_app_quit(app: AppHandle) {
 /// the choice. Must be called on the main thread (via `run_on_main_thread`);
 /// `runModal` spins a nested modal loop until the user responds.
 #[cfg(target_os = "macos")]
-fn show_quit_alert(app: &AppHandle, show_minimize: bool) {
+fn show_quit_alert(app: &AppHandle, show_minimize: bool, message: &str) {
     use objc::{class, msg_send, sel, sel_impl};
     use tauri_nspanel::cocoa::base::{id, nil};
     use tauri_nspanel::cocoa::foundation::NSString;
@@ -461,7 +488,7 @@ fn show_quit_alert(app: &AppHandle, show_minimize: bool) {
 
         let title = NSString::alloc(nil).init_str("Quit screenpipe?");
         let _: () = msg_send![alert, setMessageText: title];
-        let message = NSString::alloc(nil).init_str("Screen and audio recording will stop.");
+        let message = NSString::alloc(nil).init_str(message);
         let _: () = msg_send![alert, setInformativeText: message];
 
         let quit = NSString::alloc(nil).init_str(QUIT_BUTTON);
