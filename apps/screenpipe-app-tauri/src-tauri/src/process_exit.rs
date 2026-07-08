@@ -229,6 +229,107 @@ pub fn os_session_is_ending() -> bool {
     }
 }
 
+/// App handle for the `applicationShouldTerminate:` override.
+#[cfg(target_os = "macos")]
+static TERMINATE_APP_HANDLE: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
+
+/// Intercept native app termination — dock right-click → Quit, AppleScript
+/// `quit`, `osascript` — the same way ghostty does: an
+/// `applicationShouldTerminate:` override on the app delegate
+/// (ghostty/macos/Sources/App/macOS/AppDelegate.swift). tao 0.35 does not
+/// implement this delegate method and native `terminate:` never surfaces as
+/// `RunEvent::ExitRequested`, so without this override the process dies with
+/// no confirmation and no interception point.
+///
+/// Returns `NSTerminateNow` when quit was already confirmed, a restart is in
+/// flight, or the OS session is ending (shutdown/restart/logout — blocking
+/// those with a dialog would hang the session). Otherwise cancels the
+/// termination and routes through [`confirm_and_request_app_quit`].
+///
+/// Swizzled via `class_addMethod` on the existing tao delegate — same
+/// pattern as `dock_menu::setup_dock_menu`.
+#[cfg(target_os = "macos")]
+#[allow(deprecated)]
+pub fn setup_terminate_interceptor(app_handle: AppHandle) {
+    use objc::runtime::{Object, Sel};
+    use objc::{class, msg_send, sel, sel_impl};
+    use tauri_nspanel::cocoa::base::id;
+
+    let _ = TERMINATE_APP_HANDLE.set(app_handle);
+
+    // NSApplicationTerminateReply: Cancel = 0, Now = 1
+    extern "C" fn should_terminate(_this: &Object, _sel: Sel, _sender: id) -> usize {
+        // Runs inside the ObjC→Rust trampoline (nounwind) — a panic here
+        // would abort the app, so catch it and fall back to allowing exit.
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if QUIT_REQUESTED.load(Ordering::SeqCst)
+                || PENDING_RESTART.load(Ordering::SeqCst)
+            {
+                return 1;
+            }
+            if os_session_is_ending() {
+                info!("terminate: OS session ending — allowing exit without confirmation");
+                QUIT_REQUESTED.store(true, Ordering::SeqCst);
+                return 1;
+            }
+            let Some(app) = TERMINATE_APP_HANDLE.get() else {
+                return 1;
+            };
+            info!("terminate: intercepted — routing through quit confirmation");
+            confirm_and_request_app_quit(app.clone());
+            0
+        }))
+        .unwrap_or(1)
+    }
+
+    unsafe {
+        // Register a scratch class to obtain a typed IMP without transmute,
+        // then copy it onto the real tao delegate (dock_menu.rs pattern).
+        let superclass = class!(NSObject);
+        let Some(mut decl) =
+            objc::declare::ClassDecl::new("ScreenpipeTerminateDelegate", superclass)
+        else {
+            warn!("terminate interceptor: scratch class registration failed");
+            return;
+        };
+        decl.add_method(
+            sel!(applicationShouldTerminate:),
+            should_terminate as extern "C" fn(&Object, Sel, id) -> usize,
+        );
+        let scratch_class = decl.register();
+        let scratch: id = msg_send![scratch_class, new];
+
+        let ns_app: id = msg_send![class!(NSApplication), sharedApplication];
+        let delegate: id = msg_send![ns_app, delegate];
+        if delegate.is_null() {
+            warn!("terminate interceptor: no app delegate to attach to");
+            return;
+        }
+
+        let terminate_sel = sel!(applicationShouldTerminate:);
+        let scratch_cls: *const objc::runtime::Class = msg_send![scratch, class];
+        let method = objc::runtime::class_getInstanceMethod(scratch_cls, terminate_sel);
+        if method.is_null() {
+            warn!("terminate interceptor: scratch method lookup failed");
+            return;
+        }
+        let imp = objc::runtime::method_getImplementation(method);
+        let encoding = b"Q@:@\0".as_ptr() as *const std::ffi::c_char;
+        let delegate_cls: *const objc::runtime::Class = msg_send![delegate, class];
+        let added = objc::runtime::class_addMethod(
+            delegate_cls as *mut _,
+            terminate_sel,
+            imp,
+            encoding,
+        );
+        if added == objc::runtime::YES {
+            info!("terminate interceptor installed (applicationShouldTerminate:)");
+        } else {
+            warn!("terminate interceptor: delegate already implements applicationShouldTerminate:");
+        }
+    }
+}
+
 /// Hide the whole app (all windows) and return focus to the previous app —
 /// the "Minimize to Tray" choice in the quit dialog. The tray icon stays.
 #[cfg(target_os = "macos")]
