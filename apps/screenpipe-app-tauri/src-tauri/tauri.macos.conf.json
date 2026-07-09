@@ -11,19 +11,7 @@
                 "MacOS/libonnxruntime.dylib": "libonnxruntime.dylib"
             },
             "dmg": {
-                "background": "assets/dmg-background.png",
-                "windowSize": {
-                    "width": 801,
-                    "height": 455
-                },
-                "appPosition": {
-                    "x": 200,
-                    "y": 230
-                },
-                "applicationFolderPosition": {
-                    "x": 600,
-                    "y": 230
-                }
+                "background": "assets/dmg-background.png"
             }
         },
         "externalBin": [
