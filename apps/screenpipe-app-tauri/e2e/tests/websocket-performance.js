@@ -92,9 +92,12 @@ class TimelinePerformanceTester {
                         return;
                     }
 
-                    // Handle batched frames
-                    if (Array.isArray(parsed)) {
-                        const frameCount = parsed.length;
+                    // Bare arrays (legacy, no request_id) or {request_id, frames}.
+                    const batch = Array.isArray(parsed)
+                        ? parsed
+                        : (parsed && Array.isArray(parsed.frames) ? parsed.frames : null);
+                    if (batch) {
+                        const frameCount = batch.length;
                         this.metrics.batchCount++;
                         this.metrics.totalFrames += frameCount;
                         this.metrics.totalBytes += dataStr.length;

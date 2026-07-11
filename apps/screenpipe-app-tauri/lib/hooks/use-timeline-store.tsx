@@ -14,6 +14,7 @@ import {
 	redactApiUrlForLogs,
 } from "@/lib/api";
 import { mergeTimelineFrames } from "./timeline-frame-merge";
+import { dateSwapVerdictFromBuffer } from "./timeline-date-swap-verdict";
 import { evaluateTimelineLiveness } from "./timeline-liveness";
 
 // Frame buffer for batching updates - reduces 68 re-renders to ~3-5
@@ -571,34 +572,28 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					if (!pendingNavRequestIds.has(requestId)) return; // live fetch — nothing to resolve
 					pendingNavRequestIds.delete(requestId);
 
-					// Navigation fetches include prior-day context for playhead
-					// fill (navFetchRange). Success must mean the TARGET day has
-					// frames — prior-day-only buffer would otherwise look like a
-					// successful swap onto an empty day (no toast, wrong content).
-					const targetDate = get().currentDate;
-					const targetDayCount = frameBuffer.filter((f) =>
-						isSameDay(new Date(f.timestamp), targetDate),
-					).length;
+					// navFetchRange includes prior-day context; only target-day
+					// frames count as a successful swap.
+					const verdict = dateSwapVerdictFromBuffer(
+						frameBuffer,
+						get().currentDate,
+					);
 
-					if (targetDayCount > 0) {
-						// Target day arrived (possibly with prior-evening
-						// context). Swap atomically. A failed fetch with
-						// partial target-day frames still beats showing nothing.
+					if (verdict.kind === "success") {
+						// Swap atomically (may include prior-evening context).
 						pendingNavRequestIds.clear();
 						get().flushFrameBuffer(true);
 						set({
 							navigationResult: {
 								requestId,
-								count: targetDayCount,
+								count: verdict.targetDayCount,
 								error: false,
 								at: Date.now(),
 							},
 						});
 					} else if (pendingNavRequestIds.size === 0) {
-						// Empty target day (buffer may still hold prior-day
-						// context) or failed fetch. Drop the buffered context
-						// so we don't leak it into a later flush; keep the old
-						// visible frames. The navigation hook reverts the date.
+						// Empty/failed target: drop prior-day buffer, keep old
+						// frames; navigation hook reverts the date and toasts.
 						frameBuffer = [];
 						set({
 							pendingDateSwap: false,
@@ -612,8 +607,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 							},
 						});
 					}
-					// else: a sibling fetch (narrow + full-day pair) is still in
-					// flight — wait for its verdict. Keep buffer for now.
+					// else: a sibling fetch is still in flight; keep buffer.
 					return;
 				}
 

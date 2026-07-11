@@ -530,23 +530,31 @@ export function useDateNavigation(opts: {
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
 
-	// Fallback only: navigation normally resolves via batch_complete. If the
-	// socket died and never delivered a verdict, clear the state so the user
-	// isn't locked out. The server caps past-day fetches at 120s.
+	// Fallback: if batch_complete never arrives, restore origin and unlock UI.
+	// Server caps past-day fetches at 120s.
 	useEffect(() => {
 		if (!seekingTimestamp) return;
 		const timer = setTimeout(() => {
-			console.warn("Navigation fallback timeout — clearing seeking state");
+			console.warn("Navigation fallback timeout: clearing seeking state");
+			const origin = navOriginRef.current;
 			useTimelineStore.getState().cancelPendingDateSwap();
 			navOriginRef.current = null;
-			setSeekingTimestamp(null);
 			pendingNavigationRef.current = null;
+			pendingFrameIdRef.current = undefined;
+			setSeekingTimestamp(null);
 			setPendingNavigation(null);
 			setIsNavigating(false);
 			isNavigatingRef.current = false;
+			if (origin) {
+				setCurrentDate(origin);
+				toast({
+					title: "couldn't load that day",
+					description: "the fetch timed out; please try again",
+				});
+			}
 		}, NAV_FALLBACK_TIMEOUT_MS);
 		return () => clearTimeout(timer);
-	}, [seekingTimestamp, setPendingNavigation]);
+	}, [seekingTimestamp, setPendingNavigation, setCurrentDate]);
 
 	return {
 		navigateDirectToDate,
