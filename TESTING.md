@@ -408,6 +408,14 @@ commits: `f1255eac`, `25cbdc6b`, `2529367d`, `d9821624`, `e61501da`, `039d5fea`,
 - [ ] **Keyword search logic** — Verify that keyword search SQL correctly uses `OR` instead of `UNION` within `IN()`.
 - [ ] **Search prompt accuracy** — Verify that search prompts are improved to prevent false negatives from over-filtering.
 - [ ] **Past-day timeline navigation** — Navigate the timeline to past days (e.g., using date picker or arrow keys). Verify that data loads correctly and the timeline behaves as expected.
+- [ ] **Calendar jump to historical day** — Pick a day weeks/months back from the calendar. Verify the timeline actually switches to that day (no snap-back to today), even when the fetch takes 30s+; a full-width strip skeleton (pills + playhead chip placeholder) shows while loading, then the day swaps in atomically with the strip filling the screen (no half strip between voids).
+- [ ] **Calendar pick during live streaming** — While today's frames are actively streaming, pick a past day. Verify live frames don't hijack the navigation (wrong-day flash) and the picked day loads.
+- [ ] **Rapid date re-picks** — Click several calendar days in quick succession. Verify the final pick wins and no stale day's frames appear afterwards.
+- [ ] **Empty day verdict** — Navigate to a day with no captures (e.g. via deep link). Verify a "no captures" toast appears promptly and the view reverts to the prior day — no infinite "loading...".
+- [ ] **Audio-only day navigation** — On a day with only mic audio (screen recording off), verify the day is reachable from the calendar and arrows.
+- [ ] **Arrow keys across recording gaps** — With a multi-day gap in recordings, verify the day arrows skip to the nearest day with data instead of dead-ending.
+- [ ] **Earliest recorded day reachable** — Navigate to the very first day that has any recording. Verify the calendar allows it and the day loads (previously blocked by a start-date guard).
+- [ ] **Edge prefetch shimmer** — Scroll the strip toward the end of the loaded day (either direction). Verify muted shimmer pills continue the strip while the adjacent day fetches (no black void, no scroll jerk), and they swap to real bars when the batch lands.
 - [ ] **`content_type=all` search and pagination** — Perform search queries with `content_type=all`. Verify that the result count is accurate and pagination works correctly without missing or duplicating results.
 - [ ] **Search pagination with offset** — Perform paginated searches, particularly beyond the first page. Verify that results are not empty or incorrect due to double-applied offsets.
 - [ ] **`search_ocr()` returns results for event-driven capture** — Verify that `search_ocr()` correctly returns OCR results for event-driven captures and does not return empty when visible text is present on screen.
