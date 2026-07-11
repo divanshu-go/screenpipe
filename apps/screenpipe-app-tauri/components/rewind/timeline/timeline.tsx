@@ -20,6 +20,85 @@ import { AppContextPopover } from "./app-context-popover";
 import { TimelineTagToolbar } from "./timeline-tag-toolbar";
 import { extractDomain, FaviconImg } from "./favicon-utils";
 import { localFetch, getApiBaseUrl, appendAuthToken } from "@/lib/api";
+import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
+
+// Shimmer continuation rendered at a strip edge while the adjacent day's
+// frames are fetched (stripPrefetchLoading in use-timeline-store): muted
+// pseudo-segments sized in real frame slots, so scrolling toward an unloaded
+// day reads as "more strip coming" instead of dead-ending in a void and then
+// jerking when frames pop in. Fixed slot counts — deterministic, no jitter.
+const PREFETCH_SHIMMER_GROUP_SLOTS = [14, 6, 22, 9, 16];
+
+function StripPrefetchShimmer({ slotWidth }: { slotWidth: number }) {
+	const segGap = 2; // matches the real segments' end inset
+	return (
+		<div
+			className="flex flex-nowrap items-center h-full flex-shrink-0 relative animate-pulse"
+			aria-hidden
+			data-testid="strip-prefetch-shimmer"
+		>
+			{PREFETCH_SHIMMER_GROUP_SLOTS.map((slots, i) => (
+				<div
+					key={i}
+					className="flex-shrink-0 bg-foreground/15"
+					style={{
+						width: `${Math.max(2, slots * slotWidth - segGap * 2)}px`,
+						height: "12px", // same slim strip height as real bars
+						borderRadius: "6px",
+						marginLeft: `${segGap}px`,
+						marginRight: `${segGap}px`,
+					}}
+				/>
+			))}
+		</div>
+	);
+}
+
+// Full-width strip skeleton shown while a date swap is loading: muted pill
+// segments spanning the whole strip plus a playhead line + time-chip
+// placeholder, so picking a day reads as "the strip is loading" instead of
+// showing the old day's bars (confusing) or a void. Same slot-based geometry
+// as the real bars; the pattern repeats to overfill any viewport width.
+function TimelineStripLoadingRow({ slotWidth }: { slotWidth: number }) {
+	const segGap = 2;
+	const pattern = [14, 6, 22, 9, 16, 11, 25, 7, 18, 10];
+	const containerWidth =
+		typeof window !== "undefined" ? window.innerWidth : 1600;
+	const patternWidth = pattern.reduce((sum, s) => sum + s * slotWidth, 0);
+	const repeats = Math.max(1, Math.ceil(containerWidth / Math.max(1, patternWidth)));
+	const groups = Array.from({ length: repeats }, () => pattern).flat();
+	return (
+		<div
+			className="relative w-full h-24 overflow-hidden pointer-events-none"
+			aria-hidden
+			data-testid="strip-loading-skeleton"
+		>
+			<div className="absolute inset-0 flex flex-nowrap items-center justify-center animate-pulse">
+				{groups.map((slots, i) => (
+					<div
+						key={i}
+						className="flex-shrink-0 bg-foreground/15"
+						style={{
+							width: `${Math.max(2, slots * slotWidth - segGap * 2)}px`,
+							height: "12px",
+							borderRadius: "6px",
+							marginLeft: `${segGap}px`,
+							marginRight: `${segGap}px`,
+						}}
+					/>
+				))}
+			</div>
+			{/* Playhead placeholder: time chip above, line down to the strip */}
+			<div className="absolute left-1/2 -translate-x-1/2 top-0 flex flex-col items-center">
+				<div className="flex items-center gap-2 h-7 px-3 rounded-full bg-background/90 border border-border shadow-sm">
+					<Clock className="w-3.5 h-3.5 text-muted-foreground" />
+					<div className="w-16 h-2.5 rounded-full bg-foreground/20 animate-pulse" />
+				</div>
+				<div className="w-px h-8 bg-foreground/80" />
+			</div>
+		</div>
+	);
+}
 
 // Global cache: preloads app-icon images so they render instantly on scroll.
 // Maps app name → "loaded" | "error" | Promise (in-flight).
@@ -416,6 +495,15 @@ export const TimelineSlider = ({
 	const lastFetchRef = useRef<Date | null>(null);
 	const lastForwardFetchRef = useRef<Date | null>(null);
 
+	// Adjacent-day prefetch in flight per strip edge (ISO of the day, or null).
+	// Set by fetchNextDayData, cleared by that request's batch_complete.
+	const stripPrefetchLoading = useTimelineStore((s) => s.stripPrefetchLoading);
+
+	// Date swap in flight (calendar pick / day arrows): the strip shows a
+	// full-width loading skeleton until the target day's frames swap in
+	// atomically on batch_complete — not the old day's bars, not a void.
+	const pendingDateSwap = useTimelineStore((s) => s.pendingDateSwap);
+
 	const [hoveredTimestamp, setHoveredTimestamp] = useState<string | null>(null);
 	const [hoveredRect, setHoveredRect] = useState<{ x: number; y: number } | null>(null);
 	const [isDragging, setIsDragging] = useState(false);
@@ -613,8 +701,20 @@ export const TimelineSlider = ({
 		const framesPerScreen = Math.ceil(containerWidth / Math.max(1, frameWidth + frameMargin));
 		// Small buffer (20%) to avoid pop-in at edges, but not the old 400-frame over-fetch
 		const halfWindow = Math.ceil(framesPerScreen * 0.6);
-		const start = Math.max(0, currentIndex - halfWindow);
-		const end = Math.min(frames.length, currentIndex + halfWindow);
+		// Keep the window a constant size even when the playhead sits at an
+		// array edge (e.g. right after landing on a day's start): shift the
+		// window inward instead of clamping it, so the strip still fills the
+		// screen instead of rendering half a window between two voids.
+		let start = currentIndex - halfWindow;
+		let end = currentIndex + halfWindow;
+		if (start < 0) {
+			end = Math.min(frames.length, end - start);
+			start = 0;
+		}
+		if (end > frames.length) {
+			start = Math.max(0, start - (end - frames.length));
+			end = frames.length;
+		}
 		return frames.slice(start, end);
 	}, [frames, currentIndex, frameWidth, frameMargin]);
 
@@ -936,7 +1036,9 @@ export const TimelineSlider = ({
 
 		observer.observe(observerTarget);
 		return () => observer.disconnect();
-	}, [fetchNextDayData, currentDate, startAndEndDates]);
+		// pendingDateSwap: the sentinel unmounts behind the loading skeleton and
+		// remounts as a new node when the swap resolves — re-observe it then.
+	}, [fetchNextDayData, currentDate, startAndEndDates, pendingDateSwap]);
 
 	// Forward observer: fetch newer day's data when scrolling left (toward newer frames)
 	useEffect(() => {
@@ -970,8 +1072,17 @@ export const TimelineSlider = ({
 
 		forwardObserver.observe(forwardTarget);
 		return () => forwardObserver.disconnect();
-	}, [fetchNextDayData, currentDate]);
+		// pendingDateSwap: see the backward observer above — re-observe the
+		// remounted sentinel once the loading skeleton clears.
+	}, [fetchNextDayData, currentDate, pendingDateSwap]);
 
+	// Smooth-scroll only for small playhead steps (arrow keys, playback).
+	// Larger deltas are jumps — date navigation, search results — where an
+	// animated glide across the strip reads as the marker "dragging" to its
+	// destination. Zero-delta re-runs are layout corrections (window
+	// re-slice after a prefetch merge) and must not animate either.
+	const SMOOTH_SCROLL_MAX_STEP = 12;
+	const lastScrolledIndexRef = useRef<number | null>(null);
 	useEffect(() => {
 		const container = containerRef.current;
 		if (!container || !frames[currentIndex]) return;
@@ -983,11 +1094,34 @@ export const TimelineSlider = ({
 
 		if (!currentElement) return;
 
-		currentElement.scrollIntoView({
-			behavior: isWheelNavigating ? "auto" : "smooth",
-			block: "nearest",
-			inline: "center",
-		});
+		const prevIndex = lastScrolledIndexRef.current;
+		lastScrolledIndexRef.current = currentIndex;
+		const step = prevIndex === null ? Infinity : Math.abs(currentIndex - prevIndex);
+		const smooth =
+			!isWheelNavigating && step >= 1 && step <= SMOOTH_SCROLL_MAX_STEP;
+
+		// Center by MEASURED delta instead of scrollIntoView: the strip row is
+		// `sticky right-0`, which repositions the content while the browser
+		// scrolls, so scrollIntoView's precomputed destination lands wrong
+		// (observed: every navigation parked near the content's right edge,
+		// rendering a half strip). getBoundingClientRect reflects the live,
+		// sticky-adjusted geometry, so scrolling by the on-screen delta is
+		// exact. Instant jumps re-measure once in case the first correction
+		// shifted the sticky layout again.
+		const centerDelta = () => {
+			const cRect = container.getBoundingClientRect();
+			const eRect = currentElement.getBoundingClientRect();
+			return eRect.left + eRect.width / 2 - (cRect.left + cRect.width / 2);
+		};
+		container.scrollBy({ left: centerDelta(), behavior: smooth ? "smooth" : "auto" });
+		if (!smooth) {
+			requestAnimationFrame(() => {
+				const correction = centerDelta();
+				if (Math.abs(correction) > 2) {
+					container.scrollBy({ left: correction, behavior: "auto" });
+				}
+			});
+		}
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [currentIndex, frames.length, isWheelNavigating]);
 
@@ -1560,6 +1694,9 @@ export const TimelineSlider = ({
 					paddingBottom: "24px", // Space for time axis below
 				}}
 			>
+				{pendingDateSwap ? (
+					<TimelineStripLoadingRow slotWidth={frameWidth + frameMargin * 2} />
+				) : (
 				<motion.div
 					ref={timelineContentRef}
 					className="whitespace-nowrap flex flex-nowrap w-max justify-center px-[50vw] h-24 sticky right-0 scrollbar-hide relative"
@@ -1632,6 +1769,12 @@ export const TimelineSlider = ({
 					)}
 
 					<div ref={forwardObserverTargetRef} className="h-full w-1" />
+					{/* Newer-day prefetch shimmer (left edge) */}
+					{stripPrefetchLoading.forward && (
+						<StripPrefetchShimmer
+							slotWidth={frameWidth + frameMargin * 2}
+						/>
+					)}
 					{appGroups.map((group, groupIndex) => {
 						const groupWidth = getGroupWidth(group);
 						const showLabel = groupWidth > 60; // Only show label if group is wide enough
@@ -2050,9 +2193,16 @@ export const TimelineSlider = ({
 							</React.Fragment>
 						);
 					})}
+					{/* Older-day prefetch shimmer (right edge) */}
+					{stripPrefetchLoading.backward && (
+						<StripPrefetchShimmer
+							slotWidth={frameWidth + frameMargin * 2}
+						/>
+					)}
 					<div ref={observerTargetRef} className="h-full w-1" />
 
 				</motion.div>
+				)}
 			</div>
 
 			{/* Time axis legend - hidden, too small to be useful */}

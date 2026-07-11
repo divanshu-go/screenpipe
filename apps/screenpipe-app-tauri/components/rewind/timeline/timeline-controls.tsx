@@ -38,7 +38,9 @@ interface TimelineControlsProps {
 	// shown in the date pill so the label tracks the cursor minute-to-minute
 	// (currentDate only changes when the day changes). Null until frames load.
 	currentTime?: Date | null;
-	onDateChange: (date: Date) => Promise<any>;
+	// exact: honor the picked day as-is (calendar) instead of walking to the
+	// nearest day with data (arrows)
+	onDateChange: (date: Date, opts?: { exact?: boolean }) => Promise<any>;
 	onJumpToday: () => void;
 	onSearchClick?: () => void;
 	onChatClick?: () => void;
@@ -50,6 +52,10 @@ interface TimelineControlsProps {
 	onTogglePlayPause?: () => void;
 	onCycleSpeed?: () => void;
 	isNavigating?: boolean;
+	/** ISO timestamp of the day/time being navigated to — drives the date
+	 *  pill while isNavigating so we show the target day, not the stale
+	 *  playhead frame still on screen from the previous day. */
+	seekingTimestamp?: string | null;
 	activeDevices?: { name: string; isInput: boolean }[];
 	mutedDevices?: Set<string>;
 	onToggleDeviceMute?: (deviceName: string) => void;
@@ -71,6 +77,7 @@ export function TimelineControls({
 	onTogglePlayPause,
 	onCycleSpeed,
 	isNavigating,
+	seekingTimestamp,
 	activeDevices,
 	mutedDevices,
 	onToggleDeviceMute,
@@ -135,6 +142,19 @@ export function TimelineControls({
 		[currentDate],
 	);
 
+	// While navigating, old frames stay on screen so currentTime is still the
+	// previous day — prefer the sought target so "clicked Jul 9" doesn't keep
+	// showing "Jul 1" next to the spinner.
+	const displayDate = useMemo(() => {
+		if (isNavigating && seekingTimestamp) {
+			return new Date(seekingTimestamp);
+		}
+		if (isNavigating) {
+			return currentDate;
+		}
+		return currentTime ?? currentDate;
+	}, [isNavigating, seekingTimestamp, currentTime, currentDate]);
+
 	// Disable back button if we're at or before the earliest recorded date
 	const isAtEarliestDate = useMemo(() => {
 		const previousDay = subDays(currentDate, 1);
@@ -177,9 +197,9 @@ export function TimelineControls({
 								)}
 								{/* Show just the date, e.g. "Jun 19" — the exact time is already
 								    shown by the playhead chip on the timeline, so repeating it here
-								    is redundant. Prefer the date of the frame under the playhead;
-								    fall back to currentDate during the brief load window. */}
-								<span>{format(currentTime ?? currentDate, "MMM d")}</span>
+								    is redundant. While navigating, show the target day (seeking);
+								    otherwise prefer the frame under the playhead. */}
+								<span>{format(displayDate, "MMM d")}</span>
 								<ChevronDown className="h-3 w-3 opacity-60" />
 							</button>
 						</PopoverTrigger>
@@ -192,9 +212,11 @@ export function TimelineControls({
 							mode="single"
 							selected={currentDate}
 							fromMonth={startOfDay(startAndEndDates.start)} toMonth={new Date()} onSelect={(date) => {
-								console.log("[Calendar] onSelect called with:", date?.toISOString(), "currentDate:", currentDate.toISOString());
 								if (date) {
-									onDateChange(date);
+									// The user picked this exact day — honor it
+									// rather than silently redirecting to a
+									// neighbor.
+									onDateChange(date, { exact: true });
 									setCalendarOpen(false);
 								}
 							}}

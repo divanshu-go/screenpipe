@@ -177,7 +177,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 
 	// Note: audio transcript is now on-demand (opened via subtitle bar click)
 
-	const { currentDate, setCurrentDate, fetchTimeRange, hasDateBeenFetched, onWindowFocus, clearNewFramesCount, clearSentRequestForDate, clearFramesForNavigation, pendingNavigation, setPendingNavigation } =
+	const { currentDate, setCurrentDate, fetchTimeRange, hasDateBeenFetched, onWindowFocus, clearNewFramesCount, clearSentRequestForDate, clearFramesForNavigation, pendingNavigation, setPendingNavigation, pendingDateSwap } =
 		useTimelineStore();
 
 	const { frames, isLoading, error, message, fetchNextDayData, websocket } =
@@ -391,13 +391,15 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 					debounceTimer = null;
 
 					// Don't reset if a search/calendar navigation is in progress —
-					// onWindowFocus resets currentDate to today, which cancels the
-					// cross-date navigation and discards the pending fetch.
+					// onWindowFocus used to force currentDate to today, which
+					// cancelled cross-date navigation. Also skip while the store
+					// is mid date-swap (covers multi-instance Timeline mounts).
 					// Also skip if a search navigation completed recently (within 2s) —
 					// pendingNavigationRef and seekingTimestamp get cleared on completion
 					// but the focus debounce (500ms) may still be pending.
 					const recentSearchNav = Date.now() - lastSearchNavRef.current < 2000;
-					if (isNavigatingRef.current || pendingNavigationRef.current || seekingTimestamp || searchNavFrame || recentSearchNav) {
+					const midDateSwap = useTimelineStore.getState().pendingDateSwap;
+					if (isNavigatingRef.current || pendingNavigationRef.current || seekingTimestamp || searchNavFrame || recentSearchNav || midDateSwap) {
 						return;
 					}
 
@@ -407,10 +409,16 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 					// Reset filters so stale selections don't persist across open/close
 					resetFilters();
 
-					// Reset position to latest (index 0 = newest frame)
-					// Window is hidden/shown not destroyed, so old position persists
-					setCurrentIndex(0);
-					setCurrentFrame(frames.length > 0 ? frames[0] : null);
+					const storeDate = useTimelineStore.getState().currentDate;
+					const viewingToday = isSameDay(storeDate, new Date());
+
+					// Only snap the playhead to the live edge when already on
+					// today. Historical viewing keeps its position; onWindowFocus
+					// refreshes that day without forcing today.
+					if (viewingToday) {
+						setCurrentIndex(0);
+						setCurrentFrame(frames.length > 0 ? frames[0] : null);
+					}
 					isNavigatingRef.current = false;
 					setIsNavigating(false);
 					pendingNavigationRef.current = null;
@@ -515,15 +523,20 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		setSeekingTimestamp(targetTimestamp);
 		pendingNavigationRef.current = targetDate;
 
-		// Same-day with the day's frames already loaded: jump in place instantly.
-		// The "process pending navigation" effect only re-runs when frames/
-		// currentDate change, so without this fast path a same-day jump (the
-		// common case: searching today while viewing today) never moves.
+		// Same-day with the target moment already loaded: jump in place
+		// instantly. The "process pending navigation" effect only re-runs
+		// when frames/currentDate change, so without this fast path a
+		// same-day jump (the common case: searching today while viewing
+		// today) never moves. Require a frame within 2 minutes of the
+		// target — "some frame of that day exists" lets jumpToTime's
+		// closest-timestamp fallback land far from the requested moment
+		// on partially loaded days.
 		if (isSameDay(targetDate, currentDate)) {
-			const hasTargetDayFrames = frames.some((f) =>
-				isSameDay(new Date(f.timestamp), targetDate)
+			const targetMs = targetDate.getTime();
+			const nearTargetLoaded = frames.some(
+				(f) => Math.abs(new Date(f.timestamp).getTime() - targetMs) < 120_000,
 			);
-			if (hasTargetDayFrames) {
+			if (nearTargetLoaded) {
 				jumpToTime(targetDate);
 				pendingNavigationRef.current = null;
 				setSeekingTimestamp(null);
@@ -641,10 +654,11 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 	}, [pendingNavigation, navigateToTimestamp, setPendingNavigation]);
 
 	// Progressive loading: show UI immediately once we have any frames.
-	// During navigation, frames are cleared but we DON'T show the full-screen
-	// blocker — the inline spinner on the date control is enough feedback.
+	// During navigation (isNavigating or a pending date swap), the strip's
+	// full-width loading skeleton is the feedback — never the full-screen
+	// "Loading Timeline" blocker.
 	const hasInitialFrames = frames.length > 0;
-	const showBlockingLoader = isLoading && !hasInitialFrames && !isNavigating;
+	const showBlockingLoader = isLoading && !hasInitialFrames && !isNavigating && !pendingDateSwap;
 
 
 	// Auto-select first frame when frames arrive and no frame is selected
@@ -897,10 +911,18 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			let dateToCheck = new Date(currentDate);
 			const isToday = isSameDay(dateToCheck, new Date());
 
+			// A navigation owns its fetch (handleDateChange/navigateDirectToDate
+			// fire it directly with previous-evening context). Firing a plain
+			// full-day fetch here too would supersede it on the server
+			// (requests are last-wins on the socket). Check the STORE's swap
+			// flag as well as the local ref: Timeline mounts more than once
+			// (home section + overlay), and another instance's effect doesn't
+			// see this instance's isNavigatingRef.
+			if (isNavigatingRef.current || useTimelineStore.getState().pendingDateSwap) return;
+
 			// For today, always fetch — live polling will push new frames.
 			// For other dates, find nearest date with frames in a single query.
-			// Skip when navigating — handleDateChange already resolved the date.
-			if (!isToday && !isNavigatingRef.current) {
+			if (!isToday) {
 				if (cancelled) return;
 				const nearest = await findNearestDateWithFrames(dateToCheck, "backward", MAX_DATE_RETRIES);
 				if (cancelled) return;
@@ -919,9 +941,8 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 
 			if (cancelled) return;
 
-			// Always fetch full day. For search navigation, the narrow ±5min
-			// fetch was already fired synchronously in navigateDirectToDate().
-			// This full-day fetch acts as backfill to populate the timeline.
+			// Non-navigation date changes (scroll across a day boundary,
+			// window-focus reset to today): fetch the full day as backfill.
 			const startTime = startOfDay(dateToCheck);
 			const endTime = endOfDay(dateToCheck);
 			fetchTimeRange(startTime, endTime);
@@ -942,8 +963,11 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 	// to break the circular dependency: this effect sets currentDate, which would
 	// re-trigger this effect if currentDate were in the dep array.
 	useEffect(() => {
-		// Skip if we're in the middle of intentional navigation
-		if (isNavigatingRef.current) {
+		// Skip if we're in the middle of intentional navigation. Check the
+		// STORE's swap flag too: Timeline mounts more than once (home
+		// section + overlay), and another instance's sync effect would
+		// otherwise move the shared currentDate mid-swap.
+		if (isNavigatingRef.current || useTimelineStore.getState().pendingDateSwap) {
 			return;
 		}
 		if (currentFrame) {
@@ -1042,13 +1066,19 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			setSeekingTimestamp(timestamp);
 			setSearchNavFrame(true);
 
-			// Same-day optimization: use jumpToTime for instant navigation
+			// Same-day optimization: jump in place only when the clicked
+			// result is actually loaded — the exact frame when we have its
+			// id, otherwise a frame within 2 minutes of the target. "Some
+			// frame of that day exists" isn't enough: jumpToTime's closest-
+			// timestamp fallback can land hours from the clicked result on
+			// partially loaded or down-sampled days.
 			if (isSameDay(targetDate, currentDate)) {
-				pendingNavigationRef.current = targetDate;
-				const hasTargetDayFrames = frames.some(f =>
-					isSameDay(new Date(f.timestamp), targetDate)
-				);
-				if (hasTargetDayFrames) {
+				const targetMs = targetDate.getTime();
+				const resultLoaded = frameId != null
+					? frames.some(f => f.devices.some(d => String(d.frame_id) === String(frameId)))
+					: frames.some(f => Math.abs(new Date(f.timestamp).getTime() - targetMs) < 120_000);
+				if (resultLoaded) {
+					pendingNavigationRef.current = targetDate;
 					jumpToTime(targetDate, frameId);
 					pendingNavigationRef.current = null;
 					setSeekingTimestamp(null);
@@ -1291,6 +1321,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 						onTogglePlayPause={togglePlayPause}
 						onCycleSpeed={cycleSpeed}
 						isNavigating={isNavigating}
+						seekingTimestamp={seekingTimestamp}
 						activeDevices={activeDevices}
 						mutedDevices={mutedDevices}
 						onToggleDeviceMute={toggleDeviceMute}
@@ -1504,7 +1535,11 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 
 				{/* Bottom Timeline - Overlay that doesn't cut off image */}
 				<div className="absolute bottom-0 left-0 right-0 z-40 pointer-events-auto">
-					{frames.length > 0 ? (
+					{/* Mount the slider during a date swap even with zero frames:
+					    it renders the full-width strip skeleton internally. The
+					    legacy "Loading timeline..." panel below is only for the
+					    initial connect before any fetch is in flight. */}
+					{frames.length > 0 || pendingDateSwap ? (
 						<TimelineSlider
 							frames={frames}
 							currentIndex={currentIndex}
