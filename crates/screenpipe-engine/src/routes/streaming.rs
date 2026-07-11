@@ -17,7 +17,11 @@ use screenpipe_db::{DatabaseManager, FrameData, Order};
 
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::atomic::{AtomicU64, Ordering},
+    sync::Arc,
+    time::Duration,
+};
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -42,6 +46,13 @@ pub struct StreamFramesRequest {
     order: Order,
     #[serde(default)]
     limit: Option<usize>,
+    /// Client-chosen id echoed on every frame batch and on the
+    /// `batch_complete` marker for this request. The socket multiplexes
+    /// fetches, so without this the client cannot tell a stale in-flight
+    /// fetch's frames from the ones it asked for last — the root cause of
+    /// wrong-day flashes on date navigation. 0 = legacy untagged.
+    #[serde(default)]
+    request_id: u64,
 }
 
 const MAX_STREAM_FRAME_LIMIT: usize = 10_000;
@@ -106,6 +117,20 @@ fn downsample_in_place<T>(items: &mut Vec<T>, limit: usize) {
 pub struct StreamTimeSeriesResponse {
     pub timestamp: DateTime<Utc>,
     pub devices: Vec<DeviceFrameResponse>,
+}
+
+/// Internal event for the send loop. Frames carry the id of the request
+/// they answer; `Complete` marks the end of a request's initial fetch so
+/// the client gets a definitive verdict — `count: 0` means the range is
+/// genuinely empty (vs. still loading), `error` means the fetch failed or
+/// timed out and the count is not authoritative.
+enum StreamEvent {
+    Frame(u64, TimeSeriesFrame),
+    Complete {
+        request_id: u64,
+        count: usize,
+        error: bool,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -311,15 +336,22 @@ async fn handle_stream_frames_socket(
         Arc::new(Mutex::new(std::collections::HashSet::new()));
 
     // Channel for initial batch results (from cache or DB)
-    let (frame_tx, frame_rx) = tokio::sync::mpsc::channel::<TimeSeriesFrame>(100);
+    let (frame_tx, frame_rx) = tokio::sync::mpsc::channel::<StreamEvent>(100);
 
     // Shared flag: should we subscribe to live cache updates?
     let live_subscribe: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
+
+    // Id of the most recent request on this socket. Requests are last-wins
+    // (each one already clears sent_frame_ids and re-decides the live flag),
+    // so fetch loops for older ids stop streaming once this moves on — no
+    // point burning DB/CPU on frames the client will discard.
+    let active_request: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
 
     let sent_ids_clone = sent_frame_ids.clone();
     let live_sub_clone = live_subscribe.clone();
     let cache_clone = cache.clone();
     let db_clone = db.clone();
+    let active_request_recv = active_request.clone();
 
     // Handle incoming messages for time range requests
     let receive_handle = tokio::spawn(async move {
@@ -332,6 +364,10 @@ async fn handle_stream_frames_socket(
                         let is_descending = request.order == Order::Descending;
                         let limit = stream_frame_limit(request.limit);
                         let db_fetch_limit = stream_db_fetch_limit(limit);
+                        let request_id = request.request_id;
+
+                        // Last request wins: supersede any in-flight fetch.
+                        active_request_recv.store(request_id, Ordering::SeqCst);
 
                         // Clear sent IDs for new request
                         sent_ids_clone.lock().await.clear();
@@ -391,7 +427,7 @@ async fn handle_stream_frames_socket(
                             } // lock dropped
 
                             for frame in sorted {
-                                let _ = frame_tx.send(frame).await;
+                                let _ = frame_tx.send(StreamEvent::Frame(request_id, frame)).await;
                             }
 
                             // Only backfill from DB if the hot cache doesn't
@@ -420,7 +456,10 @@ async fn handle_stream_frames_socket(
                                 let frame_tx_db = frame_tx.clone();
                                 let db_backfill = db_clone.clone();
                                 let sent_ids_backfill = sent_ids_clone.clone();
+                                let active_backfill = active_request_recv.clone();
                                 tokio::spawn(async move {
+                                    let mut sent_count = 0usize;
+                                    let mut failed = false;
                                     match db_backfill
                                         .find_video_chunks_limited(
                                             start_time,
@@ -442,6 +481,13 @@ async fn handle_stream_frames_socket(
                                             }
                                             downsample_in_place(&mut chunks.frames, backfill_limit);
                                             for chunk in chunks.frames {
+                                                // A newer request took over the socket —
+                                                // its frames are all the client wants now.
+                                                if active_backfill.load(Ordering::Relaxed)
+                                                    != request_id
+                                                {
+                                                    break;
+                                                }
                                                 let should_send = {
                                                     let mut sent = sent_ids_backfill.lock().await;
                                                     sent.insert(chunk.frame_id)
@@ -453,25 +499,48 @@ async fn handle_stream_frames_socket(
                                                 if frame.frame_data.is_empty() {
                                                     continue;
                                                 }
-                                                if frame_tx_db.send(frame).await.is_err() {
+                                                if frame_tx_db
+                                                    .send(StreamEvent::Frame(request_id, frame))
+                                                    .await
+                                                    .is_err()
+                                                {
                                                     break;
                                                 }
+                                                sent_count += 1;
                                             }
                                             info!("Today DB backfill complete");
                                         }
-                                        Err(e) => warn!("Today DB backfill failed: {}", e),
+                                        Err(e) => {
+                                            warn!("Today DB backfill failed: {}", e);
+                                            failed = true;
+                                        }
                                     }
+                                    let _ = frame_tx_db
+                                        .send(StreamEvent::Complete {
+                                            request_id,
+                                            count: initial_count + sent_count,
+                                            error: failed,
+                                        })
+                                        .await;
                                 });
                             } else {
                                 info!(
                                     "skipping DB backfill — hot cache covers full range or stream limit reached"
                                 );
+                                let _ = frame_tx
+                                    .send(StreamEvent::Complete {
+                                        request_id,
+                                        count: initial_count,
+                                        error: false,
+                                    })
+                                    .await;
                             }
                         } else {
                             // Past day — one-shot DB query (acceptable, rare)
                             let frame_tx = frame_tx.clone();
                             let db = db_clone.clone();
                             let sent_ids = sent_ids_clone.clone();
+                            let active_fetch = active_request_recv.clone();
 
                             tokio::spawn(async move {
                                 let fetch_result = tokio::time::timeout(
@@ -480,19 +549,37 @@ async fn handle_stream_frames_socket(
                                         db,
                                         start_time,
                                         end_time,
-                                        frame_tx,
+                                        frame_tx.clone(),
                                         is_descending,
                                         limit,
                                         sent_ids,
+                                        request_id,
+                                        active_fetch,
                                     ),
                                 )
                                 .await;
 
-                                match fetch_result {
-                                    Ok(Ok(_)) => info!("Past-day fetch complete"),
-                                    Ok(Err(e)) => error!("Past-day fetch failed: {}", e),
-                                    Err(_) => warn!("Past-day fetch timed out after 120s"),
-                                }
+                                let (count, error) = match fetch_result {
+                                    Ok(Ok((_, count))) => {
+                                        info!("Past-day fetch complete ({} frames)", count);
+                                        (count, false)
+                                    }
+                                    Ok(Err(e)) => {
+                                        error!("Past-day fetch failed: {}", e);
+                                        (0, true)
+                                    }
+                                    Err(_) => {
+                                        warn!("Past-day fetch timed out after 120s");
+                                        (0, true)
+                                    }
+                                };
+                                let _ = frame_tx
+                                    .send(StreamEvent::Complete {
+                                        request_id,
+                                        count,
+                                        error,
+                                    })
+                                    .await;
                             });
                         }
                     }
@@ -507,6 +594,9 @@ async fn handle_stream_frames_socket(
     // Send frames to the client with batching + live cache subscription
     let send_handle = tokio::spawn(async move {
         let mut frame_buffer = Vec::with_capacity(STREAM_BATCH_CAPACITY);
+        // Which request the buffered frames answer. A batch never mixes
+        // requests: when the id changes, the old buffer flushes first.
+        let mut buffer_request_id: u64 = 0;
         let mut next_batch_flush_at: Option<TokioInstant> = None;
         let mut keepalive_timer = tokio::time::interval(Duration::from_secs(30));
 
@@ -526,24 +616,76 @@ async fn handle_stream_frames_socket(
                     }
                 } => {
                     match frame {
-                        Some(tsf) => {
+                        Some(StreamEvent::Frame(req_id, tsf)) => {
                             if let Some(ref error) = tsf.error {
                                 let _ = sender
                                     .send(Message::Text(format!("{{\"error\": \"{}\"}}", error)))
                                     .await;
                                 continue;
                             }
+                            // Frames for a superseded request — the client
+                            // would drop them anyway, save the bandwidth.
+                            if req_id != active_request.load(Ordering::Relaxed) {
+                                continue;
+                            }
+                            if !frame_buffer.is_empty() && buffer_request_id != req_id {
+                                if let Err(e) =
+                                    send_batch(&mut sender, buffer_request_id, &mut frame_buffer)
+                                        .await
+                                {
+                                    error!("failed to send batch: {}", e);
+                                    break;
+                                }
+                                next_batch_flush_at = None;
+                            }
+                            buffer_request_id = req_id;
                             push_stream_batch(
                                 &mut frame_buffer,
                                 StreamTimeSeriesResponse::from(tsf),
                                 &mut next_batch_flush_at,
                             );
                             if frame_buffer.len() >= STREAM_BATCH_CAPACITY {
-                                if let Err(e) = send_batch(&mut sender, &mut frame_buffer).await {
+                                if let Err(e) =
+                                    send_batch(&mut sender, buffer_request_id, &mut frame_buffer)
+                                        .await
+                                {
                                     error!("failed to send batch: {}", e);
                                     break;
                                 }
                                 next_batch_flush_at = None;
+                            }
+                        }
+                        Some(StreamEvent::Complete {
+                            request_id,
+                            count,
+                            error,
+                        }) => {
+                            // Flush pending frames first so the completion
+                            // marker arrives after everything it counts.
+                            if !frame_buffer.is_empty() {
+                                if let Err(e) =
+                                    send_batch(&mut sender, buffer_request_id, &mut frame_buffer)
+                                        .await
+                                {
+                                    error!("failed to send batch: {}", e);
+                                    break;
+                                }
+                                next_batch_flush_at = None;
+                            }
+                            // Legacy clients (request_id == 0) never asked for
+                            // completion markers and may not understand them.
+                            if request_id == 0 {
+                                continue;
+                            }
+                            let msg = serde_json::json!({
+                                "type": "batch_complete",
+                                "request_id": request_id,
+                                "count": count,
+                                "error": error,
+                            });
+                            if let Err(e) = sender.send(Message::Text(msg.to_string())).await {
+                                error!("failed to send batch_complete: {}", e);
+                                break;
                             }
                         }
                         None => {
@@ -613,13 +755,30 @@ async fn handle_stream_frames_socket(
                                 }],
                             };
 
+                            // Live frames belong to the current (today)
+                            // request — tag them with its id.
+                            let live_request_id = active_request.load(Ordering::Relaxed);
+                            if !frame_buffer.is_empty() && buffer_request_id != live_request_id {
+                                if let Err(e) =
+                                    send_batch(&mut sender, buffer_request_id, &mut frame_buffer)
+                                        .await
+                                {
+                                    error!("failed to send batch: {}", e);
+                                    break;
+                                }
+                                next_batch_flush_at = None;
+                            }
+                            buffer_request_id = live_request_id;
                             push_stream_batch(
                                 &mut frame_buffer,
                                 response,
                                 &mut next_batch_flush_at,
                             );
                             if frame_buffer.len() >= STREAM_BATCH_CAPACITY {
-                                if let Err(e) = send_batch(&mut sender, &mut frame_buffer).await {
+                                if let Err(e) =
+                                    send_batch(&mut sender, buffer_request_id, &mut frame_buffer)
+                                        .await
+                                {
                                     error!("failed to send live batch: {}", e);
                                     break;
                                 }
@@ -680,7 +839,7 @@ async fn handle_stream_frames_socket(
 
                 // Flush partial batches
                 _ = pending_batch_flush(next_batch_flush_at) => {
-                    if let Err(e) = send_batch(&mut sender, &mut frame_buffer).await {
+                    if let Err(e) = send_batch(&mut sender, buffer_request_id, &mut frame_buffer).await {
                         error!("failed to send batch: {}", e);
                         break;
                     }
@@ -705,16 +864,20 @@ async fn handle_stream_frames_socket(
     }
 }
 
-/// Fetch frames and track which ones have been sent
+/// Fetch frames and track which ones have been sent. Returns the latest
+/// timestamp seen and the number of frames actually sent.
+#[allow(clippy::too_many_arguments)]
 async fn fetch_and_process_frames_with_tracking(
     db: Arc<DatabaseManager>,
     start_time: DateTime<Utc>,
     end_time: DateTime<Utc>,
-    frame_tx: mpsc::Sender<TimeSeriesFrame>,
+    frame_tx: mpsc::Sender<StreamEvent>,
     is_descending: bool,
     limit: usize,
     sent_frame_ids: Arc<Mutex<std::collections::HashSet<i64>>>,
-) -> Result<Option<DateTime<Utc>>, anyhow::Error> {
+    request_id: u64,
+    active_request: Arc<AtomicU64>,
+) -> Result<(Option<DateTime<Utc>>, usize), anyhow::Error> {
     let mut chunks = db
         .find_video_chunks_limited(
             start_time,
@@ -724,6 +887,7 @@ async fn fetch_and_process_frames_with_tracking(
         )
         .await?;
     let mut latest_timestamp: Option<DateTime<Utc>> = None;
+    let mut sent_count = 0usize;
 
     // Sort chunks based on order
     if is_descending {
@@ -736,6 +900,10 @@ async fn fetch_and_process_frames_with_tracking(
     downsample_in_place(&mut chunks.frames, limit);
 
     for chunk in chunks.frames {
+        // A newer request took over the socket — stop streaming stale frames.
+        if active_request.load(Ordering::Relaxed) != request_id {
+            break;
+        }
         {
             let mut sent = sent_frame_ids.lock().await;
             sent.insert(chunk.frame_id);
@@ -748,10 +916,11 @@ async fn fetch_and_process_frames_with_tracking(
         if latest_timestamp.is_none() || ts > latest_timestamp.unwrap() {
             latest_timestamp = Some(ts);
         }
-        frame_tx.send(frame).await?;
+        frame_tx.send(StreamEvent::Frame(request_id, frame)).await?;
+        sent_count += 1;
     }
 
-    Ok(latest_timestamp)
+    Ok((latest_timestamp, sent_count))
 }
 
 fn request_order(is_descending: bool) -> Order {
@@ -780,16 +949,36 @@ fn push_stream_batch(
     }
 }
 
-// Helper function to send batched frames
+/// Wire format for a frame batch. The request_id lets the client attribute
+/// every frame to the fetch it answers — one equality check replaces
+/// guessing staleness from timestamps.
+#[derive(Serialize)]
+struct StreamBatchMessage<'a> {
+    request_id: u64,
+    frames: &'a Vec<StreamTimeSeriesResponse>,
+}
+
+/// Send batched frames. Tagged clients (`request_id != 0`) get the envelope
+/// `{ request_id, frames }`. Legacy clients that omit `request_id` (defaults
+/// to 0) keep receiving a bare frame array so older app builds / e2e harnesses
+/// don't break on the wire-format change.
 async fn send_batch(
     sender: &mut futures::stream::SplitSink<WebSocket, Message>,
+    request_id: u64,
     buffer: &mut Vec<StreamTimeSeriesResponse>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if buffer.is_empty() {
         return Ok(());
     }
 
-    let json = serde_json::to_string(&buffer)?;
+    let json = if request_id == 0 {
+        serde_json::to_string(buffer)?
+    } else {
+        serde_json::to_string(&StreamBatchMessage {
+            request_id,
+            frames: buffer,
+        })?
+    };
     sender.send(Message::Text(json)).await?;
     buffer.clear();
     Ok(())
@@ -976,7 +1165,8 @@ mod tests {
 
         let end = start + chrono::Duration::seconds(total_frames as i64 - 1);
         let (frame_tx, mut frame_rx) = mpsc::channel(display_limit + 1);
-        let latest_timestamp = fetch_and_process_frames_with_tracking(
+        let request_id = 7u64;
+        let (latest_timestamp, sent_count) = fetch_and_process_frames_with_tracking(
             db,
             start,
             end,
@@ -984,16 +1174,25 @@ mod tests {
             true,
             display_limit,
             Arc::new(Mutex::new(std::collections::HashSet::new())),
+            request_id,
+            Arc::new(AtomicU64::new(request_id)),
         )
         .await
         .expect("timeline fetch should succeed");
 
         let mut streamed_frames = Vec::new();
-        while let Some(frame) = frame_rx.recv().await {
-            streamed_frames.push(frame);
+        while let Some(event) = frame_rx.recv().await {
+            match event {
+                StreamEvent::Frame(id, frame) => {
+                    assert_eq!(id, request_id, "frames must carry their request id");
+                    streamed_frames.push(frame);
+                }
+                StreamEvent::Complete { .. } => {}
+            }
         }
 
         assert_eq!(streamed_frames.len(), display_limit);
+        assert_eq!(sent_count, display_limit);
         assert_eq!(streamed_frames.first().unwrap().timestamp, end);
         assert_eq!(streamed_frames.last().unwrap().timestamp, start);
         assert_eq!(latest_timestamp, Some(end));
@@ -1003,6 +1202,59 @@ mod tests {
                 .all(|window| window[0].timestamp > window[1].timestamp),
             "descending stream order should be preserved after downsampling"
         );
+    }
+
+    // A fetch whose request id is no longer active must stop sending —
+    // its frames answer a navigation the user has already abandoned.
+    #[tokio::test]
+    async fn superseded_request_stops_streaming() {
+        let db = Arc::new(
+            DatabaseManager::new("sqlite::memory:", Default::default())
+                .await
+                .expect("in-memory database should initialize"),
+        );
+        db.insert_video_chunk("/tmp/timeline-superseded.mp4", "monitor")
+            .await
+            .expect("video chunk should insert");
+
+        let start = DateTime::parse_from_rfc3339("2026-06-28T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let seeded_frames: Vec<_> = (0..50)
+            .map(|idx| {
+                (
+                    start + chrono::Duration::seconds(idx as i64),
+                    idx as i64,
+                    Vec::new(),
+                )
+            })
+            .collect();
+        db.insert_multi_frames_with_ocr_batch(
+            "monitor",
+            &seeded_frames,
+            Arc::new(OcrEngine::Tesseract),
+        )
+        .await
+        .expect("frames should seed");
+
+        let (frame_tx, mut frame_rx) = mpsc::channel(100);
+        // Active request has already moved on to id 2; this fetch is for id 1.
+        let (_, sent_count) = fetch_and_process_frames_with_tracking(
+            db,
+            start,
+            start + chrono::Duration::seconds(60),
+            frame_tx,
+            true,
+            100,
+            Arc::new(Mutex::new(std::collections::HashSet::new())),
+            1,
+            Arc::new(AtomicU64::new(2)),
+        )
+        .await
+        .expect("fetch should succeed");
+
+        assert_eq!(sent_count, 0, "superseded fetch must not stream frames");
+        assert!(frame_rx.recv().await.is_none(), "channel should be empty");
     }
 
     // #4569: down-sampling must span the WHOLE range (keep both ends), not drop

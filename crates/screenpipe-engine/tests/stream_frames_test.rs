@@ -18,6 +18,34 @@ struct StreamTimeSeriesResponse {
     timestamp: String,
 }
 
+/// Frame batches arrive wrapped with the id of the request they answer
+/// (see StreamBatchMessage in routes/streaming.rs).
+#[derive(Debug, Deserialize)]
+struct StreamBatchEnvelope {
+    request_id: u64,
+    frames: Vec<StreamTimeSeriesResponse>,
+}
+
+/// Completion marker sent after a request's initial fetch finishes.
+#[derive(Debug, Deserialize)]
+struct StreamBatchComplete {
+    #[serde(rename = "type")]
+    kind: String,
+    request_id: u64,
+    count: usize,
+    error: bool,
+}
+
+/// Extract frames from a WS text message, whether wrapped in the
+/// request-id envelope (current format) or a bare array (legacy).
+/// Returns None for control messages (keep-alive, batch_complete, errors).
+fn parse_frame_batch(text: &str) -> Option<Vec<StreamTimeSeriesResponse>> {
+    if let Ok(envelope) = serde_json::from_str::<StreamBatchEnvelope>(text) {
+        return Some(envelope.frames);
+    }
+    serde_json::from_str::<Vec<StreamTimeSeriesResponse>>(text).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -32,6 +60,7 @@ mod tests {
         end_time: String,
         order: String,
         limit: usize,
+        request_id: u64,
     }
 
     async fn setup_stream_test_server() -> (
@@ -122,6 +151,7 @@ mod tests {
             end_time: end.to_rfc3339(),
             order: "descending".to_string(),
             limit: display_limit,
+            request_id: 42,
         };
 
         write
@@ -143,9 +173,14 @@ mod tests {
                 if text == "\"keep-alive-text\"" {
                     continue;
                 }
-                let mut batch: Vec<StreamTimeSeriesResponse> =
-                    serde_json::from_str(&text).expect("response batch should parse");
-                received.append(&mut batch);
+                if let Ok(envelope) = serde_json::from_str::<StreamBatchEnvelope>(&text) {
+                    assert_eq!(
+                        envelope.request_id, 42,
+                        "frame batches must echo the request id"
+                    );
+                    received.extend(envelope.frames);
+                }
+                // batch_complete and other control messages fall through
             }
             received
         })
@@ -164,6 +199,168 @@ mod tests {
         assert_eq!(received_frames.len(), display_limit);
         assert_eq!(first, end);
         assert_eq!(last, start);
+    }
+
+    /// A fetch for an empty range must end with a definitive
+    /// `batch_complete {count: 0}` so the client can show an empty state
+    /// instead of spinning forever (or misreading silence as "still loading").
+    #[tokio::test]
+    async fn test_empty_range_sends_batch_complete_zero() {
+        let (url, _db, server_handle) = setup_stream_test_server().await;
+
+        let (ws_stream, _) = tokio_tungstenite::connect_async(&url)
+            .await
+            .expect("websocket should connect");
+        let (mut write, mut read) = ws_stream.split();
+
+        // A past range with no data — takes the DB path, returns nothing.
+        let start = DateTime::parse_from_rfc3339("2020-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let request = StreamFramesLimitedRequest {
+            start_time: start.to_rfc3339(),
+            end_time: (start + Duration::days(1)).to_rfc3339(),
+            order: "descending".to_string(),
+            limit: 100,
+            request_id: 7,
+        };
+
+        write
+            .send(Message::Text(serde_json::to_string(&request).unwrap()))
+            .await
+            .expect("request should send");
+
+        let complete = timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                let msg = read
+                    .next()
+                    .await
+                    .expect("websocket should stay open")
+                    .expect("message should read");
+                let Message::Text(text) = msg else { continue };
+                if let Ok(complete) = serde_json::from_str::<StreamBatchComplete>(&text) {
+                    return complete;
+                }
+                assert!(
+                    parse_frame_batch(&text).map_or(true, |f| f.is_empty()),
+                    "empty range must not stream frames"
+                );
+            }
+        })
+        .await
+        .expect("batch_complete should arrive for an empty range");
+
+        server_handle.abort();
+
+        assert_eq!(complete.kind, "batch_complete");
+        assert_eq!(complete.request_id, 7);
+        assert_eq!(complete.count, 0);
+        assert!(!complete.error);
+    }
+
+    /// Legacy clients omit `request_id` (server defaults to 0). They must keep
+    /// receiving bare frame arrays — not the `{request_id, frames}` envelope —
+    /// and must not receive `batch_complete` markers they don't understand.
+    #[tokio::test]
+    async fn test_legacy_untagged_request_sends_bare_arrays() {
+        let (url, db, server_handle) = setup_stream_test_server().await;
+        let device_name = "legacy-wire-monitor";
+        db.insert_video_chunk("legacy-wire.mp4", device_name)
+            .await
+            .unwrap();
+
+        let start = DateTime::parse_from_rfc3339("2026-06-01T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let seeded_frames: Vec<_> = (0..5)
+            .map(|idx| {
+                (
+                    start + Duration::seconds(idx as i64),
+                    idx as i64,
+                    Vec::new(),
+                )
+            })
+            .collect();
+        db.insert_multi_frames_with_ocr_batch(
+            device_name,
+            &seeded_frames,
+            Arc::new(OcrEngine::Tesseract),
+        )
+        .await
+        .unwrap();
+
+        let end = start + Duration::seconds(4);
+        let (ws_stream, _) = tokio_tungstenite::connect_async(&url)
+            .await
+            .expect("websocket should connect");
+        let (mut write, mut read) = ws_stream.split();
+
+        // No request_id field — mirrors older clients / e2e harnesses.
+        let request = StreamFramesRequest {
+            start_time: start.to_rfc3339(),
+            end_time: end.to_rfc3339(),
+            order: "descending".to_string(),
+        };
+
+        write
+            .send(Message::Text(serde_json::to_string(&request).unwrap()))
+            .await
+            .expect("request should send");
+
+        let (received, saw_envelope, saw_batch_complete) =
+            timeout(std::time::Duration::from_secs(10), async {
+                let mut received = Vec::new();
+                let mut saw_envelope = false;
+                let mut saw_batch_complete = false;
+                // Drain until we have all 5 frames or the socket idles briefly
+                // after receiving some. Empty-range path would send nothing;
+                // here we expect bare arrays only.
+                let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+                while tokio::time::Instant::now() < deadline {
+                    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                    match timeout(remaining.min(std::time::Duration::from_millis(500)), read.next())
+                        .await
+                    {
+                        Ok(Some(Ok(Message::Text(text)))) => {
+                            if text == "\"keep-alive-text\"" {
+                                continue;
+                            }
+                            if serde_json::from_str::<StreamBatchComplete>(&text).is_ok() {
+                                saw_batch_complete = true;
+                                continue;
+                            }
+                            if serde_json::from_str::<StreamBatchEnvelope>(&text).is_ok() {
+                                saw_envelope = true;
+                                continue;
+                            }
+                            if let Ok(frames) =
+                                serde_json::from_str::<Vec<StreamTimeSeriesResponse>>(&text)
+                            {
+                                received.extend(frames);
+                                if received.len() >= 5 {
+                                    break;
+                                }
+                            }
+                        }
+                        _ => break,
+                    }
+                }
+                (received, saw_envelope, saw_batch_complete)
+            })
+            .await
+            .expect("legacy stream should respond in time");
+
+        server_handle.abort();
+
+        assert_eq!(received.len(), 5, "legacy client should receive all frames");
+        assert!(
+            !saw_envelope,
+            "legacy (request_id=0) must receive bare arrays, not envelopes"
+        );
+        assert!(
+            !saw_batch_complete,
+            "legacy clients must not receive batch_complete markers"
+        );
     }
 
     /// TEST 1: Reproduce the main issue - new frames after initial fetch are not pushed
@@ -210,8 +407,7 @@ mod tests {
                     if text == "\"keep-alive-text\"" {
                         break; // End of initial batch
                     }
-                    if let Ok(frames) = serde_json::from_str::<Vec<StreamTimeSeriesResponse>>(&text)
-                    {
+                    if let Some(frames) = parse_frame_batch(&text) {
                         received_frames.extend(frames);
                     }
                 }
@@ -364,8 +560,7 @@ mod tests {
                     if text == "\"keep-alive-text\"" {
                         break;
                     }
-                    if let Ok(batch) = serde_json::from_str::<Vec<StreamTimeSeriesResponse>>(&text)
-                    {
+                    if let Some(batch) = parse_frame_batch(&text) {
                         for frame in batch {
                             // Verify each frame is within the requested time range
                             let timestamp = chrono::DateTime::parse_from_rfc3339(&frame.timestamp)
@@ -511,8 +706,7 @@ mod tests {
                     if text == "\"keep-alive-text\"" {
                         break;
                     }
-                    if let Ok(batch) = serde_json::from_str::<Vec<StreamTimeSeriesResponse>>(&text)
-                    {
+                    if let Some(batch) = parse_frame_batch(&text) {
                         frames.extend(batch);
                     }
                 }
