@@ -5,7 +5,7 @@
 import { create } from "zustand";
 import { StreamTimeSeriesResponse } from "@/components/rewind/timeline";
 import { hasFramesForDate } from "../actions/has-frames-date";
-import { subDays } from "date-fns";
+import { isSameDay, subDays } from "date-fns";
 import { saveFramesToCache, loadCachedFrames } from "./use-timeline-cache";
 import {
 	appendAuthToken,
@@ -29,13 +29,22 @@ let errorGraceTimer: ReturnType<typeof setTimeout> | null = null;
 const MAX_SILENT_RETRIES = 5; // Increased from 3 - retry more before showing error
 const RETRY_DELAY_MS = 2000; // Wait 2 seconds between retries
 
-// Request timeout logic - retry with exponential backoff (never give up)
-let requestTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
-let requestRetryCount = 0;
-const REQUEST_TIMEOUT_BASE_MS = 5000; // Initial timeout: 5 seconds
-const REQUEST_TIMEOUT_MAX_MS = 60000; // Cap at 60 seconds
-const MAX_REQUEST_RETRIES = 5;
 const TIMELINE_STREAM_FRAME_LIMIT = 2500;
+
+// Monotonic id sent with every stream request. The server echoes it on each
+// frame batch and on the batch_complete marker, so "is this batch stale?" is
+// a single equality check instead of guessing from timestamps.
+let streamRequestSeq = 0;
+
+// Ids of the fetches serving the current date swap. Only their batches may
+// resolve the swap; batches from anything else in flight (live today frames,
+// a superseded fetch) are dropped while the swap is pending.
+let pendingNavRequestIds = new Set<number>();
+
+// In-flight adjacent-day prefetches (user scrolled toward a strip edge),
+// keyed by request id so the server's batch_complete clears the matching
+// side deterministically. Drives the edge shimmer in TimelineSlider.
+let prefetchRequests = new Map<number, "backward" | "forward">();
 
 // Reconnect timeout - must be tracked to prevent cascade
 let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -101,6 +110,17 @@ interface TimelineState {
 	// When true, next flushFrameBuffer replaces frames instead of merging (date swap)
 	pendingDateSwap: boolean;
 
+	// Verdict of the current date swap, set when the server's batch_complete
+	// arrives: count > 0 means the day's frames were swapped in; count 0 means
+	// the day is genuinely empty; error means the fetch failed. The navigation
+	// hook subscribes to this instead of guessing with timers.
+	navigationResult: { requestId: number; count: number; error: boolean; at: number } | null;
+
+	// ISO date of the adjacent day currently being prefetched at each strip
+	// edge (null = idle). TimelineSlider renders a shimmer continuation there
+	// so scrolling into an unloaded day doesn't dead-end in a black void.
+	stripPrefetchLoading: { backward: string | null; forward: string | null };
+
 	// Deep link navigation — persists across component mounts
 	pendingNavigation: { timestamp: string; frameId?: string } | null;
 
@@ -115,11 +135,12 @@ interface TimelineState {
 	fetchTimeRange: (startTime: Date, endTime: Date) => void;
 	fetchNextDayData: (date: Date) => void;
 	hasDateBeenFetched: (date: Date) => boolean;
-	flushFrameBuffer: () => void;
+	flushFrameBuffer: (force?: boolean) => void;
 	onWindowFocus: () => void;
 	clearNewFramesCount: () => void;
 	clearSentRequestForDate: (date: Date) => void;
 	clearFramesForNavigation: () => void; // Clear frames when navigating to new date
+	cancelPendingDateSwap: () => void; // Fallback abort if batch_complete never arrives
 	loadFromCache: () => Promise<void>; // Load cached frames on startup
 }
 
@@ -138,6 +159,8 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 	isConnected: false,
 	hasCachedData: false,
 	pendingDateSwap: false,
+	navigationResult: null,
+	stripPrefetchLoading: { backward: null, forward: null },
 	pendingNavigation: null,
 
 	setPendingNavigation: (nav) => set({ pendingNavigation: nav }),
@@ -193,7 +216,9 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 	},
 
 	// Prepare for date navigation — keep old frames visible while new ones load.
-	// Sets pendingDateSwap so flushFrameBuffer replaces frames atomically on first batch.
+	// Sets pendingDateSwap: incoming batches are held in the buffer (only the
+	// swap's own request ids pass the gate) and swapped in atomically when the
+	// server's batch_complete arrives.
 	clearFramesForNavigation: () => {
 		// Clear the frame buffer too
 		frameBuffer = [];
@@ -201,22 +226,35 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 			clearTimeout(flushTimer);
 			flushTimer = null;
 		}
-		// Clear request timeout so stale retries don't interfere
-		if (requestTimeoutTimer) {
-			clearTimeout(requestTimeoutTimer);
-			requestTimeoutTimer = null;
-		}
-		requestRetryCount = 0;
+		pendingNavRequestIds.clear();
+		// Navigation supersedes any edge prefetch (last request wins on the
+		// server, so its frames aren't coming anyway).
+		prefetchRequests.clear();
 		// Keep frames + frameTimestamps so old content stays visible.
-		// pendingDateSwap tells flushFrameBuffer to replace (not merge) on next batch.
 		set(() => ({
 			sentRequests: new Set<string>(),
 			pendingDateSwap: true,
+			navigationResult: null,
+			stripPrefetchLoading: { backward: null, forward: null },
 			isLoading: true,
 			loadingProgress: { loaded: 0, isStreaming: false },
 			error: null,
 			message: "loading...",
 		}));
+	},
+
+	// Fallback abort for a swap whose batch_complete never arrived (e.g. the
+	// socket died and never reconnected). Old frames stay visible.
+	cancelPendingDateSwap: () => {
+		pendingNavRequestIds.clear();
+		prefetchRequests.clear();
+		frameBuffer = [];
+		set({
+			pendingDateSwap: false,
+			isLoading: false,
+			message: null,
+			stripPrefetchLoading: { backward: null, forward: null },
+		});
 	},
 
 	hasDateBeenFetched: (date: Date) => {
@@ -231,9 +269,13 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 		return false;
 	},
 
-	// Flush accumulated frames to state - called periodically instead of on every message
-	flushFrameBuffer: () => {
+	// Flush accumulated frames to state - called periodically instead of on every message.
+	// During a date swap the buffer is held until batch_complete forces a flush,
+	// so the day swaps in atomically (a partial first batch would land the
+	// playhead mid-day and flash incomplete content).
+	flushFrameBuffer: (force = false) => {
 		if (frameBuffer.length === 0) return;
+		if (!force && get().pendingDateSwap) return;
 
 		const framesToFlush = frameBuffer;
 		frameBuffer = [];
@@ -248,13 +290,6 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 
 			// If pendingDateSwap, replace frames entirely with new batch (date changed)
 			if (state.pendingDateSwap) {
-				// Frames received - clear the request timeout (no need to retry)
-				if (requestTimeoutTimer) {
-					clearTimeout(requestTimeoutTimer);
-					requestTimeoutTimer = null;
-				}
-				requestRetryCount = 0;
-
 				// Debounce cache save
 				if (cacheSaveTimer) clearTimeout(cacheSaveTimer);
 				cacheSaveTimer = setTimeout(() => {
@@ -286,13 +321,6 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					error: null,
 				};
 			}
-
-			// Frames received - clear the request timeout (no need to retry)
-			if (requestTimeoutTimer) {
-				clearTimeout(requestTimeoutTimer);
-				requestTimeoutTimer = null;
-			}
-			requestRetryCount = 0; // Reset retry count on success
 
 			// Debounce cache save - don't save on every flush
 			if (cacheSaveTimer) {
@@ -365,17 +393,17 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 				error: null,
 				message: currentFrames.length > 0 ? null : "connecting...",
 				isConnected: false,
+				stripPrefetchLoading: { backward: null, forward: null },
 			});
 			
 			frameBuffer = [];
-			requestRetryCount = 0; // Reset retry counter on reconnection
+			// Fetches in flight on the old socket are dead; a pending date swap
+			// survives the reconnect — the post-open fetch re-registers its id.
+			pendingNavRequestIds.clear();
+			prefetchRequests.clear();
 			if (progressUpdateTimer) {
 				clearTimeout(progressUpdateTimer);
 				progressUpdateTimer = null;
-			}
-			if (requestTimeoutTimer) {
-				clearTimeout(requestTimeoutTimer);
-				requestTimeoutTimer = null;
 			}
 
 			// Start the liveness watchdog once. It runs for the app lifetime and
@@ -519,16 +547,97 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					return;
 				}
 
-				// Handle batched frames - OPTIMIZED: buffer and flush periodically
-				if (Array.isArray(data)) {
-					if (data.length > 0) {
-						requestRetryCount = 0;
-					}
-					// Add to buffer instead of immediate state update
-					frameBuffer.push(...data);
+				// Completion marker: the initial fetch for request_id is done.
+				// This is the definitive resolution for a date swap — count 0
+				// means the day is genuinely empty (vs. still loading).
+				if (data && data.type === "batch_complete") {
+					const requestId = Number(data.request_id) || 0;
 
-					// Schedule flush if not already scheduled
-					if (!flushTimer) {
+					// Edge prefetch finished: land its frames and drop the shimmer
+					// in the same tick so the strip extends seamlessly.
+					const prefetchDirection = prefetchRequests.get(requestId);
+					if (prefetchDirection) {
+						prefetchRequests.delete(requestId);
+						get().flushFrameBuffer();
+						set((state) => ({
+							stripPrefetchLoading: {
+								...state.stripPrefetchLoading,
+								[prefetchDirection]: null,
+							},
+						}));
+						return;
+					}
+
+					if (!pendingNavRequestIds.has(requestId)) return; // live fetch — nothing to resolve
+					pendingNavRequestIds.delete(requestId);
+
+					// Navigation fetches include prior-day context for playhead
+					// fill (navFetchRange). Success must mean the TARGET day has
+					// frames — prior-day-only buffer would otherwise look like a
+					// successful swap onto an empty day (no toast, wrong content).
+					const targetDate = get().currentDate;
+					const targetDayCount = frameBuffer.filter((f) =>
+						isSameDay(new Date(f.timestamp), targetDate),
+					).length;
+
+					if (targetDayCount > 0) {
+						// Target day arrived (possibly with prior-evening
+						// context). Swap atomically. A failed fetch with
+						// partial target-day frames still beats showing nothing.
+						pendingNavRequestIds.clear();
+						get().flushFrameBuffer(true);
+						set({
+							navigationResult: {
+								requestId,
+								count: targetDayCount,
+								error: false,
+								at: Date.now(),
+							},
+						});
+					} else if (pendingNavRequestIds.size === 0) {
+						// Empty target day (buffer may still hold prior-day
+						// context) or failed fetch. Drop the buffered context
+						// so we don't leak it into a later flush; keep the old
+						// visible frames. The navigation hook reverts the date.
+						frameBuffer = [];
+						set({
+							pendingDateSwap: false,
+							isLoading: false,
+							message: null,
+							navigationResult: {
+								requestId,
+								count: 0,
+								error: Boolean(data.error),
+								at: Date.now(),
+							},
+						});
+					}
+					// else: a sibling fetch (narrow + full-day pair) is still in
+					// flight — wait for its verdict. Keep buffer for now.
+					return;
+				}
+
+				// Handle batched frames - OPTIMIZED: buffer and flush periodically.
+				// Current server format wraps frames with the id of the request
+				// they answer; bare arrays are the legacy untagged format.
+				const isEnvelope = data && typeof data === "object" && Array.isArray(data.frames);
+				if (isEnvelope || Array.isArray(data)) {
+					const incoming: StreamTimeSeriesResponse[] = isEnvelope ? data.frames : data;
+					const requestId = isEnvelope ? Number(data.request_id) || 0 : 0;
+
+					// During a date swap, only the swap's own fetches may
+					// contribute — drop stale in-flight batches and live today
+					// frames with one comparison (the wrong-day race).
+					if (get().pendingDateSwap && !pendingNavRequestIds.has(requestId)) {
+						return;
+					}
+
+					// Add to buffer instead of immediate state update
+					frameBuffer.push(...incoming);
+
+					// Schedule flush if not already scheduled. During a swap the
+					// buffer is held until batch_complete flushes it atomically.
+					if (!flushTimer && !get().pendingDateSwap) {
 						flushTimer = setTimeout(() => {
 							flushTimer = null;
 							get().flushFrameBuffer();
@@ -554,10 +663,9 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 
 				// Handle single frame (legacy support)
 				if (data.timestamp && data.devices) {
-					requestRetryCount = 0;
 					frameBuffer.push(data);
 
-					if (!flushTimer) {
+					if (!flushTimer && !get().pendingDateSwap) {
 						flushTimer = setTimeout(() => {
 							flushTimer = null;
 							get().flushFrameBuffer();
@@ -656,10 +764,6 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 				clearTimeout(progressUpdateTimer);
 				progressUpdateTimer = null;
 			}
-			if (requestTimeoutTimer) {
-				clearTimeout(requestTimeoutTimer);
-				requestTimeoutTimer = null;
-			}
 			get().flushFrameBuffer();
 
 			const currentFrames = get().frames;
@@ -707,62 +811,26 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 			}
 
 			if (websocket && websocket.readyState === WebSocket.OPEN) {
+				const requestId = ++streamRequestSeq;
+				// During a date swap every outgoing fetch serves the swap:
+				// register it so its batches pass the stale-gate and its
+				// batch_complete can resolve the navigation.
+				if (get().pendingDateSwap) {
+					pendingNavRequestIds.add(requestId);
+				}
 				websocket.send(
 					JSON.stringify({
 						start_time: startTime.toISOString(),
 						end_time: endTime.toISOString(),
 						order: "descending",
 						limit: TIMELINE_STREAM_FRAME_LIMIT,
+						request_id: requestId,
 					}),
 				);
 
 				set((state) => ({
 					sentRequests: new Set(state.sentRequests).add(requestKey),
 				}));
-
-				// Start timeout - if no frames arrive, retry with exponential backoff
-				if (requestTimeoutTimer) {
-					clearTimeout(requestTimeoutTimer);
-				}
-				const timeoutMs = Math.min(
-					REQUEST_TIMEOUT_BASE_MS * Math.pow(2, requestRetryCount),
-					REQUEST_TIMEOUT_MAX_MS
-				);
-				requestTimeoutTimer = setTimeout(() => {
-					requestTimeoutTimer = null;
-					const { frames: currentFrames, pendingDateSwap: stillSwapping } = get();
-
-					// Retry forever with backoff if no frames arrived
-					if (currentFrames.length === 0 || stillSwapping) {
-						requestRetryCount++;
-
-						if (requestRetryCount > MAX_REQUEST_RETRIES) {
-							set({
-								isLoading: false,
-								pendingDateSwap: false,
-								message: currentFrames.length === 0
-									? "Timeline is still warming up. Try again in a moment."
-									: null,
-							});
-							return;
-						}
-
-						// Clear this date from sentRequests to allow retry
-						set((state) => {
-							const newSentRequests = new Set(state.sentRequests);
-							newSentRequests.delete(requestKey);
-							return {
-								sentRequests: newSentRequests,
-								message: requestRetryCount > 2
-									? "Loading history... server is warming up"
-									: null,
-							};
-						});
-
-						// Retry the request
-						get().fetchTimeRange(startTime, endTime);
-					}
-				}, timeoutMs);
 			} else if (attempt < 5) {
 				// WebSocket not open — retry after a short delay instead of silently dropping.
 				// This happens during cross-date navigation when the WS may be reconnecting.
@@ -782,6 +850,10 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 	},
 
 	fetchNextDayData: async (date: Date) => {
+		// The socket serves one fetch at a time (last request wins on the
+		// server) — don't let a scroll-prefetch cancel an active date swap.
+		if (get().pendingDateSwap) return;
+
 		const hasFrames = await hasFramesForDate(date);
 
 		if (!hasFrames) {
@@ -795,37 +867,112 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 		const endTime = new Date(nextDay);
 		endTime.setHours(23, 59, 59, 999);
 
-		const { websocket, sentRequests } = get();
+		const { websocket, sentRequests, pendingDateSwap } = get();
 		const requestKey = `${nextDay.toISOString()}_${endTime.toISOString()}`;
 
-		if (sentRequests.has(requestKey)) {
+		if (sentRequests.has(requestKey) || pendingDateSwap) {
 			return;
 		}
 
 		if (websocket && websocket.readyState === WebSocket.OPEN) {
+			const requestId = ++streamRequestSeq;
 			websocket.send(
 				JSON.stringify({
 					start_time: nextDay.toISOString(),
 					end_time: endTime.toISOString(),
 					order: "descending",
 					limit: TIMELINE_STREAM_FRAME_LIMIT,
+					request_id: requestId,
 				}),
 			);
+
+			// Arm the edge shimmer for the side being extended; the request's
+			// batch_complete clears it. Days are compared at local midnight.
+			const currentMidnight = new Date(get().currentDate);
+			currentMidnight.setHours(0, 0, 0, 0);
+			const direction =
+				nextDay.getTime() < currentMidnight.getTime() ? "backward" : "forward";
+			prefetchRequests.set(requestId, direction);
+			const armedDayIso = nextDay.toISOString();
+
 			set((state) => ({
 				sentRequests: new Set(state.sentRequests).add(requestKey),
+				stripPrefetchLoading: {
+					...state.stripPrefetchLoading,
+					[direction]: armedDayIso,
+				},
 			}));
+
+			// Safety: never leave the shimmer stuck if batch_complete is lost
+			// (dead socket that never reconnects). Only clears if this request
+			// still owns the slot.
+			setTimeout(() => {
+				if (prefetchRequests.delete(requestId)) {
+					set((state) =>
+						state.stripPrefetchLoading[direction] === armedDayIso
+							? {
+									stripPrefetchLoading: {
+										...state.stripPrefetchLoading,
+										[direction]: null,
+									},
+								}
+							: state,
+					);
+				}
+			}, 45_000);
 		}
 	},
 
 	onWindowFocus: () => {
-		const { websocket, fetchTimeRange, connectWebSocket } = get();
+		const { websocket, fetchTimeRange, connectWebSocket, pendingDateSwap, currentDate } =
+			get();
 
-		// Always reset to today when the window is focused.
-		// The window is hidden/shown (not destroyed), so stale dates persist.
+		// Never interrupt an in-flight date swap — resetting currentDate to
+		// today mid-nav is exactly the snap-back that makes calendar picks
+		// look broken.
+		if (pendingDateSwap) {
+			return;
+		}
+
 		const today = new Date();
-		const todayStr = today.toDateString();
+		const viewingToday = isSameDay(currentDate, today);
 
-		// Also clear the old date's sentRequests in case it was different
+		// Historical viewing: refresh the day the user is already on. Do NOT
+		// force currentDate back to today — that undoes intentional calendar
+		// / scroll navigation whenever the window regains focus.
+		if (!viewingToday) {
+			const day = currentDate;
+			const dayStr = day.toDateString();
+			set((state) => {
+				const newSentRequests = new Set<string>();
+				for (const key of state.sentRequests) {
+					const startIso = key.split("_")[0];
+					try {
+						if (new Date(startIso).toDateString() === dayStr) continue;
+					} catch {
+						/* keep non-matching keys */
+					}
+					newSentRequests.add(key);
+				}
+				return { sentRequests: newSentRequests };
+			});
+
+			const isStale = Date.now() - lastMessageAt > LIVENESS_STALE_THRESHOLD_MS;
+			if (websocket && websocket.readyState === WebSocket.OPEN && !isStale) {
+				const startTime = new Date(day);
+				startTime.setHours(0, 0, 0, 0);
+				const endTime = new Date(day);
+				endTime.setHours(23, 59, 59, 999);
+				fetchTimeRange(startTime, endTime);
+			} else {
+				resetBackoffCounters();
+				connectWebSocket();
+			}
+			return;
+		}
+
+		// Viewing today: clear today's sentRequests and re-fetch live data.
+		const todayStr = today.toDateString();
 		const { currentDate: oldDate } = get();
 		const oldDateStr = oldDate.toDateString();
 
@@ -842,8 +989,6 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 			return {
 				sentRequests: newSentRequests,
 				currentDate: today,
-				// Signal that position should reset to latest (index 0)
-				// by clearing pendingNavigation and setting a flag
 				pendingNavigation: null,
 			};
 		});
