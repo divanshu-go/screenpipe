@@ -318,8 +318,11 @@ mod tests {
                 let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
                 while tokio::time::Instant::now() < deadline {
                     let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-                    match timeout(remaining.min(std::time::Duration::from_millis(500)), read.next())
-                        .await
+                    match timeout(
+                        remaining.min(std::time::Duration::from_millis(500)),
+                        read.next(),
+                    )
+                    .await
                     {
                         Ok(Some(Ok(Message::Text(text)))) => {
                             if text == "\"keep-alive-text\"" {
