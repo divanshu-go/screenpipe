@@ -408,7 +408,7 @@ commits: `f1255eac`, `25cbdc6b`, `2529367d`, `d9821624`, `e61501da`, `039d5fea`,
 - [ ] **Keyword search logic** — Verify that keyword search SQL correctly uses `OR` instead of `UNION` within `IN()`.
 - [ ] **Search prompt accuracy** — Verify that search prompts are improved to prevent false negatives from over-filtering.
 - [ ] **Past-day timeline navigation** — Navigate the timeline to past days (e.g., using date picker or arrow keys). Verify that data loads correctly and the timeline behaves as expected.
-- [ ] **Calendar jump to historical day** — Pick a day weeks/months back from the calendar. Verify the timeline actually switches to that day (no snap-back to today), even when the fetch takes 30s+; a full-width strip skeleton (pills + playhead chip placeholder) shows while loading, then the day swaps in atomically with the strip filling the screen (no half strip between voids).
+- [ ] **Calendar jump to historical day** — Pick a day weeks/months back from the calendar. Verify the timeline actually switches to that day (no snap-back to today), even when the fetch takes 30s+; the date pill shows a spinner while old frames stay visible (strip stays mounted), then the day swaps in atomically.
 - [ ] **Calendar pick during live streaming** — While today's frames are actively streaming, pick a past day. Verify live frames don't hijack the navigation (wrong-day flash) and the picked day loads.
 - [ ] **Rapid date re-picks** — Click several calendar days in quick succession. Verify the final pick wins and no stale day's frames appear afterwards.
 - [ ] **Empty day verdict** — Navigate to a day with no captures (e.g. via deep link). Verify a "no captures" toast appears promptly and the view reverts to the prior day — no infinite "loading...".

@@ -1076,54 +1076,93 @@ export const TimelineSlider = ({
 		// remounted sentinel once the loading skeleton clears.
 	}, [fetchNextDayData, currentDate, pendingDateSwap]);
 
-	// Smooth-scroll only for small playhead steps (arrow keys, playback).
-	// Larger deltas are jumps — date navigation, search results — where an
-	// animated glide across the strip reads as the marker "dragging" to its
-	// destination. Zero-delta re-runs are layout corrections (window
-	// re-slice after a prefetch merge) and must not animate either.
+	// Measured scroll: sticky strip breaks scrollIntoView.
+	// Date jumps re-center after content replaces under the same mount.
 	const SMOOTH_SCROLL_MAX_STEP = 12;
 	const lastScrolledIndexRef = useRef<number | null>(null);
+	const prevPendingSwapRef = useRef(pendingDateSwap);
+
 	useEffect(() => {
+		if (pendingDateSwap) {
+			lastScrolledIndexRef.current = null;
+			prevPendingSwapRef.current = true;
+			return;
+		}
+
 		const container = containerRef.current;
 		if (!container || !frames[currentIndex]) return;
 
-		const currentTimestamp = frames[currentIndex].timestamp;
-		const currentElement = container.querySelector(
-			`[data-timestamp="${currentTimestamp}"]`,
-		);
-
-		if (!currentElement) return;
+		const justLeftSwap = prevPendingSwapRef.current;
+		prevPendingSwapRef.current = false;
 
 		const prevIndex = lastScrolledIndexRef.current;
-		lastScrolledIndexRef.current = currentIndex;
 		const step = prevIndex === null ? Infinity : Math.abs(currentIndex - prevIndex);
+		const isJump = justLeftSwap || step > SMOOTH_SCROLL_MAX_STEP;
 		const smooth =
-			!isWheelNavigating && step >= 1 && step <= SMOOTH_SCROLL_MAX_STEP;
+			!isJump && !isWheelNavigating && step >= 1 && step <= SMOOTH_SCROLL_MAX_STEP;
 
-		// Center by MEASURED delta instead of scrollIntoView: the strip row is
-		// `sticky right-0`, which repositions the content while the browser
-		// scrolls, so scrollIntoView's precomputed destination lands wrong
-		// (observed: every navigation parked near the content's right edge,
-		// rendering a half strip). getBoundingClientRect reflects the live,
-		// sticky-adjusted geometry, so scrolling by the on-screen delta is
-		// exact. Instant jumps re-measure once in case the first correction
-		// shifted the sticky layout again.
-		const centerDelta = () => {
+		const measureAndScroll = () => {
+			const currentTimestamp = frames[currentIndex]?.timestamp;
+			if (!currentTimestamp) return false;
+			const currentElement = container.querySelector(
+				`[data-timestamp="${currentTimestamp}"]`,
+			);
+			if (!currentElement) return false;
+
 			const cRect = container.getBoundingClientRect();
 			const eRect = currentElement.getBoundingClientRect();
-			return eRect.left + eRect.width / 2 - (cRect.left + cRect.width / 2);
+			let delta: number;
+			if (isJump) {
+				delta = eRect.left + eRect.width / 2 - (cRect.left + cRect.width / 2);
+			} else {
+				const margin = Math.min(120, cRect.width * 0.15);
+				const x = eRect.left + eRect.width / 2;
+				if (x < cRect.left + margin) delta = x - (cRect.left + margin);
+				else if (x > cRect.right - margin) delta = x - (cRect.right - margin);
+				else delta = 0;
+			}
+			if (Math.abs(delta) > 2) {
+				container.scrollBy({ left: delta, behavior: smooth ? "smooth" : "auto" });
+			}
+			lastScrolledIndexRef.current = currentIndex;
+			return true;
 		};
-		container.scrollBy({ left: centerDelta(), behavior: smooth ? "smooth" : "auto" });
-		if (!smooth) {
-			requestAnimationFrame(() => {
-				const correction = centerDelta();
-				if (Math.abs(correction) > 2) {
-					container.scrollBy({ left: correction, behavior: "auto" });
+
+		if (justLeftSwap) {
+			// Content replaced; reset scroll then re-measure.
+			container.scrollLeft = 0;
+			let raf = 0;
+			let tries = 0;
+			const run = () => {
+				raf = 0;
+				if (measureAndScroll() || tries++ > 8) {
+					requestAnimationFrame(() => {
+						measureAndScroll();
+					});
+					return;
 				}
+				raf = requestAnimationFrame(run);
+			};
+			raf = requestAnimationFrame(run);
+			return () => {
+				if (raf) cancelAnimationFrame(raf);
+			};
+		}
+
+		if (!measureAndScroll()) {
+			const raf = requestAnimationFrame(() => {
+				measureAndScroll();
 			});
+			return () => cancelAnimationFrame(raf);
+		}
+		if (!smooth) {
+			const raf = requestAnimationFrame(() => {
+				measureAndScroll();
+			});
+			return () => cancelAnimationFrame(raf);
 		}
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [currentIndex, frames.length, isWheelNavigating]);
+	}, [currentIndex, frames.length, isWheelNavigating, pendingDateSwap]);
 
 	useEffect(() => {
 		if (!selectionRange) {
@@ -1694,12 +1733,16 @@ export const TimelineSlider = ({
 					paddingBottom: "24px", // Space for time axis below
 				}}
 			>
-				{pendingDateSwap ? (
+				{/* Keep strip mounted during date swaps; skeleton only when empty. */}
+				{frames.length === 0 ? (
 					<TimelineStripLoadingRow slotWidth={frameWidth + frameMargin * 2} />
 				) : (
 				<motion.div
 					ref={timelineContentRef}
-					className="whitespace-nowrap flex flex-nowrap w-max justify-center px-[50vw] h-24 sticky right-0 scrollbar-hide relative"
+					className={cn(
+						"whitespace-nowrap flex flex-nowrap w-max justify-center px-[50vw] h-24 sticky right-0 scrollbar-hide relative",
+						pendingDateSwap && "opacity-50 pointer-events-none",
+					)}
 					onMouseUp={handleDragEnd}
 					onMouseLeave={handleDragEnd}
 				>
