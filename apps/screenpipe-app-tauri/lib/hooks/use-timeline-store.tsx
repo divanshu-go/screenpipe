@@ -629,6 +629,21 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					// Add to buffer instead of immediate state update
 					frameBuffer.push(...incoming);
 
+					// Prefetch: clear edge shimmer when real bars start landing.
+					const prefetchDirection = prefetchRequests.get(requestId);
+					if (prefetchDirection && incoming.length > 0) {
+						set((state) =>
+							state.stripPrefetchLoading[prefetchDirection]
+								? {
+										stripPrefetchLoading: {
+											...state.stripPrefetchLoading,
+											[prefetchDirection]: null,
+										},
+									}
+								: state,
+						);
+					}
+
 					// Schedule flush if not already scheduled. During a swap the
 					// buffer is held until batch_complete flushes it atomically.
 					if (!flushTimer && !get().pendingDateSwap) {
