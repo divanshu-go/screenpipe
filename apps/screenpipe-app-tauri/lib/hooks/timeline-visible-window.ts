@@ -12,9 +12,18 @@ export function visibleFrameWindow(opts: {
 	currentIndex: number;
 	halfWindow: number;
 }): { start: number; end: number } {
-	const { frameCount, currentIndex, halfWindow } = opts;
+	const { frameCount, halfWindow } = opts;
 	if (frameCount <= 0 || halfWindow < 0) return { start: 0, end: 0 };
 
+	// Clamp playhead first: an out-of-range index (HMR / shrink) would yield
+	// start >= end and an empty virtualized strip.
+	const currentIndex = Math.max(
+		0,
+		Math.min(
+			Number.isFinite(opts.currentIndex) ? Math.trunc(opts.currentIndex) : 0,
+			frameCount - 1,
+		),
+	);
 	const start = Math.max(0, currentIndex - halfWindow);
 	const end = Math.min(frameCount, currentIndex + halfWindow);
 	return { start, end };

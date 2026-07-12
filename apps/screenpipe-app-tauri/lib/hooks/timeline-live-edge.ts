@@ -22,3 +22,17 @@ export function shiftIndexForPrependedFrames(
 	if (followLiveEdge && currentIndex === 0) return currentIndex;
 	return currentIndex + newFramesAtFront;
 }
+
+/**
+ * Keep `currentIndex` inside `[0, frameCount)`. Fast Refresh can preserve a high
+ * index while the Zustand frame array resets/shrinks; an out-of-range index makes
+ * the virtualized strip window empty (sparse/stuck playhead).
+ */
+export function clampTimelineIndex(
+	currentIndex: number,
+	frameCount: number,
+): number {
+	if (!(frameCount > 0)) return 0;
+	if (!Number.isFinite(currentIndex)) return 0;
+	return Math.max(0, Math.min(Math.trunc(currentIndex), frameCount - 1));
+}

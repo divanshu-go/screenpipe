@@ -27,7 +27,10 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { shiftIndexForPrependedFrames } from "../timeline-live-edge";
+import {
+	clampTimelineIndex,
+	shiftIndexForPrependedFrames,
+} from "../timeline-live-edge";
 
 interface Flush {
 	/** frames prepended at the front on this flush (merge.newAtFront) */
@@ -111,6 +114,19 @@ describe("shiftIndexForPrependedFrames (pure)", () => {
 		// defensive: NaN / negative counts never move the index
 		expect(shiftIndexForPrependedFrames(7, Number.NaN)).toBe(7);
 		expect(shiftIndexForPrependedFrames(7, -2)).toBe(7);
+	});
+});
+
+describe("clampTimelineIndex (HMR / shrink recovery)", () => {
+	it("clamps an out-of-range index into the loaded frame array", () => {
+		expect(clampTimelineIndex(5000, 100)).toBe(99);
+		expect(clampTimelineIndex(-3, 100)).toBe(0);
+		expect(clampTimelineIndex(40, 100)).toBe(40);
+	});
+
+	it("returns 0 when there are no frames or the index is non-finite", () => {
+		expect(clampTimelineIndex(12, 0)).toBe(0);
+		expect(clampTimelineIndex(Number.NaN, 50)).toBe(0);
 	});
 });
 

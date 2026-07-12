@@ -1227,3 +1227,53 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 		}
 	},
 }));
+
+// Fast Refresh: tear down module-level sockets/timers so a reloaded store does
+// not leave an orphan OPEN socket writing into a dead closure, and so
+// isConnecting cannot stick true across the dispose boundary.
+function teardownTimelineHotRuntime() {
+	if (flushTimer) {
+		clearTimeout(flushTimer);
+		flushTimer = null;
+	}
+	if (progressUpdateTimer) {
+		clearTimeout(progressUpdateTimer);
+		progressUpdateTimer = null;
+	}
+	if (errorGraceTimer) {
+		clearTimeout(errorGraceTimer);
+		errorGraceTimer = null;
+	}
+	if (reconnectTimeout) {
+		clearTimeout(reconnectTimeout);
+		reconnectTimeout = null;
+	}
+	if (cacheSaveTimer) {
+		clearTimeout(cacheSaveTimer);
+		cacheSaveTimer = null;
+	}
+	if (livenessTimer) {
+		clearInterval(livenessTimer);
+		livenessTimer = null;
+	}
+	frameBuffer = [];
+	pendingNavRequestIds.clear();
+	suppressedNavRequestIds.clear();
+	prefetchRequests.clear();
+	prefetchSkeletonClearOnFlush.clear();
+	isConnecting = false;
+	try {
+		const ws = useTimelineStore.getState().websocket;
+		if (ws && ws.readyState !== WebSocket.CLOSED) ws.close();
+	} catch {
+		/* store may already be gone */
+	}
+}
+
+if (typeof import.meta !== "undefined") {
+	const hot = (import.meta as ImportMeta & { hot?: { dispose: (cb: () => void) => void } })
+		.hot;
+	hot?.dispose(() => {
+		teardownTimelineHotRuntime();
+	});
+}

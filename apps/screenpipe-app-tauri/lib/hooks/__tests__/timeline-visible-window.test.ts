@@ -59,4 +59,16 @@ describe("visibleFrameWindow", () => {
 			visibleFrameWindow({ frameCount: 0, currentIndex: 0, halfWindow: 10 }),
 		).toEqual({ start: 0, end: 0 });
 	});
+
+	it("clamps an out-of-range playhead so the window is never empty", () => {
+		// HMR can keep currentIndex high after frames shrink — without clamping,
+		// start >= end and the strip virtualizes to zero bars.
+		expect(
+			visibleFrameWindow({
+				frameCount: 100,
+				currentIndex: 5000,
+				halfWindow: 50,
+			}),
+		).toEqual({ start: 49, end: 100 });
+	});
 });

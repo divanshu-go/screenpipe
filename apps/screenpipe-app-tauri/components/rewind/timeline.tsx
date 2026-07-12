@@ -22,7 +22,10 @@ import { TimelineSlider } from "@/components/rewind/timeline/timeline";
 import { SearchResultStrip } from "@/components/rewind/search-result-strip";
 import { useMeetings } from "@/lib/hooks/use-meetings";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
-import { shiftIndexForPrependedFrames } from "@/lib/hooks/timeline-live-edge";
+import {
+	clampTimelineIndex,
+	shiftIndexForPrependedFrames,
+} from "@/lib/hooks/timeline-live-edge";
 import { shouldMountTimelineStrip } from "@/lib/hooks/timeline-strip-mount";
 import { findNearestDateWithFrames } from "@/lib/actions/has-frames-date";
 import { CurrentFrameTimeline } from "@/components/rewind/current-frame-timeline";
@@ -328,6 +331,38 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 	const currentIndexRef = useRef(currentIndex);
 	currentIndexRef.current = currentIndex;
 
+	// Fast Refresh can keep a high currentIndex while frames reset/shrink
+	// (store HMR) — clamp so the virtualized strip does not go empty.
+	useEffect(() => {
+		if (frames.length === 0) return;
+		if (currentIndex >= 0 && currentIndex < frames.length) return;
+		if (isNavigatingRef.current || pendingNavigationRef.current) return;
+		const next = clampTimelineIndex(currentIndex, frames.length);
+		setCurrentIndex(next);
+		setCurrentFrame(frames[next] ?? null);
+	}, [frames, currentIndex, setCurrentFrame]);
+
+	// Remount / HMR: local seekingTimestamp is gone, so an orphaned
+	// pendingDateSwap would gate the strip forever. If a successful result is
+	// already ready, the seek effect below finishes it; otherwise unlock.
+	useEffect(() => {
+		const store = useTimelineStore.getState();
+		if (!store.pendingDateSwap) return;
+		const res = store.navigationResult;
+		const canFinishSeek =
+			!!store.pendingNavTargetDate &&
+			!!res &&
+			res.count > 0 &&
+			!res.error &&
+			store.frames.length > 0;
+		if (canFinishSeek) return;
+		store.cancelPendingDateSwap();
+		useTimelineStore.setState({
+			navOriginDate: null,
+			pendingNavTargetDate: null,
+		});
+	}, []);
+
 	useEffect(() => {
 		let prevTs = 0;
 		return useTimelineStore.subscribe((state) => {
@@ -339,11 +374,15 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 				// followLiveEdge only on today; historical forward prepend must shift.
 				const viewingToday = isSameDay(state.currentDate, new Date());
 				const wasAtLiveEdge = currentIndexRef.current === 0;
+				const frameCount = state.frames.length;
 
 				setCurrentIndex((prev) =>
-					shiftIndexForPrependedFrames(prev, newFramesCount, {
-						followLiveEdge: viewingToday,
-					}),
+					clampTimelineIndex(
+						shiftIndexForPrependedFrames(prev, newFramesCount, {
+							followLiveEdge: viewingToday,
+						}),
+						frameCount,
+					),
 				);
 
 				if (
