@@ -314,6 +314,34 @@ export function getFrameAppName(frame: StreamTimeSeriesResponse | undefined): st
 	return deviceWithApp?.metadata?.app_name?.trim() || 'Unknown';
 }
 
+/** Whether two adjacent frames (newer, older in time) belong in the same
+ *  app/site segment — mirrors the break rules in appGroups. Used so
+ *  virtualization window cuts don't get rounded pill caps / segGap. */
+function framesShareSegment(
+	newer: StreamTimeSeriesResponse | undefined,
+	older: StreamTimeSeriesResponse | undefined,
+): boolean {
+	if (!newer || !older) return false;
+	let appNewer = getFrameAppName(newer);
+	let appOlder = getFrameAppName(older);
+	if (appNewer === "Unknown" && appOlder !== "Unknown") appNewer = appOlder;
+	if (appOlder === "Unknown" && appNewer !== "Unknown") appOlder = appNewer;
+	if (appNewer !== appOlder) return false;
+	if (new Date(newer.timestamp).toDateString() !== new Date(older.timestamp).toDateString()) {
+		return false;
+	}
+	if (getAppCategory(appNewer) === "browser") {
+		const urlNewer =
+			newer.devices?.find((d) => d.metadata?.browser_url)?.metadata?.browser_url?.trim() || "";
+		const urlOlder =
+			older.devices?.find((d) => d.metadata?.browser_url)?.metadata?.browser_url?.trim() || "";
+		const domNewer = urlNewer ? extractDomain(urlNewer) || "" : "";
+		const domOlder = urlOlder ? extractDomain(urlOlder) || "" : "";
+		if (domNewer && domOlder && domNewer !== domOlder) return false;
+	}
+	return true;
+}
+
 // Get ALL app names from a frame (for multi-app display)
 export function getFrameAppNames(frame: StreamTimeSeriesResponse | undefined): string[] {
 	if (!frame?.devices?.length) return ['Unknown'];
@@ -495,8 +523,12 @@ export const TimelineSlider = ({
 	// The inner flex content (motion.div) that lays out frame bars and is the
 	// positioning context for the memory-marker layer. Memory diamonds are placed
 	// by measuring real frame DOM positions relative to this node (the frame row
-	// flows right-to-left under dir="rtl", so offsets can't be recomputed by index).
+	// is flex-row-reverse — oldest left, newest right — so offsets can't be
+	// recomputed by index).
 	const timelineContentRef = useRef<HTMLDivElement>(null);
+	// Track strip viewport width so the virtualized window resizes with the
+	// window (useMemo alone would keep a stale clientWidth from first paint).
+	const [stripViewportWidth, setStripViewportWidth] = useState(1200);
 	const observerTargetRef = useRef<HTMLDivElement>(null);
 	const forwardObserverTargetRef = useRef<HTMLDivElement>(null);
 	const lastFetchRef = useRef<Date | null>(null);
@@ -678,6 +710,20 @@ export const TimelineSlider = ({
 		return Math.max(1, Math.round(baseMargin * zoomLevel));
 	}, [zoomLevel]);
 
+	// Keep virtualization window in sync with the real strip viewport width.
+	useEffect(() => {
+		const el = containerRef.current;
+		if (!el) return;
+		const apply = () => {
+			const w = el.clientWidth;
+			if (w > 0) setStripViewportWidth(w);
+		};
+		apply();
+		const ro = new ResizeObserver(apply);
+		ro.observe(el);
+		return () => ro.disconnect();
+	}, []);
+
 
 	// Pre-compute frame index map for O(1) lookups instead of O(n) indexOf.
 	// Uses object identity (WeakMap) so duplicate timestamps don't collide.
@@ -703,10 +749,12 @@ export const TimelineSlider = ({
 	// only show items from the actual viewport, not a fixed 800-frame window.
 	const latestVisibleFrames = useMemo(() => {
 		if (!frames || frames.length === 0) return [];
-		const containerWidth = containerRef.current?.clientWidth ?? 1200;
-		const framesPerScreen = Math.ceil(containerWidth / Math.max(1, frameWidth + frameMargin));
-		// Small buffer (20%) to avoid pop-in at edges, but not the old 400-frame over-fetch
-		const halfWindow = Math.ceil(framesPerScreen * 0.6);
+		// Slot width must match rendered bars (frameWidth + both side margins).
+		const slotWidth = Math.max(1, frameWidth + frameMargin * 2);
+		const framesPerScreen = Math.ceil(stripViewportWidth / slotWidth);
+		// ≥1 viewport each side so mid-scroll edges stay filled after centering
+		// (px-[50vw] padding is only for true content ends, not mid-strip).
+		const halfWindow = Math.ceil(framesPerScreen * 1.15);
 		// Keep the window a constant size even when the playhead sits at an
 		// array edge (e.g. right after landing on a day's start): shift the
 		// window inward instead of clamping it, so the strip still fills the
@@ -722,7 +770,7 @@ export const TimelineSlider = ({
 			end = frames.length;
 		}
 		return frames.slice(start, end);
-	}, [frames, currentIndex, frameWidth, frameMargin]);
+	}, [frames, currentIndex, frameWidth, frameMargin, stripViewportWidth]);
 
 	// Freeze visible frames while user is interacting to prevent
 	// WebSocket pushes from recomputing appGroups and losing popover/selection
@@ -1082,11 +1130,15 @@ export const TimelineSlider = ({
 		// remounted sentinel once the loading skeleton clears.
 	}, [fetchNextDayData, currentDate, pendingDateSwap]);
 
-	// Measured scroll: sticky strip breaks scrollIntoView.
+	// Measured scroll on an LTR overflow container (parent used to be dir=rtl,
+	// which made scrollBy/scrollLeft unreliable and left scroll≈0 → left
+	// px-[50vw] void + rounded pill start while the right edge looked flush).
+	// Visual oldest←→newest order is flex-row-reverse on the content row.
 	// Date jumps re-center after content replaces under the same mount.
 	const SMOOTH_SCROLL_MAX_STEP = 12;
 	const lastScrolledIndexRef = useRef<number | null>(null);
 	const prevPendingSwapRef = useRef(pendingDateSwap);
+	const prevStripWidthRef = useRef(stripViewportWidth);
 
 	useEffect(() => {
 		if (pendingDateSwap) {
@@ -1100,10 +1152,12 @@ export const TimelineSlider = ({
 
 		const justLeftSwap = prevPendingSwapRef.current;
 		prevPendingSwapRef.current = false;
+		const widthChanged = prevStripWidthRef.current !== stripViewportWidth;
+		prevStripWidthRef.current = stripViewportWidth;
 
 		const prevIndex = lastScrolledIndexRef.current;
 		const step = prevIndex === null ? Infinity : Math.abs(currentIndex - prevIndex);
-		const isJump = justLeftSwap || step > SMOOTH_SCROLL_MAX_STEP;
+		const isJump = justLeftSwap || widthChanged || step > SMOOTH_SCROLL_MAX_STEP;
 		const smooth =
 			!isJump && !isWheelNavigating && step >= 1 && step <= SMOOTH_SCROLL_MAX_STEP;
 
@@ -1128,21 +1182,26 @@ export const TimelineSlider = ({
 				else delta = 0;
 			}
 			if (Math.abs(delta) > 2) {
-				container.scrollBy({ left: delta, behavior: smooth ? "smooth" : "auto" });
+				if (smooth) {
+					container.scrollBy({ left: delta, behavior: "smooth" });
+				} else {
+					// LTR container: assign scrollLeft directly (reliable after
+					// removing parent dir=rtl, which broke scrollBy centering).
+					container.scrollLeft += delta;
+				}
 			}
+
 			lastScrolledIndexRef.current = currentIndex;
 			return true;
 		};
 
 		if (justLeftSwap) {
-			// Content replaced; reset scroll then re-measure. Needed with the
-			// sticky strip — skipping the reset reintroduces half-strip after arrows.
-			container.scrollLeft = 0;
+			// Content replaced; re-measure to center landing frame (no sticky).
 			let raf = 0;
 			let tries = 0;
 			const run = () => {
 				raf = 0;
-				if (measureAndScroll() || tries++ > 8) {
+				if (measureAndScroll() || tries++ > 12) {
 					requestAnimationFrame(() => {
 						measureAndScroll();
 					});
@@ -1169,7 +1228,7 @@ export const TimelineSlider = ({
 			return () => cancelAnimationFrame(raf);
 		}
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [currentIndex, frames.length, isWheelNavigating, pendingDateSwap]);
+	}, [currentIndex, frames.length, isWheelNavigating, pendingDateSwap, stripViewportWidth]);
 
 	useEffect(() => {
 		if (!selectionRange) {
@@ -1295,12 +1354,12 @@ export const TimelineSlider = ({
 	}, [frameWidth, frameMargin]);
 
 	// Position memory diamonds by measuring the real frame DOM nodes.
-	// The frame row flows right-to-left (dir="rtl") and is virtualized, so a
-	// frame's pixel offset can't be derived from its index — we read each
-	// rendered frame's center relative to the content box and snap every memory
-	// to its nearest-in-time frame. Runs in a layout effect (pre-paint) so the
-	// markers never flash at a stale spot. Re-measures whenever the laid-out
-	// frames (appGroups), sizing, or the memory set changes.
+	// The frame row is flex-row-reverse (oldest left / newest right) and
+	// virtualized, so a frame's pixel offset can't be derived from its index —
+	// we read each rendered frame's center relative to the content box and snap
+	// every memory to its nearest-in-time frame. Runs in a layout effect
+	// (pre-paint) so the markers never flash at a stale spot. Re-measures
+	// whenever the laid-out frames (appGroups), sizing, or the memory set changes.
 	useLayoutEffect(() => {
 		const container = timelineContentRef.current;
 		const clearIfNeeded = () =>
@@ -1359,7 +1418,7 @@ export const TimelineSlider = ({
 	}, [appGroups, frameWidth, frameMargin, memories]);
 
 	return (
-		<div className="relative w-full" dir="rtl">
+		<div className="relative w-full">
 			{/* Filter icon column + inline expand (design E) */}
 			<div
 				ref={(el) => { if (filtersRef) filtersRef.current = el; }}
@@ -1734,6 +1793,7 @@ export const TimelineSlider = ({
 				}}
 				data-testid="timeline-slider"
 				tabIndex={0}
+				dir="ltr"
 				className="w-full overflow-x-auto overflow-y-visible scrollbar-hide bg-gradient-to-t from-foreground/5 to-transparent outline-none"
 				style={{
 					paddingTop: "60px", // Space for tooltips above
@@ -1747,7 +1807,12 @@ export const TimelineSlider = ({
 				<motion.div
 					ref={timelineContentRef}
 					className={cn(
-						"whitespace-nowrap flex flex-nowrap w-max justify-center px-[50vw] h-24 sticky right-0 scrollbar-hide relative",
+						// LTR scrollport + flex-row-reverse: oldest left / newest right
+						// (same visual as the old parent dir=rtl) without breaking
+						// scrollLeft centering. No sticky right-0 (parked content and
+						// left a screen-edge void). px-[50vw] keeps the playhead
+						// centerable at true content ends only.
+						"whitespace-nowrap flex flex-row-reverse flex-nowrap w-max justify-center px-[50vw] h-24 scrollbar-hide relative",
 						pendingDateSwap && "opacity-50 pointer-events-none",
 					)}
 					onMouseUp={handleDragEnd}
@@ -1756,7 +1821,7 @@ export const TimelineSlider = ({
 					{/* Memory markers — diamonds above frame bars. Positions are measured
 					    from real frame DOM nodes in a layout effect (memoryPositions),
 					    so each diamond sits on its nearest-in-time frame even though the
-					    frame row flows right-to-left. */}
+					    frame row is flex-row-reverse (oldest left). */}
 					{memories.length > 0 && (
 						<div className="absolute top-0 left-0 right-0 h-5 pointer-events-auto" style={{ direction: "ltr", zIndex: 40 }}>
 							{memories.map((mem) => {
@@ -1819,7 +1884,7 @@ export const TimelineSlider = ({
 					)}
 
 					<div ref={forwardObserverTargetRef} className="h-full w-1" />
-					{/* Newer-day prefetch shimmer (left edge) */}
+					{/* Newer-day prefetch shimmer (visual RIGHT — flex-row-reverse) */}
 					{stripPrefetchLoading.forward && (
 						<StripPrefetchShimmer
 							slotWidth={frameWidth + frameMargin * 2}
@@ -2031,17 +2096,32 @@ export const TimelineSlider = ({
 									const frameTags = frameId ? (tags[frameId] || []) : [];
 									const hasTags = frameTags.length > 0;
 
-										// Rewind-style segments: round + inset the two end frames of each
-										// app run so segments read as separate rounded pills with a small
-										// gap at every transition. We shrink the end frames (rather than
-										// add margin to the group) so frame slots — and the time axis —
-										// stay aligned. Group is dir=rtl → frameIdx 0 is the segment's
-										// right end, the last frame is its left end.
+										// Rewind-style segments: round + inset only TRUE app-run
+										// ends so segments read as separate rounded pills. Group is
+										// dir=rtl → frameIdx 0 is the segment's right (newer) end,
+										// last frame is its left (older) end. Virtualization may
+										// cut mid-run — those cut edges stay square/flush so the
+										// viewport edge never shows a floating rounded pill start
+										// when the bar continues past that edge.
 										const isFirstInGroup = frameIdx === 0;
 										const isLastInGroup = frameIdx === group.frames.length - 1;
-										const segGap = 2; // px pulled in at each segment end
+										const globalIdx = frameIndexMap.get(frame) ?? -1;
+										// frames[] is newest-first: lower index = newer (visual right).
+										const continuesNewer =
+											globalIdx > 0 &&
+											framesShareSegment(frames[globalIdx - 1], frame);
+										const continuesOlder =
+											globalIdx >= 0 &&
+											globalIdx + 1 < frames.length &&
+											framesShareSegment(frame, frames[globalIdx + 1]);
+										const roundRight = isFirstInGroup && !continuesNewer;
+										const roundLeft = isLastInGroup && !continuesOlder;
+										const segGap = 2; // px pulled in at each true segment end
 										const slotWidth = frameWidth + frameMargin * 2;
-										const barWidth = Math.max(2, slotWidth - (isFirstInGroup ? segGap : 0) - (isLastInGroup ? segGap : 0));
+										const barWidth = Math.max(
+											2,
+											slotWidth - (roundRight ? segGap : 0) - (roundLeft ? segGap : 0),
+										);
 										const endRadius = "6px"; // half of 12px height → pill end
 
 									return (
@@ -2059,11 +2139,11 @@ export const TimelineSlider = ({
 											)}
 											style={{
 												// Interior frames fill their full slot with zero margin so same-app
-												// neighbors fuse into one solid segment; only the two end frames of a
-												// segment are inset (see barWidth/segGap above) for the transition gap.
+												// neighbors fuse into one solid segment; only true segment ends
+												// are inset (see barWidth/segGap above) for the transition gap.
 												width: `${barWidth}px`,
-												marginRight: isFirstInGroup ? `${segGap}px` : 0,
-												marginLeft: isLastInGroup ? `${segGap}px` : 0,
+												marginRight: roundRight ? `${segGap}px` : 0,
+												marginLeft: roundLeft ? `${segGap}px` : 0,
 												// Color browser sessions by their top site (github.com, etc.) rather
 												// than the browser app, so different sites in the same browser get
 												// distinct colors; non-browser groups fall back to the app name.
@@ -2086,10 +2166,10 @@ export const TimelineSlider = ({
 													: 'none',
 												filter: (isSelected || isInRange) ? 'brightness(1.35) saturate(1.1)' : 'none',
 												transition: 'all 0.2s ease-out',
-												borderTopRightRadius: isFirstInGroup ? endRadius : '0px',
-												borderBottomRightRadius: isFirstInGroup ? endRadius : '0px',
-												borderTopLeftRadius: isLastInGroup ? endRadius : '0px',
-												borderBottomLeftRadius: isLastInGroup ? endRadius : '0px',
+												borderTopRightRadius: roundRight ? endRadius : '0px',
+												borderBottomRightRadius: roundRight ? endRadius : '0px',
+												borderTopLeftRadius: roundLeft ? endRadius : '0px',
+												borderBottomLeftRadius: roundLeft ? endRadius : '0px',
 											}}
 											whileHover={{
 												opacity: 1,
@@ -2243,7 +2323,7 @@ export const TimelineSlider = ({
 							</React.Fragment>
 						);
 					})}
-					{/* Older-day prefetch shimmer (right edge) */}
+					{/* Older-day prefetch shimmer (visual LEFT — flex-row-reverse) */}
 					{stripPrefetchLoading.backward && (
 						<StripPrefetchShimmer
 							slotWidth={frameWidth + frameMargin * 2}

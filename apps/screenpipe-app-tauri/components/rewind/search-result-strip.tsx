@@ -13,10 +13,10 @@ const STRIP_HEIGHT = 14;
  * Horizontal position (px from the left edge) of the dot for search result `index`.
  *
  * Search results are newest-first (index 0 = newest). The main timeline strip is
- * laid out RTL — oldest on the LEFT, newest on the RIGHT (see dir="rtl" in
- * components/rewind/timeline/timeline.tsx, confirmed by the newer-day fetch
- * sentinel sitting at the right edge). So the dot-strip MUST be mirrored to match:
- * newest (index 0) sits at the RIGHT edge, oldest at the LEFT.
+ * laid out oldest on the LEFT, newest on the RIGHT (flex-row-reverse on the
+ * strip content in components/rewind/timeline/timeline.tsx; confirmed by the
+ * newer-day fetch sentinel sitting at the right edge). So the dot-strip MUST
+ * be mirrored to match: newest (index 0) sits at the RIGHT edge, oldest at the LEFT.
  *
  * If this ever maps index 0 → x=0 (left), the active dot slides OPPOSITE to the
  * timeline cursor and the ◀/▶ + ←/→ + ⌘G controls, which reads as the arrows being
