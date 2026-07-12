@@ -22,6 +22,7 @@ import { extractDomain, FaviconImg } from "./favicon-utils";
 import { localFetch, getApiBaseUrl, appendAuthToken } from "@/lib/api";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
 import { edgePrefetchPlan } from "@/lib/hooks/timeline-edge-prefetch";
+import { visibleFrameWindow } from "@/lib/hooks/timeline-visible-window";
 
 // Shimmer continuation rendered at a strip edge while the adjacent day's
 // frames are fetched (stripPrefetchLoading in use-timeline-store): muted
@@ -760,20 +761,14 @@ export const TimelineSlider = ({
 		// ≥1 viewport each side so mid-scroll edges stay filled after centering
 		// (px-[50vw] padding is only for true content ends, not mid-strip).
 		const halfWindow = Math.ceil(framesPerScreen * 1.15);
-		// Keep the window a constant size even when the playhead sits at an
-		// array edge (e.g. right after landing on a day's start): shift the
-		// window inward instead of clamping it, so the strip still fills the
-		// screen instead of rendering half a window between two voids.
-		let start = currentIndex - halfWindow;
-		let end = currentIndex + halfWindow;
-		if (start < 0) {
-			end = Math.min(frames.length, end - start);
-			start = 0;
-		}
-		if (end > frames.length) {
-			start = Math.max(0, start - (end - frames.length));
-			end = frames.length;
-		}
+		// Clamp-only window: do not steal frames from the loaded side to fill a
+		// short day edge. Inward rebalance caused a layout jump when adjacent-day
+		// frames landed (window recentered). Prefetch shimmer covers the gap.
+		const { start, end } = visibleFrameWindow({
+			frameCount: frames.length,
+			currentIndex,
+			halfWindow,
+		});
 		return frames.slice(start, end);
 	}, [frames, currentIndex, frameWidth, frameMargin, stripViewportWidth]);
 
@@ -1141,15 +1136,29 @@ export const TimelineSlider = ({
 	// px-[50vw] void + rounded pill start while the right edge looked flush).
 	// Visual oldest←→newest order is flex-row-reverse on the content row.
 	// Date jumps re-center after content replaces under the same mount.
+	//
+	// useLayoutEffect (not useEffect): when prefetched frames prepend/append or
+	// shimmer swaps for real bars, content width changes under the playhead.
+	// Correcting scrollLeft before paint avoids a one-frame jump. Smooth
+	// scrollBy still runs here — the browser animates asynchronously anyway.
 	const SMOOTH_SCROLL_MAX_STEP = 12;
 	const lastScrolledIndexRef = useRef<number | null>(null);
 	const prevPendingSwapRef = useRef(pendingDateSwap);
 	const prevStripWidthRef = useRef(stripViewportWidth);
+	const prevFramesLengthRef = useRef(frames.length);
+	const stripPrefetchKey = `${stripPrefetchLoading.backward ?? ""}|${stripPrefetchLoading.forward ?? ""}`;
+	const prevStripPrefetchKeyRef = useRef(stripPrefetchKey);
+	// Viewport X of the playhead frame center — used to restore position when
+	// content width changes without a seek (prefetch merge / shimmer swap).
+	const playheadViewportXRef = useRef<number | null>(null);
 
-	useEffect(() => {
+	useLayoutEffect(() => {
 		if (pendingDateSwap) {
 			lastScrolledIndexRef.current = null;
 			prevPendingSwapRef.current = true;
+			prevFramesLengthRef.current = frames.length;
+			prevStripPrefetchKeyRef.current = stripPrefetchKey;
+			playheadViewportXRef.current = null;
 			return;
 		}
 
@@ -1160,12 +1169,27 @@ export const TimelineSlider = ({
 		prevPendingSwapRef.current = false;
 		const widthChanged = prevStripWidthRef.current !== stripViewportWidth;
 		prevStripWidthRef.current = stripViewportWidth;
+		const framesLengthChanged = prevFramesLengthRef.current !== frames.length;
+		prevFramesLengthRef.current = frames.length;
+		const shimmerChanged = prevStripPrefetchKeyRef.current !== stripPrefetchKey;
+		prevStripPrefetchKeyRef.current = stripPrefetchKey;
 
 		const prevIndex = lastScrolledIndexRef.current;
 		const step = prevIndex === null ? Infinity : Math.abs(currentIndex - prevIndex);
-		const isJump = justLeftSwap || widthChanged || step > SMOOTH_SCROLL_MAX_STEP;
+		// Layout-only change: keep the playhead on the same screen X (don't
+		// snap-center — that fights an in-progress wheel scrub).
+		const preserveViewportX =
+			!justLeftSwap &&
+			(framesLengthChanged || shimmerChanged) &&
+			playheadViewportXRef.current != null;
+		const isJump =
+			justLeftSwap || widthChanged || step > SMOOTH_SCROLL_MAX_STEP;
 		const smooth =
-			!isJump && !isWheelNavigating && step >= 1 && step <= SMOOTH_SCROLL_MAX_STEP;
+			!isJump &&
+			!preserveViewportX &&
+			!isWheelNavigating &&
+			step >= 1 &&
+			step <= SMOOTH_SCROLL_MAX_STEP;
 
 		const measureAndScroll = () => {
 			const currentTimestamp = frames[currentIndex]?.timestamp;
@@ -1177,14 +1201,16 @@ export const TimelineSlider = ({
 
 			const cRect = container.getBoundingClientRect();
 			const eRect = currentElement.getBoundingClientRect();
+			const playheadX = eRect.left + eRect.width / 2;
 			let delta: number;
-			if (isJump) {
-				delta = eRect.left + eRect.width / 2 - (cRect.left + cRect.width / 2);
+			if (preserveViewportX && step === 0) {
+				delta = playheadX - (playheadViewportXRef.current as number);
+			} else if (isJump) {
+				delta = playheadX - (cRect.left + cRect.width / 2);
 			} else {
 				const margin = Math.min(120, cRect.width * 0.15);
-				const x = eRect.left + eRect.width / 2;
-				if (x < cRect.left + margin) delta = x - (cRect.left + margin);
-				else if (x > cRect.right - margin) delta = x - (cRect.right - margin);
+				if (playheadX < cRect.left + margin) delta = playheadX - (cRect.left + margin);
+				else if (playheadX > cRect.right - margin) delta = playheadX - (cRect.right - margin);
 				else delta = 0;
 			}
 			if (Math.abs(delta) > 2) {
@@ -1197,6 +1223,8 @@ export const TimelineSlider = ({
 				}
 			}
 
+			const after = currentElement.getBoundingClientRect();
+			playheadViewportXRef.current = after.left + after.width / 2;
 			lastScrolledIndexRef.current = currentIndex;
 			return true;
 		};
@@ -1227,14 +1255,21 @@ export const TimelineSlider = ({
 			});
 			return () => cancelAnimationFrame(raf);
 		}
+		// One sync remasure catches group-width settle in the same commit.
+		// Avoid a post-paint rAF here — that reintroduced the one-frame hitch
+		// we moved to useLayoutEffect to eliminate.
 		if (!smooth) {
-			const raf = requestAnimationFrame(() => {
-				measureAndScroll();
-			});
-			return () => cancelAnimationFrame(raf);
+			measureAndScroll();
 		}
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [currentIndex, frames.length, isWheelNavigating, pendingDateSwap, stripViewportWidth]);
+	}, [
+		currentIndex,
+		frames.length,
+		isWheelNavigating,
+		pendingDateSwap,
+		stripViewportWidth,
+		stripPrefetchKey,
+	]);
 
 	useEffect(() => {
 		if (!selectionRange) {

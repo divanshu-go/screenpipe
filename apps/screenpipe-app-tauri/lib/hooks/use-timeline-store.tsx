@@ -50,6 +50,9 @@ let pendingNavRequestIds = new Set<number>();
 // keyed by request id so the server's batch_complete clears the matching
 // side deterministically. Drives the edge shimmer in TimelineSlider.
 let prefetchRequests = new Map<number, "backward" | "forward">();
+// Directions whose shimmer should drop in the *same* flush that merges their
+// first real frames — clearing earlier left a void frame before bars arrived.
+let prefetchShimmerClearOnFlush = new Set<"backward" | "forward">();
 
 // Reconnect timeout - must be tracked to prevent cascade
 let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -246,6 +249,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 		// Navigation supersedes any edge prefetch (last request wins on the
 		// server, so its frames aren't coming anyway).
 		prefetchRequests.clear();
+		prefetchShimmerClearOnFlush.clear();
 		// Keep frames + frameTimestamps so old content stays visible.
 		set(() => ({
 			sentRequests: new Set<string>(),
@@ -267,6 +271,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 	cancelPendingDateSwap: () => {
 		pendingNavRequestIds.clear();
 		prefetchRequests.clear();
+		prefetchShimmerClearOnFlush.clear();
 		frameBuffer = [];
 		set({
 			pendingDateSwap: false,
@@ -298,6 +303,8 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 
 		const framesToFlush = frameBuffer;
 		frameBuffer = [];
+		const shimmerDirsToClear = [...prefetchShimmerClearOnFlush];
+		prefetchShimmerClearOnFlush.clear();
 
 		set((state) => {
 			const merged = mergeTimelineFrames({
@@ -306,6 +313,17 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 				incomingFrames: framesToFlush,
 				replace: state.pendingDateSwap,
 			});
+
+			const nextPrefetchLoading =
+				shimmerDirsToClear.length > 0
+					? (() => {
+							const next = { ...state.stripPrefetchLoading };
+							for (const dir of shimmerDirsToClear) {
+								next[dir] = null;
+							}
+							return next;
+						})()
+					: state.stripPrefetchLoading;
 
 			// If pendingDateSwap, replace frames entirely with new batch (date changed).
 			// Keep pendingDateSwap true until the pending-nav seek lands: clearing it
@@ -329,6 +347,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					error: null,
 					newFramesCount: 0,
 					lastFlushTimestamp: Date.now(),
+					stripPrefetchLoading: nextPrefetchLoading,
 				};
 			}
 
@@ -341,6 +360,9 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					},
 					message: null,
 					error: null,
+					// Still drop shimmer if a prefetch batch was empty/dupe-only
+					// but asked to clear — avoids a stuck pulse at the edge.
+					stripPrefetchLoading: nextPrefetchLoading,
 				};
 			}
 
@@ -365,6 +387,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 				error: null,
 				newFramesCount: merged.newAtFront,
 				lastFlushTimestamp: Date.now(),
+				stripPrefetchLoading: nextPrefetchLoading,
 			};
 		});
 	},
@@ -423,6 +446,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 			// survives the reconnect — the post-open fetch re-registers its id.
 			pendingNavRequestIds.clear();
 			prefetchRequests.clear();
+			prefetchShimmerClearOnFlush.clear();
 			if (progressUpdateTimer) {
 				clearTimeout(progressUpdateTimer);
 				progressUpdateTimer = null;
@@ -739,19 +763,12 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					// Add to buffer instead of immediate state update
 					frameBuffer.push(...incoming);
 
-					// Prefetch: clear edge shimmer when real bars start landing.
+					// Prefetch: drop the edge shimmer in the flush that merges
+					// these frames (same React commit) — clearing here left a
+					// void gap before bars arrived and felt like a scroll bump.
 					const prefetchDirection = prefetchRequests.get(requestId);
 					if (prefetchDirection && incoming.length > 0) {
-						set((state) =>
-							state.stripPrefetchLoading[prefetchDirection]
-								? {
-										stripPrefetchLoading: {
-											...state.stripPrefetchLoading,
-											[prefetchDirection]: null,
-										},
-									}
-								: state,
-						);
+						prefetchShimmerClearOnFlush.add(prefetchDirection);
 					}
 
 					// Schedule flush if not already scheduled. During a swap the
