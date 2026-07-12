@@ -327,13 +327,14 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 	// math lives in shiftIndexForPrependedFrames so it can be unit-tested; see
 	// lib/hooks/__tests__/timeline-live-edge-shift.test.ts.
 	//
-	// LIVE-EDGE AUTO-FOLLOW: when the user is parked on the newest frame (index
-	// 0) and isn't doing anything else, advance the *displayed* frame to the new
-	// newest as it streams in — otherwise the image freezes on an old frame
-	// while the scrubber grows (the "I came back and it was stuck until I hit
-	// refresh" report). Gated below so it never fights manual scrubbing,
-	// playback, seeking, navigation, or search review. Frame loads are debounced
-	// (use-frame-loading), so following sparse live frames is cheap.
+	// LIVE-EDGE AUTO-FOLLOW: when viewing today, parked on the newest frame
+	// (index 0), and idle, advance the *displayed* frame as live frames stream
+	// in — otherwise the image freezes on an old frame while the scrubber grows.
+	// Historical forward prefetch also prepends; that path shifts the index
+	// instead of pinning so the strip extends right without cascading.
+	// Gated below so it never fights manual scrubbing, playback, seeking,
+	// navigation, or search review. Frame loads are debounced (use-frame-loading),
+	// so following sparse live frames is cheap.
 	const liveFollowBlockedRef = useRef(false);
 	useEffect(() => {
 		liveFollowBlockedRef.current =
@@ -358,13 +359,20 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			prevTs = lastFlushTimestamp;
 
 			if (newFramesCount > 0) {
-				// Was the user parked on the newest frame (live edge) as of the last
-				// render? Read from the ref, not from inside the updater below.
+				// True live-edge follow only while viewing today. Historical
+				// forward prefetch also prepends; pinning index 0 there would
+				// teleport to the new day's newest frame (cascade toward today).
+				const viewingToday = isSameDay(state.currentDate, new Date());
 				const wasAtLiveEdge = currentIndexRef.current === 0;
 
-				setCurrentIndex((prev) => shiftIndexForPrependedFrames(prev, newFramesCount));
+				setCurrentIndex((prev) =>
+					shiftIndexForPrependedFrames(prev, newFramesCount, {
+						followLiveEdge: viewingToday,
+					}),
+				);
 
 				if (
+					viewingToday &&
 					wasAtLiveEdge &&
 					!liveFollowBlockedRef.current &&
 					!isNavigatingRef.current &&

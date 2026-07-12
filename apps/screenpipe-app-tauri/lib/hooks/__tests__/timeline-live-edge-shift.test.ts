@@ -95,6 +95,17 @@ describe("shiftIndexForPrependedFrames (pure)", () => {
 		expect(shiftIndexForPrependedFrames(0, 5)).toBe(0);
 	});
 
+	it("shifts index 0 when followLiveEdge is false (historical forward prefetch)", () => {
+		// Newer-day frames prepend; keep the playhead on the same frame so the
+		// strip extends right instead of cascading to the new day's end.
+		expect(
+			shiftIndexForPrependedFrames(0, 5, { followLiveEdge: false }),
+		).toBe(5);
+		expect(
+			shiftIndexForPrependedFrames(3, 10, { followLiveEdge: false }),
+		).toBe(13);
+	});
+
 	it("is a no-op when nothing was prepended", () => {
 		expect(shiftIndexForPrependedFrames(7, 0)).toBe(7);
 		// defensive: NaN / negative counts never move the index

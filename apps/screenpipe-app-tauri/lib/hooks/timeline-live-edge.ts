@@ -10,9 +10,15 @@
  * To keep the viewport on the same frame the user is currently looking at, we
  * shift `currentIndex` forward by the number of frames added at the front.
  *
- * The one exception is the "live edge": when the user is at index 0 they're
- * pinned to the newest frame, and we want them to stay pinned there (index 0
- * is always the newest frame), so we leave the index untouched.
+ * The one exception is the true "live edge" while viewing today: when the user
+ * is at index 0 they're pinned to the newest frame, and we want them to stay
+ * pinned there (index 0 is always the newest frame), so we leave the index
+ * untouched.
+ *
+ * Historical forward prefetch also prepends (newer day at the front). In that
+ * case we must NOT pin: pinning would teleport the playhead to the end of the
+ * newly loaded day (cascade toward today). Pass `followLiveEdge: false` so the
+ * index shifts and the strip extends to the visual right under a stable playhead.
  *
  * WHY THIS IS A STANDALONE PURE FUNCTION
  * --------------------------------------
@@ -35,10 +41,12 @@
 export function shiftIndexForPrependedFrames(
 	currentIndex: number,
 	newFramesAtFront: number,
+	opts?: { followLiveEdge?: boolean },
 ): number {
 	// Nothing was added at the front (or a non-positive/NaN count) — no shift.
 	if (!(newFramesAtFront > 0)) return currentIndex;
-	// Live edge: stay pinned to the newest frame (index 0 is always newest).
-	if (currentIndex === 0) return currentIndex;
+	const followLiveEdge = opts?.followLiveEdge !== false;
+	// Live edge (today only): stay pinned to the newest frame.
+	if (followLiveEdge && currentIndex === 0) return currentIndex;
 	return currentIndex + newFramesAtFront;
 }
