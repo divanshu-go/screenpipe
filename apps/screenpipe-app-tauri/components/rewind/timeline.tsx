@@ -5,7 +5,7 @@
 
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 
-import { Loader2, RotateCcw, AlertCircle, X, Sparkles, Globe, Lock, ExternalLink, MonitorOff, Settings } from "lucide-react";
+import { RotateCcw, AlertCircle, X, Sparkles, Globe, Lock, ExternalLink, MonitorOff, Settings } from "lucide-react";
 import { SearchModal } from "@/components/rewind/search-modal";
 import { commands } from "@/lib/utils/tauri";
 import { listen, emit } from "@tauri-apps/api/event";
@@ -23,6 +23,7 @@ import { SearchResultStrip } from "@/components/rewind/search-result-strip";
 import { useMeetings } from "@/lib/hooks/use-meetings";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
 import { shiftIndexForPrependedFrames } from "@/lib/hooks/timeline-live-edge";
+import { shouldMountTimelineStrip } from "@/lib/hooks/timeline-strip-mount";
 import { findNearestDateWithFrames } from "@/lib/actions/has-frames-date";
 import { CurrentFrameTimeline } from "@/components/rewind/current-frame-timeline";
 import { useSearchHighlight } from "@/lib/hooks/use-search-highlight";
@@ -642,10 +643,15 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		return () => clearTimeout(timer);
 	}, [pendingNavigation, navigateToTimestamp, setPendingNavigation]);
 
-	// Progressive loading: show UI once any frames exist. During date nav,
-	// the strip skeleton is the feedback (not the full-screen blocker).
-	const hasInitialFrames = frames.length > 0;
-	const showBlockingLoader = isLoading && !hasInitialFrames && !isNavigating && !pendingDateSwap;
+	// Strip skeleton owns first connect and date-swap loading. Never show the
+	// legacy full-screen "Loading Timeline" blocker or bottom "Loading
+	// timeline..." panel — including the await gap before pendingDateSwap.
+	const mountTimelineStrip = shouldMountTimelineStrip({
+		frameCount: frames.length,
+		pendingDateSwap,
+		isNavigating,
+		isLoading,
+	});
 
 
 	// Auto-select first frame when frames arrive and no frame is selected
@@ -698,7 +704,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 	
 	// Track loading state changes for cumulative loading time
 	useEffect(() => {
-		if (isLoading || showBlockingLoader) {
+		if (isLoading) {
 			// Started loading
 			if (loadingStartTimeRef.current === null) {
 				loadingStartTimeRef.current = performance.now();
@@ -710,7 +716,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 				loadingStartTimeRef.current = null;
 			}
 		}
-	}, [isLoading, showBlockingLoader]);
+	}, [isLoading]);
 	
 	// Track time to first frame
 	useEffect(() => {
@@ -1194,7 +1200,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 					) : null}
 
 	
-					{!currentFrame && !showBlockingLoader && !error && frames.length === 0 && !isLoading ? (
+					{!currentFrame && !error && frames.length === 0 && !isLoading ? (
 						<div className="absolute inset-0 flex items-center justify-center bg-gradient-to-b from-background via-background to-muted/20">
 							{health?.frame_status === "disabled" ? (
 								<div className="text-center p-8 max-w-md">
@@ -1352,31 +1358,8 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 					/>
 				</div>
 
-				{/* Loading/Error States - Progressive loading: only block when no frames yet */}
-				{showBlockingLoader && (
-					<div className="absolute inset-0 z-50 flex items-center justify-center bg-background/90">
-						{/* Close button - always visible to prevent being stuck (hidden in embedded mode) */}
-						{!embedded && (
-							<button
-								onClick={() => commands.closeWindow("Main")}
-								className="absolute top-4 right-4 p-2 bg-card hover:bg-muted border border-border rounded-md transition-colors z-50"
-								title="Close (Esc)"
-							>
-								<X className="w-4 h-4 text-muted-foreground" />
-							</button>
-						)}
-						<div className="bg-card text-foreground p-6 rounded-2xl text-center space-y-3 max-w-md mx-4">
-							<h3 className="font-medium">Loading Timeline</h3>
-							<p className="text-sm text-foreground">
-								Fetching your recorded frames...
-							</p>
-							<Loader2 className="h-5 w-5 animate-spin mx-auto mt-2" />
-							<p className="text-xs text-muted-foreground mt-4">
-								Press Esc or click X to close
-							</p>
-						</div>
-					</div>
-				)}
+				{/* Loading UX: TimelineStripLoadingRow / StripDateSwapSkeleton inside
+				    the mounted strip — no full-screen "Loading Timeline" blocker. */}
 
 				{/* Non-blocking streaming indicator - removed for minimalistic UX
 			    The timeline works fine while loading, no need to show persistent indicator */}
@@ -1506,11 +1489,10 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 
 				{/* Bottom Timeline - Overlay that doesn't cut off image */}
 				<div className="absolute bottom-0 left-0 right-0 z-40 pointer-events-auto">
-					{/* Mount the slider during a date swap even with zero frames:
-					    it renders the full-width strip skeleton internally.
-					    The blocking "Loading timeline..." panel is only for the
-					    initial connect before any fetch is in flight. */}
-					{frames.length > 0 || pendingDateSwap ? (
+					{/* Keep TimelineSlider mounted for load/nav/swap so
+					    TimelineStripLoadingRow / StripDateSwapSkeleton own UX.
+					    Idle empty panel is only Recording... / error. */}
+					{mountTimelineStrip ? (
 						<TimelineSlider
 							frames={frames}
 							currentIndex={currentIndex}
@@ -1557,29 +1539,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 					) : (
 						<div className="bg-card/80 backdrop-blur-sm p-4 border-t border-border">
 							<div className="text-foreground text-sm">
-								{isLoading ? (
-									<div className="space-y-3">
-										{/* Skeleton timeline slider */}
-										<div className="flex items-center gap-2 justify-center">
-											<Loader2 className="w-4 h-4 animate-spin" />
-											<span>Loading timeline...</span>
-										</div>
-										<div className="h-16 bg-muted/50 rounded-lg animate-pulse flex items-end gap-0.5 px-2 pb-2">
-											{/* Skeleton bars */}
-											{Array.from({ length: 60 }).map((_, i) => (
-												<div
-													key={i}
-													className="flex-1 bg-muted rounded-t"
-													style={{
-														// Deterministic heights to avoid SSR/client hydration mismatch
-														height: `${((i * 37 + 13) % 60) + 20}%`,
-														animationDelay: `${i * 20}ms`
-													}}
-												/>
-											))}
-										</div>
-									</div>
-								) : error ? (
+								{error ? (
 									<div className="text-destructive text-center">Failed to load timeline data</div>
 								) : (
 									<div className="text-center text-muted-foreground flex items-center justify-center gap-2">
