@@ -161,6 +161,8 @@ impl HotFrameCache {
 
     /// Read frames from cache for a time range, with associated audio.
     /// Returns `TimeSeriesFrame` entries compatible with the existing WS format.
+    /// Orphan audio (no screen frame in range that already carries the chunk)
+    /// becomes audio-only placeholders so screen-off days still stream markers.
     pub async fn get_frames_in_range(
         &self,
         start: DateTime<Utc>,
@@ -172,13 +174,34 @@ impl HotFrameCache {
         let range_start = (start, i64::MIN);
         let range_end = (end, i64::MAX);
 
-        frames
+        let mut result: Vec<TimeSeriesFrame> = frames
             .range(range_start..=range_end)
             .map(|(_, hot_frame)| {
                 let audio_entries = find_audio_for_frame(&audio, hot_frame.timestamp);
                 hot_frame_to_timeseries(hot_frame, audio_entries)
             })
-            .collect()
+            .collect();
+
+        let mut attached_chunk_ids = HashSet::new();
+        for ts_frame in &result {
+            for device in &ts_frame.frame_data {
+                for a in &device.audio_entries {
+                    attached_chunk_ids.insert(a.audio_chunk_id);
+                }
+            }
+        }
+
+        for (_, audio_list) in audio.range(start..=end) {
+            for a in audio_list {
+                if !attached_chunk_ids.insert(a.audio_chunk_id) {
+                    continue;
+                }
+                result.push(orphan_audio_to_timeseries(a));
+            }
+        }
+
+        result.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        result
     }
 
     /// Earliest timestamp the cache covers (inclusive).
@@ -436,6 +459,45 @@ fn hot_frame_to_timeseries(hot: &HotFrame, audio_entries: Vec<AudioEntry>) -> Ti
     }
 }
 
+/// Synthetic timeline marker for audio with no nearby screen frame.
+fn orphan_audio_to_timeseries(a: &HotAudio) -> TimeSeriesFrame {
+    let transcription = a.transcription.to_string();
+    let audio_entries = vec![AudioEntry {
+        transcription: transcription.clone(),
+        device_name: a.device_name.to_string(),
+        is_input: a.is_input,
+        audio_file_path: a.audio_file_path.to_string(),
+        duration_secs: a.duration_secs,
+        audio_chunk_id: a.audio_chunk_id,
+        speaker_id: a.speaker_id,
+        speaker_name: a.speaker_name.as_deref().map(String::from),
+        start_time: a.start_time,
+        end_time: a.end_time,
+    }];
+
+    TimeSeriesFrame {
+        timestamp: a.timestamp,
+        frame_data: vec![DeviceFrame {
+            device_id: "audio-only".to_string(),
+            frame_id: -a.audio_chunk_id.abs(),
+            image_data: vec![],
+            metadata: FrameMetadata {
+                file_path: String::new(),
+                app_name: "Audio Recording".to_string(),
+                window_name: String::new(),
+                transcription,
+                ocr_text: String::new(),
+                browser_url: None,
+            },
+            audio_entries,
+            machine_id: None,
+        }],
+        offset_index: i64::MIN,
+        fps: 0.0,
+        error: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -520,6 +582,44 @@ mod tests {
         assert_eq!(
             result[0].frame_data[0].audio_entries[0].transcription,
             "hello"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_orphan_audio_becomes_placeholder() {
+        let cache = HotFrameCache::new();
+        let now = Utc::now();
+
+        cache
+            .push_audio(HotAudio {
+                audio_chunk_id: 99,
+                timestamp: now,
+                transcription: "screen off talk".into(),
+                device_name: "mic_0".into(),
+                is_input: true,
+                audio_file_path: "/tmp/audio.mp4".into(),
+                duration_secs: 2.0,
+                start_time: None,
+                end_time: None,
+                speaker_id: None,
+                speaker_name: None,
+            })
+            .await;
+
+        let start = now - chrono::Duration::seconds(1);
+        let end = now + chrono::Duration::seconds(1);
+        let result = cache.get_frames_in_range(start, end).await;
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].frame_data[0].device_id, "audio-only");
+        assert_eq!(
+            result[0].frame_data[0].metadata.app_name,
+            "Audio Recording"
+        );
+        assert_eq!(result[0].frame_data[0].audio_entries.len(), 1);
+        assert_eq!(
+            result[0].frame_data[0].audio_entries[0].transcription,
+            "screen off talk"
         );
     }
 
