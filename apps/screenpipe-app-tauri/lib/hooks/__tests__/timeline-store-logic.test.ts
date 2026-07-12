@@ -12,6 +12,7 @@ import { describe, it, expect } from "bun:test";
 import { mergeTimelineFrames } from "../timeline-frame-merge";
 import {
   findNextFrameIndex,
+  hasFrameNavigableContent,
   hasFrameVisualMedia,
   snapFrameIndex,
 } from "../timeline-frame-navigation";
@@ -432,12 +433,13 @@ describe("Timeline Store Logic - Frame Refresh Bug Tests", () => {
 });
 
 describe("Timeline visual frame navigation", () => {
-  it("detects transcript-only timeline markers as non-visual", () => {
+  it("detects transcript-only timeline markers as non-visual but navigable", () => {
     expect(hasFrameVisualMedia(createMockFrame("2026-07-03T10:00:00Z"))).toBe(true);
     expect(hasFrameVisualMedia(createAudioOnlyFrame("2026-07-03T10:01:00Z"))).toBe(false);
+    expect(hasFrameNavigableContent(createAudioOnlyFrame("2026-07-03T10:01:00Z"))).toBe(true);
   });
 
-  it("skips audio-only markers during default next/previous navigation", () => {
+  it("steps onto audio-only markers during next/previous navigation", () => {
     const frames = [
       createMockFrame("2026-07-03T10:03:00Z", "monitor_1", 3),
       createAudioOnlyFrame("2026-07-03T10:02:00Z", -2),
@@ -445,11 +447,12 @@ describe("Timeline visual frame navigation", () => {
       createMockFrame("2026-07-03T10:00:00Z", "monitor_1", 1),
     ];
 
-    expect(findNextFrameIndex(frames, 0, 1, hasFrameVisualMedia)).toBe(3);
-    expect(findNextFrameIndex(frames, 3, -1, hasFrameVisualMedia)).toBe(0);
+    expect(findNextFrameIndex(frames, 0, 1, hasFrameNavigableContent)).toBe(1);
+    expect(findNextFrameIndex(frames, 1, 1, hasFrameNavigableContent)).toBe(2);
+    expect(findNextFrameIndex(frames, 3, -1, hasFrameNavigableContent)).toBe(2);
   });
 
-  it("snaps wheel targets off audio-only markers toward the scroll direction", () => {
+  it("keeps wheel targets on audio-only markers", () => {
     const frames = [
       createMockFrame("2026-07-03T10:03:00Z", "monitor_1", 3),
       createAudioOnlyFrame("2026-07-03T10:02:00Z", -2),
@@ -457,8 +460,8 @@ describe("Timeline visual frame navigation", () => {
       createMockFrame("2026-07-03T10:00:00Z", "monitor_1", 1),
     ];
 
-    expect(snapFrameIndex(frames, 1, 1, hasFrameVisualMedia)).toBe(2);
-    expect(snapFrameIndex(frames, 1, -1, hasFrameVisualMedia)).toBe(0);
+    expect(snapFrameIndex(frames, 1, 1, hasFrameNavigableContent)).toBe(1);
+    expect(snapFrameIndex(frames, 1, -1, hasFrameNavigableContent)).toBe(1);
   });
 });
 

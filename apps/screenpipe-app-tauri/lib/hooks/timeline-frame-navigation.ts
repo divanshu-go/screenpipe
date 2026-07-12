@@ -27,7 +27,7 @@ export function hasFrameAudioContent(
 	return !!frame?.devices?.some((device) => (device.audio?.length ?? 0) > 0);
 }
 
-/** Screen media, or audio markers (for audio-only days). */
+/** Screen media, or audio markers (mic + transcript UI). */
 export function hasFrameNavigableContent(
 	frame: StreamTimeSeriesResponse | null | undefined,
 ): boolean {

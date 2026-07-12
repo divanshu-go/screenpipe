@@ -5,7 +5,7 @@
 import { StreamTimeSeriesResponse } from "@/components/rewind/timeline";
 import { useEffect, useState } from "react";
 import { useTimelineStore } from "./use-timeline-store";
-import { hasFrameVisualMedia, snapFrameIndex } from "./timeline-frame-navigation";
+import { hasFrameNavigableContent, snapFrameIndex } from "./timeline-frame-navigation";
 
 export const useCurrentFrame = (setCurrentIndex: (index: number) => void) => {
 	const [currentFrame, setCurrentFrame] =
@@ -13,12 +13,12 @@ export const useCurrentFrame = (setCurrentIndex: (index: number) => void) => {
 
 	const { frames, isLoading } = useTimelineStore();
 
-	// Select first frame (most recent) when frames load and no frame is selected
+	// Select first navigable frame (screen or audio marker) when frames load
 	useEffect(() => {
 		if (!currentFrame && frames.length > 0) {
-			const firstVisualIndex = snapFrameIndex(frames, 0, 1, hasFrameVisualMedia);
-			setCurrentFrame(frames[firstVisualIndex]);
-			setCurrentIndex(firstVisualIndex);
+			const firstIndex = snapFrameIndex(frames, 0, 1, hasFrameNavigableContent);
+			setCurrentFrame(frames[firstIndex]);
+			setCurrentIndex(firstIndex);
 		}
 	}, [isLoading, frames, currentFrame, setCurrentIndex]);
 
