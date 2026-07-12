@@ -57,7 +57,7 @@ let pendingNavRequestIds = new Set<number>();
 let prefetchRequests = new Map<number, "backward" | "forward">();
 // Directions whose edge skeleton should drop in the *same* flush that merges
 // their first real frames — clearing earlier left a void before bars arrived.
-let prefetchShimmerClearOnFlush = new Set<"backward" | "forward">();
+let prefetchSkeletonClearOnFlush = new Set<"backward" | "forward">();
 
 // Reconnect timeout - must be tracked to prevent cascade
 let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -252,7 +252,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 		// Navigation supersedes any edge prefetch (last request wins on the
 		// server, so its frames aren't coming anyway).
 		prefetchRequests.clear();
-		prefetchShimmerClearOnFlush.clear();
+		prefetchSkeletonClearOnFlush.clear();
 		// Keep frames in state (row hidden under skeleton) until the swap flush.
 		set(() => ({
 			sentRequests: new Set<string>(),
@@ -274,7 +274,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 	cancelPendingDateSwap: () => {
 		pendingNavRequestIds.clear();
 		prefetchRequests.clear();
-		prefetchShimmerClearOnFlush.clear();
+		prefetchSkeletonClearOnFlush.clear();
 		frameBuffer = [];
 		set({
 			pendingDateSwap: false,
@@ -306,8 +306,8 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 
 		const framesToFlush = frameBuffer;
 		frameBuffer = [];
-		const shimmerDirsToClear = [...prefetchShimmerClearOnFlush];
-		prefetchShimmerClearOnFlush.clear();
+		const skeletonDirsToClear = [...prefetchSkeletonClearOnFlush];
+		prefetchSkeletonClearOnFlush.clear();
 
 		set((state) => {
 			const merged = mergeTimelineFrames({
@@ -318,10 +318,10 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 			});
 
 			const nextPrefetchLoading =
-				shimmerDirsToClear.length > 0
+				skeletonDirsToClear.length > 0
 					? (() => {
 							const next = { ...state.stripPrefetchLoading };
-							for (const dir of shimmerDirsToClear) {
+							for (const dir of skeletonDirsToClear) {
 								next[dir] = null;
 							}
 							return next;
@@ -449,7 +449,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 			// survives the reconnect — the post-open fetch re-registers its id.
 			pendingNavRequestIds.clear();
 			prefetchRequests.clear();
-			prefetchShimmerClearOnFlush.clear();
+			prefetchSkeletonClearOnFlush.clear();
 			if (progressUpdateTimer) {
 				clearTimeout(progressUpdateTimer);
 				progressUpdateTimer = null;
@@ -775,7 +775,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					// void gap before bars arrived and felt like a scroll bump.
 					const prefetchDirection = prefetchRequests.get(requestId);
 					if (prefetchDirection && incoming.length > 0) {
-						prefetchShimmerClearOnFlush.add(prefetchDirection);
+						prefetchSkeletonClearOnFlush.add(prefetchDirection);
 					}
 
 					// Schedule flush if not already scheduled. During a swap the
@@ -1022,13 +1022,9 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 
 		if (get().stripPrefetchLoading[direction]) return;
 
-		// Do NOT use hasDateBeenFetched here. Calendar jumps register a
-		// multi-day nav range that may still cover empty gap midnights
-		// (fallback previous-midnight, or a range that spans Jun 30 en
-		// route to Jun 29). That used to mark Jun 30 "fetched" with zero
-		// frames and abort before findNearest could reach Jun 29. Only
-		// abort when the strip already has the day, or an exact day-only
-		// request was already sent.
+		// Skip hasDateBeenFetched: a multi-day nav range can cover an empty gap
+		// midnight without loading frames for it. Only abort when the strip
+		// already has the day, or an exact day-only request was already sent.
 		const { frames, sentRequests: sent } = get();
 		if (
 			!shouldProbeEdgePrefetchDay({
@@ -1043,8 +1039,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 		if (get().pendingDateSwap) return;
 
 		if (!hasFrames) {
-			// Skip empty calendar days in the scroll direction (not always
-			// backward — that used to prefetch the wrong side on forward).
+			// Skip empty calendar days in the scroll direction via findNearest.
 			const nearest = await findNearestDateWithFrames(nextDay, direction, 7);
 			if (!nearest || get().pendingDateSwap) return;
 			nextDay = startOfDay(nearest);

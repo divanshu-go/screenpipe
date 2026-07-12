@@ -63,16 +63,12 @@ export function framesIncludeLocalDay(
 
 /**
  * Whether edge prefetch should still probe `candidateDay` (hasFrames /
- * findNearest) instead of aborting as "already fetched".
+ * findNearest).
  *
- * Calendar jumps use `resolveNavFetchRange`, which prefers the nearest prior
- * day with frames. Legacy / fallback ranges may still start at the previous
- * local midnight, marking an empty gap day as "fetched" via start-date
- * matching (e.g. Jul 1 jump → Jun 30 covered, no frames). Aborting on that
- * alone never reaches Jun 29 via scroll-edge prefetch.
- *
- * Only abort when the strip already has that day's frames, or an exact
- * day-only request was already sent for it.
+ * A multi-day calendar nav range may cover an empty gap midnight via
+ * start-date matching without loading frames for that day. Do not abort on
+ * that alone — only when the strip already has the day's frames, or an exact
+ * day-only request was already sent.
  */
 export function shouldProbeEdgePrefetchDay(opts: {
 	candidateHasLoadedFrames: boolean;

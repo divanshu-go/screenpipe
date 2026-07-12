@@ -391,12 +391,10 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 					debounceTimer = null;
 
 					// Don't reset if a search/calendar navigation is in progress —
-					// onWindowFocus used to force currentDate to today, which
-					// cancelled cross-date navigation. Also skip while the store
-					// is mid date-swap (covers multi-instance Timeline mounts).
-					// Also skip if a search navigation completed recently (within 2s) —
-					// pendingNavigationRef and seekingTimestamp get cleared on completion
-					// but the focus debounce (500ms) may still be pending.
+					// window focus must not force currentDate to today while browsing
+					// history. Also skip while the store is mid date-swap (covers
+					// multi-instance Timeline mounts), and for ~2s after a search nav
+					// completes (refs clear before the 500ms focus debounce may fire).
 					const recentSearchNav = Date.now() - lastSearchNavRef.current < 2000;
 					const midDateSwap = useTimelineStore.getState().pendingDateSwap;
 					if (isNavigatingRef.current || pendingNavigationRef.current || seekingTimestamp || searchNavFrame || recentSearchNav || midDateSwap) {
@@ -1536,8 +1534,8 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 				{/* Bottom Timeline - Overlay that doesn't cut off image */}
 				<div className="absolute bottom-0 left-0 right-0 z-40 pointer-events-auto">
 					{/* Mount the slider during a date swap even with zero frames:
-					    it renders the full-width strip skeleton internally. The
-					    legacy "Loading timeline..." panel below is only for the
+					    it renders the full-width strip skeleton internally.
+					    The blocking "Loading timeline..." panel is only for the
 					    initial connect before any fetch is in flight. */}
 					{frames.length > 0 || pendingDateSwap ? (
 						<TimelineSlider

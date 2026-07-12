@@ -85,9 +85,8 @@ export function dayFetchRange(targetDate: Date): { start: Date; end: Date } {
 }
 
 /**
- * Calendar / arrow day jumps can skip the full-strip date-swap skeleton when
- * the strip already holds frames for the target local day (e.g. user scrolled
- * the month, then picks a past day from the calendar).
+ * Calendar / arrow day jumps skip the full-strip date-swap skeleton when the
+ * in-memory strip already holds frames for the target local day (hot path).
  */
 export function canInstantDateNav(
 	frames: ReadonlyArray<{ timestamp: string }>,

@@ -652,7 +652,7 @@ export const TimelineSlider = ({
 	const memoriesFetchedRangeRef = useRef<string>("");
 	// Measured left-px (relative to the timeline content box) for each memory's
 	// diamond marker, keyed by memory id. Computed in a layout effect from real
-	// frame positions so markers land on the correct frame regardless of RTL flow.
+	// frame positions so markers land correctly under flex-row-reverse.
 	const [memoryPositions, setMemoryPositions] = useState<Record<number, number>>({});
 
 	// Chat history overlay — show PipeAI icon on timeline where chats occurred
@@ -817,9 +817,8 @@ export const TimelineSlider = ({
 		// ≥1 viewport each side so mid-scroll edges stay filled after centering
 		// (px-[50vw] padding is only for true content ends, not mid-strip).
 		const halfWindow = Math.ceil(framesPerScreen * 1.15);
-		// Clamp-only window: do not steal frames from the loaded side to fill a
-		// short day edge. Inward rebalance caused a layout jump when adjacent-day
-		// frames landed (window recentered). Edge prefetch skeleton covers the gap.
+		// Clamp-only window around the playhead. Short unloaded edges stay short
+		// until edge-prefetch skeleton / merged frames extend the array.
 		const { start, end } = visibleFrameWindow({
 			frameCount: frames.length,
 			currentIndex,
@@ -2188,13 +2187,12 @@ export const TimelineSlider = ({
 									const frameTags = frameId ? (tags[frameId] || []) : [];
 									const hasTags = frameTags.length > 0;
 
-										// Rewind-style segments: round + inset only TRUE app-run
-										// ends so segments read as separate rounded pills. Group is
-										// dir=rtl → frameIdx 0 is the segment's right (newer) end,
-										// last frame is its left (older) end. Virtualization may
-										// cut mid-run — those cut edges stay square/flush so the
-										// viewport edge never shows a floating rounded pill start
-										// when the bar continues past that edge.
+										// Round + inset only true app-run ends so segments read as
+										// separate pills. Under flex-row-reverse, frameIdx 0 is the
+										// segment's right (newer) end and the last frame is its left
+										// (older) end. Virtualization may cut mid-run — those cut
+										// edges stay square/flush so the viewport edge never shows
+										// a floating rounded pill start when the bar continues.
 										const isFirstInGroup = frameIdx === 0;
 										const isLastInGroup = frameIdx === group.frames.length - 1;
 										const globalIdx = frameIndexMap.get(frame) ?? -1;

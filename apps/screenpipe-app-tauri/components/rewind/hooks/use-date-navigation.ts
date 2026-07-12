@@ -200,7 +200,8 @@ export function useDateNavigation(opts: {
 			clearSentRequestForDate(targetDate);
 
 			pendingNavigationRef.current = targetDate;
-			// Don't clear currentFrame — keep old frame visible while new ones load
+			// Leave currentFrame; the strip is invisible under StripDateSwapSkeleton
+			// until batch_complete, then the pending-nav seek updates it.
 			setCurrentIndex(0);
 			setCurrentDate(targetDate);
 			fetchTimeRange(range.start, range.end);
@@ -586,9 +587,8 @@ export function useDateNavigation(opts: {
 			if (res.at === lastConsumedNavigationAt) return;
 			lastConsumedNavigationAt = res.at;
 
-			// Empty day or failed fetch: the old frames were never replaced,
-			// so restoring the date is all it takes. Origin lives in the store
-			// so remounts still revert correctly.
+			// Empty/failed swap never flushes new frames — restore origin date
+			// (kept in the store so remounts still revert correctly).
 			const origin = state.navOriginDate;
 			const targetDay = state.pendingNavTargetDate ?? pendingNavigationRef.current;
 			useTimelineStore.setState({

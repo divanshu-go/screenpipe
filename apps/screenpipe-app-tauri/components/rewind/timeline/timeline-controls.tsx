@@ -142,9 +142,9 @@ export function TimelineControls({
 		[currentDate],
 	);
 
-	// While navigating, old frames stay on screen so currentTime is still the
-	// previous day — prefer the sought target so "clicked Jul 9" doesn't keep
-	// showing "Jul 1" next to the spinner.
+	// During a cold-path date swap the strip is under the skeleton overlay, so
+	// currentTime may still be the previous day — prefer seekingTimestamp so the
+	// date pill shows the day being loaded.
 	const displayDate = useMemo(() => {
 		if (isNavigating && seekingTimestamp) {
 			return new Date(seekingTimestamp);

@@ -17,8 +17,7 @@ describe("visibleFrameWindow", () => {
 	});
 
 	it("clamps at the older edge without stealing newer frames", () => {
-		// Inward rebalance used to pull start left (e.g. 800) so the window
-		// stayed full — then jumped to 850 when more older frames arrived.
+		// Near the older end, start = currentIndex - halfWindow (not padded).
 		expect(
 			visibleFrameWindow({
 				frameCount: 1000,
