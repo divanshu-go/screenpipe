@@ -11,8 +11,12 @@ import { framesIncludeLocalDay } from "@/lib/hooks/timeline-edge-prefetch";
 // the swap arrives with content on both sides of the playhead.
 export const NAV_CONTEXT_HOURS_BEFORE = 24;
 
-/** How far to walk past empty calendar days for prior-day context on arrival. */
-export const NAV_PRIOR_GAP_MAX_DAYS = 7;
+/** How far to walk past empty calendar days for prior-day context on arrival.
+ *  Matches arrow MAX_DATE_RETRIES (365) so a long gap land still includes prior day. */
+export const NAV_PRIOR_GAP_MAX_DAYS = 365;
+
+/** Earliest same-day frame must fall within this of local midnight for hot nav. */
+export const HOT_DAY_START_SLACK_MS = 2 * 60 * 60 * 1000;
 
 /**
  * Fetch window for a calendar/date jump.
@@ -98,15 +102,37 @@ export function framesHavePriorDayContext(
 }
 
 /**
- * Hot path: target day is in the strip and an older calendar day is too, so a
- * startOfDay landing is not parked at the global oldest edge with a left void.
+ * True when the earliest loaded frame on `targetDate` is near local midnight
+ * (within HOT_DAY_START_SLACK_MS). Sparse afternoon-only samples from a
+ * downsampled multi-day fetch fail this and force a cold refetch.
+ */
+export function framesHaveDayStartCoverage(
+	frames: ReadonlyArray<{ timestamp: string }>,
+	targetDate: Date,
+): boolean {
+	const dayStart = startOfDay(targetDate).getTime();
+	let earliest: number | null = null;
+	for (const f of frames) {
+		const t = new Date(f.timestamp).getTime();
+		if (!isSameDay(new Date(t), targetDate)) continue;
+		if (earliest === null || t < earliest) earliest = t;
+	}
+	if (earliest === null) return false;
+	return earliest - dayStart <= HOT_DAY_START_SLACK_MS;
+}
+
+/**
+ * Hot path: target day is in the strip with near-midnight coverage and an
+ * older calendar day too, so startOfDay landing is not at the global oldest
+ * edge and is not a sparse afternoon-only sliver.
  */
 export function canInstantDateNav(
 	frames: ReadonlyArray<{ timestamp: string }>,
 	targetDate: Date,
 ): boolean {
 	if (!framesIncludeLocalDay(frames, targetDate)) return false;
-	return framesHavePriorDayContext(frames, targetDate);
+	if (!framesHavePriorDayContext(frames, targetDate)) return false;
+	return framesHaveDayStartCoverage(frames, targetDate);
 }
 
 /**

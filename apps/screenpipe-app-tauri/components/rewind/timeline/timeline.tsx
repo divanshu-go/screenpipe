@@ -23,6 +23,7 @@ import { localFetch, getApiBaseUrl, appendAuthToken } from "@/lib/api";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
 import { edgePrefetchPlan } from "@/lib/hooks/timeline-edge-prefetch";
 import { visibleFrameWindow } from "@/lib/hooks/timeline-visible-window";
+import { scrollDeltaForPlayhead } from "@/lib/hooks/timeline-playhead-scroll";
 
 // Strip loading UI: segmented opacity-pulse pills for empty strip, edge
 // prefetch, and calendar/arrow date swaps. Wide pills get blank icon chips
@@ -1254,17 +1255,17 @@ export const TimelineSlider = ({
 			const cRect = container.getBoundingClientRect();
 			const eRect = currentElement.getBoundingClientRect();
 			const playheadX = eRect.left + eRect.width / 2;
-			let delta: number;
-			if (preserveViewportX && step === 0) {
-				delta = playheadX - (playheadViewportXRef.current as number);
-			} else if (isJump) {
-				delta = playheadX - (cRect.left + cRect.width / 2);
-			} else {
-				const margin = Math.min(120, cRect.width * 0.15);
-				if (playheadX < cRect.left + margin) delta = playheadX - (cRect.left + margin);
-				else if (playheadX > cRect.right - margin) delta = playheadX - (cRect.right - margin);
-				else delta = 0;
-			}
+			const delta = scrollDeltaForPlayhead({
+				preserveViewportX,
+				step,
+				isWheelNavigating,
+				isJump,
+				playheadX,
+				anchorViewportX: playheadViewportXRef.current as number,
+				containerLeft: cRect.left,
+				containerRight: cRect.right,
+				containerWidth: cRect.width,
+			});
 			if (Math.abs(delta) > 2) {
 				if (smooth) {
 					container.scrollBy({ left: delta, behavior: "smooth" });

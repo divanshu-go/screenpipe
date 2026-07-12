@@ -8,6 +8,7 @@ import { framesIncludeLocalDay } from "../timeline-edge-prefetch";
 import {
 	canInstantDateNav,
 	findLoadedDayLandingIndex,
+	framesHaveDayStartCoverage,
 	framesHavePriorDayContext,
 	navFetchRange,
 	resolveNavFetchRange,
@@ -81,6 +82,21 @@ describe("resolveNavFetchRange", () => {
 		});
 		expect(range.start.getTime()).toBe(jun30.getTime());
 	});
+
+	it("default maxGapDays is 365 so long empty gaps still resolve prior context", async () => {
+		const jul1 = startOfDay(new Date(2026, 6, 1));
+		const jun15 = startOfDay(new Date(2026, 5, 15));
+		let seenMaxDays: number | undefined;
+		const range = await resolveNavFetchRange(jul1, {
+			findPrior: async (_from, _dir, maxDays) => {
+				seenMaxDays = maxDays;
+				return jun15;
+			},
+		});
+		expect(seenMaxDays).toBe(365);
+		expect(range.start.getTime()).toBe(jun15.getTime());
+		expect(range.end.getTime()).toBe(endOfDay(jul1).getTime());
+	});
 });
 
 describe("canInstantDateNav / findLoadedDayLandingIndex", () => {
@@ -141,14 +157,37 @@ describe("canInstantDateNav / findLoadedDayLandingIndex", () => {
 		const jul8 = startOfDay(new Date(2026, 6, 8));
 		const jul7 = startOfDay(new Date(2026, 6, 7));
 		const jul6 = startOfDay(new Date(2026, 6, 6));
+		// Near-midnight samples so day-start coverage passes.
 		const scrolled = [
-			{ timestamp: new Date(2026, 6, 8, 12, 0).toISOString() },
-			{ timestamp: new Date(2026, 6, 7, 12, 0).toISOString() },
-			{ timestamp: new Date(2026, 6, 6, 12, 0).toISOString() },
+			{ timestamp: new Date(2026, 6, 8, 0, 45).toISOString() },
+			{ timestamp: new Date(2026, 6, 7, 0, 40).toISOString() },
+			{ timestamp: new Date(2026, 6, 6, 0, 35).toISOString() },
 		];
 		expect(canInstantDateNav(scrolled, jul8)).toBe(true);
 		expect(canInstantDateNav(scrolled, jul7)).toBe(true);
 		expect(canInstantDateNav(scrolled, jul6)).toBe(false);
+	});
+
+	it("not instant when target day only has afternoon frames (sparse downsample)", () => {
+		const sparseAfternoon = [
+			{ timestamp: new Date(2026, 6, 1, 15, 0).toISOString() },
+			{ timestamp: new Date(2026, 6, 1, 18, 0).toISOString() },
+			{ timestamp: new Date(2026, 5, 29, 22, 0).toISOString() },
+		];
+		expect(framesIncludeLocalDay(sparseAfternoon, jul1)).toBe(true);
+		expect(framesHavePriorDayContext(sparseAfternoon, jul1)).toBe(true);
+		expect(framesHaveDayStartCoverage(sparseAfternoon, jul1)).toBe(false);
+		expect(canInstantDateNav(sparseAfternoon, jul1)).toBe(false);
+	});
+
+	it("instant when earliest same-day frame is within 2h of midnight", () => {
+		const nearMidnight = [
+			{ timestamp: new Date(2026, 6, 1, 1, 0).toISOString() },
+			{ timestamp: new Date(2026, 6, 1, 18, 0).toISOString() },
+			{ timestamp: new Date(2026, 5, 29, 22, 0).toISOString() },
+		];
+		expect(framesHaveDayStartCoverage(nearMidnight, jul1)).toBe(true);
+		expect(canInstantDateNav(nearMidnight, jul1)).toBe(true);
 	});
 
 	it("lands near startOfDay (oldest end) among that day's frames", () => {
