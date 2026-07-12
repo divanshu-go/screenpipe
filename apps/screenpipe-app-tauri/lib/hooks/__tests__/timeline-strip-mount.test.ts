@@ -28,7 +28,7 @@ describe("shouldMountTimelineStrip", () => {
 		).toBe(true);
 	});
 
-	it("mounts during isNavigating before pendingDateSwap flips (calendar await gap)", () => {
+	it("mounts during isNavigating before pendingDateSwap (arrow findNearest await)", () => {
 		expect(
 			shouldMountTimelineStrip({
 				frameCount: 0,

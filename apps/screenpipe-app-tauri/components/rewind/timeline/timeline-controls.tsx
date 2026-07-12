@@ -143,10 +143,8 @@ export function TimelineControls({
 		[currentDate],
 	);
 
-	// During a cold-path date swap the strip is under the skeleton overlay, so
-	// currentTime may still be the previous day. Prefer local seekingTimestamp,
-	// then the store's pendingNavTargetDate (shared across Timeline mounts —
-	// home + overlay — where only one instance owns isNavigating).
+	// During cold date swap, prefer seekingTimestamp / pendingNavTargetDate
+	// over stale currentTime still pointing at the previous day.
 	const pendingDateSwap = useTimelineStore((s) => s.pendingDateSwap);
 	const pendingNavTargetDate = useTimelineStore((s) => s.pendingNavTargetDate);
 	const swapInFlight = isNavigating || pendingDateSwap;

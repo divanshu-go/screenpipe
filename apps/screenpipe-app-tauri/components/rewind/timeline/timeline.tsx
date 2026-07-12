@@ -363,7 +363,7 @@ export function getAppCategoryColor(appName: string): string {
 	return CATEGORY_COLORS[category] || CATEGORY_COLORS.other;
 }
 
-// Legacy function name for backwards compatibility
+// Alias used by app-group color mapping below.
 export function stringToColor(str: string): string {
 	return getAppCategoryColor(str);
 }
@@ -486,9 +486,7 @@ const PlayheadTimeChip = React.memo(function PlayheadTimeChip({
 			}
 			tries = 0;
 			const r = el.getBoundingClientRect();
-			// The timeline is a flat strip: every bar is the same slim height with no
-			// per-state height or scale change, so the current bar's top stays put as
-			// frames scroll under the playhead. Tracking it directly no longer bobs.
+			// Flat strip: bar top is stable while frames scroll under the playhead.
 			setRect({ x: r.left + r.width / 2, y: r.top });
 		};
 		const schedule = () => {
@@ -509,8 +507,7 @@ const PlayheadTimeChip = React.memo(function PlayheadTimeChip({
 
 	return createPortal(
 		<>
-			{/* Vertical playhead line through the bar (Rewind-style) — marks the
-			    current position cleanly instead of glowing the current frame. */}
+			{/* Vertical playhead line through the bar (marks current frame). */}
 			<div
 				className="fixed z-[9997] pointer-events-none"
 				style={{

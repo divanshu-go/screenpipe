@@ -181,7 +181,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 
 	// Note: audio transcript is now on-demand (opened via subtitle bar click)
 
-	const { currentDate, setCurrentDate, fetchTimeRange, hasDateBeenFetched, onWindowFocus, clearNewFramesCount, clearSentRequestForDate, clearFramesForNavigation, pendingNavigation, setPendingNavigation, pendingDateSwap } =
+	const { currentDate, setCurrentDate, fetchTimeRange, onWindowFocus, clearNewFramesCount, clearSentRequestForDate, clearFramesForNavigation, pendingNavigation, setPendingNavigation, pendingDateSwap } =
 		useTimelineStore();
 
 	const { frames, isLoading, error, message, fetchNextDayData, websocket } =
@@ -273,8 +273,6 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		clearFramesForNavigation,
 		setSearchNavFrame,
 		fetchTimeRange,
-		hasDateBeenFetched,
-		fetchNextDayData,
 		startAndEndDates,
 		pendingNavigation,
 		setPendingNavigation,
@@ -342,9 +340,9 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		setCurrentFrame(frames[next] ?? null);
 	}, [frames, currentIndex, setCurrentFrame]);
 
-	// Remount / HMR: local seekingTimestamp is gone, so an orphaned
-	// pendingDateSwap would gate the strip forever. If a successful result is
-	// already ready, the seek effect below finishes it; otherwise unlock.
+	// Remount / HMR: local seeking state is gone. Rehydrate from the store when
+	// a swap is still live; cancel only true orphans (no target / not loading /
+	// nothing to seek).
 	useEffect(() => {
 		const store = useTimelineStore.getState();
 		if (!store.pendingDateSwap) return;
@@ -355,7 +353,13 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			res.count > 0 &&
 			!res.error &&
 			store.frames.length > 0;
-		if (canFinishSeek) return;
+		if (store.pendingNavTargetDate && (canFinishSeek || store.isLoading)) {
+			pendingNavigationRef.current = store.pendingNavTargetDate;
+			setSeekingTimestamp(store.pendingNavTargetDate.toISOString());
+			setIsNavigating(true);
+			isNavigatingRef.current = true;
+			return;
+		}
 		store.cancelPendingDateSwap();
 		useTimelineStore.setState({
 			navOriginDate: null,
@@ -1500,9 +1504,8 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 
 				{/* Bottom Timeline - Overlay that doesn't cut off image */}
 				<div className="absolute bottom-0 left-0 right-0 z-40 pointer-events-auto">
-					{/* Keep TimelineSlider mounted for load/nav/swap so
-					    TimelineStripLoadingRow / StripDateSwapSkeleton own UX.
-					    Idle empty panel is only Recording... / error. */}
+					{/* Keep TimelineSlider mounted for load/nav/swap so strip
+					    skeletons own UX. Idle empty panel is Recording... / error. */}
 					{mountTimelineStrip ? (
 						<TimelineSlider
 							frames={frames}

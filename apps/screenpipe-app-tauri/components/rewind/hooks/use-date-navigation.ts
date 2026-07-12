@@ -41,8 +41,6 @@ export function useDateNavigation(opts: {
 	clearFramesForNavigation: (opts: { origin: Date; target: Date }) => void;
 	setSearchNavFrame: (v: boolean) => void;
 	fetchTimeRange: (start: Date, end: Date) => void;
-	hasDateBeenFetched: any;
-	fetchNextDayData: any;
 	startAndEndDates: { start: Date; end: Date };
 	pendingNavigation: any;
 	setPendingNavigation: (v: any) => void;
@@ -66,8 +64,6 @@ export function useDateNavigation(opts: {
 		clearFramesForNavigation,
 		setSearchNavFrame,
 		fetchTimeRange,
-		hasDateBeenFetched,
-		fetchNextDayData,
 		startAndEndDates,
 		pendingNavigation,
 		setPendingNavigation,
@@ -233,9 +229,7 @@ export function useDateNavigation(opts: {
 	// Fast navigation to a date we already know has frames (e.g. from search results).
 	// Skips the hasFramesForDate() HTTP round-trip and adjacent-date probing.
 	const navigateDirectToDate = useCallback((targetDate: Date, frameId?: number) => {
-		// Same target already in flight (the search window re-emits its
-		// navigation event to survive mount races): let the existing swap
-		// finish instead of restarting it into a dead state.
+		// Same target in flight: update frame_id only; do not restart the swap.
 		if (
 			isNavigatingRef.current &&
 			pendingNavigationRef.current &&
@@ -271,48 +265,56 @@ export function useDateNavigation(opts: {
 		setIsNavigating(true);
 		setSeekingTimestamp(targetDate.toISOString());
 
-		// Resolve prior-day context so empty gap days (Jun 30 before Jul 1)
-		// are included on arrival.
-		void (async () => {
-			const range = await resolveNavFetchRange(targetDate);
-			if (seq !== navSeqRef.current) return;
+		dateChangesRef.current += 1;
+		posthog.capture("timeline_date_changed", {
+			from_date: currentDate.toISOString(),
+			to_date: targetDate.toISOString(),
+		});
 
-			// Edge prefetch may have landed the day while we awaited.
-			const framesNow = useTimelineStore.getState().frames;
-			if (canInstantDateNav(framesNow, targetDate)) {
-				if (frameId != null) {
-					const hasExact = framesNow.some((f) =>
-						isSameDay(new Date(f.timestamp), targetDate) &&
-						f.devices.some((d) => String(d.frame_id) === String(frameId)),
-					);
-					if (hasExact && seekLoadedDay(framesNow, targetDate, frameId)) {
-						setSearchNavFrame(true);
+		// Arm swap before prior-day SQL so edge prefetch / live batches stay gated.
+		clearFramesForNavigation({ origin: currentDate, target: targetDate });
+		clearSentRequestForDate(targetDate);
+		pendingNavigationRef.current = targetDate;
+		// Leave currentFrame; strip stays under StripDateSwapSkeleton until seek.
+		setCurrentIndex(0);
+		setCurrentDate(targetDate);
+
+		void (async () => {
+			try {
+				const range = await resolveNavFetchRange(targetDate);
+				if (seq !== navSeqRef.current) return;
+
+				const framesNow = useTimelineStore.getState().frames;
+				if (canInstantDateNav(framesNow, targetDate)) {
+					if (frameId != null) {
+						const hasExact = framesNow.some((f) =>
+							isSameDay(new Date(f.timestamp), targetDate) &&
+							f.devices.some((d) => String(d.frame_id) === String(frameId)),
+						);
+						if (hasExact && seekLoadedDay(framesNow, targetDate, frameId)) {
+							setSearchNavFrame(true);
+							return;
+						}
+					} else if (seekLoadedDay(framesNow, targetDate)) {
 						return;
 					}
-				} else if (seekLoadedDay(framesNow, targetDate)) {
-					return;
 				}
+
+				fetchTimeRange(range.start, range.end);
+			} catch (error) {
+				console.error("[navigateDirectToDate] Error:", error);
+				if (seq !== navSeqRef.current) return;
+				useTimelineStore.getState().cancelPendingDateSwap();
+				useTimelineStore.setState({
+					navOriginDate: null,
+					pendingNavTargetDate: null,
+				});
+				isNavigatingRef.current = false;
+				setIsNavigating(false);
+				pendingNavigationRef.current = null;
+				setSeekingTimestamp(null);
 			}
-
-			dateChangesRef.current += 1;
-			posthog.capture("timeline_date_changed", {
-				from_date: currentDate.toISOString(),
-				to_date: targetDate.toISOString(),
-			});
-
-			clearFramesForNavigation({ origin: currentDate, target: targetDate });
-			clearSentRequestForDate(targetDate);
-
-			pendingNavigationRef.current = targetDate;
-			// Leave currentFrame; the strip is invisible under StripDateSwapSkeleton
-			// until batch_complete, then the pending-nav seek updates it.
-			setCurrentIndex(0);
-			setCurrentDate(targetDate);
-			fetchTimeRange(range.start, range.end);
 		})();
-
-		// Resolution arrives via batch_complete (see the navigationResult
-		// subscription below); the fallback timeout covers a lost socket.
 	}, [currentDate, clearFramesForNavigation, clearSentRequestForDate, fetchTimeRange, setCurrentIndex, setCurrentDate, isNavigatingRef, pendingNavigationRef, dateChangesRef, seekLoadedDay, setSearchNavFrame]);
 
 	// Navigate to a specific search result by index (arrow keys in search review mode)
@@ -442,9 +444,7 @@ export function useDateNavigation(opts: {
 				return;
 			}
 
-			// Hot path: target day already in the strip (scroll/edge prefetch).
-			// Seek in place — no pendingDateSwap skeleton, no refetch.
-			// Read store frames after awaits so a concurrent scroll load is seen.
+			// Hot path: target day already in the strip — instant seek, no skeleton.
 			const liveFrames = useTimelineStore.getState().frames;
 			if (
 				canInstantDateNav(liveFrames, targetDate) &&
@@ -453,13 +453,24 @@ export function useDateNavigation(opts: {
 				return;
 			}
 
-			// Cold path: day not loaded — full date-swap skeleton + gated fetch.
-			// Resolve prior-day context before opening the swap so empty
-			// gap days (Jun 30 before Jul 1) are included on arrival.
+			// Cold path: arm swap before prior-day SQL so prefetch/live stay gated.
+			dateChangesRef.current += 1;
+			posthog.capture("timeline_date_changed", {
+				from_date: currentDate.toISOString(),
+				to_date: targetDate.toISOString(),
+			});
+
+			clearFramesForNavigation({ origin: currentDate, target: targetDate });
+			clearSentRequestForDate(targetDate);
+			pendingNavigationRef.current = targetDate;
+			setCurrentIndex(0);
+			setCurrentDate(targetDate);
+			// Seeking chip tracks resolved target (may differ after arrow nearest-day).
+			setSeekingTimestamp(targetDate.toISOString());
+
 			const range = await resolveNavFetchRange(targetDate);
 			if (seq !== navSeqRef.current) return;
 
-			// Edge prefetch may have landed the day while we awaited.
 			const framesNow = useTimelineStore.getState().frames;
 			if (
 				canInstantDateNav(framesNow, targetDate) &&
@@ -468,36 +479,16 @@ export function useDateNavigation(opts: {
 				return;
 			}
 
-			// Track date change
-			dateChangesRef.current += 1;
-			posthog.capture("timeline_date_changed", {
-				from_date: currentDate.toISOString(),
-				to_date: targetDate.toISOString(),
-			});
-
-			// Start the swap: frame row stays mounted (hidden under skeleton),
-			// batches gated by request id, resolves on batch_complete.
-			clearFramesForNavigation({ origin: currentDate, target: targetDate });
-
-			// Clear the sent request cache for this date to force a fresh fetch
-			clearSentRequestForDate(targetDate);
-
-			// Store pending navigation - will be processed when frames arrive
-			pendingNavigationRef.current = targetDate;
-
-			setCurrentIndex(0);
-			setCurrentDate(targetDate);
-			// Keep seeking chip on the resolved target (may differ from the
-			// click for arrow nearest-day walks).
-			setSeekingTimestamp(targetDate.toISOString());
-
-			// Fire fetch for nearest prior day with frames + whole target day.
-			// fetchTimeRange dedupes by range key.
 			fetchTimeRange(range.start, range.end);
 
 		} catch (error) {
 			console.error("[handleDateChange] Error:", error);
 			if (seq !== navSeqRef.current) return;
+			useTimelineStore.getState().cancelPendingDateSwap();
+			useTimelineStore.setState({
+				navOriginDate: null,
+				pendingNavTargetDate: null,
+			});
 			isNavigatingRef.current = false;
 			setIsNavigating(false);
 			pendingNavigationRef.current = null;
@@ -547,10 +538,7 @@ export function useDateNavigation(opts: {
 	}, [setCurrentFrame, setCurrentIndex, setCurrentDate, fetchTimeRange, clearSentRequestForDate, isNavigatingRef, pendingNavigationRef]);
 
 	// Process pending navigation when frames load after date change.
-	// Success flush keeps pendingDateSwap true until this seek lands so the
-	// playhead/scroll handoff sees the landing index, not nav-start index 0.
-	// Gate on navigationResult success so we never land on pre-swap frames
-	// (prefetch may already contain the target day) and clear the swap early.
+	// Seek only after navigationResult success; then clear pendingDateSwap.
 	const navigationResult = useTimelineStore((s) => s.navigationResult);
 	useEffect(() => {
 		const store = useTimelineStore.getState();

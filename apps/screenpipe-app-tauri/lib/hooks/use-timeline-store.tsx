@@ -81,10 +81,8 @@ const RECONNECT_MAX_DELAY_MS = 30000;
 // scheduled reconnect is mid-await) would each build a socket and orphan one.
 let isConnecting = false;
 
-// Reset the backoff counters so the next connectWebSocket reconnects promptly
-// instead of inheriting a long delay. Kept as one helper so the two "reconnect
-// now" call sites (watchdog + onWindowFocus) can't drift and silently
-// reintroduce the long-backoff-on-return regression.
+// Reset backoff so the next connectWebSocket reconnects promptly.
+// Shared by watchdog + onWindowFocus so those call sites cannot drift.
 function resetBackoffCounters() {
 	reconnectAttempts = 0;
 	connectionAttempts = 0;
@@ -139,10 +137,7 @@ interface TimelineState {
 	navOriginDate: Date | null;
 	pendingNavTargetDate: Date | null;
 
-	// Verdict of the current date swap, set when the server's batch_complete
-	// arrives: count > 0 means the day's frames were swapped in; count 0 means
-	// the day is genuinely empty; error means the fetch failed. The navigation
-	// hook subscribes to this instead of guessing with timers.
+	// The navigation hook waits on this (set at batch_complete).
 	navigationResult: { requestId: number; count: number; error: boolean; at: number } | null;
 
 	// ISO date of the adjacent day currently being prefetched at each strip
@@ -503,8 +498,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 			// Seed activity so the connecting socket isn't flagged stale before it opens.
 			lastMessageAt = Date.now();
 			const ws = new WebSocket(wsUrl);
-			// Past the ensureApiReady await — the socket now exists and the rest of
-			// this function is synchronous, so re-entry can no longer orphan a socket.
+			// Socket exists; remaining setup is sync so re-entry won't orphan it.
 			isConnecting = false;
 
 		ws.onopen = () => {
@@ -774,9 +768,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					return;
 				}
 
-				// Handle batched frames - OPTIMIZED: buffer and flush periodically.
-				// Current server format wraps frames with the id of the request
-				// they answer; bare arrays are the legacy untagged format.
+				// Batched frames — envelope has request_id; bare arrays use id 0.
 				const isEnvelope = data && typeof data === "object" && Array.isArray(data.frames);
 				if (isEnvelope || Array.isArray(data)) {
 					const incoming: StreamTimeSeriesResponse[] = isEnvelope ? data.frames : data;
@@ -832,7 +824,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					return;
 				}
 
-				// Handle single frame (legacy support)
+				// Single-frame websocket payload
 				if (data.timestamp && data.devices) {
 					frameBuffer.push(data);
 

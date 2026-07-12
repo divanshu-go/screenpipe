@@ -36,14 +36,6 @@ export function countContentOnTargetDay(
 	}).length;
 }
 
-/** @deprecated Prefer countContentOnTargetDay — kept for call-site clarity. */
-export function countFramesOnTargetDay<T extends { timestamp: string }>(
-	frames: T[],
-	targetDate: Date,
-): number {
-	return frames.filter((f) => isSameDay(new Date(f.timestamp), targetDate)).length;
-}
-
 export type DateSwapVerdict =
 	| { kind: "success"; targetDayCount: number }
 	| { kind: "empty" };
