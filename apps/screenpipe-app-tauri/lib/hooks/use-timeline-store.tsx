@@ -20,6 +20,11 @@ import { mergeTimelineFrames } from "./timeline-frame-merge";
 import { dateSwapVerdictFromBuffer } from "./timeline-date-swap-verdict";
 import { evaluateTimelineLiveness } from "./timeline-liveness";
 import { dayFetchRange, navFetchRange } from "./timeline-nav-range";
+import {
+	framesIncludeLocalDay,
+	hasExactDayRequest,
+	shouldProbeEdgePrefetchDay,
+} from "./timeline-edge-prefetch";
 
 // Frame buffer for batching updates - reduces 68 re-renders to ~3-5
 let frameBuffer: StreamTimeSeriesResponse[] = [];
@@ -1011,9 +1016,24 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 				? "backward"
 				: "forward");
 
-		// Already requested / in flight for this edge — don't thrash.
-		if (get().hasDateBeenFetched(nextDay)) return;
 		if (get().stripPrefetchLoading[direction]) return;
+
+		// Do NOT use hasDateBeenFetched here. Calendar jumps register a
+		// multi-day navFetchRange whose start is the previous midnight —
+		// that marks empty gap days (Jun 30 before a Jul 1 landing) as
+		// "fetched" even with zero frames, and used to abort before
+		// findNearestDateWithFrames could reach Jun 29 across the month
+		// boundary. Only abort when the strip already has the day, or an
+		// exact day-only request was already sent.
+		const { frames, sentRequests: sent } = get();
+		if (
+			!shouldProbeEdgePrefetchDay({
+				candidateHasLoadedFrames: framesIncludeLocalDay(frames, nextDay),
+				exactDayRequestSent: hasExactDayRequest(sent, nextDay),
+			})
+		) {
+			return;
+		}
 
 		const hasFrames = await hasFramesForDate(nextDay);
 		if (get().pendingDateSwap) return;
@@ -1024,7 +1044,21 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 			const nearest = await findNearestDateWithFrames(nextDay, direction, 7);
 			if (!nearest || get().pendingDateSwap) return;
 			nextDay = startOfDay(nearest);
-			if (get().hasDateBeenFetched(nextDay)) return;
+			const afterSkip = get();
+			if (
+				!shouldProbeEdgePrefetchDay({
+					candidateHasLoadedFrames: framesIncludeLocalDay(
+						afterSkip.frames,
+						nextDay,
+					),
+					exactDayRequestSent: hasExactDayRequest(
+						afterSkip.sentRequests,
+						nextDay,
+					),
+				})
+			) {
+				return;
+			}
 		}
 
 		const endTime = endOfDay(nextDay);
