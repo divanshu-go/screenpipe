@@ -612,10 +612,7 @@ mod tests {
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].frame_data[0].device_id, "audio-only");
-        assert_eq!(
-            result[0].frame_data[0].metadata.app_name,
-            "Audio Recording"
-        );
+        assert_eq!(result[0].frame_data[0].metadata.app_name, "Audio Recording");
         assert_eq!(result[0].frame_data[0].audio_entries.len(), 1);
         assert_eq!(
             result[0].frame_data[0].audio_entries[0].transcription,
