@@ -499,9 +499,8 @@ export const TimelineSlider = ({
 	// Set by fetchNextDayData, cleared by that request's batch_complete.
 	const stripPrefetchLoading = useTimelineStore((s) => s.stripPrefetchLoading);
 
-	// Date swap in flight (calendar pick / day arrows): the strip shows a
-	// full-width loading skeleton until the target day's frames swap in
-	// atomically on batch_complete — not the old day's bars, not a void.
+	// Date swap in flight (calendar / arrows / search jump): strip stays
+	// mounted and dimmed until the target day swaps in on batch_complete.
 	const pendingDateSwap = useTimelineStore((s) => s.pendingDateSwap);
 
 	const [hoveredTimestamp, setHoveredTimestamp] = useState<string | null>(null);
@@ -2297,14 +2296,15 @@ export const TimelineSlider = ({
 				document.body
 			)}
 
-			{/* Playhead time chip — always pinned above the current (big) bar so the
-			    current time position is visible at a glance, regardless of hover.
-			    Isolated component so the scroll-driven re-measuring doesn't re-render
-			    the whole timeline. */}
-			<PlayheadTimeChip
-				containerRef={containerRef}
-				timestamp={frames[currentIndex]?.timestamp}
-			/>
+			{/* Playhead time chip — pinned above the current bar. Hidden during
+			    date swaps so the dimmed old-day strip doesn't show a misleading
+			    playhead; reappears when pendingDateSwap clears. */}
+			{!pendingDateSwap && (
+				<PlayheadTimeChip
+					containerRef={containerRef}
+					timestamp={frames[currentIndex]?.timestamp}
+				/>
+			)}
 		</div>
 	);
 };
