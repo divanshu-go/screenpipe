@@ -11,11 +11,12 @@ import {
 } from "../search-result-strip";
 
 // Search results are NEWEST-FIRST (index 0 = newest). The main timeline strip is
-// RTL — oldest on the LEFT, newest on the RIGHT. The dot-strip is mirrored to
-// match, so the active dot moves WITH the timeline cursor and the ◀/▶ + ←/→ + ⌘G
-// controls (all of which step index+1 = older, index-1 = newer). Before the fix
-// the strip used (i/denom)*width — newest at the LEFT — so the dot slid opposite
-// to every arrow, which read as "the arrow and the shortcut arrow are inverted".
+// LTR scrollport + flex-row-reverse — oldest on the LEFT, newest on the RIGHT.
+// The dot-strip is mirrored to match, so the active dot moves WITH the timeline
+// cursor and the ◀/▶ + ←/→ + ⌘G controls (all of which step index+1 = older,
+// index-1 = newer). Before the fix the strip used (i/denom)*width — newest at
+// the LEFT — so the dot slid opposite to every arrow, which read as "the arrow
+// and the shortcut arrow are inverted".
 const N = 5; // indexes 0..4, 0 = newest, 4 = oldest
 
 describe("searchResultDotX — dot-strip geometry", () => {
@@ -27,7 +28,7 @@ describe("searchResultDotX — dot-strip geometry", () => {
 		expect(searchResultDotX(N - 1, N)).toBe(0);
 	});
 
-	it("is strictly decreasing in index — older = further left (matches the RTL timeline)", () => {
+	it("is strictly decreasing in index — older = further left (matches flex-row-reverse strip)", () => {
 		for (let i = 1; i < N; i++) {
 			expect(searchResultDotX(i, N)).toBeLessThan(searchResultDotX(i - 1, N));
 		}

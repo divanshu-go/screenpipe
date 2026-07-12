@@ -20,6 +20,7 @@ import { useSettings } from "@/lib/hooks/use-settings";
 import { Calendar } from "@/components/ui/calendar";
 import { listDaysWithFrames } from "@/lib/actions/has-frames-date";
 import { formatShortcutDisplay } from "@/lib/chat-utils";
+import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
 import {
 	Popover,
 	PopoverContent,
@@ -143,17 +144,31 @@ export function TimelineControls({
 	);
 
 	// During a cold-path date swap the strip is under the skeleton overlay, so
-	// currentTime may still be the previous day — prefer seekingTimestamp so the
-	// date pill shows the day being loaded.
+	// currentTime may still be the previous day. Prefer local seekingTimestamp,
+	// then the store's pendingNavTargetDate (shared across Timeline mounts —
+	// home + overlay — where only one instance owns isNavigating).
+	const pendingDateSwap = useTimelineStore((s) => s.pendingDateSwap);
+	const pendingNavTargetDate = useTimelineStore((s) => s.pendingNavTargetDate);
+	const swapInFlight = isNavigating || pendingDateSwap;
 	const displayDate = useMemo(() => {
 		if (isNavigating && seekingTimestamp) {
 			return new Date(seekingTimestamp);
+		}
+		if (pendingDateSwap && pendingNavTargetDate) {
+			return pendingNavTargetDate;
 		}
 		if (isNavigating) {
 			return currentDate;
 		}
 		return currentTime ?? currentDate;
-	}, [isNavigating, seekingTimestamp, currentTime, currentDate]);
+	}, [
+		isNavigating,
+		seekingTimestamp,
+		pendingDateSwap,
+		pendingNavTargetDate,
+		currentTime,
+		currentDate,
+	]);
 
 	// Disable back button if we're at or before the earliest recorded date
 	const isAtEarliestDate = useMemo(() => {
@@ -179,7 +194,7 @@ export function TimelineControls({
 						size="icon"
 						onClick={() => jumpDay(-1)}
 						className="h-8 w-8 text-foreground hover:bg-foreground hover:text-background transition-colors duration-150"
-						disabled={isAtEarliestDate || isNavigating}
+						disabled={isAtEarliestDate || swapInFlight}
 					>
 						<ChevronLeft className="h-4 w-4" />
 					</Button>
@@ -190,7 +205,7 @@ export function TimelineControls({
 								type="button"
 								className="px-3 h-8 text-sm font-mono text-foreground min-w-[100px] text-center hover:bg-foreground hover:text-background transition-colors duration-150 flex items-center justify-center gap-2"
 							>
-								{isNavigating ? (
+								{swapInFlight ? (
 									<Loader2 className="h-3 w-3 animate-spin" />
 								) : (
 									<CalendarIcon className="h-3 w-3" />
@@ -242,7 +257,7 @@ export function TimelineControls({
 						size="icon"
 						onClick={() => jumpDay(1)}
 						className="h-8 w-8 text-foreground hover:bg-foreground hover:text-background transition-colors duration-150"
-						disabled={isAtToday || isNavigating}
+						disabled={isAtToday || swapInFlight}
 					>
 						<ChevronRight className="h-4 w-4" />
 					</Button>

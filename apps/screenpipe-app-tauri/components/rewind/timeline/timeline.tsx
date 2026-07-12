@@ -2013,7 +2013,7 @@ export const TimelineSlider = ({
 								)}
 							<div
 								className="flex flex-nowrap items-center h-full group/appgroup relative"
-								dir="rtl"
+								dir="rtl" // icon stack / frame order within the group (not the scrollport)
 								style={{
 									// borderLeft removed — caused visible white lines between groups
 									cursor: "pointer",

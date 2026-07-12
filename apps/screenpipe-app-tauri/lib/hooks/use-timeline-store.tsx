@@ -25,6 +25,10 @@ import {
 	hasExactDayRequest,
 	shouldProbeEdgePrefetchDay,
 } from "./timeline-edge-prefetch";
+import {
+	shouldDropStreamBatch,
+	suppressPendingNavRequests,
+} from "./timeline-nav-request-gate";
 
 // Frame buffer for batching updates - reduces 68 re-renders to ~3-5
 let frameBuffer: StreamTimeSeriesResponse[] = [];
@@ -50,6 +54,10 @@ let streamRequestSeq = 0;
 // resolve the swap; batches from anything else in flight (live today frames,
 // a superseded fetch) are dropped while the swap is pending.
 let pendingNavRequestIds = new Set<number>();
+// Ids from a cancelled swap. Late batches must still be dropped after
+// pendingDateSwap flips false (hot jump / Today mid-flight), until their
+// batch_complete arrives and clears the id.
+let suppressedNavRequestIds = new Set<number>();
 
 // In-flight adjacent-day prefetches (user scrolled toward a strip edge),
 // keyed by request id so the server's batch_complete clears the matching
@@ -248,7 +256,10 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 			clearTimeout(flushTimer);
 			flushTimer = null;
 		}
-		pendingNavRequestIds.clear();
+		// Superseding an in-flight swap: keep dropping the old request ids
+		// after this swap ends (server is last-wins, but in-flight batches
+		// can still arrive on the wire).
+		suppressPendingNavRequests(pendingNavRequestIds, suppressedNavRequestIds);
 		// Navigation supersedes any edge prefetch (last request wins on the
 		// server, so its frames aren't coming anyway).
 		prefetchRequests.clear();
@@ -268,11 +279,12 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 		}));
 	},
 
-	// Fallback abort for a swap whose batch_complete never arrived (e.g. the
-	// socket died and never reconnected). Clears pendingDateSwap / skeleton.
+	// Abort an in-flight swap (hot jump / Today / hung fallback). Clears
+	// pendingDateSwap / skeleton. In-flight request ids move to the suppress
+	// set so their late batches cannot merge after the gate turns off.
 	// Leaves navOriginDate for the navigationResult / timeout path to restore.
 	cancelPendingDateSwap: () => {
-		pendingNavRequestIds.clear();
+		suppressPendingNavRequests(pendingNavRequestIds, suppressedNavRequestIds);
 		prefetchRequests.clear();
 		prefetchSkeletonClearOnFlush.clear();
 		frameBuffer = [];
@@ -448,6 +460,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 			// Fetches in flight on the old socket are dead; a pending date swap
 			// survives the reconnect — the post-open fetch re-registers its id.
 			pendingNavRequestIds.clear();
+			suppressedNavRequestIds.clear();
 			prefetchRequests.clear();
 			prefetchSkeletonClearOnFlush.clear();
 			if (progressUpdateTimer) {
@@ -563,6 +576,13 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 				// clear pendingDateSwap via navigationResult.
 				if (data && data.type === "batch_complete") {
 					const requestId = Number(data.request_id) || 0;
+
+					// Cancelled-swap fetch finished — drop suppress entry; frames
+					// were already ignored in the batch handler.
+					if (suppressedNavRequestIds.has(requestId)) {
+						suppressedNavRequestIds.delete(requestId);
+						return;
+					}
 
 					// Edge prefetch finished: land its frames and drop the edge skeleton
 					// in the same tick so the strip extends seamlessly.
@@ -760,10 +780,17 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					const incoming: StreamTimeSeriesResponse[] = isEnvelope ? data.frames : data;
 					const requestId = isEnvelope ? Number(data.request_id) || 0 : 0;
 
-					// During a date swap, only the swap's own fetches may
-					// contribute — drop stale in-flight batches and live today
-					// frames with one comparison (the wrong-day race).
-					if (get().pendingDateSwap && !pendingNavRequestIds.has(requestId)) {
+					// Drop cancelled-swap batches and, during an active swap,
+					// anything that is not that swap's registered fetch
+					// (stale in-flight / live today — the wrong-day race).
+					if (
+						shouldDropStreamBatch({
+							requestId,
+							pendingDateSwap: get().pendingDateSwap,
+							pendingNavRequestIds,
+							suppressedNavRequestIds,
+						})
+					) {
 						return;
 					}
 

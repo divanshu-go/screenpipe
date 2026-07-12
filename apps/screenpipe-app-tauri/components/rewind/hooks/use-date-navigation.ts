@@ -108,6 +108,85 @@ export function useDateNavigation(opts: {
 	// Ref to hold navigateToSearchResult so arrow-key effect doesn't depend on it directly
 	const navigateToSearchResultRef = useRef<(index: number) => void>(() => {});
 
+	/** Instant seek onto a day already in `liveFrames` (hot path). */
+	const seekLoadedDay = useCallback((
+		liveFrames: StreamTimeSeriesResponse[],
+		targetDate: Date,
+		frameId?: number,
+	): boolean => {
+		let landingIndex = -1;
+		if (frameId != null) {
+			landingIndex = liveFrames.findIndex((f) =>
+				isSameDay(new Date(f.timestamp), targetDate) &&
+				f.devices.some((d) => String(d.frame_id) === String(frameId)),
+			);
+		}
+		if (landingIndex < 0) {
+			landingIndex = findLoadedDayLandingIndex(liveFrames, targetDate);
+		}
+		if (landingIndex < 0) return false;
+
+		if (useTimelineStore.getState().pendingDateSwap) {
+			useTimelineStore.getState().cancelPendingDateSwap();
+			useTimelineStore.setState({
+				navOriginDate: null,
+				pendingNavTargetDate: null,
+			});
+		}
+
+		dateChangesRef.current += 1;
+		posthog.capture("timeline_date_changed", {
+			from_date: currentDate.toISOString(),
+			to_date: targetDate.toISOString(),
+			instant: true,
+		});
+
+		let finalIndex =
+			frameId != null &&
+			liveFrames[landingIndex]?.devices.some(
+				(d) => String(d.frame_id) === String(frameId),
+			)
+				? landingIndex
+				: snapToDevice(landingIndex);
+		if (
+			liveFrames[finalIndex] &&
+			!isSameDay(new Date(liveFrames[finalIndex].timestamp), targetDate)
+		) {
+			finalIndex = landingIndex;
+		}
+		const targetDayFrames = liveFrames
+			.map((f, i) => ({ f, i }))
+			.filter(({ f }) => isSameDay(new Date(f.timestamp), targetDate));
+		const targetHasVisual = targetDayFrames.some(({ f }) =>
+			hasFrameVisualMedia(f),
+		);
+		if (!targetHasVisual) {
+			const audioIdx = targetDayFrames.find(({ f }) =>
+				hasFrameAudioContent(f),
+			)?.i;
+			if (audioIdx != null) finalIndex = audioIdx;
+		}
+
+		setCurrentIndex(finalIndex);
+		setCurrentFrame(liveFrames[finalIndex]);
+		setCurrentDate(targetDate);
+		pendingNavigationRef.current = null;
+		pendingFrameIdRef.current = undefined;
+		isNavigatingRef.current = false;
+		setIsNavigating(false);
+		setSeekingTimestamp(null);
+		return true;
+	}, [
+		currentDate,
+		snapToDevice,
+		setCurrentIndex,
+		setCurrentFrame,
+		setCurrentDate,
+		pendingNavigationRef,
+		isNavigatingRef,
+		dateChangesRef,
+	]);
+
 	const jumpToTime = useCallback((targetDate: Date, frameId?: number) => {
 		// Find the closest frame to the target date
 		if (frames.length === 0) {
@@ -175,6 +254,23 @@ export function useDateNavigation(opts: {
 			return;
 		}
 
+		// Hot path: day (and exact frame, when requested) already in the strip.
+		const liveFrames = useTimelineStore.getState().frames;
+		if (canInstantDateNav(liveFrames, targetDate)) {
+			if (frameId != null) {
+				const hasExact = liveFrames.some((f) =>
+					isSameDay(new Date(f.timestamp), targetDate) &&
+					f.devices.some((d) => String(d.frame_id) === String(frameId)),
+				);
+				if (hasExact && seekLoadedDay(liveFrames, targetDate, frameId)) {
+					setSearchNavFrame(true);
+					return;
+				}
+			} else if (seekLoadedDay(liveFrames, targetDate)) {
+				return;
+			}
+		}
+
 		// Supersede any in-flight calendar/arrow pick so its post-await
 		// commit cannot land after this search navigation.
 		const seq = ++navSeqRef.current;
@@ -189,6 +285,23 @@ export function useDateNavigation(opts: {
 		void (async () => {
 			const range = await resolveNavFetchRange(targetDate);
 			if (seq !== navSeqRef.current) return;
+
+			// Edge prefetch may have landed the day while we awaited.
+			const framesNow = useTimelineStore.getState().frames;
+			if (canInstantDateNav(framesNow, targetDate)) {
+				if (frameId != null) {
+					const hasExact = framesNow.some((f) =>
+						isSameDay(new Date(f.timestamp), targetDate) &&
+						f.devices.some((d) => String(d.frame_id) === String(frameId)),
+					);
+					if (hasExact && seekLoadedDay(framesNow, targetDate, frameId)) {
+						setSearchNavFrame(true);
+						return;
+					}
+				} else if (seekLoadedDay(framesNow, targetDate)) {
+					return;
+				}
+			}
 
 			dateChangesRef.current += 1;
 			posthog.capture("timeline_date_changed", {
@@ -209,7 +322,7 @@ export function useDateNavigation(opts: {
 
 		// Resolution arrives via batch_complete (see the navigationResult
 		// subscription below); the fallback timeout covers a lost socket.
-	}, [currentDate, clearFramesForNavigation, clearSentRequestForDate, fetchTimeRange, setCurrentIndex, setCurrentDate, isNavigatingRef, pendingNavigationRef, dateChangesRef]);
+	}, [currentDate, clearFramesForNavigation, clearSentRequestForDate, fetchTimeRange, setCurrentIndex, setCurrentDate, isNavigatingRef, pendingNavigationRef, dateChangesRef, seekLoadedDay, setSearchNavFrame]);
 
 	// Navigate to a specific search result by index (arrow keys in search review mode)
 	const navigateToSearchResult = useCallback((index: number) => {
@@ -307,18 +420,33 @@ export function useDateNavigation(opts: {
 
 			if (seq !== navSeqRef.current) return;
 
-			// Already on this day - jump to first frame of the day
+			// Already on this day — land near startOfDay (oldest end), matching
+			// hot/cold pending-nav seek. Frames are newest-first, so findIndex
+			// would wrongly pick the newest same-day frame.
 			if (isSameDay(targetDate, currentDate)) {
-				const targetDayStart = startOfDay(targetDate);
-				const targetDayEnd = endOfDay(targetDate);
-				const targetIndex = frames.findIndex((frame) => {
-					const frameDate = new Date(frame.timestamp);
-					return frameDate >= targetDayStart && frameDate <= targetDayEnd;
-				});
-				if (targetIndex !== -1) {
-					const snapped = snapToDevice(targetIndex);
-					setCurrentIndex(snapped);
-					setCurrentFrame(frames[snapped]);
+				const landingIndex = findLoadedDayLandingIndex(frames, targetDate);
+				if (landingIndex >= 0) {
+					let finalIndex = snapToDevice(landingIndex);
+					if (
+						frames[finalIndex] &&
+						!isSameDay(new Date(frames[finalIndex].timestamp), targetDate)
+					) {
+						finalIndex = landingIndex;
+					}
+					const targetDayFrames = frames
+						.map((f, i) => ({ f, i }))
+						.filter(({ f }) => isSameDay(new Date(f.timestamp), targetDate));
+					const targetHasVisual = targetDayFrames.some(({ f }) =>
+						hasFrameVisualMedia(f),
+					);
+					if (!targetHasVisual) {
+						const audioIdx = targetDayFrames.find(({ f }) =>
+							hasFrameAudioContent(f),
+						)?.i;
+						if (audioIdx != null) finalIndex = audioIdx;
+					}
+					setCurrentIndex(finalIndex);
+					setCurrentFrame(frames[finalIndex]);
 				}
 				isNavigatingRef.current = false;
 				setIsNavigating(false);
@@ -338,53 +466,11 @@ export function useDateNavigation(opts: {
 			// Seek in place — no pendingDateSwap skeleton, no refetch.
 			// Read store frames after awaits so a concurrent scroll load is seen.
 			const liveFrames = useTimelineStore.getState().frames;
-			if (canInstantDateNav(liveFrames, targetDate)) {
-				const landingIndex = findLoadedDayLandingIndex(liveFrames, targetDate);
-				if (landingIndex >= 0) {
-					if (useTimelineStore.getState().pendingDateSwap) {
-						useTimelineStore.getState().cancelPendingDateSwap();
-						useTimelineStore.setState({
-							navOriginDate: null,
-							pendingNavTargetDate: null,
-						});
-					}
-
-					dateChangesRef.current += 1;
-					posthog.capture("timeline_date_changed", {
-						from_date: currentDate.toISOString(),
-						to_date: targetDate.toISOString(),
-						instant: true,
-					});
-
-					let finalIndex = snapToDevice(landingIndex);
-					if (
-						liveFrames[finalIndex] &&
-						!isSameDay(new Date(liveFrames[finalIndex].timestamp), targetDate)
-					) {
-						finalIndex = landingIndex;
-					}
-					const targetDayFrames = liveFrames
-						.map((f, i) => ({ f, i }))
-						.filter(({ f }) => isSameDay(new Date(f.timestamp), targetDate));
-					const targetHasVisual = targetDayFrames.some(({ f }) =>
-						hasFrameVisualMedia(f),
-					);
-					if (!targetHasVisual) {
-						const audioIdx = targetDayFrames.find(({ f }) =>
-							hasFrameAudioContent(f),
-						)?.i;
-						if (audioIdx != null) finalIndex = audioIdx;
-					}
-
-					setCurrentIndex(finalIndex);
-					setCurrentFrame(liveFrames[finalIndex]);
-					setCurrentDate(targetDate);
-					pendingNavigationRef.current = null;
-					isNavigatingRef.current = false;
-					setIsNavigating(false);
-					setSeekingTimestamp(null);
-					return;
-				}
+			if (
+				canInstantDateNav(liveFrames, targetDate) &&
+				seekLoadedDay(liveFrames, targetDate)
+			) {
+				return;
 			}
 
 			// Cold path: day not loaded — full date-swap skeleton + gated fetch.
@@ -392,6 +478,15 @@ export function useDateNavigation(opts: {
 			// gap days (Jun 30 before Jul 1) are included on arrival.
 			const range = await resolveNavFetchRange(targetDate);
 			if (seq !== navSeqRef.current) return;
+
+			// Edge prefetch may have landed the day while we awaited.
+			const framesNow = useTimelineStore.getState().frames;
+			if (
+				canInstantDateNav(framesNow, targetDate) &&
+				seekLoadedDay(framesNow, targetDate)
+			) {
+				return;
+			}
 
 			// Track date change
 			dateChangesRef.current += 1;
@@ -433,7 +528,7 @@ export function useDateNavigation(opts: {
 			pendingNavigationRef.current = null;
 			setSeekingTimestamp(null);
 		}
-	}, [currentDate, frames, startAndEndDates, snapToDevice, clearFramesForNavigation, clearSentRequestForDate, fetchTimeRange, setCurrentIndex, setCurrentFrame, setCurrentDate, isNavigatingRef, pendingNavigationRef, pausePlayback, resetFilters, dateChangesRef]);
+	}, [currentDate, frames, startAndEndDates, snapToDevice, clearFramesForNavigation, clearSentRequestForDate, fetchTimeRange, setCurrentIndex, setCurrentFrame, setCurrentDate, isNavigatingRef, pendingNavigationRef, pausePlayback, resetFilters, dateChangesRef, seekLoadedDay]);
 
 	const handleJumpToday = useCallback(async () => {
 		const today = new Date();

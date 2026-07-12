@@ -111,6 +111,16 @@ describe("canInstantDateNav / findLoadedDayLandingIndex", () => {
 		expect(findLoadedDayLandingIndex(frames, jun29)).toBe(4);
 	});
 
+	it("same-day re-pick must not use findIndex (newest-first would land at evening)", () => {
+		// Frames are descending: findIndex of same-day returns index 0 (18:00).
+		const findIndexLanding = frames.findIndex((f) =>
+			new Date(f.timestamp).toDateString() === jul1.toDateString(),
+		);
+		expect(findIndexLanding).toBe(0);
+		expect(findLoadedDayLandingIndex(frames, jul1)).not.toBe(findIndexLanding);
+		expect(findLoadedDayLandingIndex(frames, jul1)).toBe(2);
+	});
+
 	it("returns -1 when the day has no loaded frames", () => {
 		expect(findLoadedDayLandingIndex(frames, jun30)).toBe(-1);
 		expect(findLoadedDayLandingIndex([], jul1)).toBe(-1);
