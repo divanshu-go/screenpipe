@@ -91,9 +91,7 @@ export function useDateNavigation(opts: {
 	// Navigation in progress — disables day arrows to prevent double-clicks
 	const [isNavigating, setIsNavigating] = useState(false);
 
-	// Monotonic generation for date picks. After any await (nearest-day lookup),
-	// only the latest seq may commit a swap — otherwise a click from 2s ago can
-	// overwrite the day the user currently wants.
+	// Monotonic seq so only the latest date pick may commit after awaits.
 	const navSeqRef = useRef(0);
 
 	const searchResults = useKeywordSearchStore((s) => s.searchResults);

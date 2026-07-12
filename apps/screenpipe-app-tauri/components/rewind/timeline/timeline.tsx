@@ -1117,10 +1117,9 @@ export const TimelineSlider = ({
 		return markers;
 	}, [visibleFrames]);
 
-	// Adjacent-day frame prefetch: arm when the playhead is within ~2 viewports
-	// of a loaded frame-array edge and scrolling toward it. Idle / parked at
-	// absolute end without a new proximity approach does not auto-chain; user
-	// scrolls slightly to re-enter the lead zone.
+	// Adjacent-day prefetch: ~2 viewports from a loaded edge while scrolling
+	// toward it. Absolute ends (index 0 / last) may arm even with delta 0
+	// because further scroll into the void cannot change currentIndex.
 	useEffect(() => {
 		if (pendingDateSwap || !frames || frames.length === 0) return;
 

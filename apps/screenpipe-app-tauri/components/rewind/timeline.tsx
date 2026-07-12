@@ -308,33 +308,10 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		onWheelNavigationStateChange: setIsWheelNavigating,
 	});
 
-	// When new frames stream in (live recording), they're prepended at the
-	// front (newest-first), shifting every already-loaded frame to a higher
-	// index. Keep currentIndex pointing at the same frame the user is viewing
-	// by shifting it forward by the number of frames added at the front — a
-	// no-op at the live edge (index 0), where we stay pinned to the newest.
-	//
-	// Subscribe directly to the store (not via reactive state) so we don't
-	// re-render the whole timeline on every flush. Read the live index via the
-	// functional setState updater (prev) and gate on lastFlushTimestamp so each
-	// flush is processed exactly once.
-	//
-	// IMPORTANT: do NOT gate this on a React ref tracking frames.length. Store
-	// subscribers fire synchronously inside set(), BEFORE React re-renders, so
-	// such a ref is one flush stale and silently drops the first shift — which
-	// desyncs currentIndex below currentFrame and makes ArrowRight die early at
-	// index 0 (the original "stuck going right after ~5 moves" bug). The shift
-	// math lives in shiftIndexForPrependedFrames so it can be unit-tested; see
-	// lib/hooks/__tests__/timeline-live-edge-shift.test.ts.
-	//
-	// LIVE-EDGE AUTO-FOLLOW: when viewing today, parked on the newest frame
-	// (index 0), and idle, advance the *displayed* frame as live frames stream
-	// in — otherwise the image freezes on an old frame while the scrubber grows.
-	// Historical forward prefetch also prepends; that path shifts the index
-	// instead of pinning so the strip extends right without cascading.
-	// Gated below so it never fights manual scrubbing, playback, seeking,
-	// navigation, or search review. Frame loads are debounced (use-frame-loading),
-	// so following sparse live frames is cheap.
+	// Prepended frames shift indices; keep currentIndex on the viewed frame via
+	// shiftIndexForPrependedFrames. followLiveEdge only while viewing today so
+	// historical forward prefetch extends the strip without cascading. When
+	// parked at today's index 0 and idle, also advance the displayed frame.
 	const liveFollowBlockedRef = useRef(false);
 	useEffect(() => {
 		liveFollowBlockedRef.current =
@@ -359,9 +336,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			prevTs = lastFlushTimestamp;
 
 			if (newFramesCount > 0) {
-				// True live-edge follow only while viewing today. Historical
-				// forward prefetch also prepends; pinning index 0 there would
-				// teleport to the new day's newest frame (cascade toward today).
+				// followLiveEdge only on today; historical forward prepend must shift.
 				const viewingToday = isSameDay(state.currentDate, new Date());
 				const wasAtLiveEdge = currentIndexRef.current === 0;
 
@@ -651,9 +626,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		return () => clearTimeout(timer);
 	}, [pendingNavigation, navigateToTimestamp, setPendingNavigation]);
 
-	// Strip skeleton owns first connect and date-swap loading. Never show the
-	// legacy full-screen "Loading Timeline" blocker or bottom "Loading
-	// timeline..." panel — including the await gap before pendingDateSwap.
+	// Strip skeletons own loading; keep the strip mounted through nav/load gaps.
 	const mountTimelineStrip = shouldMountTimelineStrip({
 		frameCount: frames.length,
 		pendingDateSwap,
@@ -1365,15 +1338,6 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 						meetingApp={health?.audio_pipeline?.meeting_app}
 					/>
 				</div>
-
-				{/* Loading UX: TimelineStripLoadingRow / StripDateSwapSkeleton inside
-				    the mounted strip — no full-screen "Loading Timeline" blocker. */}
-
-				{/* Non-blocking streaming indicator - removed for minimalistic UX
-			    The timeline works fine while loading, no need to show persistent indicator */}
-
-				{/* Seeking state is now indicated inline by the spinner on the date
-				    in TimelineControls + disabled nav buttons — no overlay needed */}
 
 				{error && (
 					<div className="absolute inset-0 z-50 flex items-center justify-center bg-background/90">

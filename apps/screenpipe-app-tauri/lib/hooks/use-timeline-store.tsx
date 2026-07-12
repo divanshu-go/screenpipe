@@ -50,21 +50,14 @@ const TIMELINE_STREAM_FRAME_LIMIT = 2500;
 // a single equality check instead of guessing from timestamps.
 let streamRequestSeq = 0;
 
-// Ids of the fetches serving the current date swap. Only their batches may
-// resolve the swap; batches from anything else in flight (live today frames,
-// a superseded fetch) are dropped while the swap is pending.
+// Ids of the fetches serving the current date swap.
 let pendingNavRequestIds = new Set<number>();
-// Ids from a cancelled swap. Late batches must still be dropped after
-// pendingDateSwap flips false (hot jump / Today mid-flight), until their
-// batch_complete arrives and clears the id.
+// Cancelled-swap ids: drop late batches after pendingDateSwap clears.
 let suppressedNavRequestIds = new Set<number>();
 
-// In-flight adjacent-day prefetches (user scrolled toward a strip edge),
-// keyed by request id so the server's batch_complete clears the matching
-// side deterministically. Drives the edge skeleton in TimelineSlider.
+// In-flight edge prefetches by request id (batch_complete clears the side).
 let prefetchRequests = new Map<number, "backward" | "forward">();
-// Directions whose edge skeleton should drop in the *same* flush that merges
-// their first real frames — clearing earlier left a void before bars arrived.
+// Clear edge skeleton in the same flush that merges the first real frames.
 let prefetchSkeletonClearOnFlush = new Set<"backward" | "forward">();
 
 function isPrefetchDirectionInFlight(

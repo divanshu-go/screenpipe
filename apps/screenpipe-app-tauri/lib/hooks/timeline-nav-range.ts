@@ -98,15 +98,8 @@ export function framesHavePriorDayContext(
 }
 
 /**
- * Calendar / arrow day jumps skip the full-strip date-swap skeleton when the
- * in-memory strip already holds frames for the target local day AND usable
- * prior-day context for a start-of-day landing (hot path).
- *
- * A day that is only present as the prior sliver of a later cold fetch
- * (e.g. Jul 7 frames from a Jul 8 nav range) is NOT hot: landing at
- * startOfDay would sit at the strip's oldest edge with a void on the left.
- * Fall through to cold `resolveNavFetchRange` so the nearest older day
- * with frames is fetched, matching Jul 8 arrival behavior.
+ * Hot path: target day is in the strip and an older calendar day is too, so a
+ * startOfDay landing is not parked at the global oldest edge with a left void.
  */
 export function canInstantDateNav(
 	frames: ReadonlyArray<{ timestamp: string }>,
