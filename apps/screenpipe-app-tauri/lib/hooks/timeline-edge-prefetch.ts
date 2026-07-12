@@ -65,10 +65,9 @@ export function framesIncludeLocalDay(
  * Whether edge prefetch should still probe `candidateDay` (hasFrames /
  * findNearest).
  *
- * A multi-day calendar nav range may cover an empty gap midnight via
- * start-date matching without loading frames for that day. Do not abort on
- * that alone — only when the strip already has the day's frames, or an exact
- * day-only request was already sent.
+ * Skip only when the strip already has that day's frames, or an exact
+ * day-only request was already sent. A multi-day nav range covering an
+ * empty gap midnight does not count as fetched for that day.
  */
 export function shouldProbeEdgePrefetchDay(opts: {
 	candidateHasLoadedFrames: boolean;

@@ -47,10 +47,8 @@ pub struct StreamFramesRequest {
     #[serde(default)]
     limit: Option<usize>,
     /// Client-chosen id echoed on every frame batch and on the
-    /// `batch_complete` marker for this request. The socket multiplexes
-    /// fetches, so without this the client cannot tell a stale in-flight
-    /// fetch's frames from the ones it asked for last — the root cause of
-    /// wrong-day flashes on date navigation. 0 = legacy untagged.
+    /// `batch_complete` marker for this request. Attributes multiplexed
+    /// fetches on one socket. 0 = untagged (bare array wire format).
     #[serde(default)]
     request_id: u64,
 }
@@ -1204,8 +1202,7 @@ mod tests {
         );
     }
 
-    // A fetch whose request id is no longer active must stop sending —
-    // its frames answer a navigation the user has already abandoned.
+    // Stop streaming once the request id is no longer the active one on the socket.
     #[tokio::test]
     async fn superseded_request_stops_streaming() {
         let db = Arc::new(

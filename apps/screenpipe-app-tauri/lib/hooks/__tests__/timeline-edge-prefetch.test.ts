@@ -86,11 +86,11 @@ describe("shouldProbeEdgePrefetchDay (empty gap + nav range)", () => {
 		const navKey = `${range.start.toISOString()}_${range.end.toISOString()}`;
 		const sent = new Set([navKey]);
 
-		// Legacy hasDateBeenFetched matched request START → Jun 30 "fetched".
+		// Nav range start is Jun 30 midnight; that alone is not an exact day-only fetch.
 		const startIso = navKey.split("_")[0];
 		expect(new Date(startIso).toDateString()).toBe(jun30.toDateString());
 
-		// But Jun 30 has no frames in the strip and no exact day-only request.
+		// Jun 30 still has no strip frames and no exact day-only request.
 		expect(framesIncludeLocalDay([], jun30)).toBe(false);
 		expect(hasExactDayRequest(sent, jun30)).toBe(false);
 		expect(

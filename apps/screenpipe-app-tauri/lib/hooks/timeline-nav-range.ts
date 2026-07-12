@@ -6,11 +6,9 @@ import { startOfDay, endOfDay, subDays, isSameDay } from "date-fns";
 import { findNearestDateWithFrames } from "@/lib/actions/has-frames-date";
 import { framesIncludeLocalDay } from "@/lib/hooks/timeline-edge-prefetch";
 
-// Day navigations land the playhead at the day's START, which is the oldest
-// end of the strip — so the fetch reaches back through the WHOLE previous
-// day that has frames. The day then arrives with content on both sides of
-// the playhead in one atomic swap, instead of a half strip plus a separate
-// prefetch.
+// Day navigations land the playhead at the day's START (oldest end of the
+// strip), so the fetch includes the whole previous day that has frames and
+// the swap arrives with content on both sides of the playhead.
 export const NAV_CONTEXT_HOURS_BEFORE = 24;
 
 /** How far to walk past empty calendar days for prior-day context on arrival. */

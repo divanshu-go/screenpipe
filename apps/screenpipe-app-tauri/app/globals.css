@@ -589,8 +589,8 @@
     animation: shimmer 1.5s infinite linear;
   }
 
-  /* Timeline strip skeleton: solid fill pills + opacity pulse (no shimmer /
-     glass / backdrop-filter). Blank icon chips cycle soft / squircle / sharp. */
+  /* Timeline strip skeleton: solid fill pills + opacity pulse.
+     Blank icon chips cycle soft / squircle / sharp. */
   .strip-skeleton-pill {
     box-sizing: border-box;
     background-color: hsl(var(--foreground) / 0.42);

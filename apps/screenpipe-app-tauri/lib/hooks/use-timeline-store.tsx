@@ -308,10 +308,9 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 		return false;
 	},
 
-	// Flush accumulated frames to state - called periodically instead of on every message.
-	// During a date swap the buffer is held until batch_complete forces a flush,
-	// so the day swaps in atomically (a partial first batch would land the
-	// playhead mid-day and flash incomplete content).
+	// Flush accumulated frames to state (periodic, not per message).
+	// During a date swap the buffer is held until batch_complete so the
+	// day lands in one atomic flush.
 	flushFrameBuffer: (force = false) => {
 		if (frameBuffer.length === 0) return;
 		if (!force && get().pendingDateSwap) return;
@@ -340,10 +339,9 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 						})()
 					: state.stripPrefetchLoading;
 
-			// If pendingDateSwap, replace frames entirely with new batch (date changed).
-			// Keep pendingDateSwap true until the pending-nav seek lands: clearing it
-			// here remounts the playhead and runs justLeftSwap while currentIndex is
-			// still 0 (nav start), so the chip misses data-current / centers wrong.
+			// If pendingDateSwap, replace frames entirely with the new batch.
+			// Leave pendingDateSwap true until the pending-nav seek lands so
+			// playhead remount/centering uses the landing index.
 			if (state.pendingDateSwap) {
 				// Debounce cache save
 				if (cacheSaveTimer) clearTimeout(cacheSaveTimer);
@@ -530,10 +528,9 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 			});
 			hasLoggedTimelineDisconnect = false;
 
-			// After successful connection/reconnection, refetch the current view.
-			// Mid-swap reconnect must use resolveNavFetchRange (prior day with
-			// frames, skipping empty gaps), not bare day bounds — otherwise
-			// the strip lands half-empty.
+			// After reconnect, refetch the current view. Mid-swap reconnect
+			// uses resolveNavFetchRange (prior day with frames, skipping empty
+			// gaps) so arrival still has content on both sides of the playhead.
 			setTimeout(() => {
 				void (async () => {
 					const { currentDate, fetchTimeRange, pendingDateSwap } = get();
@@ -782,7 +779,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 
 					// Drop cancelled-swap batches and, during an active swap,
 					// anything that is not that swap's registered fetch
-					// (stale in-flight / live today — the wrong-day race).
+					// (stale in-flight or live-today batches).
 					if (
 						shouldDropStreamBatch({
 							requestId,
@@ -797,9 +794,8 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					// Add to buffer instead of immediate state update
 					frameBuffer.push(...incoming);
 
-					// Prefetch: drop the edge skeleton in the flush that merges
-					// these frames (same React commit) — clearing here left a
-					// void gap before bars arrived and felt like a scroll bump.
+					// Prefetch: clear edge skeleton in the same flush that merges
+					// these frames so bars and skeleton swap in one React commit.
 					const prefetchDirection = prefetchRequests.get(requestId);
 					if (prefetchDirection && incoming.length > 0) {
 						prefetchSkeletonClearOnFlush.add(prefetchDirection);
@@ -1144,9 +1140,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 		const { websocket, fetchTimeRange, connectWebSocket, pendingDateSwap, currentDate } =
 			get();
 
-		// Never interrupt an in-flight date swap — resetting currentDate to
-		// today mid-nav is exactly the snap-back that makes calendar picks
-		// look broken.
+		// Skip focus handling while a date swap is pending.
 		if (pendingDateSwap) {
 			return;
 		}
@@ -1154,9 +1148,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 		const today = new Date();
 		const viewingToday = isSameDay(currentDate, today);
 
-		// Historical viewing: refresh the day the user is already on. Do NOT
-		// force currentDate back to today — that undoes intentional calendar
-		// / scroll navigation whenever the window regains focus.
+		// Historical viewing: refresh the day already on screen; leave currentDate.
 		if (!viewingToday) {
 			const day = currentDate;
 			const dayStr = day.toDateString();

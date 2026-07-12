@@ -21,16 +21,10 @@ import { toast } from "@/components/ui/use-toast";
 import posthog from "posthog-js";
 import type { StreamTimeSeriesResponse } from "@/components/rewind/timeline";
 
-// How far the arrow keys walk past empty days. The underlying SQL uses
-// the timestamp index (O(log n)) so a wider window costs nothing. 7 was
-// too tight — users with >7 day recording gaps would dead-end on the
-// arrow and have to use the calendar instead.
+// How far arrow keys walk past empty days (SQL uses the timestamp index).
 const MAX_DATE_RETRIES = 365;
 
-// Pure fallback: navigation normally resolves via the server's
-// batch_complete (success, empty, or error). The server caps past-day
-// fetches at 120s, so anything still unresolved past this is lost —
-// clear the state so the user isn't locked out. Never the primary path.
+// Fallback if batch_complete never arrives. Server caps past-day fetches at 120s.
 const NAV_FALLBACK_TIMEOUT_MS = 150_000;
 
 // One toast/revert per navigationResult across multiple Timeline mounts
@@ -279,9 +273,8 @@ export function useDateNavigation(opts: {
 		setIsNavigating(true);
 		setSeekingTimestamp(targetDate.toISOString());
 
-		// Resolve prior-day context before opening the swap so empty gap
-		// days (Jun 30 before Jul 1) are included on arrival, not only via
-		// later edge prefetch.
+		// Resolve prior-day context so empty gap days (Jun 30 before Jul 1)
+		// are included on arrival.
 		void (async () => {
 			const range = await resolveNavFetchRange(targetDate);
 			if (seq !== navSeqRef.current) return;
@@ -338,10 +331,7 @@ export function useDateNavigation(opts: {
 		if (!isSameDay(targetDate, currentDate)) {
 			navigateDirectToDate(targetDate, result.frame_id);
 		} else {
-			// Same day: jump in place only when the EXACT result frame is
-			// loaded. "Some frame of that day exists" isn't enough — with
-			// down-sampled or partially loaded days, jumpToTime's closest-
-			// timestamp fallback lands minutes away from the clicked result.
+			// Same day: jump in place only when the exact result frame is loaded.
 			const hasExactFrame = frames.some((f) =>
 				f.devices.some((d) => String(d.frame_id) === String(result.frame_id))
 			);
@@ -361,10 +351,7 @@ export function useDateNavigation(opts: {
 	navigateToSearchResultRef.current = navigateToSearchResult;
 
 	const handleDateChange = useCallback(async (newDate: Date, opts?: { exact?: boolean }) => {
-		// Same target already in flight (double-click, dev double-invoke):
-		// let the existing swap finish. Restarting it would wipe the
-		// registered fetch id while currentDate stays unchanged, so no new
-		// fetch would fire and the swap could never resolve.
+		// Same target already in flight: let the existing swap finish.
 		if (
 			isNavigatingRef.current &&
 			pendingNavigationRef.current &&
@@ -394,9 +381,7 @@ export function useDateNavigation(opts: {
 			// For today, skip any HTTP checks — hot cache guarantees frames
 			const isToday = isSameDay(newDate, new Date());
 
-			// Determine the actual target date. Arrows walk to the nearest day
-			// with data; an explicit calendar pick (exact) is honored as-is —
-			// silently redirecting a day the user chose reads as "not working".
+			// Arrows walk to the nearest day with data; calendar (exact) honors the pick.
 			let targetDate = newDate;
 
 			if (!isToday && !opts?.exact) {
@@ -404,8 +389,7 @@ export function useDateNavigation(opts: {
 				const direction = isAfter(currentDate, newDate) ? "backward" : "forward";
 				const nearest = await findNearestDateWithFrames(newDate, direction, MAX_DATE_RETRIES);
 
-				// A newer pick (or search jump) started while we waited —
-				// abandon this stale intent entirely; don't clear their UI.
+				// A newer pick started while we waited; leave their UI alone.
 				if (seq !== navSeqRef.current) return;
 
 				if (!nearest) {
@@ -420,9 +404,7 @@ export function useDateNavigation(opts: {
 
 			if (seq !== navSeqRef.current) return;
 
-			// Already on this day — land near startOfDay (oldest end), matching
-			// hot/cold pending-nav seek. Frames are newest-first, so findIndex
-			// would wrongly pick the newest same-day frame.
+			// Already on this day: land near startOfDay via findLoadedDayLandingIndex.
 			if (isSameDay(targetDate, currentDate)) {
 				const landingIndex = findLoadedDayLandingIndex(frames, targetDate);
 				if (landingIndex >= 0) {
@@ -511,14 +493,9 @@ export function useDateNavigation(opts: {
 			// click for arrow nearest-day walks).
 			setSeekingTimestamp(targetDate.toISOString());
 
-			// Fire the fetch (nearest prior day with frames + whole target
-			// day) so the swap lands with content on both sides of the
-			// playhead. fetchTimeRange dedupes by range key.
+			// Fire fetch for nearest prior day with frames + whole target day.
+			// fetchTimeRange dedupes by range key.
 			fetchTimeRange(range.start, range.end);
-
-			// DON'T try to find frames here - they won't be loaded yet!
-			// The pending navigation effect handles jumping to the
-			// correct frame once the new date's frames arrive via WebSocket.
 
 		} catch (error) {
 			console.error("[handleDateChange] Error:", error);

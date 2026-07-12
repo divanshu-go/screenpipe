@@ -1116,11 +1116,10 @@ export const TimelineSlider = ({
 		return markers;
 	}, [visibleFrames]);
 
-	// Adjacent-day frame prefetch: fire when the playhead is within ~2
-	// viewports of a *loaded* frame-array edge (not the virtualization window
-	// edge). IntersectionObservers on virtualization sentinels only tripped
-	// once the day edge was already on screen — too late to hide the hitch.
-	// Direction-aware: only prefetch the side we're scrolling toward.
+	// Adjacent-day frame prefetch: arm when the playhead is within ~2 viewports
+	// of a loaded frame-array edge (not the virtualization window edge) so the
+	// WS fetch can land before that edge reaches the screen. Direction-aware:
+	// only the side the user is scrolling toward.
 	useEffect(() => {
 		if (pendingDateSwap || !frames || frames.length === 0) return;
 
@@ -1308,8 +1307,7 @@ export const TimelineSlider = ({
 			return () => cancelAnimationFrame(raf);
 		}
 		// One sync remasure catches group-width settle in the same commit.
-		// Avoid a post-paint rAF here — that reintroduced the one-frame hitch
-		// we moved to useLayoutEffect to eliminate.
+		// Keep correction in this layout effect so width changes apply before paint.
 		if (!smooth) {
 			measureAndScroll();
 		}

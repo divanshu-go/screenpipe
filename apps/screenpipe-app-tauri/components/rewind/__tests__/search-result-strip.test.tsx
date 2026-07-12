@@ -10,13 +10,9 @@ import {
 	STRIP_WIDTH,
 } from "../search-result-strip";
 
-// Search results are NEWEST-FIRST (index 0 = newest). The main timeline strip is
-// LTR scrollport + flex-row-reverse — oldest on the LEFT, newest on the RIGHT.
-// The dot-strip is mirrored to match, so the active dot moves WITH the timeline
-// cursor and the ◀/▶ + ←/→ + ⌘G controls (all of which step index+1 = older,
-// index-1 = newer). Before the fix the strip used (i/denom)*width — newest at
-// the LEFT — so the dot slid opposite to every arrow, which read as "the arrow
-// and the shortcut arrow are inverted".
+// Search results are NEWEST-FIRST (index 0 = newest). Dot X mirrors the main
+// timeline (LTR scrollport + flex-row-reverse: oldest left, newest right) so
+// ◀/▶, ←/→, and ⌘G stay aligned with the strip (index+1 = older, index-1 = newer).
 const N = 5; // indexes 0..4, 0 = newest, 4 = oldest
 
 describe("searchResultDotX — dot-strip geometry", () => {
@@ -34,9 +30,7 @@ describe("searchResultDotX — dot-strip geometry", () => {
 		}
 	});
 
-	it("REGRESSION GUARD: newest must NOT be at the left (the pre-fix bug)", () => {
-		// Old mapping (i/denom)*width put newest (i=0) at x=0. If this passes again
-		// the arrows will read as inverted — see the comment block above.
+	it("newest is never at the left edge", () => {
 		expect(searchResultDotX(0, N)).not.toBe(0);
 		expect(searchResultDotX(0, N)).toBeGreaterThan(searchResultDotX(N - 1, N));
 	});
