@@ -8,7 +8,11 @@ import { findNearestDateWithFrames } from "@/lib/actions/has-frames-date";
 import { useSearchHighlight } from "@/lib/hooks/use-search-highlight";
 import { useKeywordSearchStore } from "@/lib/hooks/use-keyword-search-store";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
-import { resolveNavFetchRange } from "@/lib/hooks/timeline-nav-range";
+import {
+	canInstantDateNav,
+	findLoadedDayLandingIndex,
+	resolveNavFetchRange,
+} from "@/lib/hooks/timeline-nav-range";
 import {
 	hasFrameAudioContent,
 	hasFrameVisualMedia,
@@ -329,6 +333,60 @@ export function useDateNavigation(opts: {
 				return;
 			}
 
+			// Hot path: target day already in the strip (scroll/edge prefetch).
+			// Seek in place — no pendingDateSwap skeleton, no refetch.
+			// Read store frames after awaits so a concurrent scroll load is seen.
+			const liveFrames = useTimelineStore.getState().frames;
+			if (canInstantDateNav(liveFrames, targetDate)) {
+				const landingIndex = findLoadedDayLandingIndex(liveFrames, targetDate);
+				if (landingIndex >= 0) {
+					if (useTimelineStore.getState().pendingDateSwap) {
+						useTimelineStore.getState().cancelPendingDateSwap();
+						useTimelineStore.setState({
+							navOriginDate: null,
+							pendingNavTargetDate: null,
+						});
+					}
+
+					dateChangesRef.current += 1;
+					posthog.capture("timeline_date_changed", {
+						from_date: currentDate.toISOString(),
+						to_date: targetDate.toISOString(),
+						instant: true,
+					});
+
+					let finalIndex = snapToDevice(landingIndex);
+					if (
+						liveFrames[finalIndex] &&
+						!isSameDay(new Date(liveFrames[finalIndex].timestamp), targetDate)
+					) {
+						finalIndex = landingIndex;
+					}
+					const targetDayFrames = liveFrames
+						.map((f, i) => ({ f, i }))
+						.filter(({ f }) => isSameDay(new Date(f.timestamp), targetDate));
+					const targetHasVisual = targetDayFrames.some(({ f }) =>
+						hasFrameVisualMedia(f),
+					);
+					if (!targetHasVisual) {
+						const audioIdx = targetDayFrames.find(({ f }) =>
+							hasFrameAudioContent(f),
+						)?.i;
+						if (audioIdx != null) finalIndex = audioIdx;
+					}
+
+					setCurrentIndex(finalIndex);
+					setCurrentFrame(liveFrames[finalIndex]);
+					setCurrentDate(targetDate);
+					pendingNavigationRef.current = null;
+					isNavigatingRef.current = false;
+					setIsNavigating(false);
+					setSeekingTimestamp(null);
+					return;
+				}
+			}
+
+			// Cold path: day not loaded — full date-swap skeleton + gated fetch.
 			// Resolve prior-day context before opening the swap so empty
 			// gap days (Jun 30 before Jul 1) are included on arrival.
 			const range = await resolveNavFetchRange(targetDate);

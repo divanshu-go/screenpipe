@@ -4,7 +4,12 @@
 
 import { describe, expect, it } from "vitest";
 import { endOfDay, startOfDay } from "date-fns";
-import { navFetchRange, resolveNavFetchRange } from "../timeline-nav-range";
+import {
+	canInstantDateNav,
+	findLoadedDayLandingIndex,
+	navFetchRange,
+	resolveNavFetchRange,
+} from "../timeline-nav-range";
 
 describe("navFetchRange", () => {
 	it("defaults to previous local midnight without a prior-day hint", () => {
@@ -73,5 +78,41 @@ describe("resolveNavFetchRange", () => {
 			findPrior: async () => null,
 		});
 		expect(range.start.getTime()).toBe(jun30.getTime());
+	});
+});
+
+describe("canInstantDateNav / findLoadedDayLandingIndex", () => {
+	const jul1 = startOfDay(new Date(2026, 6, 1));
+	const jun30 = startOfDay(new Date(2026, 5, 30));
+	const jun29 = startOfDay(new Date(2026, 5, 29));
+
+	// Newest-first strip spanning Jul 1 → Jun 29 (Jun 30 empty / absent).
+	const frames = [
+		{ timestamp: new Date(2026, 6, 1, 18, 0).toISOString() },
+		{ timestamp: new Date(2026, 6, 1, 9, 0).toISOString() },
+		{ timestamp: new Date(2026, 6, 1, 0, 30).toISOString() },
+		{ timestamp: new Date(2026, 5, 29, 22, 0).toISOString() },
+		{ timestamp: new Date(2026, 5, 29, 8, 0).toISOString() },
+	];
+
+	it("instant when the target day is already in the strip", () => {
+		expect(canInstantDateNav(frames, jul1)).toBe(true);
+		expect(canInstantDateNav(frames, jun29)).toBe(true);
+	});
+
+	it("not instant for an empty / unloaded gap day", () => {
+		expect(canInstantDateNav(frames, jun30)).toBe(false);
+		expect(canInstantDateNav([], jul1)).toBe(false);
+	});
+
+	it("lands near startOfDay (oldest end) among that day's frames", () => {
+		// startOfDay Jul 1 → closest is 00:30 (index 2), not evening
+		expect(findLoadedDayLandingIndex(frames, jul1)).toBe(2);
+		expect(findLoadedDayLandingIndex(frames, jun29)).toBe(4);
+	});
+
+	it("returns -1 when the day has no loaded frames", () => {
+		expect(findLoadedDayLandingIndex(frames, jun30)).toBe(-1);
+		expect(findLoadedDayLandingIndex([], jul1)).toBe(-1);
 	});
 });
