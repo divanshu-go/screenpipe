@@ -4,9 +4,11 @@
 
 import { describe, expect, it } from "vitest";
 import { endOfDay, startOfDay } from "date-fns";
+import { framesIncludeLocalDay } from "../timeline-edge-prefetch";
 import {
 	canInstantDateNav,
 	findLoadedDayLandingIndex,
+	framesHavePriorDayContext,
 	navFetchRange,
 	resolveNavFetchRange,
 } from "../timeline-nav-range";
@@ -95,14 +97,58 @@ describe("canInstantDateNav / findLoadedDayLandingIndex", () => {
 		{ timestamp: new Date(2026, 5, 29, 8, 0).toISOString() },
 	];
 
-	it("instant when the target day is already in the strip", () => {
+	it("instant when the target day is loaded with prior-day context", () => {
 		expect(canInstantDateNav(frames, jul1)).toBe(true);
-		expect(canInstantDateNav(frames, jun29)).toBe(true);
+		expect(framesHavePriorDayContext(frames, jul1)).toBe(true);
+	});
+
+	it("not instant for the oldest loaded day (would void-left at startOfDay)", () => {
+		// Jun 29 is in the strip but nothing older — hot seek would land at
+		// the global oldest edge with a black void on the left.
+		expect(framesIncludeLocalDay(frames, jun29)).toBe(true);
+		expect(framesHavePriorDayContext(frames, jun29)).toBe(false);
+		expect(canInstantDateNav(frames, jun29)).toBe(false);
 	});
 
 	it("not instant for an empty / unloaded gap day", () => {
 		expect(canInstantDateNav(frames, jun30)).toBe(false);
 		expect(canInstantDateNav([], jul1)).toBe(false);
+	});
+
+	it("Jul 8 cold range (Jul 7+Jul 8) → Jul 7 is not hot without older day", () => {
+		// Repro: cold land on Jul 8 fetches Jul 7 as prior context. Arrow to
+		// Jul 7 must NOT take the hot path — startOfDay landing would sit at
+		// the strip's oldest edge with a void on the left.
+		const jul8 = startOfDay(new Date(2026, 6, 8));
+		const jul7 = startOfDay(new Date(2026, 6, 7));
+		const jul8ColdFrames = [
+			{ timestamp: new Date(2026, 6, 8, 18, 0).toISOString() },
+			{ timestamp: new Date(2026, 6, 8, 9, 0).toISOString() },
+			{ timestamp: new Date(2026, 6, 8, 0, 30).toISOString() },
+			{ timestamp: new Date(2026, 6, 7, 22, 0).toISOString() },
+			{ timestamp: new Date(2026, 6, 7, 0, 29).toISOString() },
+		];
+		expect(canInstantDateNav(jul8ColdFrames, jul8)).toBe(true);
+		expect(framesHavePriorDayContext(jul8ColdFrames, jul7)).toBe(false);
+		expect(canInstantDateNav(jul8ColdFrames, jul7)).toBe(false);
+		// Landing would be at the oldest edge (index length-1).
+		expect(findLoadedDayLandingIndex(jul8ColdFrames, jul7)).toBe(
+			jul8ColdFrames.length - 1,
+		);
+	});
+
+	it("hot among mid-strip days when prior days are already buffered", () => {
+		const jul8 = startOfDay(new Date(2026, 6, 8));
+		const jul7 = startOfDay(new Date(2026, 6, 7));
+		const jul6 = startOfDay(new Date(2026, 6, 6));
+		const scrolled = [
+			{ timestamp: new Date(2026, 6, 8, 12, 0).toISOString() },
+			{ timestamp: new Date(2026, 6, 7, 12, 0).toISOString() },
+			{ timestamp: new Date(2026, 6, 6, 12, 0).toISOString() },
+		];
+		expect(canInstantDateNav(scrolled, jul8)).toBe(true);
+		expect(canInstantDateNav(scrolled, jul7)).toBe(true);
+		expect(canInstantDateNav(scrolled, jul6)).toBe(false);
 	});
 
 	it("lands near startOfDay (oldest end) among that day's frames", () => {

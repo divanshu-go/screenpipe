@@ -83,14 +83,37 @@ export function dayFetchRange(targetDate: Date): { start: Date; end: Date } {
 }
 
 /**
+ * True when the strip has at least one frame on a calendar day strictly
+ * before `targetDate`. Start-of-day landings need this so the playhead is
+ * not parked at the global oldest edge with a black void on the left.
+ */
+export function framesHavePriorDayContext(
+	frames: ReadonlyArray<{ timestamp: string }>,
+	targetDate: Date,
+): boolean {
+	const targetStart = startOfDay(targetDate).getTime();
+	return frames.some(
+		(f) => startOfDay(new Date(f.timestamp)).getTime() < targetStart,
+	);
+}
+
+/**
  * Calendar / arrow day jumps skip the full-strip date-swap skeleton when the
- * in-memory strip already holds frames for the target local day (hot path).
+ * in-memory strip already holds frames for the target local day AND usable
+ * prior-day context for a start-of-day landing (hot path).
+ *
+ * A day that is only present as the prior sliver of a later cold fetch
+ * (e.g. Jul 7 frames from a Jul 8 nav range) is NOT hot: landing at
+ * startOfDay would sit at the strip's oldest edge with a void on the left.
+ * Fall through to cold `resolveNavFetchRange` so the nearest older day
+ * with frames is fetched, matching Jul 8 arrival behavior.
  */
 export function canInstantDateNav(
 	frames: ReadonlyArray<{ timestamp: string }>,
 	targetDate: Date,
 ): boolean {
-	return framesIncludeLocalDay(frames, targetDate);
+	if (!framesIncludeLocalDay(frames, targetDate)) return false;
+	return framesHavePriorDayContext(frames, targetDate);
 }
 
 /**
