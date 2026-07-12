@@ -234,10 +234,8 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 		}
 	},
 
-	// Prepare for date navigation — keep old frames visible while new ones load.
-	// Sets pendingDateSwap: incoming batches are held in the buffer (only the
-	// swap's own request ids pass the gate) and swapped in atomically when the
-	// server's batch_complete arrives.
+	// Prepare for date navigation: frame row stays mounted (hidden under
+	// skeleton), incoming batches gated by request id until batch_complete.
 	clearFramesForNavigation: ({ origin, target }) => {
 		// Clear the frame buffer too
 		frameBuffer = [];
@@ -250,7 +248,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 		// server, so its frames aren't coming anyway).
 		prefetchRequests.clear();
 		prefetchShimmerClearOnFlush.clear();
-		// Keep frames + frameTimestamps so old content stays visible.
+		// Keep frames in state (row hidden under skeleton) until the swap flush.
 		set(() => ({
 			sentRequests: new Set<string>(),
 			pendingDateSwap: true,
@@ -266,7 +264,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 	},
 
 	// Fallback abort for a swap whose batch_complete never arrived (e.g. the
-	// socket died and never reconnected). Old frames stay visible.
+	// socket died and never reconnected). Clears pendingDateSwap / skeleton.
 	// Leaves navOriginDate for the navigationResult / timeout path to restore.
 	cancelPendingDateSwap: () => {
 		pendingNavRequestIds.clear();

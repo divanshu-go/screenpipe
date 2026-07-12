@@ -332,9 +332,8 @@ export function useDateNavigation(opts: {
 				to_date: targetDate.toISOString(),
 			});
 
-			// Remember where we came from, then start the swap: old frames stay
-			// visible, incoming batches are gated by request id, and the swap
-			// resolves on the server's batch_complete (success, empty, or error).
+			// Start the swap: frame row stays mounted (hidden under skeleton),
+			// batches gated by request id, resolves on batch_complete.
 			clearFramesForNavigation({ origin: currentDate, target: targetDate });
 
 			// Clear the sent request cache for this date to force a fresh fetch
@@ -377,7 +376,7 @@ export function useDateNavigation(opts: {
 		// cannot yank the user off today.
 		navSeqRef.current += 1;
 
-		// Cancel any in-flight date swap so the strip doesn't stay dimmed.
+		// Cancel any in-flight date swap so the skeleton overlay clears.
 		if (useTimelineStore.getState().pendingDateSwap) {
 			useTimelineStore.getState().cancelPendingDateSwap();
 			useTimelineStore.setState({

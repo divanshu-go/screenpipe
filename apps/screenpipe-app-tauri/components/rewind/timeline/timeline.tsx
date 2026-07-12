@@ -1225,7 +1225,7 @@ export const TimelineSlider = ({
 		prevStripWidthRef.current = stripViewportWidth;
 		const framesLengthChanged = prevFramesLengthRef.current !== frames.length;
 		prevFramesLengthRef.current = frames.length;
-		const shimmerChanged = prevStripPrefetchKeyRef.current !== stripPrefetchKey;
+		const prefetchSkeletonChanged = prevStripPrefetchKeyRef.current !== stripPrefetchKey;
 		prevStripPrefetchKeyRef.current = stripPrefetchKey;
 
 		const prevIndex = lastScrolledIndexRef.current;
@@ -1234,7 +1234,7 @@ export const TimelineSlider = ({
 		// snap-center — that fights an in-progress wheel scrub).
 		const preserveViewportX =
 			!justLeftSwap &&
-			(framesLengthChanged || shimmerChanged) &&
+			(framesLengthChanged || prefetchSkeletonChanged) &&
 			playheadViewportXRef.current != null;
 		const isJump =
 			justLeftSwap || widthChanged || step > SMOOTH_SCROLL_MAX_STEP;
@@ -1271,8 +1271,7 @@ export const TimelineSlider = ({
 				if (smooth) {
 					container.scrollBy({ left: delta, behavior: "smooth" });
 				} else {
-					// LTR container: assign scrollLeft directly (reliable after
-					// removing parent dir=rtl, which broke scrollBy centering).
+					// LTR scrollport: assign scrollLeft directly for jump corrections.
 					container.scrollLeft += delta;
 				}
 			}

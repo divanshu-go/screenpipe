@@ -5,11 +5,8 @@
 /**
  * Virtualization window around the playhead.
  *
- * Intentionally does NOT "steal" frames from the loaded side to fill a short
- * unloaded edge. That inward rebalance kept the strip visually full at a day
- * boundary, but when adjacent-day frames landed the window jumped back to
- * center and reshuffled bars under the playhead (the remaining scroll bump).
- * Unloaded sides are filled by the edge prefetch skeleton instead.
+ * Clamp-only around currentIndex. Unloaded sides stay short until edge
+ * prefetch skeleton and merged frames extend the array.
  */
 export function visibleFrameWindow(opts: {
 	frameCount: number;
