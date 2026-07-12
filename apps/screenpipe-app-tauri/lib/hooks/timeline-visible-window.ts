@@ -9,7 +9,7 @@
  * unloaded edge. That inward rebalance kept the strip visually full at a day
  * boundary, but when adjacent-day frames landed the window jumped back to
  * center and reshuffled bars under the playhead (the remaining scroll bump).
- * Unloaded sides are filled by the edge prefetch shimmer instead.
+ * Unloaded sides are filled by the edge prefetch skeleton instead.
  */
 export function visibleFrameWindow(opts: {
 	frameCount: number;

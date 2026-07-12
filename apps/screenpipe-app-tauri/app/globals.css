@@ -589,26 +589,22 @@
     animation: shimmer 1.5s infinite linear;
   }
 
-  /* Timeline strip skeleton pills — higher-contrast fill + opacity pulse.
-     No backdrop-filter (too expensive over live screenshots). */
+  /* Timeline strip skeleton pills: high-contrast fill + opacity pulse. */
   .strip-skeleton-pill {
     box-sizing: border-box;
     background-color: hsl(var(--foreground) / 0.42);
     animation: strip-skeleton-pulse 1.6s ease-in-out infinite;
   }
 
-  /* Blank icon chips — shapes that read as app icons / favicons
-     (soft round + squircle), not sharp squares. */
+  /* Blank icon chips: soft round, squircle, or sharp square. */
   .strip-skeleton-icon {
     width: 0.875rem; /* 14px */
     height: 0.875rem;
   }
   .strip-skeleton-icon--soft {
-    /* Typical macOS/Android app-icon rounding (~25% of side). */
     border-radius: 22%;
   }
   .strip-skeleton-icon--squircle {
-    /* iOS-like continuous corner; falls back to heavy round. */
     border-radius: 30%;
   }
   @supports (corner-shape: squircle) {

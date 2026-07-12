@@ -24,10 +24,9 @@ import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
 import { edgePrefetchPlan } from "@/lib/hooks/timeline-edge-prefetch";
 import { visibleFrameWindow } from "@/lib/hooks/timeline-visible-window";
 
-// Segmented skeleton pills for edge prefetch + date-swap + empty strip.
-// Opacity pulse on bars + blank icon chips that look like real app icons:
-// soft-rounded + squircle (desktop/mobile app marks) and occasional hard
-// square. No circles, glyphs, letters, Lucide, or yesterday's real apps.
+// Strip loading UI: segmented opacity-pulse pills for empty strip, edge
+// prefetch, and calendar/arrow date swaps. Wide pills get blank icon chips
+// cycling soft / squircle / sharp shapes (same footprint as real app icons).
 const STRIP_SKELETON_SEG_GAP = 2;
 const PREFETCH_SKELETON_GROUP_SLOTS = [14, 6, 22, 9, 16];
 const FULL_STRIP_SKELETON_PATTERN = [14, 6, 22, 9, 16, 11, 25, 7, 18, 10];
@@ -145,7 +144,7 @@ function TimelineStripLoadingRow({ slotWidth }: { slotWidth: number }) {
 	);
 }
 
-// Date-swap overlay; strip stays mounted underneath (no remount / opacity-50).
+// Date-swap overlay: skeleton covers the viewport while the strip stays mounted.
 function StripDateSwapSkeleton({ slotWidth }: { slotWidth: number }) {
 	return (
 		<div
@@ -601,9 +600,8 @@ export const TimelineSlider = ({
 	// Set by fetchNextDayData, cleared by that request's batch_complete.
 	const stripPrefetchLoading = useTimelineStore((s) => s.stripPrefetchLoading);
 
-	// Date swap in flight (calendar / arrows / search jump): strip stays
-	// mounted (visibility:hidden) under a full-width shimmer overlay until
-	// the target day swaps in on batch_complete — never remount, never opacity-50.
+	// Date swap in flight (calendar / arrows / search jump): strip stays mounted
+	// but invisible under StripDateSwapSkeleton until batch_complete lands.
 	const pendingDateSwap = useTimelineStore((s) => s.pendingDateSwap);
 
 	const [hoveredTimestamp, setHoveredTimestamp] = useState<string | null>(null);
@@ -821,7 +819,7 @@ export const TimelineSlider = ({
 		const halfWindow = Math.ceil(framesPerScreen * 1.15);
 		// Clamp-only window: do not steal frames from the loaded side to fill a
 		// short day edge. Inward rebalance caused a layout jump when adjacent-day
-		// frames landed (window recentered). Prefetch shimmer covers the gap.
+		// frames landed (window recentered). Edge prefetch skeleton covers the gap.
 		const { start, end } = visibleFrameWindow({
 			frameCount: frames.length,
 			currentIndex,
@@ -1189,14 +1187,12 @@ export const TimelineSlider = ({
 		startAndEndDates,
 	]);
 
-	// Measured scroll on an LTR overflow container (parent used to be dir=rtl,
-	// which made scrollBy/scrollLeft unreliable and left scroll≈0 → left
-	// px-[50vw] void + rounded pill start while the right edge looked flush).
-	// Visual oldest←→newest order is flex-row-reverse on the content row.
-	// Date jumps re-center after content replaces under the same mount.
+	// Measured scroll on an LTR overflow container. Content uses flex-row-reverse
+	// (oldest left / newest right). Date jumps re-center after content replaces
+	// under the same mount.
 	//
 	// useLayoutEffect (not useEffect): when prefetched frames prepend/append or
-	// shimmer swaps for real bars, content width changes under the playhead.
+	// edge skeleton swaps for real bars, content width changes under the playhead.
 	// Correcting scrollLeft before paint avoids a one-frame jump. Smooth
 	// scrollBy still runs here — the browser animates asynchronously anyway.
 	const SMOOTH_SCROLL_MAX_STEP = 12;
@@ -1207,7 +1203,7 @@ export const TimelineSlider = ({
 	const stripPrefetchKey = `${stripPrefetchLoading.backward ?? ""}|${stripPrefetchLoading.forward ?? ""}`;
 	const prevStripPrefetchKeyRef = useRef(stripPrefetchKey);
 	// Viewport X of the playhead frame center — used to restore position when
-	// content width changes without a seek (prefetch merge / shimmer swap).
+	// content width changes without a seek (prefetch merge / skeleton clear).
 	const playheadViewportXRef = useRef<number | null>(null);
 
 	useLayoutEffect(() => {
@@ -1288,7 +1284,7 @@ export const TimelineSlider = ({
 		};
 
 		if (justLeftSwap) {
-			// Content replaced; re-measure to center landing frame (no sticky).
+			// Content replaced; re-measure to center the landing frame.
 			let raf = 0;
 			let tries = 0;
 			const run = () => {
@@ -1901,20 +1897,15 @@ export const TimelineSlider = ({
 				}}
 			>
 				{/* Empty: full-width skeleton. Date swap with existing frames: keep
-				    the strip mounted (invisible) under StripDateSwapSkeleton — do
-				    NOT unmount the strip (historical half-strip / sticky remount bug)
-				    and do NOT dim old day with opacity-50. */}
+				    the strip mounted (invisible) under StripDateSwapSkeleton. */}
 				{frames.length === 0 ? (
 					<TimelineStripLoadingRow slotWidth={frameWidth + frameMargin * 2} />
 				) : (
 				<motion.div
 					ref={timelineContentRef}
 					className={cn(
-						// LTR scrollport + flex-row-reverse: oldest left / newest right
-						// (same visual as the old parent dir=rtl) without breaking
-						// scrollLeft centering. No sticky right-0 (parked content and
-						// left a screen-edge void). px-[50vw] keeps the playhead
-						// centerable at true content ends only.
+						// LTR scrollport + flex-row-reverse (oldest left / newest right).
+						// px-[50vw] keeps the playhead centerable at true content ends.
 						"whitespace-nowrap flex flex-row-reverse flex-nowrap w-max justify-center px-[50vw] h-24 scrollbar-hide relative",
 						pendingDateSwap && "invisible pointer-events-none",
 					)}
@@ -1986,7 +1977,7 @@ export const TimelineSlider = ({
 						document.body
 					)}
 
-					{/* Newer-day prefetch shimmer (visual RIGHT — flex-row-reverse) */}
+					{/* Newer-day edge prefetch skeleton (visual RIGHT) */}
 					{stripPrefetchLoading.forward && (
 						<StripPrefetchSkeleton
 							slotWidth={frameWidth + frameMargin * 2}
@@ -2425,7 +2416,7 @@ export const TimelineSlider = ({
 							</React.Fragment>
 						);
 					})}
-					{/* Older-day prefetch shimmer (visual LEFT — flex-row-reverse) */}
+					{/* Older-day edge prefetch skeleton (visual LEFT) */}
 					{stripPrefetchLoading.backward && (
 						<StripPrefetchSkeleton
 							slotWidth={frameWidth + frameMargin * 2}

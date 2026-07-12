@@ -48,10 +48,10 @@ let pendingNavRequestIds = new Set<number>();
 
 // In-flight adjacent-day prefetches (user scrolled toward a strip edge),
 // keyed by request id so the server's batch_complete clears the matching
-// side deterministically. Drives the edge shimmer in TimelineSlider.
+// side deterministically. Drives the edge skeleton in TimelineSlider.
 let prefetchRequests = new Map<number, "backward" | "forward">();
-// Directions whose shimmer should drop in the *same* flush that merges their
-// first real frames — clearing earlier left a void frame before bars arrived.
+// Directions whose edge skeleton should drop in the *same* flush that merges
+// their first real frames — clearing earlier left a void before bars arrived.
 let prefetchShimmerClearOnFlush = new Set<"backward" | "forward">();
 
 // Reconnect timeout - must be tracked to prevent cascade
@@ -115,9 +115,9 @@ interface TimelineState {
 	// Optimistic UI state
 	isConnected: boolean; // WebSocket connection status
 	hasCachedData: boolean; // Whether we loaded from cache
-	// When true, date-swap batches are gated and the strip stays dimmed. A
-	// successful flush replaces frames but leaves this true until the pending-nav
-	// seek lands (so playhead/scroll don't run against nav-start index 0).
+	// When true, date-swap batches are gated and the strip skeleton overlay is
+	// shown. A successful flush replaces frames but leaves this true until the
+	// pending-nav seek lands (so playhead/scroll don't run against nav-start index 0).
 	pendingDateSwap: boolean;
 
 	// Remount-safe nav origin/target for empty/failed swap revert + toast.
@@ -131,8 +131,8 @@ interface TimelineState {
 	navigationResult: { requestId: number; count: number; error: boolean; at: number } | null;
 
 	// ISO date of the adjacent day currently being prefetched at each strip
-	// edge (null = idle). TimelineSlider renders a shimmer continuation there
-	// so scrolling into an unloaded day doesn't dead-end in a black void.
+	// edge (null = idle). TimelineSlider renders an edge skeleton continuation
+	// there so scrolling into an unloaded day doesn't dead-end in a void.
 	stripPrefetchLoading: { backward: string | null; forward: string | null };
 
 	// Deep link navigation — persists across component mounts
@@ -360,7 +360,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					},
 					message: null,
 					error: null,
-					// Still drop shimmer if a prefetch batch was empty/dupe-only
+					// Still drop edge skeleton if a prefetch batch was empty/dupe-only
 					// but asked to clear — avoids a stuck pulse at the edge.
 					stripPrefetchLoading: nextPrefetchLoading,
 				};
@@ -557,7 +557,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 				if (data && data.type === "batch_complete") {
 					const requestId = Number(data.request_id) || 0;
 
-					// Edge prefetch finished: land its frames and drop the shimmer
+					// Edge prefetch finished: land its frames and drop the edge skeleton
 					// in the same tick so the strip extends seamlessly.
 					const prefetchDirection = prefetchRequests.get(requestId);
 					if (prefetchDirection) {
@@ -763,7 +763,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					// Add to buffer instead of immediate state update
 					frameBuffer.push(...incoming);
 
-					// Prefetch: drop the edge shimmer in the flush that merges
+					// Prefetch: drop the edge skeleton in the flush that merges
 					// these frames (same React commit) — clearing here left a
 					// void gap before bars arrived and felt like a scroll bump.
 					const prefetchDirection = prefetchRequests.get(requestId);
@@ -1049,7 +1049,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 				}),
 			);
 
-			// Arm the edge shimmer for the side being extended; the request's
+			// Arm the edge skeleton for the side being extended; the request's
 			// batch_complete clears it.
 			prefetchRequests.set(requestId, direction);
 			const armedDayIso = nextDay.toISOString();
@@ -1062,7 +1062,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 				},
 			}));
 
-			// Safety: never leave the shimmer stuck if batch_complete is lost
+			// Safety: never leave the edge skeleton stuck if batch_complete is lost
 			// (dead socket that never reconnects). Only clears if this request
 			// still owns the slot.
 			setTimeout(() => {
