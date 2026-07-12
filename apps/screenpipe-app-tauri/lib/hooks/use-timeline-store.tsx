@@ -947,11 +947,8 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 			}
 
 			// Reconnect with exponential backoff (2s, 3s, 4.5s, ... capped at 30s),
-			// indefinitely. We used to give up after a fixed number of attempts (~10),
-			// which left the timeline permanently frozen after a long outage (e.g.
-			// machine sleep) until a manual refresh. The local engine is effectively
-			// always available, so it's correct to keep retrying; the 30s cap keeps
-			// the cost negligible (at most one attempt per 30s).
+			// indefinitely. The local engine is effectively always available, so
+			// keep retrying; the 30s cap keeps cost negligible.
 			reconnectAttempts++;
 			const delay = Math.min(
 				RECONNECT_BASE_DELAY_MS * Math.pow(1.5, reconnectAttempts - 1),
