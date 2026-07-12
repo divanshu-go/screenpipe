@@ -363,7 +363,7 @@ export function getAppCategoryColor(appName: string): string {
 	return CATEGORY_COLORS[category] || CATEGORY_COLORS.other;
 }
 
-// Alias used by app-group color mapping below.
+// Alias for getAppCategoryColor (external imports)
 export function stringToColor(str: string): string {
 	return getAppCategoryColor(str);
 }
@@ -486,7 +486,7 @@ const PlayheadTimeChip = React.memo(function PlayheadTimeChip({
 			}
 			tries = 0;
 			const r = el.getBoundingClientRect();
-			// Flat strip: bar top is stable while frames scroll under the playhead.
+			// Flat strip: bar top is stable while scrolling
 			setRect({ x: r.left + r.width / 2, y: r.top });
 		};
 		const schedule = () => {
@@ -507,7 +507,7 @@ const PlayheadTimeChip = React.memo(function PlayheadTimeChip({
 
 	return createPortal(
 		<>
-			{/* Vertical playhead line through the bar (marks current frame). */}
+			{/* Playhead line marks current frame (no bar glow) */}
 			<div
 				className="fixed z-[9997] pointer-events-none"
 				style={{

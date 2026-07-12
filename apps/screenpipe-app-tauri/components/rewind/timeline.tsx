@@ -340,9 +340,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		setCurrentFrame(frames[next] ?? null);
 	}, [frames, currentIndex, setCurrentFrame]);
 
-	// Remount / HMR: local seeking state is gone. Rehydrate from the store when
-	// a swap is still live; cancel only true orphans (no target / not loading /
-	// nothing to seek).
+	// On mount: rehydrate live swap from store; cancel only orphans
 	useEffect(() => {
 		const store = useTimelineStore.getState();
 		if (!store.pendingDateSwap) return;
@@ -538,9 +536,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		const targetDate = new Date(targetTimestamp);
 		if (isNaN(targetDate.getTime())) return;
 
-		// Pause playback so the jump settles on a still moment. Preserves the
-		// prior cross-day behavior (handleDateChange paused; navigateDirectToDate
-		// does not). resetFilters still runs via the pending-navigation effect.
+		// Pause playback so the jump settles on a still frame.
 		pausePlayback();
 		setSeekingTimestamp(targetTimestamp);
 		pendingNavigationRef.current = targetDate;
@@ -560,12 +556,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			}
 		}
 
-		// Cross-day, or same-day with stale/empty frames (e.g. the window was
-		// hidden): fetch around the exact moment and let the pending-navigation
-		// effect jump once frames arrive. Use navigateDirectToDate, not
-		// handleDateChange — the latter overwrites pendingNavigationRef with the
-		// nearest *day* (local midnight), landing the jump at the start of the
-		// day instead of the captured moment.
+		// Deep-link jumps need exact timestamp; handleDateChange lands at day start
 		await navigateDirectToDate(targetDate);
 	}, [currentDate, frames, jumpToTime, navigateDirectToDate, pausePlayback]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1304,11 +1295,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 						startAndEndDates={startAndEndDates}
 						onDateChange={handleDateChange}
 						onJumpToday={handleJumpToday}
-						// Embedded timeline no longer renders a search button
-						// here — the AppSidebar's top bar (next to the macOS
-						// traffic lights) owns search now and emits an
-						// `open-search` event that the listener below picks
-						// up. Standalone timeline window keeps its button.
+						// Search lives in nav bar when embedded
 						onSearchClick={
 							embedded
 								? undefined

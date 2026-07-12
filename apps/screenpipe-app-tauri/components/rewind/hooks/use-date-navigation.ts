@@ -229,7 +229,7 @@ export function useDateNavigation(opts: {
 	// Fast navigation to a date we already know has frames (e.g. from search results).
 	// Skips the hasFramesForDate() HTTP round-trip and adjacent-date probing.
 	const navigateDirectToDate = useCallback((targetDate: Date, frameId?: number) => {
-		// Same target in flight: update frame_id only; do not restart the swap.
+		// Same target in flight: update frame_id only
 		if (
 			isNavigatingRef.current &&
 			pendingNavigationRef.current &&

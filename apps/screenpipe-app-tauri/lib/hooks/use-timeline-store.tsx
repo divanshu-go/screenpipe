@@ -81,8 +81,7 @@ const RECONNECT_MAX_DELAY_MS = 30000;
 // scheduled reconnect is mid-await) would each build a socket and orphan one.
 let isConnecting = false;
 
-// Reset backoff so the next connectWebSocket reconnects promptly.
-// Shared by watchdog + onWindowFocus so those call sites cannot drift.
+// Reset backoff before watchdog/focus reconnect
 function resetBackoffCounters() {
 	reconnectAttempts = 0;
 	connectionAttempts = 0;
@@ -137,7 +136,7 @@ interface TimelineState {
 	navOriginDate: Date | null;
 	pendingNavTargetDate: Date | null;
 
-	// The navigation hook waits on this (set at batch_complete).
+	// Set on batch_complete; navigation hook waits for this
 	navigationResult: { requestId: number; count: number; error: boolean; at: number } | null;
 
 	// ISO date of the adjacent day currently being prefetched at each strip
@@ -457,8 +456,8 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 			frameBuffer = [];
 			// Fetches in flight on the old socket are dead; a pending date swap
 			// survives the reconnect — the post-open fetch re-registers its id.
+			// Keep suppressedNavRequestIds so cancelled-swap late batches still drop.
 			pendingNavRequestIds.clear();
-			suppressedNavRequestIds.clear();
 			prefetchRequests.clear();
 			prefetchSkeletonClearOnFlush.clear();
 			if (progressUpdateTimer) {
@@ -485,7 +484,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 						console.warn(
 							"[timeline WS] liveness watchdog: stream silent/dead, reconnecting",
 						);
-						// Reconnect promptly — don't inherit a long backoff delay.
+						// Reconnect promptly on silent/dead stream
 						resetBackoffCounters();
 						get().connectWebSocket();
 					}
@@ -498,7 +497,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 			// Seed activity so the connecting socket isn't flagged stale before it opens.
 			lastMessageAt = Date.now();
 			const ws = new WebSocket(wsUrl);
-			// Socket exists; remaining setup is sync so re-entry won't orphan it.
+			// isConnecting cleared once socket is constructed
 			isConnecting = false;
 
 		ws.onopen = () => {
@@ -768,7 +767,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					return;
 				}
 
-				// Batched frames — envelope has request_id; bare arrays use id 0.
+				// Untagged array batches use request_id 0
 				const isEnvelope = data && typeof data === "object" && Array.isArray(data.frames);
 				if (isEnvelope || Array.isArray(data)) {
 					const incoming: StreamTimeSeriesResponse[] = isEnvelope ? data.frames : data;

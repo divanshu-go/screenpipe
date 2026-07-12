@@ -143,8 +143,7 @@ export function TimelineControls({
 		[currentDate],
 	);
 
-	// During cold date swap, prefer seekingTimestamp / pendingNavTargetDate
-	// over stale currentTime still pointing at the previous day.
+	// During swap, show pendingNavTargetDate (not stale currentTime)
 	const pendingDateSwap = useTimelineStore((s) => s.pendingDateSwap);
 	const pendingNavTargetDate = useTimelineStore((s) => s.pendingNavTargetDate);
 	const swapInFlight = isNavigating || pendingDateSwap;
