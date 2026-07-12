@@ -67,6 +67,15 @@ let prefetchRequests = new Map<number, "backward" | "forward">();
 // their first real frames — clearing earlier left a void before bars arrived.
 let prefetchSkeletonClearOnFlush = new Set<"backward" | "forward">();
 
+function isPrefetchDirectionInFlight(
+	direction: "backward" | "forward",
+): boolean {
+	for (const dir of prefetchRequests.values()) {
+		if (dir === direction) return true;
+	}
+	return false;
+}
+
 // Reconnect timeout - must be tracked to prevent cascade
 let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
 let reconnectAttempts = 0;
@@ -146,6 +155,9 @@ interface TimelineState {
 	// ISO date of the adjacent day currently being prefetched at each strip
 	// edge (null = idle). TimelineSlider renders an edge skeleton continuation
 	// there so scrolling into an unloaded day doesn't dead-end in a void.
+	// May clear on the first frame flush (skeleton swap) while the request is
+	// still streaming — in-flight checks prevent arming the next adjacent day
+	// until batch_complete frees the direction.
 	stripPrefetchLoading: { backward: string | null; forward: string | null };
 
 	// Deep link navigation — persists across component mounts
@@ -163,7 +175,7 @@ interface TimelineState {
 	fetchNextDayData: (
 		date: Date,
 		directionHint?: "backward" | "forward",
-	) => void;
+	) => Promise<void>;
 	hasDateBeenFetched: (date: Date) => boolean;
 	flushFrameBuffer: (force?: boolean) => void;
 	onWindowFocus: () => void;
@@ -1041,6 +1053,10 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 				: "forward");
 
 		if (get().stripPrefetchLoading[direction]) return;
+		// Skeleton may clear on the first frame flush while this direction is
+		// still streaming — do not arm the next adjacent day until batch_complete
+		// removes the in-flight entry (avoids cancelling the active fetch).
+		if (isPrefetchDirectionInFlight(direction)) return;
 
 		// Skip hasDateBeenFetched: a multi-day nav range can cover an empty gap
 		// midnight without loading frames for it. Only abort when the strip
@@ -1061,7 +1077,8 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 		if (!hasFrames) {
 			// Skip empty calendar days in the scroll direction via findNearest.
 			const nearest = await findNearestDateWithFrames(nextDay, direction, 7);
-			if (!nearest || get().pendingDateSwap) return;
+			if (get().pendingDateSwap) return;
+			if (!nearest) return;
 			nextDay = startOfDay(nearest);
 			const afterSkip = get();
 			if (
@@ -1084,9 +1101,8 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 		const { websocket, sentRequests, pendingDateSwap } = get();
 		const requestKey = `${nextDay.toISOString()}_${endTime.toISOString()}`;
 
-		if (sentRequests.has(requestKey) || pendingDateSwap) {
-			return;
-		}
+		if (pendingDateSwap) return;
+		if (sentRequests.has(requestKey)) return;
 
 		if (websocket && websocket.readyState === WebSocket.OPEN) {
 			const requestId = ++streamRequestSeq;

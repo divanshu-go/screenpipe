@@ -65,32 +65,82 @@ describe("edgePrefetchPlan", () => {
 		expect(awayFromNewer.prefetchNewer).toBe(false);
 	});
 
-	it("arms when idle near an edge (landing / paused)", () => {
+	it("does not arm when idle mid-lead-zone (not at absolute end)", () => {
 		const plan = edgePrefetchPlan({
 			currentIndex: 980,
 			prevIndex: 980,
 			frameCount: 1000,
 			leadFrames: 100,
 		});
-		expect(plan.prefetchOlder).toBe(true);
+		expect(plan.prefetchOlder).toBe(false);
 		expect(plan.prefetchNewer).toBe(false);
+	});
+
+	it("arms newer at index 0 even without delta (clamped hard-scroll void)", () => {
+		// Further scroll-newer cannot decrease index below 0, so movement
+		// gate alone would leave a permanent right void after hard-scroll.
+		expect(
+			edgePrefetchPlan({
+				currentIndex: 0,
+				prevIndex: 0,
+				frameCount: 2500,
+				leadFrames: 100,
+			}).prefetchNewer,
+		).toBe(true);
+	});
+
+	it("arms newer near index 0 while moving newer (cold forward approach)", () => {
+		const plan = edgePrefetchPlan({
+			currentIndex: 5,
+			prevIndex: 40,
+			frameCount: 800,
+			leadFrames: 100,
+		});
+		expect(plan.prefetchNewer).toBe(true);
+		expect(plan.prefetchOlder).toBe(false);
+	});
+
+	it("arms older at absolute oldest end even without delta (symmetric)", () => {
+		expect(
+			edgePrefetchPlan({
+				currentIndex: 799,
+				prevIndex: 799,
+				frameCount: 800,
+				leadFrames: 100,
+			}).prefetchOlder,
+		).toBe(true);
+	});
+
+	it("scroll-away then scroll-back re-enters newer proximity", () => {
+		const scrollAway = edgePrefetchPlan({
+			currentIndex: 80,
+			prevIndex: 0,
+			frameCount: 2500,
+			leadFrames: 100,
+		});
+		expect(scrollAway.prefetchNewer).toBe(false);
+
+		const scrollBack = edgePrefetchPlan({
+			currentIndex: 20,
+			prevIndex: 80,
+			frameCount: 2500,
+			leadFrames: 100,
+		});
+		expect(scrollBack.prefetchNewer).toBe(true);
 	});
 });
 
 describe("shouldProbeEdgePrefetchDay (empty gap + nav range)", () => {
 	it("still probes an empty previous day covered only by navFetchRange start", () => {
-		// Jul 1 calendar jump → nav range starts at Jun 30 midnight.
 		const jul1 = startOfDay(new Date(2026, 6, 1));
 		const jun30 = startOfDay(subDays(jul1, 1));
 		const range = navFetchRange(jul1);
 		const navKey = `${range.start.toISOString()}_${range.end.toISOString()}`;
 		const sent = new Set([navKey]);
 
-		// Nav range start is Jun 30 midnight; that alone is not an exact day-only fetch.
 		const startIso = navKey.split("_")[0];
 		expect(new Date(startIso).toDateString()).toBe(jun30.toDateString());
 
-		// Jun 30 still has no strip frames and no exact day-only request.
 		expect(framesIncludeLocalDay([], jun30)).toBe(false);
 		expect(hasExactDayRequest(sent, jun30)).toBe(false);
 		expect(
@@ -103,8 +153,8 @@ describe("shouldProbeEdgePrefetchDay (empty gap + nav range)", () => {
 
 	it("probes across a month boundary so Jul 1 can reach Jun 29", () => {
 		const jul1 = startOfDay(new Date(2026, 6, 1));
-		const jun30 = startOfDay(subDays(jul1, 1)); // empty gap
-		const jun29 = startOfDay(subDays(jul1, 2)); // has frames
+		const jun30 = startOfDay(subDays(jul1, 1));
+		const jun29 = startOfDay(subDays(jul1, 2));
 
 		const range = navFetchRange(jul1);
 		const sent = new Set([
@@ -112,7 +162,6 @@ describe("shouldProbeEdgePrefetchDay (empty gap + nav range)", () => {
 		]);
 		const frames = [{ timestamp: new Date(2026, 6, 1, 0, 1, 20).toISOString() }];
 
-		// After landing on Jul 1, strip only has Jul 1; edge candidate is Jun 30.
 		expect(framesIncludeLocalDay(frames, jul1)).toBe(true);
 		expect(framesIncludeLocalDay(frames, jun30)).toBe(false);
 		expect(framesIncludeLocalDay(frames, jun29)).toBe(false);
@@ -124,7 +173,6 @@ describe("shouldProbeEdgePrefetchDay (empty gap + nav range)", () => {
 			}),
 		).toBe(true);
 
-		// Once findNearest resolves Jun 29, that day is still fetchable.
 		expect(
 			shouldProbeEdgePrefetchDay({
 				candidateHasLoadedFrames: framesIncludeLocalDay(frames, jun29),
@@ -155,7 +203,6 @@ describe("shouldProbeEdgePrefetchDay (empty gap + nav range)", () => {
 	});
 
 	it("still probes the newer side when the next calendar day is empty", () => {
-		// Symmetric: land on Jun 29, next day Jun 30 empty, Jul 1 has frames.
 		const jun29 = startOfDay(new Date(2026, 5, 29));
 		const jun30 = startOfDay(new Date(2026, 5, 30));
 		const jul1 = startOfDay(new Date(2026, 6, 1));

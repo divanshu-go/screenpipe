@@ -9,8 +9,13 @@ import { endOfDay, isSameDay, startOfDay } from "date-fns";
  * to arm adjacent-day prefetch.
  *
  * Frames are descending (index 0 = newest, length-1 = oldest). Lead is in
- * frame slots (~N viewports). Direction-aware: do not prefetch the edge the
- * user is scrolling away from.
+ * frame slots (~N viewports). Direction-aware: arm while scrolling toward
+ * that edge. Idle mid-lead-zone does not arm.
+ *
+ * Absolute ends are special: index is clamped, so further scroll toward the
+ * void cannot change currentIndex (delta stays 0). Without treating
+ * parked-at-absolute-end as still wanting that edge, hard-scroll into the
+ * right (newer) void never arms cold forward prefetch.
  */
 export function edgePrefetchPlan(opts: {
 	currentIndex: number;
@@ -30,9 +35,13 @@ export function edgePrefetchPlan(opts: {
 	const nearOlderEdge = currentIndex >= frameCount - leadFrames;
 	const nearNewerEdge = currentIndex <= leadFrames;
 
+	// Clamped ends: scroll toward the unloaded side cannot move the index.
+	const atNewerAbsoluteEnd = currentIndex === 0;
+	const atOlderAbsoluteEnd = currentIndex >= frameCount - 1;
+
 	return {
-		prefetchOlder: nearOlderEdge && !movingNewer,
-		prefetchNewer: nearNewerEdge && !movingOlder,
+		prefetchOlder: nearOlderEdge && (movingOlder || atOlderAbsoluteEnd),
+		prefetchNewer: nearNewerEdge && (movingNewer || atNewerAbsoluteEnd),
 	};
 }
 

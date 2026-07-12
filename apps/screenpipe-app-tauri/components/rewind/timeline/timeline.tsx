@@ -249,7 +249,7 @@ interface TimelineSliderProps {
 	fetchNextDayData: (
 		date: Date,
 		directionHint?: "backward" | "forward",
-	) => void;
+	) => Promise<void>;
 	currentDate: Date;
 	onSelectionChange?: (selectedFrames: StreamTimeSeriesResponse[]) => void;
 	newFramesCount?: number; // Number of new frames added (for animation)
@@ -597,7 +597,8 @@ export const TimelineSlider = ({
 	const prevIndexForPrefetchRef = useRef(currentIndex);
 
 	// Adjacent-day prefetch in flight per strip edge (ISO of the day, or null).
-	// Set by fetchNextDayData, cleared by that request's batch_complete.
+	// Set by fetchNextDayData; may clear on first frame flush while the request
+	// still streams.
 	const stripPrefetchLoading = useTimelineStore((s) => s.stripPrefetchLoading);
 
 	// Date swap in flight (calendar / arrows / search jump): strip stays mounted
@@ -1117,9 +1118,9 @@ export const TimelineSlider = ({
 	}, [visibleFrames]);
 
 	// Adjacent-day frame prefetch: arm when the playhead is within ~2 viewports
-	// of a loaded frame-array edge (not the virtualization window edge) so the
-	// WS fetch can land before that edge reaches the screen. Direction-aware:
-	// only the side the user is scrolling toward.
+	// of a loaded frame-array edge and scrolling toward it. Idle / parked at
+	// absolute end without a new proximity approach does not auto-chain; user
+	// scrolls slightly to re-enter the lead zone.
 	useEffect(() => {
 		if (pendingDateSwap || !frames || frames.length === 0) return;
 
@@ -1155,7 +1156,7 @@ export const TimelineSlider = ({
 				// startAndEndDates.start is the earliest reachable day.
 				if (!isAfter(startOfDay(startAndEndDates.start), target)) {
 					lastFetchRef.current = now;
-					fetchNextDayData(target, "backward");
+					void fetchNextDayData(target, "backward");
 				}
 			}
 		}
@@ -1170,7 +1171,7 @@ export const TimelineSlider = ({
 				const today = startOfDay(new Date());
 				if (!isAfter(startOfDay(target), today)) {
 					lastForwardFetchRef.current = now;
-					fetchNextDayData(target, "forward");
+					void fetchNextDayData(target, "forward");
 				}
 			}
 		}
