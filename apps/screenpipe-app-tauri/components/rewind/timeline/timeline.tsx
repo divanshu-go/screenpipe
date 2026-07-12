@@ -24,64 +24,95 @@ import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
 import { edgePrefetchPlan } from "@/lib/hooks/timeline-edge-prefetch";
 import { visibleFrameWindow } from "@/lib/hooks/timeline-visible-window";
 
-// Shared muted pill geometry for strip skeletons (edge prefetch + date-swap
-// overlay + empty-strip loading). Same slim 12px bars / 2px end inset as real
-// app-group segments — one visual language, deterministic slot counts.
-const STRIP_SHIMMER_SEG_GAP = 2;
-const PREFETCH_SHIMMER_GROUP_SLOTS = [14, 6, 22, 9, 16];
-const FULL_STRIP_SHIMMER_PATTERN = [14, 6, 22, 9, 16, 11, 25, 7, 18, 10];
+// Segmented skeleton pills for edge prefetch + date-swap + empty strip.
+// Opacity pulse on bars + blank icon chips that look like real app icons:
+// soft-rounded + squircle (desktop/mobile app marks) and occasional hard
+// square. No circles, glyphs, letters, Lucide, or yesterday's real apps.
+const STRIP_SKELETON_SEG_GAP = 2;
+const PREFETCH_SKELETON_GROUP_SLOTS = [14, 6, 22, 9, 16];
+const FULL_STRIP_SKELETON_PATTERN = [14, 6, 22, 9, 16, 11, 25, 7, 18, 10];
+const SKELETON_ICON_MIN_WIDTH = 30;
 
-function StripShimmerPills({
+/** Icon-like blank shapes: soft + squircle (app icons), sharp square. */
+type SkeletonIconShape = "soft" | "squircle" | "sharp";
+
+const SKELETON_ICON_SHAPE_CYCLE: SkeletonIconShape[] = ["soft", "squircle", "sharp"];
+
+function StripSkeletonBlankIconChip({ shape }: { shape: SkeletonIconShape }) {
+	return (
+		<div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-[65%] z-10 pointer-events-none">
+			<div
+				className={cn(
+					"strip-skeleton-pill strip-skeleton-icon",
+					shape === "soft" && "strip-skeleton-icon--soft",
+					shape === "squircle" && "strip-skeleton-icon--squircle",
+					shape === "sharp" && "strip-skeleton-icon--sharp",
+				)}
+			/>
+		</div>
+	);
+}
+
+function StripSkeletonPills({
 	slots,
 	slotWidth,
 }: {
 	slots: number[];
 	slotWidth: number;
 }) {
+	let iconSlot = 0;
 	return (
 		<>
-			{slots.map((n, i) => (
-				<div
-					key={i}
-					className="flex-shrink-0 bg-foreground/15"
-					style={{
-						width: `${Math.max(2, n * slotWidth - STRIP_SHIMMER_SEG_GAP * 2)}px`,
-						height: "12px",
-						borderRadius: "6px",
-						marginLeft: `${STRIP_SHIMMER_SEG_GAP}px`,
-						marginRight: `${STRIP_SHIMMER_SEG_GAP}px`,
-					}}
-				/>
-			))}
+			{slots.map((n, i) => {
+				const widthPx = Math.max(2, n * slotWidth - STRIP_SKELETON_SEG_GAP * 2);
+				const showIcon = widthPx > SKELETON_ICON_MIN_WIDTH;
+				const shape = showIcon
+					? SKELETON_ICON_SHAPE_CYCLE[iconSlot++ % SKELETON_ICON_SHAPE_CYCLE.length]
+					: null;
+				return (
+					<div
+						key={i}
+						className="flex-shrink-0 relative"
+						style={{
+							width: `${widthPx}px`,
+							height: "12px",
+							marginLeft: `${STRIP_SKELETON_SEG_GAP}px`,
+							marginRight: `${STRIP_SKELETON_SEG_GAP}px`,
+						}}
+					>
+						{shape && <StripSkeletonBlankIconChip shape={shape} />}
+						<div
+							className="strip-skeleton-pill w-full h-full"
+							style={{ borderRadius: "6px" }}
+						/>
+					</div>
+				);
+			})}
 		</>
 	);
 }
 
-// Shimmer continuation rendered at a strip edge while the adjacent day's
-// frames are fetched (stripPrefetchLoading in use-timeline-store): muted
-// pseudo-segments sized in real frame slots, so scrolling toward an unloaded
-// day reads as "more strip coming" instead of dead-ending in a void and then
-// jerking when frames pop in. Fixed slot counts — deterministic, no jitter.
-function StripPrefetchShimmer({ slotWidth }: { slotWidth: number }) {
+// Edge continuation while the adjacent day loads.
+function StripPrefetchSkeleton({ slotWidth }: { slotWidth: number }) {
 	return (
 		<div
-			className="flex flex-nowrap items-center h-full flex-shrink-0 relative animate-pulse"
+			className="flex flex-nowrap items-center h-full flex-shrink-0 relative"
 			aria-hidden
-			data-testid="strip-prefetch-shimmer"
+			data-testid="strip-prefetch-skeleton"
 		>
-			<StripShimmerPills slots={PREFETCH_SHIMMER_GROUP_SLOTS} slotWidth={slotWidth} />
+			<StripSkeletonPills
+				slots={PREFETCH_SKELETON_GROUP_SLOTS}
+				slotWidth={slotWidth}
+			/>
 		</div>
 	);
 }
 
-// Full-width strip skeleton (empty strip OR date-swap overlay): muted pill
-// segments spanning the viewport plus a playhead line + time-chip placeholder.
-// Same slot-based geometry as the real bars / edge prefetch shimmer; the
-// pattern repeats to overfill any viewport width.
+// Full-width strip skeleton (empty strip OR date-swap overlay).
 function TimelineStripLoadingRow({ slotWidth }: { slotWidth: number }) {
 	const containerWidth =
 		typeof window !== "undefined" ? window.innerWidth : 1600;
-	const patternWidth = FULL_STRIP_SHIMMER_PATTERN.reduce(
+	const patternWidth = FULL_STRIP_SKELETON_PATTERN.reduce(
 		(sum, s) => sum + s * slotWidth,
 		0,
 	);
@@ -89,21 +120,24 @@ function TimelineStripLoadingRow({ slotWidth }: { slotWidth: number }) {
 		1,
 		Math.ceil(containerWidth / Math.max(1, patternWidth)),
 	);
-	const groups = Array.from({ length: repeats }, () => FULL_STRIP_SHIMMER_PATTERN).flat();
+	const groups = Array.from({ length: repeats }, () => FULL_STRIP_SKELETON_PATTERN).flat();
 	return (
 		<div
 			className="relative w-full h-24 overflow-hidden pointer-events-none"
 			aria-hidden
 			data-testid="strip-loading-skeleton"
 		>
-			<div className="absolute inset-0 flex flex-nowrap items-center justify-center animate-pulse">
-				<StripShimmerPills slots={groups} slotWidth={slotWidth} />
+			<div className="absolute inset-0 flex flex-nowrap items-center justify-center">
+				<StripSkeletonPills slots={groups} slotWidth={slotWidth} />
 			</div>
 			{/* Playhead placeholder: time chip above, line down to the strip */}
-			<div className="absolute left-1/2 -translate-x-1/2 top-0 flex flex-col items-center">
+			<div className="absolute left-1/2 -translate-x-1/2 top-0 flex flex-col items-center z-[2]">
 				<div className="flex items-center gap-2 h-7 px-3 rounded-full bg-background/90 border border-border shadow-sm">
 					<Clock className="w-3.5 h-3.5 text-muted-foreground" />
-					<div className="w-16 h-2.5 rounded-full bg-foreground/20 animate-pulse" />
+					<div
+						className="flex-shrink-0 strip-skeleton-pill"
+						style={{ width: "64px", height: "10px", borderRadius: "9999px" }}
+					/>
 				</div>
 				<div className="w-px h-8 bg-foreground/80" />
 			</div>
@@ -111,10 +145,7 @@ function TimelineStripLoadingRow({ slotWidth }: { slotWidth: number }) {
 	);
 }
 
-// Viewport-fixed overlay for calendar / day-arrow date swaps. Sits outside the
-// scrollport so it does not scroll with the (still-mounted) strip. The strip
-// underneath stays mounted with visibility:hidden — layout preserved, no remount
-// / half-strip scroll bug — so pills alone (no opaque sheet) match edge prefetch.
+// Date-swap overlay; strip stays mounted underneath (no remount / opacity-50).
 function StripDateSwapSkeleton({ slotWidth }: { slotWidth: number }) {
 	return (
 		<div
@@ -1957,7 +1988,7 @@ export const TimelineSlider = ({
 
 					{/* Newer-day prefetch shimmer (visual RIGHT — flex-row-reverse) */}
 					{stripPrefetchLoading.forward && (
-						<StripPrefetchShimmer
+						<StripPrefetchSkeleton
 							slotWidth={frameWidth + frameMargin * 2}
 						/>
 					)}
@@ -2396,7 +2427,7 @@ export const TimelineSlider = ({
 					})}
 					{/* Older-day prefetch shimmer (visual LEFT — flex-row-reverse) */}
 					{stripPrefetchLoading.backward && (
-						<StripPrefetchShimmer
+						<StripPrefetchSkeleton
 							slotWidth={frameWidth + frameMargin * 2}
 						/>
 					)}

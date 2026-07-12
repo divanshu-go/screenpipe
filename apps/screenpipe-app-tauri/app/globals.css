@@ -589,6 +589,54 @@
     animation: shimmer 1.5s infinite linear;
   }
 
+  /* Timeline strip skeleton pills — higher-contrast fill + opacity pulse.
+     No backdrop-filter (too expensive over live screenshots). */
+  .strip-skeleton-pill {
+    box-sizing: border-box;
+    background-color: hsl(var(--foreground) / 0.42);
+    animation: strip-skeleton-pulse 1.6s ease-in-out infinite;
+  }
+
+  /* Blank icon chips — shapes that read as app icons / favicons
+     (soft round + squircle), not sharp squares. */
+  .strip-skeleton-icon {
+    width: 0.875rem; /* 14px */
+    height: 0.875rem;
+  }
+  .strip-skeleton-icon--soft {
+    /* Typical macOS/Android app-icon rounding (~25% of side). */
+    border-radius: 22%;
+  }
+  .strip-skeleton-icon--squircle {
+    /* iOS-like continuous corner; falls back to heavy round. */
+    border-radius: 30%;
+  }
+  @supports (corner-shape: squircle) {
+    .strip-skeleton-icon--squircle {
+      corner-shape: squircle;
+    }
+  }
+  .strip-skeleton-icon--sharp {
+    border-radius: 0;
+  }
+
+  @keyframes strip-skeleton-pulse {
+    0%,
+    100% {
+      opacity: 0.72;
+    }
+    50% {
+      opacity: 1;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .strip-skeleton-pill {
+      animation: none;
+      opacity: 0.9;
+    }
+  }
+
   /* Settings "AI audio & video analysis" preview — a dot traveling along a
      connector track to show data flowing into / out of the enclave. */
   @keyframes sp-flow {
