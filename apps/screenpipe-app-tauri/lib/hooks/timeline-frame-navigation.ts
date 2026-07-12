@@ -21,6 +21,19 @@ export function hasFrameVisualMedia(
 	});
 }
 
+export function hasFrameAudioContent(
+	frame: StreamTimeSeriesResponse | null | undefined,
+): boolean {
+	return !!frame?.devices?.some((device) => (device.audio?.length ?? 0) > 0);
+}
+
+/** Screen media, or audio markers (for audio-only days). */
+export function hasFrameNavigableContent(
+	frame: StreamTimeSeriesResponse | null | undefined,
+): boolean {
+	return hasFrameVisualMedia(frame) || hasFrameAudioContent(frame);
+}
+
 export function findNextFrameIndex(
 	frames: StreamTimeSeriesResponse[],
 	fromIndex: number,
