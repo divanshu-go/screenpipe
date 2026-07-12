@@ -24,51 +24,72 @@ import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
 import { edgePrefetchPlan } from "@/lib/hooks/timeline-edge-prefetch";
 import { visibleFrameWindow } from "@/lib/hooks/timeline-visible-window";
 
+// Shared muted pill geometry for strip skeletons (edge prefetch + date-swap
+// overlay + empty-strip loading). Same slim 12px bars / 2px end inset as real
+// app-group segments — one visual language, deterministic slot counts.
+const STRIP_SHIMMER_SEG_GAP = 2;
+const PREFETCH_SHIMMER_GROUP_SLOTS = [14, 6, 22, 9, 16];
+const FULL_STRIP_SHIMMER_PATTERN = [14, 6, 22, 9, 16, 11, 25, 7, 18, 10];
+
+function StripShimmerPills({
+	slots,
+	slotWidth,
+}: {
+	slots: number[];
+	slotWidth: number;
+}) {
+	return (
+		<>
+			{slots.map((n, i) => (
+				<div
+					key={i}
+					className="flex-shrink-0 bg-foreground/15"
+					style={{
+						width: `${Math.max(2, n * slotWidth - STRIP_SHIMMER_SEG_GAP * 2)}px`,
+						height: "12px",
+						borderRadius: "6px",
+						marginLeft: `${STRIP_SHIMMER_SEG_GAP}px`,
+						marginRight: `${STRIP_SHIMMER_SEG_GAP}px`,
+					}}
+				/>
+			))}
+		</>
+	);
+}
+
 // Shimmer continuation rendered at a strip edge while the adjacent day's
 // frames are fetched (stripPrefetchLoading in use-timeline-store): muted
 // pseudo-segments sized in real frame slots, so scrolling toward an unloaded
 // day reads as "more strip coming" instead of dead-ending in a void and then
 // jerking when frames pop in. Fixed slot counts — deterministic, no jitter.
-const PREFETCH_SHIMMER_GROUP_SLOTS = [14, 6, 22, 9, 16];
-
 function StripPrefetchShimmer({ slotWidth }: { slotWidth: number }) {
-	const segGap = 2; // matches the real segments' end inset
 	return (
 		<div
 			className="flex flex-nowrap items-center h-full flex-shrink-0 relative animate-pulse"
 			aria-hidden
 			data-testid="strip-prefetch-shimmer"
 		>
-			{PREFETCH_SHIMMER_GROUP_SLOTS.map((slots, i) => (
-				<div
-					key={i}
-					className="flex-shrink-0 bg-foreground/15"
-					style={{
-						width: `${Math.max(2, slots * slotWidth - segGap * 2)}px`,
-						height: "12px", // same slim strip height as real bars
-						borderRadius: "6px",
-						marginLeft: `${segGap}px`,
-						marginRight: `${segGap}px`,
-					}}
-				/>
-			))}
+			<StripShimmerPills slots={PREFETCH_SHIMMER_GROUP_SLOTS} slotWidth={slotWidth} />
 		</div>
 	);
 }
 
-// Full-width strip skeleton shown while a date swap is loading: muted pill
-// segments spanning the whole strip plus a playhead line + time-chip
-// placeholder, so picking a day reads as "the strip is loading" instead of
-// showing the old day's bars (confusing) or a void. Same slot-based geometry
-// as the real bars; the pattern repeats to overfill any viewport width.
+// Full-width strip skeleton (empty strip OR date-swap overlay): muted pill
+// segments spanning the viewport plus a playhead line + time-chip placeholder.
+// Same slot-based geometry as the real bars / edge prefetch shimmer; the
+// pattern repeats to overfill any viewport width.
 function TimelineStripLoadingRow({ slotWidth }: { slotWidth: number }) {
-	const segGap = 2;
-	const pattern = [14, 6, 22, 9, 16, 11, 25, 7, 18, 10];
 	const containerWidth =
 		typeof window !== "undefined" ? window.innerWidth : 1600;
-	const patternWidth = pattern.reduce((sum, s) => sum + s * slotWidth, 0);
-	const repeats = Math.max(1, Math.ceil(containerWidth / Math.max(1, patternWidth)));
-	const groups = Array.from({ length: repeats }, () => pattern).flat();
+	const patternWidth = FULL_STRIP_SHIMMER_PATTERN.reduce(
+		(sum, s) => sum + s * slotWidth,
+		0,
+	);
+	const repeats = Math.max(
+		1,
+		Math.ceil(containerWidth / Math.max(1, patternWidth)),
+	);
+	const groups = Array.from({ length: repeats }, () => FULL_STRIP_SHIMMER_PATTERN).flat();
 	return (
 		<div
 			className="relative w-full h-24 overflow-hidden pointer-events-none"
@@ -76,19 +97,7 @@ function TimelineStripLoadingRow({ slotWidth }: { slotWidth: number }) {
 			data-testid="strip-loading-skeleton"
 		>
 			<div className="absolute inset-0 flex flex-nowrap items-center justify-center animate-pulse">
-				{groups.map((slots, i) => (
-					<div
-						key={i}
-						className="flex-shrink-0 bg-foreground/15"
-						style={{
-							width: `${Math.max(2, slots * slotWidth - segGap * 2)}px`,
-							height: "12px",
-							borderRadius: "6px",
-							marginLeft: `${segGap}px`,
-							marginRight: `${segGap}px`,
-						}}
-					/>
-				))}
+				<StripShimmerPills slots={groups} slotWidth={slotWidth} />
 			</div>
 			{/* Playhead placeholder: time chip above, line down to the strip */}
 			<div className="absolute left-1/2 -translate-x-1/2 top-0 flex flex-col items-center">
@@ -98,6 +107,23 @@ function TimelineStripLoadingRow({ slotWidth }: { slotWidth: number }) {
 				</div>
 				<div className="w-px h-8 bg-foreground/80" />
 			</div>
+		</div>
+	);
+}
+
+// Viewport-fixed overlay for calendar / day-arrow date swaps. Sits outside the
+// scrollport so it does not scroll with the (still-mounted) strip. The strip
+// underneath stays mounted with visibility:hidden — layout preserved, no remount
+// / half-strip scroll bug — so pills alone (no opaque sheet) match edge prefetch.
+function StripDateSwapSkeleton({ slotWidth }: { slotWidth: number }) {
+	return (
+		<div
+			className="absolute inset-0 z-20 flex items-start pointer-events-auto"
+			style={{ paddingTop: "60px", paddingBottom: "24px" }}
+			aria-hidden
+			data-testid="strip-date-swap-skeleton"
+		>
+			<TimelineStripLoadingRow slotWidth={slotWidth} />
 		</div>
 	);
 }
@@ -545,7 +571,8 @@ export const TimelineSlider = ({
 	const stripPrefetchLoading = useTimelineStore((s) => s.stripPrefetchLoading);
 
 	// Date swap in flight (calendar / arrows / search jump): strip stays
-	// mounted and dimmed until the target day swaps in on batch_complete.
+	// mounted (visibility:hidden) under a full-width shimmer overlay until
+	// the target day swaps in on batch_complete — never remount, never opacity-50.
 	const pendingDateSwap = useTimelineStore((s) => s.pendingDateSwap);
 
 	const [hoveredTimestamp, setHoveredTimestamp] = useState<string | null>(null);
@@ -1827,6 +1854,7 @@ export const TimelineSlider = ({
 				</button>
 			</div>
 
+			<div className="relative w-full">
 			<div
 				ref={(el) => {
 					(containerRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
@@ -1841,7 +1869,10 @@ export const TimelineSlider = ({
 					paddingBottom: "24px", // Space for time axis below
 				}}
 			>
-				{/* Keep strip mounted during date swaps; skeleton only when empty. */}
+				{/* Empty: full-width skeleton. Date swap with existing frames: keep
+				    the strip mounted (invisible) under StripDateSwapSkeleton — do
+				    NOT unmount the strip (historical half-strip / sticky remount bug)
+				    and do NOT dim old day with opacity-50. */}
 				{frames.length === 0 ? (
 					<TimelineStripLoadingRow slotWidth={frameWidth + frameMargin * 2} />
 				) : (
@@ -1854,7 +1885,7 @@ export const TimelineSlider = ({
 						// left a screen-edge void). px-[50vw] keeps the playhead
 						// centerable at true content ends only.
 						"whitespace-nowrap flex flex-row-reverse flex-nowrap w-max justify-center px-[50vw] h-24 scrollbar-hide relative",
-						pendingDateSwap && "opacity-50 pointer-events-none",
+						pendingDateSwap && "invisible pointer-events-none",
 					)}
 					onMouseUp={handleDragEnd}
 					onMouseLeave={handleDragEnd}
@@ -2373,6 +2404,12 @@ export const TimelineSlider = ({
 				</motion.div>
 				)}
 			</div>
+			{pendingDateSwap && frames.length > 0 && (
+				<StripDateSwapSkeleton
+					slotWidth={frameWidth + frameMargin * 2}
+				/>
+			)}
+			</div>
 
 			{/* Time axis legend - hidden, too small to be useful */}
 			<div className="hidden">
@@ -2424,8 +2461,8 @@ export const TimelineSlider = ({
 			)}
 
 			{/* Playhead time chip — pinned above the current bar. Hidden during
-			    date swaps so the dimmed old-day strip doesn't show a misleading
-			    playhead; reappears when pendingDateSwap clears. */}
+			    date swaps (skeleton overlay owns the playhead placeholder);
+			    reappears when pendingDateSwap clears. */}
 			{!pendingDateSwap && (
 				<PlayheadTimeChip
 					containerRef={containerRef}
