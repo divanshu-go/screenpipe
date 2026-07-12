@@ -7,7 +7,7 @@ import { useEventListener } from "@/lib/hooks/use-event-listener";
 import { listen } from "@tauri-apps/api/event";
 import type { StreamTimeSeriesResponse } from "@/components/rewind/timeline";
 import { useTimelineSelection } from "@/lib/hooks/use-timeline-selection";
-import { hasFrameVisualMedia, snapFrameIndex } from "@/lib/hooks/timeline-frame-navigation";
+import { hasFrameNavigableContent, hasFrameVisualMedia, snapFrameIndex } from "@/lib/hooks/timeline-frame-navigation";
 
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 4;
@@ -137,11 +137,14 @@ export function useScrollZoom(opts: {
 					Math.max(0, Math.floor(prevIndex + indexChange)),
 					frames.length - 1,
 				);
+				const stepPredicate = frames.some(hasFrameVisualMedia)
+					? hasFrameVisualMedia
+					: hasFrameNavigableContent;
 				newIndex = snapFrameIndex(
 					frames,
 					rawIndex,
 					indexChange,
-					hasFrameVisualMedia,
+					stepPredicate,
 				);
 			}
 

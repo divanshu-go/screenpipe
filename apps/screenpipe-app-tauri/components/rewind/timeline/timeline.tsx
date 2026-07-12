@@ -381,13 +381,20 @@ const PlayheadTimeChip = React.memo(function PlayheadTimeChip({
 			return;
 		}
 		let raf = 0;
+		let tries = 0;
 		const measure = () => {
 			raf = 0;
 			const el = container.querySelector('[data-current="true"]') as HTMLElement | null;
 			if (!el) {
+				// Bar may not be painted yet right after a date-swap seek.
+				if (tries++ < 12) {
+					raf = requestAnimationFrame(measure);
+					return;
+				}
 				setRect(null);
 				return;
 			}
+			tries = 0;
 			const r = el.getBoundingClientRect();
 			// The timeline is a flat strip: every bar is the same slim height with no
 			// per-state height or scale change, so the current bar's top stays put as
@@ -1128,7 +1135,8 @@ export const TimelineSlider = ({
 		};
 
 		if (justLeftSwap) {
-			// Content replaced; reset scroll then re-measure.
+			// Content replaced; reset scroll then re-measure. Needed with the
+			// sticky strip — skipping the reset reintroduces half-strip after arrows.
 			container.scrollLeft = 0;
 			let raf = 0;
 			let tries = 0;

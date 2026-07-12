@@ -8,6 +8,7 @@ import type { StreamTimeSeriesResponse } from "@/components/rewind/timeline";
 import type { Meeting } from "@/lib/hooks/use-meetings";
 import {
 	findNextFrameIndex,
+	hasFrameNavigableContent,
 	hasFrameVisualMedia,
 	snapFrameIndex,
 } from "@/lib/hooks/timeline-frame-navigation";
@@ -111,30 +112,38 @@ export function useTimelineFilters(opts: {
 			}
 			return fromIndex;
 		}
+		// Pure audio-only days: scrub through audio markers; mixed days keep
+		// preferring visual frames so playhead doesn't stick on audio stubs.
+		const stepPredicate = frames.some(hasFrameVisualMedia)
+			? hasFrameVisualMedia
+			: hasFrameNavigableContent;
 		if (selectedDeviceId === "all" || allDeviceIds.length <= 1) {
-			return findNextFrameIndex(frames, fromIndex, dir, hasFrameVisualMedia);
+			return findNextFrameIndex(frames, fromIndex, dir, stepPredicate);
 		}
 		return findNextFrameIndex(
 			frames,
 			fromIndex,
 			dir,
 			(frame) =>
-				hasFrameVisualMedia(frame) &&
+				stepPredicate(frame) &&
 				frame.devices.some((d) => d.device_id === selectedDeviceId),
 		);
 	}, [selectedDeviceId, allDeviceIds.length, frames, matchingIndices]);
 
 	// Snap an arbitrary index to the nearest matching frame
 	const snapToDevice = useCallback((idx: number): number => {
+		const stepPredicate = frames.some(hasFrameVisualMedia)
+			? hasFrameVisualMedia
+			: hasFrameNavigableContent;
 		if (selectedDeviceId === "all" || allDeviceIds.length <= 1) {
-			return snapFrameIndex(frames, idx, 1, hasFrameVisualMedia);
+			return snapFrameIndex(frames, idx, 1, stepPredicate);
 		}
 		return snapFrameIndex(
 			frames,
 			idx,
 			1,
 			(frame) =>
-				hasFrameVisualMedia(frame) &&
+				stepPredicate(frame) &&
 				frame.devices.some((d) => d.device_id === selectedDeviceId),
 		);
 	}, [selectedDeviceId, allDeviceIds.length, frames]);

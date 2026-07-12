@@ -8,6 +8,11 @@ import { findNearestDateWithFrames } from "@/lib/actions/has-frames-date";
 import { useSearchHighlight } from "@/lib/hooks/use-search-highlight";
 import { useKeywordSearchStore } from "@/lib/hooks/use-keyword-search-store";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
+import { navFetchRange } from "@/lib/hooks/timeline-nav-range";
+import {
+	hasFrameAudioContent,
+	hasFrameVisualMedia,
+} from "@/lib/hooks/timeline-frame-navigation";
 import { toast } from "@/components/ui/use-toast";
 import posthog from "posthog-js";
 import type { StreamTimeSeriesResponse } from "@/components/rewind/timeline";
@@ -24,25 +29,9 @@ const MAX_DATE_RETRIES = 365;
 // clear the state so the user isn't locked out. Never the primary path.
 const NAV_FALLBACK_TIMEOUT_MS = 150_000;
 
-// Day navigations land the playhead at the day's START, which is the oldest
-// end of the strip — so the fetch reaches back through the WHOLE previous
-// day. The day then arrives with content on both sides of the playhead in
-// one atomic swap, instead of a half strip plus a separate prefetch that had
-// to race merges, re-picks, and buffer clears.
-//
-// A full day of context, not a few hours: the strip's width is measured in
-// frame slots, so at zoomed-out slot sizes (~3px) a sparse evening (a couple
-// hundred frames) renders only a few hundred pixels — not enough to fill the
-// half viewport right of the centered playhead, which still read as a half
-// strip. A whole previous day is comfortably wider at any zoom the UI allows.
-const NAV_CONTEXT_HOURS_BEFORE = 24;
-
-function navFetchRange(targetDate: Date): { start: Date; end: Date } {
-	const start = new Date(
-		startOfDay(targetDate).getTime() - NAV_CONTEXT_HOURS_BEFORE * 3_600_000,
-	);
-	return { start, end: endOfDay(targetDate) };
-}
+// One toast/revert per navigationResult across multiple Timeline mounts
+// in the same webview.
+let lastConsumedNavigationAt = 0;
 
 export function useDateNavigation(opts: {
 	frames: StreamTimeSeriesResponse[];
@@ -51,7 +40,7 @@ export function useDateNavigation(opts: {
 	currentIndex: number;
 	setCurrentIndex: (i: number) => void;
 	setCurrentFrame: (f: StreamTimeSeriesResponse | null) => void;
-	clearFramesForNavigation: () => void;
+	clearFramesForNavigation: (opts: { origin: Date; target: Date }) => void;
 	setSearchNavFrame: (v: boolean) => void;
 	fetchTimeRange: (start: Date, end: Date) => void;
 	hasDateBeenFetched: any;
@@ -104,10 +93,6 @@ export function useDateNavigation(opts: {
 	// Navigation in progress — disables day arrows to prevent double-clicks
 	const [isNavigating, setIsNavigating] = useState(false);
 
-	// Day the user was on when the current navigation started — restored if
-	// the target day turns out to be empty or the fetch fails (the old
-	// frames were kept, so reverting the date is all it takes).
-	const navOriginRef = useRef<Date | null>(null);
 	// Monotonic generation for date picks. After any await (nearest-day lookup),
 	// only the latest seq may commit a swap — otherwise a click from 2s ago can
 	// overwrite the day the user currently wants.
@@ -199,8 +184,7 @@ export function useDateNavigation(opts: {
 			to_date: targetDate.toISOString(),
 		});
 
-		navOriginRef.current = currentDate;
-		clearFramesForNavigation();
+		clearFramesForNavigation({ origin: currentDate, target: targetDate });
 		clearSentRequestForDate(targetDate);
 
 		pendingNavigationRef.current = targetDate;
@@ -211,10 +195,6 @@ export function useDateNavigation(opts: {
 		setCurrentDate(targetDate);
 
 		// One fetch (previous evening + the whole target day), fired directly.
-		// The old narrow ±5min pre-fetch is gone: requests are last-wins on
-		// the socket, so a second fetch superseded it and the swap could
-		// resolve with just a sliver of frames — a stubby strip that then
-		// re-filled jerkily. One fetch, one atomic swap.
 		const range = navFetchRange(targetDate);
 		fetchTimeRange(range.start, range.end);
 
@@ -355,8 +335,7 @@ export function useDateNavigation(opts: {
 			// Remember where we came from, then start the swap: old frames stay
 			// visible, incoming batches are gated by request id, and the swap
 			// resolves on the server's batch_complete (success, empty, or error).
-			navOriginRef.current = currentDate;
-			clearFramesForNavigation();
+			clearFramesForNavigation({ origin: currentDate, target: targetDate });
 
 			// Clear the sent request cache for this date to force a fresh fetch
 			clearSentRequestForDate(targetDate);
@@ -398,6 +377,16 @@ export function useDateNavigation(opts: {
 		// cannot yank the user off today.
 		navSeqRef.current += 1;
 
+		// Cancel any in-flight date swap so the strip doesn't stay dimmed.
+		if (useTimelineStore.getState().pendingDateSwap) {
+			useTimelineStore.getState().cancelPendingDateSwap();
+			useTimelineStore.setState({
+				navOriginDate: null,
+				pendingNavTargetDate: null,
+			});
+		}
+		setIsNavigating(false);
+
 		// Set navigation flag to prevent frame-date sync from fighting
 		isNavigatingRef.current = true;
 
@@ -408,7 +397,7 @@ export function useDateNavigation(opts: {
 			setCurrentDate(today);
 			setSeekingTimestamp(null);
 			pendingNavigationRef.current = null;
-			navOriginRef.current = null;
+			clearSentRequestForDate(today);
 			// Fetch today directly: the [currentDate] effect skips fetching
 			// while the navigation flag is set (navigations own their fetch),
 			// and this also resubscribes the socket to live updates after
@@ -420,101 +409,133 @@ export function useDateNavigation(opts: {
 				isNavigatingRef.current = false;
 			}, 500);
 		}
-	}, [setCurrentFrame, setCurrentDate, fetchTimeRange, isNavigatingRef, pendingNavigationRef]);
+	}, [setCurrentFrame, setCurrentIndex, setCurrentDate, fetchTimeRange, clearSentRequestForDate, isNavigatingRef, pendingNavigationRef]);
 
-	// Process pending navigation when frames load after date change
+	// Process pending navigation when frames load after date change.
+	// Success flush keeps pendingDateSwap true until this seek lands so the
+	// playhead/scroll handoff sees the landing index, not nav-start index 0.
+	// Gate on navigationResult success so we never land on pre-swap frames
+	// (prefetch may already contain the target day) and clear the swap early.
+	const navigationResult = useTimelineStore((s) => s.navigationResult);
 	useEffect(() => {
-		if (pendingNavigationRef.current && frames.length > 0) {
-			const targetDate = pendingNavigationRef.current;
-			// Only jump if we're on the correct date AND frames for that day have loaded
-			// Check that at least one frame is from the target date
-			const hasFramesForTargetDate = frames.some(frame =>
-				isSameDay(new Date(frame.timestamp), targetDate)
-			);
-			if (isSameDay(targetDate, currentDate) && hasFramesForTargetDate) {
-				const pendingFrameId = pendingFrameIdRef.current;
+		const store = useTimelineStore.getState();
+		const targetDate =
+			pendingNavigationRef.current ?? store.pendingNavTargetDate;
+		if (!targetDate || frames.length === 0) return;
 
-				// Try exact frame_id match first (avoids off-by-one from timestamp rounding)
-				let closestIndex = -1;
-				if (pendingFrameId != null) {
-					closestIndex = frames.findIndex((f) =>
-						isSameDay(new Date(f.timestamp), targetDate) &&
-						f.devices.some((d) => String(d.frame_id) === String(pendingFrameId))
-					);
-				}
+		const res = store.navigationResult;
+		const swapReady =
+			store.pendingDateSwap && !!res && res.count > 0 && !res.error;
+		if (!swapReady) return;
 
-				// Fallback: find the closest frame by timestamp
-				if (closestIndex < 0) {
-					const targetTime = targetDate.getTime();
-					let closestDiff = Infinity;
-					closestIndex = 0;
+		const hasFramesForTargetDate = frames.some((frame) =>
+			isSameDay(new Date(frame.timestamp), targetDate),
+		);
+		if (!hasFramesForTargetDate) return;
 
-					frames.forEach((frame, index) => {
-						if (!isSameDay(new Date(frame.timestamp), targetDate)) return;
-						const frameTime = new Date(frame.timestamp).getTime();
-						const diff = Math.abs(frameTime - targetTime);
-						if (diff < closestDiff) {
-							closestDiff = diff;
-							closestIndex = index;
-						}
-					});
-				}
-
-				resetFilters();
-				// If we matched by exact frame_id, use that index directly
-				// (don't snapToDevice which overrides with a nearby frame)
-				let finalIndex = (pendingFrameId != null && closestIndex >= 0 &&
-					frames[closestIndex]?.devices.some((d) => String(d.frame_id) === String(pendingFrameId)))
-					? closestIndex
-					: snapToDevice(closestIndex);
-				// The nav fetch includes the previous evening for context, so
-				// the visual snap can walk past the day boundary — never land
-				// the playhead outside the day the user navigated to (the
-				// frame-date sync would flip the date right back).
-				if (frames[finalIndex] && !isSameDay(new Date(frames[finalIndex].timestamp), targetDate)) {
-					finalIndex = closestIndex;
-				}
-				setCurrentIndex(finalIndex);
-				setCurrentFrame(frames[finalIndex]);
-				// Use HTTP JPEG fallback for this first frame (skip slow video seek)
-				setSearchNavFrame(true);
-
-				// Clear pending navigation and UI state
-				navOriginRef.current = null;
-				pendingNavigationRef.current = null;
-				pendingFrameIdRef.current = undefined;
-				setSeekingTimestamp(null);
-				setPendingNavigation(null);
-				setIsNavigating(false);
-				isNavigatingRef.current = false;
-			}
+		// Repair date if another mount snapped it during the swap window.
+		if (!isSameDay(targetDate, currentDate)) {
+			setCurrentDate(targetDate);
 		}
+
+		const pendingFrameId = pendingFrameIdRef.current;
+
+		// Try exact frame_id match first (avoids off-by-one from timestamp rounding)
+		let closestIndex = -1;
+		if (pendingFrameId != null) {
+			closestIndex = frames.findIndex((f) =>
+				isSameDay(new Date(f.timestamp), targetDate) &&
+				f.devices.some((d) => String(d.frame_id) === String(pendingFrameId))
+			);
+		}
+
+		// Fallback: find the closest frame by timestamp
+		if (closestIndex < 0) {
+			const targetTime = targetDate.getTime();
+			let closestDiff = Infinity;
+			closestIndex = 0;
+
+			frames.forEach((frame, index) => {
+				if (!isSameDay(new Date(frame.timestamp), targetDate)) return;
+				const frameTime = new Date(frame.timestamp).getTime();
+				const diff = Math.abs(frameTime - targetTime);
+				if (diff < closestDiff) {
+					closestDiff = diff;
+					closestIndex = index;
+				}
+			});
+		}
+
+		resetFilters();
+		// If we matched by exact frame_id, use that index directly
+		// (don't snapToDevice which overrides with a nearby frame).
+		// Audio-only days: snapToDevice already falls back to audio
+		// markers via hasFrameNavigableContent when no visual exists.
+		let finalIndex = (pendingFrameId != null && closestIndex >= 0 &&
+			frames[closestIndex]?.devices.some((d) => String(d.frame_id) === String(pendingFrameId)))
+			? closestIndex
+			: snapToDevice(closestIndex);
+		// The nav fetch includes the previous evening for context, so
+		// the visual snap can walk past the day boundary — never land
+		// the playhead outside the day the user navigated to (the
+		// frame-date sync would flip the date right back).
+		if (frames[finalIndex] && !isSameDay(new Date(frames[finalIndex].timestamp), targetDate)) {
+			finalIndex = closestIndex;
+		}
+		// Prefer an audio-bearing marker on pure audio-only target days.
+		const targetDayFrames = frames
+			.map((f, i) => ({ f, i }))
+			.filter(({ f }) => isSameDay(new Date(f.timestamp), targetDate));
+		const targetHasVisual = targetDayFrames.some(({ f }) => hasFrameVisualMedia(f));
+		if (!targetHasVisual) {
+			const audioIdx = targetDayFrames.find(({ f }) => hasFrameAudioContent(f))?.i;
+			if (audioIdx != null) finalIndex = audioIdx;
+		}
+		setCurrentIndex(finalIndex);
+		setCurrentFrame(frames[finalIndex]);
+		// Use HTTP JPEG fallback for this first frame (skip slow video seek)
+		setSearchNavFrame(true);
+
+		// Clear swap + pending nav together so playhead remounts on the landing bar.
+		useTimelineStore.setState({
+			pendingDateSwap: false,
+			navOriginDate: null,
+			pendingNavTargetDate: null,
+		});
+		pendingNavigationRef.current = null;
+		pendingFrameIdRef.current = undefined;
+		setSeekingTimestamp(null);
+		setPendingNavigation(null);
+		setIsNavigating(false);
+		isNavigatingRef.current = false;
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [frames, currentDate, setPendingNavigation]);
+	}, [frames, currentDate, navigationResult, setPendingNavigation, setCurrentDate]);
 
 	// Resolve empty/failed navigations the moment the server says so
-	// (batch_complete with no frames). The success path needs nothing here:
-	// the frames swap in atomically and the pending-navigation effect above
-	// seeks the playhead.
+	// (batch_complete with no frames). Success: flush keeps pendingDateSwap
+	// until the pending-navigation effect above seeks, then clears it.
 	useEffect(() => {
 		return useTimelineStore.subscribe((state, prevState) => {
 			const res = state.navigationResult;
 			if (!res || res === prevState.navigationResult) return;
 			if (res.count > 0 && !res.error) return;
+			if (res.at === lastConsumedNavigationAt) return;
+			lastConsumedNavigationAt = res.at;
 
 			// Empty day or failed fetch: the old frames were never replaced,
-			// so restoring the date is all it takes.
-			const origin = navOriginRef.current;
-			const targetDay = pendingNavigationRef.current;
-			navOriginRef.current = null;
+			// so restoring the date is all it takes. Origin lives in the store
+			// so remounts still revert correctly.
+			const origin = state.navOriginDate;
+			const targetDay = state.pendingNavTargetDate ?? pendingNavigationRef.current;
+			useTimelineStore.setState({
+				navOriginDate: null,
+				pendingNavTargetDate: null,
+			});
 			pendingNavigationRef.current = null;
 			pendingFrameIdRef.current = undefined;
 			setSeekingTimestamp(null);
 			setIsNavigating(false);
 			isNavigatingRef.current = false;
-			// Only the instance that initiated the navigation (it holds the
-			// origin) reverts and toasts — Timeline mounts more than once and
-			// every instance runs this subscription.
 			if (origin) {
 				setCurrentDate(origin);
 				toast({
@@ -536,9 +557,12 @@ export function useDateNavigation(opts: {
 		if (!seekingTimestamp) return;
 		const timer = setTimeout(() => {
 			console.warn("Navigation fallback timeout: clearing seeking state");
-			const origin = navOriginRef.current;
+			const origin = useTimelineStore.getState().navOriginDate;
 			useTimelineStore.getState().cancelPendingDateSwap();
-			navOriginRef.current = null;
+			useTimelineStore.setState({
+				navOriginDate: null,
+				pendingNavTargetDate: null,
+			});
 			pendingNavigationRef.current = null;
 			pendingFrameIdRef.current = undefined;
 			setSeekingTimestamp(null);
