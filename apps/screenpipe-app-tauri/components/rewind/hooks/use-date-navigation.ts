@@ -8,7 +8,7 @@ import { findNearestDateWithFrames } from "@/lib/actions/has-frames-date";
 import { useSearchHighlight } from "@/lib/hooks/use-search-highlight";
 import { useKeywordSearchStore } from "@/lib/hooks/use-keyword-search-store";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
-import { navFetchRange } from "@/lib/hooks/timeline-nav-range";
+import { resolveNavFetchRange } from "@/lib/hooks/timeline-nav-range";
 import {
 	hasFrameAudioContent,
 	hasFrameVisualMedia,
@@ -173,30 +173,34 @@ export function useDateNavigation(opts: {
 
 		// Supersede any in-flight calendar/arrow pick so its post-await
 		// commit cannot land after this search navigation.
-		navSeqRef.current += 1;
+		const seq = ++navSeqRef.current;
 		pendingFrameIdRef.current = frameId;
 		isNavigatingRef.current = true;
 		setIsNavigating(true);
-
-		dateChangesRef.current += 1;
-		posthog.capture("timeline_date_changed", {
-			from_date: currentDate.toISOString(),
-			to_date: targetDate.toISOString(),
-		});
-
-		clearFramesForNavigation({ origin: currentDate, target: targetDate });
-		clearSentRequestForDate(targetDate);
-
-		pendingNavigationRef.current = targetDate;
 		setSeekingTimestamp(targetDate.toISOString());
 
-		// Don't clear currentFrame — keep old frame visible while new ones load
-		setCurrentIndex(0);
-		setCurrentDate(targetDate);
+		// Resolve prior-day context before opening the swap so empty gap
+		// days (Jun 30 before Jul 1) are included on arrival, not only via
+		// later edge prefetch.
+		void (async () => {
+			const range = await resolveNavFetchRange(targetDate);
+			if (seq !== navSeqRef.current) return;
 
-		// One fetch (previous evening + the whole target day), fired directly.
-		const range = navFetchRange(targetDate);
-		fetchTimeRange(range.start, range.end);
+			dateChangesRef.current += 1;
+			posthog.capture("timeline_date_changed", {
+				from_date: currentDate.toISOString(),
+				to_date: targetDate.toISOString(),
+			});
+
+			clearFramesForNavigation({ origin: currentDate, target: targetDate });
+			clearSentRequestForDate(targetDate);
+
+			pendingNavigationRef.current = targetDate;
+			// Don't clear currentFrame — keep old frame visible while new ones load
+			setCurrentIndex(0);
+			setCurrentDate(targetDate);
+			fetchTimeRange(range.start, range.end);
+		})();
 
 		// Resolution arrives via batch_complete (see the navigationResult
 		// subscription below); the fallback timeout covers a lost socket.
@@ -325,6 +329,11 @@ export function useDateNavigation(opts: {
 				return;
 			}
 
+			// Resolve prior-day context before opening the swap so empty
+			// gap days (Jun 30 before Jul 1) are included on arrival.
+			const range = await resolveNavFetchRange(targetDate);
+			if (seq !== navSeqRef.current) return;
+
 			// Track date change
 			dateChangesRef.current += 1;
 			posthog.capture("timeline_date_changed", {
@@ -348,11 +357,9 @@ export function useDateNavigation(opts: {
 			// click for arrow nearest-day walks).
 			setSeekingTimestamp(targetDate.toISOString());
 
-			// Fire the fetch directly (previous evening + the whole target
-			// day) so the swap always has its request registered and lands
-			// with content on both sides of the playhead. fetchTimeRange
-			// dedupes by range key, so at most one request goes out.
-			const range = navFetchRange(targetDate);
+			// Fire the fetch (nearest prior day with frames + whole target
+			// day) so the swap lands with content on both sides of the
+			// playhead. fetchTimeRange dedupes by range key.
 			fetchTimeRange(range.start, range.end);
 
 			// DON'T try to find frames here - they won't be loaded yet!

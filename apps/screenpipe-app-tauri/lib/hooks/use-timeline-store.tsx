@@ -19,7 +19,7 @@ import {
 import { mergeTimelineFrames } from "./timeline-frame-merge";
 import { dateSwapVerdictFromBuffer } from "./timeline-date-swap-verdict";
 import { evaluateTimelineLiveness } from "./timeline-liveness";
-import { dayFetchRange, navFetchRange } from "./timeline-nav-range";
+import { dayFetchRange, resolveNavFetchRange } from "./timeline-nav-range";
 import {
 	framesIncludeLocalDay,
 	hasExactDayRequest,
@@ -518,14 +518,18 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 			hasLoggedTimelineDisconnect = false;
 
 			// After successful connection/reconnection, refetch the current view.
-			// Mid-swap reconnect must use navFetchRange (prior-day context), not
-			// bare day bounds — otherwise the strip lands half-empty.
+			// Mid-swap reconnect must use resolveNavFetchRange (prior day with
+			// frames, skipping empty gaps), not bare day bounds — otherwise
+			// the strip lands half-empty.
 			setTimeout(() => {
-				const { currentDate, fetchTimeRange, pendingDateSwap } = get();
-				const range = pendingDateSwap
-					? navFetchRange(currentDate)
-					: dayFetchRange(currentDate);
-				fetchTimeRange(range.start, range.end);
+				void (async () => {
+					const { currentDate, fetchTimeRange, pendingDateSwap } = get();
+					const range = pendingDateSwap
+						? await resolveNavFetchRange(currentDate)
+						: dayFetchRange(currentDate);
+					if (pendingDateSwap && !get().pendingDateSwap) return;
+					fetchTimeRange(range.start, range.end);
+				})();
 			}, 100);
 		};
 
@@ -590,7 +594,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					if (!pendingNavRequestIds.has(requestId)) return; // live fetch — nothing to resolve
 					pendingNavRequestIds.delete(requestId);
 
-					// navFetchRange includes prior-day context; only target-day
+					// Nav range includes prior-day context; only target-day
 					// visual/audio content counts as a successful swap.
 					const verdict = dateSwapVerdictFromBuffer(
 						frameBuffer,
@@ -1019,12 +1023,12 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 		if (get().stripPrefetchLoading[direction]) return;
 
 		// Do NOT use hasDateBeenFetched here. Calendar jumps register a
-		// multi-day navFetchRange whose start is the previous midnight —
-		// that marks empty gap days (Jun 30 before a Jul 1 landing) as
-		// "fetched" even with zero frames, and used to abort before
-		// findNearestDateWithFrames could reach Jun 29 across the month
-		// boundary. Only abort when the strip already has the day, or an
-		// exact day-only request was already sent.
+		// multi-day nav range that may still cover empty gap midnights
+		// (fallback previous-midnight, or a range that spans Jun 30 en
+		// route to Jun 29). That used to mark Jun 30 "fetched" with zero
+		// frames and abort before findNearest could reach Jun 29. Only
+		// abort when the strip already has the day, or an exact day-only
+		// request was already sent.
 		const { frames, sentRequests: sent } = get();
 		if (
 			!shouldProbeEdgePrefetchDay({
