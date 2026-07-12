@@ -16,6 +16,7 @@ import {
 import { mergeTimelineFrames } from "./timeline-frame-merge";
 import { dateSwapVerdictFromBuffer } from "./timeline-date-swap-verdict";
 import { evaluateTimelineLiveness } from "./timeline-liveness";
+import { dayFetchRange, navFetchRange } from "./timeline-nav-range";
 
 // Frame buffer for batching updates - reduces 68 re-renders to ~3-5
 let frameBuffer: StreamTimeSeriesResponse[] = [];
@@ -108,8 +109,14 @@ interface TimelineState {
 	// Optimistic UI state
 	isConnected: boolean; // WebSocket connection status
 	hasCachedData: boolean; // Whether we loaded from cache
-	// When true, next flushFrameBuffer replaces frames instead of merging (date swap)
+	// When true, date-swap batches are gated and the strip stays dimmed. A
+	// successful flush replaces frames but leaves this true until the pending-nav
+	// seek lands (so playhead/scroll don't run against nav-start index 0).
 	pendingDateSwap: boolean;
+
+	// Remount-safe nav origin/target for empty/failed swap revert + toast.
+	navOriginDate: Date | null;
+	pendingNavTargetDate: Date | null;
 
 	// Verdict of the current date swap, set when the server's batch_complete
 	// arrives: count > 0 means the day's frames were swapped in; count 0 means
@@ -140,7 +147,7 @@ interface TimelineState {
 	onWindowFocus: () => void;
 	clearNewFramesCount: () => void;
 	clearSentRequestForDate: (date: Date) => void;
-	clearFramesForNavigation: () => void; // Clear frames when navigating to new date
+	clearFramesForNavigation: (opts: { origin: Date; target: Date }) => void;
 	cancelPendingDateSwap: () => void; // Fallback abort if batch_complete never arrives
 	loadFromCache: () => Promise<void>; // Load cached frames on startup
 }
@@ -160,6 +167,8 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 	isConnected: false,
 	hasCachedData: false,
 	pendingDateSwap: false,
+	navOriginDate: null,
+	pendingNavTargetDate: null,
 	navigationResult: null,
 	stripPrefetchLoading: { backward: null, forward: null },
 	pendingNavigation: null,
@@ -220,7 +229,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 	// Sets pendingDateSwap: incoming batches are held in the buffer (only the
 	// swap's own request ids pass the gate) and swapped in atomically when the
 	// server's batch_complete arrives.
-	clearFramesForNavigation: () => {
+	clearFramesForNavigation: ({ origin, target }) => {
 		// Clear the frame buffer too
 		frameBuffer = [];
 		if (flushTimer) {
@@ -235,6 +244,8 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 		set(() => ({
 			sentRequests: new Set<string>(),
 			pendingDateSwap: true,
+			navOriginDate: origin,
+			pendingNavTargetDate: target,
 			navigationResult: null,
 			stripPrefetchLoading: { backward: null, forward: null },
 			isLoading: true,
@@ -246,6 +257,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 
 	// Fallback abort for a swap whose batch_complete never arrived (e.g. the
 	// socket died and never reconnected). Old frames stay visible.
+	// Leaves navOriginDate for the navigationResult / timeout path to restore.
 	cancelPendingDateSwap: () => {
 		pendingNavRequestIds.clear();
 		prefetchRequests.clear();
@@ -289,7 +301,10 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 				replace: state.pendingDateSwap,
 			});
 
-			// If pendingDateSwap, replace frames entirely with new batch (date changed)
+			// If pendingDateSwap, replace frames entirely with new batch (date changed).
+			// Keep pendingDateSwap true until the pending-nav seek lands: clearing it
+			// here remounts the playhead and runs justLeftSwap while currentIndex is
+			// still 0 (nav start), so the chip misses data-current / centers wrong.
 			if (state.pendingDateSwap) {
 				// Debounce cache save
 				if (cacheSaveTimer) clearTimeout(cacheSaveTimer);
@@ -301,7 +316,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 				return {
 					frames: merged.frames,
 					frameTimestamps: merged.timestamps,
-					pendingDateSwap: false,
+					pendingDateSwap: true,
 					isLoading: false,
 					loadingProgress: { loaded: merged.frames.length, isStreaming: true },
 					message: null,
@@ -469,17 +484,15 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 			});
 			hasLoggedTimelineDisconnect = false;
 
-			// After successful connection/reconnection, trigger a fetch for current date
-			// This ensures data is requested even after reconnection
+			// After successful connection/reconnection, refetch the current view.
+			// Mid-swap reconnect must use navFetchRange (prior-day context), not
+			// bare day bounds — otherwise the strip lands half-empty.
 			setTimeout(() => {
-				const { currentDate, fetchTimeRange } = get();
-				const startTime = new Date(currentDate);
-				startTime.setHours(0, 0, 0, 0);
-				const endTime = new Date(currentDate);
-				// Always use end of day so server keeps polling for new frames
-				// Server checks `now <= end_time` to decide whether to poll
-				endTime.setHours(23, 59, 59, 999);
-				fetchTimeRange(startTime, endTime);
+				const { currentDate, fetchTimeRange, pendingDateSwap } = get();
+				const range = pendingDateSwap
+					? navFetchRange(currentDate)
+					: dayFetchRange(currentDate);
+				fetchTimeRange(range.start, range.end);
 			}, 100);
 		};
 
@@ -507,50 +520,10 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					return;
 				}
 
-				// Handle error messages
-				if (data.error) {
-					get().flushFrameBuffer(); // Flush before error
-					// OPTIMISTIC: Don't show error if we have frames
-					const currentFrames = get().frames;
-					if (currentFrames.length === 0) {
-						set({ error: data.error, isLoading: false });
-					}
-					return;
-				}
-
-				// Handle audio updates from batch/reconciliation — merge
-				// transcription into existing frames near the audio timestamp.
-				// Mutates frames in-place to avoid cloning the entire 40k+ array
-				// on every audio update (major GC pressure on WebKitGTK/Linux).
-				if (data.type === "audio_update" && data.audio) {
-					const { frames } = get();
-					const audioTs = new Date(data.timestamp).getTime();
-					const pad = 60_000; // ±60s window matching server
-					let updated = false;
-					for (let i = 0; i < frames.length; i++) {
-						const frame = frames[i];
-						const frameTs = new Date(frame.timestamp).getTime();
-						if (Math.abs(frameTs - audioTs) > pad) continue;
-						const isDuplicate = frame.devices?.some((d: any) =>
-							d.audio?.some((a: any) => a.audio_chunk_id === data.audio.audio_chunk_id)
-						);
-						if (isDuplicate) continue;
-						// Mutate in-place — push audio onto each device's audio array
-						for (const d of (frame.devices || [])) {
-							(d as any).audio = [...((d as any).audio || []), data.audio];
-						}
-						updated = true;
-					}
-					// Trigger re-render with a new timestamp (no array clone needed)
-					if (updated) {
-						set({ lastFlushTimestamp: Date.now() });
-					}
-					return;
-				}
-
 				// Completion marker: the initial fetch for request_id is done.
-				// This is the definitive resolution for a date swap — count 0
-				// means the day is genuinely empty (vs. still loading).
+				// Must run before the generic data.error guard — batch_complete
+				// always includes error:bool, and failed completes still need to
+				// clear pendingDateSwap via navigationResult.
 				if (data && data.type === "batch_complete") {
 					const requestId = Number(data.request_id) || 0;
 
@@ -573,7 +546,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					pendingNavRequestIds.delete(requestId);
 
 					// navFetchRange includes prior-day context; only target-day
-					// frames count as a successful swap.
+					// visual/audio content counts as a successful swap.
 					const verdict = dateSwapVerdictFromBuffer(
 						frameBuffer,
 						get().currentDate,
@@ -591,23 +564,142 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 								at: Date.now(),
 							},
 						});
-					} else if (pendingNavRequestIds.size === 0) {
-						// Empty/failed target: drop prior-day buffer, keep old
-						// frames; navigation hook reverts the date and toasts.
-						frameBuffer = [];
-						set({
-							pendingDateSwap: false,
-							isLoading: false,
-							message: null,
-							navigationResult: {
-								requestId,
-								count: 0,
-								error: Boolean(data.error),
-								at: Date.now(),
-							},
-						});
+						return;
 					}
-					// else: a sibling fetch is still in flight; keep buffer.
+
+					if (pendingNavRequestIds.size > 0) {
+						// A sibling fetch is still in flight; keep buffer.
+						return;
+					}
+
+					// Empty buffer: SQL may still know about audio-only days the
+					// stream missed (esp. today/hot-cache). Confirm before toast.
+					const targetDate = get().currentDate;
+					const requestIdForResult = requestId;
+					const serverError = Boolean(data.error);
+					void (async () => {
+						if (!get().pendingDateSwap) return;
+						let hasContent = false;
+						try {
+							hasContent = await hasFramesForDate(targetDate);
+						} catch {
+							hasContent = false;
+						}
+						if (!get().pendingDateSwap) return;
+						frameBuffer = [];
+						if (hasContent && !serverError) {
+							// Content exists but stream returned nothing — load error.
+							set({
+								pendingDateSwap: false,
+								isLoading: false,
+								message: null,
+								navigationResult: {
+									requestId: requestIdForResult,
+									count: 0,
+									error: true,
+									at: Date.now(),
+								},
+							});
+						} else {
+							set({
+								pendingDateSwap: false,
+								isLoading: false,
+								message: null,
+								navigationResult: {
+									requestId: requestIdForResult,
+									count: 0,
+									error: serverError,
+									at: Date.now(),
+								},
+							});
+						}
+					})();
+					return;
+				}
+
+				// Handle error messages (non-batch_complete)
+				if (data.error && data.type !== "batch_complete") {
+					get().flushFrameBuffer(); // Flush before error
+					// OPTIMISTIC: Don't show error if we have frames
+					const currentFrames = get().frames;
+					if (currentFrames.length === 0) {
+						set({ error: data.error, isLoading: false });
+					}
+					return;
+				}
+
+				// Handle audio updates from batch/reconciliation — merge
+				// transcription into existing frames near the audio timestamp.
+				// Mutates frames in-place to avoid cloning the entire 40k+ array
+				// on every audio update (major GC pressure on WebKitGTK/Linux).
+				if (data.type === "audio_update" && data.audio) {
+					const audioTs = new Date(data.timestamp).getTime();
+					const pad = 60_000; // ±60s window matching server
+					const audioPayload = data.audio;
+
+					// During a date swap, also seed frameBuffer so the verdict
+					// can see audio-only content (live path never sends synthetic
+					// frames into the buffer).
+					if (get().pendingDateSwap) {
+						let matchedBuffer = false;
+						for (const frame of frameBuffer) {
+							const frameTs = new Date(frame.timestamp).getTime();
+							if (Math.abs(frameTs - audioTs) > pad) continue;
+							const isDuplicate = frame.devices?.some((d: any) =>
+								d.audio?.some((a: any) => a.audio_chunk_id === audioPayload.audio_chunk_id),
+							);
+							if (isDuplicate) continue;
+							for (const d of frame.devices || []) {
+								(d as any).audio = [...((d as any).audio || []), audioPayload];
+							}
+							matchedBuffer = true;
+						}
+						if (!matchedBuffer) {
+							frameBuffer.push({
+								timestamp: data.timestamp,
+								devices: [
+									{
+										device_id: "audio-only",
+										frame_id: String(-(audioPayload.audio_chunk_id ?? Date.now())),
+										frame: "",
+										offset_index: Number.MIN_SAFE_INTEGER,
+										fps: 0,
+										metadata: {
+											file_path: "",
+											app_name: "Audio Recording",
+											window_name: "",
+											text: "",
+											ocr_text: "",
+											timestamp: data.timestamp,
+											browser_url: undefined,
+										},
+										audio: [audioPayload],
+									},
+								],
+							} as StreamTimeSeriesResponse);
+						}
+					}
+
+					const { frames } = get();
+					let updated = false;
+					for (let i = 0; i < frames.length; i++) {
+						const frame = frames[i];
+						const frameTs = new Date(frame.timestamp).getTime();
+						if (Math.abs(frameTs - audioTs) > pad) continue;
+						const isDuplicate = frame.devices?.some((d: any) =>
+							d.audio?.some((a: any) => a.audio_chunk_id === audioPayload.audio_chunk_id)
+						);
+						if (isDuplicate) continue;
+						// Mutate in-place — push audio onto each device's audio array
+						for (const d of (frame.devices || [])) {
+							(d as any).audio = [...((d as any).audio || []), audioPayload];
+						}
+						updated = true;
+					}
+					// Trigger re-render with a new timestamp (no array clone needed)
+					if (updated) {
+						set({ lastFlushTimestamp: Date.now() });
+					}
 					return;
 				}
 
@@ -848,10 +940,23 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 				setTimeout(() => sendOrRetry(attempt + 1), delay);
 			} else {
 				console.error("[fetchTimeRange] WebSocket not open after 5 retries, giving up");
-				set({
-					isLoading: false,
-					message: "Connection lost — please try again",
-				});
+				const wasSwap = get().pendingDateSwap;
+				if (wasSwap) {
+					get().cancelPendingDateSwap();
+					set({
+						navigationResult: {
+							requestId: 0,
+							count: 0,
+							error: true,
+							at: Date.now(),
+						},
+					});
+				} else {
+					set({
+						isLoading: false,
+						message: "Connection lost — please try again",
+					});
+				}
 			}
 		};
 
