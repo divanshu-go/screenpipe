@@ -4,8 +4,11 @@
 
 import { create } from "zustand";
 import { StreamTimeSeriesResponse } from "@/components/rewind/timeline";
-import { hasFramesForDate } from "../actions/has-frames-date";
-import { isSameDay, subDays } from "date-fns";
+import {
+	findNearestDateWithFrames,
+	hasFramesForDate,
+} from "../actions/has-frames-date";
+import { isSameDay, startOfDay, endOfDay } from "date-fns";
 import { saveFramesToCache, loadCachedFrames } from "./use-timeline-cache";
 import {
 	appendAuthToken,
@@ -141,7 +144,10 @@ interface TimelineState {
 	setCurrentDate: (date: Date) => void;
 	connectWebSocket: () => void;
 	fetchTimeRange: (startTime: Date, endTime: Date) => void;
-	fetchNextDayData: (date: Date) => void;
+	fetchNextDayData: (
+		date: Date,
+		directionHint?: "backward" | "forward",
+	) => void;
 	hasDateBeenFetched: (date: Date) => boolean;
 	flushFrameBuffer: (force?: boolean) => void;
 	onWindowFocus: () => void;
@@ -539,6 +545,18 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 								[prefetchDirection]: null,
 							},
 						}));
+						// Past-day prefetch sets live_subscribe=false on the
+						// socket (last request wins). Re-arm today's live stream
+						// so new frames keep landing after a scroll-edge prefetch.
+						const today = new Date();
+						if (
+							prefetchDirection === "backward" &&
+							isSameDay(get().currentDate, today) &&
+							!get().pendingDateSwap
+						) {
+							get().clearSentRequestForDate(today);
+							get().fetchTimeRange(startOfDay(today), endOfDay(today));
+						}
 						return;
 					}
 
@@ -963,24 +981,38 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 		sendOrRetry(0);
 	},
 
-	fetchNextDayData: async (date: Date) => {
+	fetchNextDayData: async (
+		date: Date,
+		directionHint?: "backward" | "forward",
+	) => {
 		// The socket serves one fetch at a time (last request wins on the
 		// server) — don't let a scroll-prefetch cancel an active date swap.
 		if (get().pendingDateSwap) return;
 
-		const hasFrames = await hasFramesForDate(date);
+		let nextDay = startOfDay(date);
+		const direction: "backward" | "forward" =
+			directionHint ??
+			(nextDay.getTime() < startOfDay(get().currentDate).getTime()
+				? "backward"
+				: "forward");
+
+		// Already requested / in flight for this edge — don't thrash.
+		if (get().hasDateBeenFetched(nextDay)) return;
+		if (get().stripPrefetchLoading[direction]) return;
+
+		const hasFrames = await hasFramesForDate(nextDay);
+		if (get().pendingDateSwap) return;
 
 		if (!hasFrames) {
-			date = subDays(date, 1);
+			// Skip empty calendar days in the scroll direction (not always
+			// backward — that used to prefetch the wrong side on forward).
+			const nearest = await findNearestDateWithFrames(nextDay, direction, 7);
+			if (!nearest || get().pendingDateSwap) return;
+			nextDay = startOfDay(nearest);
+			if (get().hasDateBeenFetched(nextDay)) return;
 		}
 
-		const nextDay = new Date(date);
-		nextDay.setDate(nextDay.getDate());
-		nextDay.setHours(0, 0, 0, 0);
-
-		const endTime = new Date(nextDay);
-		endTime.setHours(23, 59, 59, 999);
-
+		const endTime = endOfDay(nextDay);
 		const { websocket, sentRequests, pendingDateSwap } = get();
 		const requestKey = `${nextDay.toISOString()}_${endTime.toISOString()}`;
 
@@ -1001,11 +1033,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 			);
 
 			// Arm the edge shimmer for the side being extended; the request's
-			// batch_complete clears it. Days are compared at local midnight.
-			const currentMidnight = new Date(get().currentDate);
-			currentMidnight.setHours(0, 0, 0, 0);
-			const direction =
-				nextDay.getTime() < currentMidnight.getTime() ? "backward" : "forward";
+			// batch_complete clears it.
 			prefetchRequests.set(requestId, direction);
 			const armedDayIso = nextDay.toISOString();
 

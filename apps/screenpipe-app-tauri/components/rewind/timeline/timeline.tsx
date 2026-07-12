@@ -21,6 +21,7 @@ import { TimelineTagToolbar } from "./timeline-tag-toolbar";
 import { extractDomain, FaviconImg } from "./favicon-utils";
 import { localFetch, getApiBaseUrl, appendAuthToken } from "@/lib/api";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
+import { edgePrefetchPlan } from "@/lib/hooks/timeline-edge-prefetch";
 
 // Shimmer continuation rendered at a strip edge while the adjacent day's
 // frames are fetched (stripPrefetchLoading in use-timeline-store): muted
@@ -188,7 +189,10 @@ interface TimelineSliderProps {
 	currentIndex: number;
 	startAndEndDates: TimeRange;
 	onFrameChange: (index: number) => void;
-	fetchNextDayData: (date: Date) => void;
+	fetchNextDayData: (
+		date: Date,
+		directionHint?: "backward" | "forward",
+	) => void;
 	currentDate: Date;
 	onSelectionChange?: (selectedFrames: StreamTimeSeriesResponse[]) => void;
 	newFramesCount?: number; // Number of new frames added (for animation)
@@ -487,7 +491,7 @@ export const TimelineSlider = ({
 	onFrameChange,
 	fetchNextDayData,
 	startAndEndDates,
-	currentDate,
+	currentDate: _currentDate,
 	onSelectionChange,
 	newFramesCount = 0,
 	lastFlushTimestamp = 0,
@@ -529,10 +533,11 @@ export const TimelineSlider = ({
 	// Track strip viewport width so the virtualized window resizes with the
 	// window (useMemo alone would keep a stale clientWidth from first paint).
 	const [stripViewportWidth, setStripViewportWidth] = useState(1200);
-	const observerTargetRef = useRef<HTMLDivElement>(null);
-	const forwardObserverTargetRef = useRef<HTMLDivElement>(null);
 	const lastFetchRef = useRef<Date | null>(null);
 	const lastForwardFetchRef = useRef<Date | null>(null);
+	// Frames are descending (index 0 = newest). Track index delta so we only
+	// arm the edge the user is scrolling toward.
+	const prevIndexForPrefetchRef = useRef(currentIndex);
 
 	// Adjacent-day prefetch in flight per strip edge (ISO of the day, or null).
 	// Set by fetchNextDayData, cleared by that request's batch_complete.
@@ -1061,74 +1066,75 @@ export const TimelineSlider = ({
 		return markers;
 	}, [visibleFrames]);
 
+	// Adjacent-day frame prefetch: fire when the playhead is within ~2
+	// viewports of a *loaded* frame-array edge (not the virtualization window
+	// edge). IntersectionObservers on virtualization sentinels only tripped
+	// once the day edge was already on screen — too late to hide the hitch.
+	// Direction-aware: only prefetch the side we're scrolling toward.
 	useEffect(() => {
-		const observerTarget = observerTargetRef.current;
-		if (!observerTarget) return;
+		if (pendingDateSwap || !frames || frames.length === 0) return;
 
-		const observer = new IntersectionObserver(
-			(entries) => {
-				const entry = entries[0];
-				if (!entry.isIntersecting) return;
+		const slotWidth = Math.max(1, frameWidth + frameMargin * 2);
+		const framesPerScreen = Math.max(
+			1,
+			Math.ceil(stripViewportWidth / slotWidth),
+		);
+		// ~2 screens of lead time so the WS fetch can land before the void.
+		const lead = Math.ceil(framesPerScreen * 2);
 
-				const lastDate = subDays(currentDate, 1);
-				const now = new Date();
-				const canFetch =
-					!lastFetchRef.current ||
-					now.getTime() - lastFetchRef.current.getTime() > 1000;
+		const prev = prevIndexForPrefetchRef.current;
+		const { prefetchOlder, prefetchNewer } = edgePrefetchPlan({
+			currentIndex,
+			prevIndex: prev,
+			frameCount: frames.length,
+			leadFrames: lead,
+		});
+		prevIndexForPrefetchRef.current = currentIndex;
 
-				if (isAfter(lastDate, startAndEndDates.start) && canFetch) {
+		const now = new Date();
+		const throttleMs = 1000;
+
+		if (prefetchOlder) {
+			const canFetch =
+				!lastFetchRef.current ||
+				now.getTime() - lastFetchRef.current.getTime() > throttleMs;
+			if (canFetch) {
+				const oldestDay = startOfDay(
+					new Date(frames[frames.length - 1].timestamp),
+				);
+				const target = subDays(oldestDay, 1);
+				// startAndEndDates.start is the earliest reachable day.
+				if (!isAfter(startOfDay(startAndEndDates.start), target)) {
 					lastFetchRef.current = now;
-					fetchNextDayData(lastDate);
+					fetchNextDayData(target, "backward");
 				}
-			},
-			{
-				root: containerRef.current,
-				threshold: 1.0,
-				rootMargin: "0px 20% 0px 0px",
-			},
-		);
+			}
+		}
 
-		observer.observe(observerTarget);
-		return () => observer.disconnect();
-		// pendingDateSwap: the sentinel unmounts behind the loading skeleton and
-		// remounts as a new node when the swap resolves — re-observe it then.
-	}, [fetchNextDayData, currentDate, startAndEndDates, pendingDateSwap]);
-
-	// Forward observer: fetch newer day's data when scrolling left (toward newer frames)
-	useEffect(() => {
-		const forwardTarget = forwardObserverTargetRef.current;
-		if (!forwardTarget) return;
-
-		const forwardObserver = new IntersectionObserver(
-			(entries) => {
-				const entry = entries[0];
-				if (!entry.isIntersecting) return;
-
-				const nextDate = addDays(currentDate, 1);
+		if (prefetchNewer) {
+			const canFetch =
+				!lastForwardFetchRef.current ||
+				now.getTime() - lastForwardFetchRef.current.getTime() > throttleMs;
+			if (canFetch) {
+				const newestDay = startOfDay(new Date(frames[0].timestamp));
+				const target = addDays(newestDay, 1);
 				const today = startOfDay(new Date());
-				const now = new Date();
-				const canFetch =
-					!lastForwardFetchRef.current ||
-					now.getTime() - lastForwardFetchRef.current.getTime() > 1000;
-
-				// Don't fetch beyond today
-				if (!isAfter(startOfDay(nextDate), today) && canFetch) {
+				if (!isAfter(startOfDay(target), today)) {
 					lastForwardFetchRef.current = now;
-					fetchNextDayData(nextDate);
+					fetchNextDayData(target, "forward");
 				}
-			},
-			{
-				root: containerRef.current,
-				threshold: 1.0,
-				rootMargin: "0px 0px 0px 20%",
-			},
-		);
-
-		forwardObserver.observe(forwardTarget);
-		return () => forwardObserver.disconnect();
-		// pendingDateSwap: see the backward observer above — re-observe the
-		// remounted sentinel once the loading skeleton clears.
-	}, [fetchNextDayData, currentDate, pendingDateSwap]);
+			}
+		}
+	}, [
+		currentIndex,
+		frames,
+		fetchNextDayData,
+		pendingDateSwap,
+		frameWidth,
+		frameMargin,
+		stripViewportWidth,
+		startAndEndDates,
+	]);
 
 	// Measured scroll on an LTR overflow container (parent used to be dir=rtl,
 	// which made scrollBy/scrollLeft unreliable and left scroll≈0 → left
@@ -1883,7 +1889,6 @@ export const TimelineSlider = ({
 						document.body
 					)}
 
-					<div ref={forwardObserverTargetRef} className="h-full w-1" />
 					{/* Newer-day prefetch shimmer (visual RIGHT — flex-row-reverse) */}
 					{stripPrefetchLoading.forward && (
 						<StripPrefetchShimmer
@@ -2329,7 +2334,6 @@ export const TimelineSlider = ({
 							slotWidth={frameWidth + frameMargin * 2}
 						/>
 					)}
-					<div ref={observerTargetRef} className="h-full w-1" />
 
 				</motion.div>
 				)}
