@@ -8,7 +8,6 @@ import { framesIncludeLocalDay } from "../timeline-edge-prefetch";
 import {
 	canInstantDateNav,
 	findLoadedDayLandingIndex,
-	framesHaveDayStartCoverage,
 	framesHavePriorDayContext,
 	navFetchRange,
 	resolveNavFetchRange,
@@ -157,18 +156,19 @@ describe("canInstantDateNav / findLoadedDayLandingIndex", () => {
 		const jul8 = startOfDay(new Date(2026, 6, 8));
 		const jul7 = startOfDay(new Date(2026, 6, 7));
 		const jul6 = startOfDay(new Date(2026, 6, 6));
-		// Near-midnight samples so day-start coverage passes.
+		// Mid-morning earliest frames (typical after sleep / laptop closed).
 		const scrolled = [
-			{ timestamp: new Date(2026, 6, 8, 0, 45).toISOString() },
-			{ timestamp: new Date(2026, 6, 7, 0, 40).toISOString() },
-			{ timestamp: new Date(2026, 6, 6, 0, 35).toISOString() },
+			{ timestamp: new Date(2026, 6, 8, 9, 0).toISOString() },
+			{ timestamp: new Date(2026, 6, 7, 9, 15).toISOString() },
+			{ timestamp: new Date(2026, 6, 6, 8, 30).toISOString() },
 		];
 		expect(canInstantDateNav(scrolled, jul8)).toBe(true);
 		expect(canInstantDateNav(scrolled, jul7)).toBe(true);
 		expect(canInstantDateNav(scrolled, jul6)).toBe(false);
 	});
 
-	it("not instant when target day only has afternoon frames (sparse downsample)", () => {
+	it("instant for afternoon-only samples when prior day is buffered", () => {
+		// Sparse downsample / late start: land on earliest loaded frame that day.
 		const sparseAfternoon = [
 			{ timestamp: new Date(2026, 6, 1, 15, 0).toISOString() },
 			{ timestamp: new Date(2026, 6, 1, 18, 0).toISOString() },
@@ -176,18 +176,17 @@ describe("canInstantDateNav / findLoadedDayLandingIndex", () => {
 		];
 		expect(framesIncludeLocalDay(sparseAfternoon, jul1)).toBe(true);
 		expect(framesHavePriorDayContext(sparseAfternoon, jul1)).toBe(true);
-		expect(framesHaveDayStartCoverage(sparseAfternoon, jul1)).toBe(false);
-		expect(canInstantDateNav(sparseAfternoon, jul1)).toBe(false);
+		expect(canInstantDateNav(sparseAfternoon, jul1)).toBe(true);
+		expect(findLoadedDayLandingIndex(sparseAfternoon, jul1)).toBe(0);
 	});
 
-	it("instant when earliest same-day frame is within 2h of midnight", () => {
-		const nearMidnight = [
-			{ timestamp: new Date(2026, 6, 1, 1, 0).toISOString() },
+	it("instant with mid-morning earliest frame and prior-day context", () => {
+		const midMorning = [
+			{ timestamp: new Date(2026, 6, 1, 9, 0).toISOString() },
 			{ timestamp: new Date(2026, 6, 1, 18, 0).toISOString() },
 			{ timestamp: new Date(2026, 5, 29, 22, 0).toISOString() },
 		];
-		expect(framesHaveDayStartCoverage(nearMidnight, jul1)).toBe(true);
-		expect(canInstantDateNav(nearMidnight, jul1)).toBe(true);
+		expect(canInstantDateNav(midMorning, jul1)).toBe(true);
 	});
 
 	it("lands near startOfDay (oldest end) among that day's frames", () => {
