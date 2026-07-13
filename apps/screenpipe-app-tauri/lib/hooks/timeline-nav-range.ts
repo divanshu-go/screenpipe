@@ -99,10 +99,9 @@ export function framesHavePriorDayContext(
 }
 
 /**
- * Hot path: target day is already in the strip and an older calendar day is
- * too. Real scrolled-in days often start mid-morning; do not require
- * near-midnight samples. Land via findLoadedDayLandingIndex (earliest loaded
- * frame that day). Oldest loaded day stays cold (no prior context → void-left).
+ * Hot path: target day is in the strip and an older calendar day is too.
+ * Seek via findLoadedDayLandingIndex (earliest loaded frame that day).
+ * Oldest loaded day stays cold (no prior context → void-left at startOfDay).
  */
 export function canInstantDateNav(
 	frames: ReadonlyArray<{ timestamp: string }>,

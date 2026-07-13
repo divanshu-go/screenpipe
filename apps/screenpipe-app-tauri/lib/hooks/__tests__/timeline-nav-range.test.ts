@@ -156,7 +156,6 @@ describe("canInstantDateNav / findLoadedDayLandingIndex", () => {
 		const jul8 = startOfDay(new Date(2026, 6, 8));
 		const jul7 = startOfDay(new Date(2026, 6, 7));
 		const jul6 = startOfDay(new Date(2026, 6, 6));
-		// Mid-morning earliest frames (typical after sleep / laptop closed).
 		const scrolled = [
 			{ timestamp: new Date(2026, 6, 8, 9, 0).toISOString() },
 			{ timestamp: new Date(2026, 6, 7, 9, 15).toISOString() },
@@ -167,26 +166,16 @@ describe("canInstantDateNav / findLoadedDayLandingIndex", () => {
 		expect(canInstantDateNav(scrolled, jul6)).toBe(false);
 	});
 
-	it("instant for afternoon-only samples when prior day is buffered", () => {
-		// Sparse downsample / late start: land on earliest loaded frame that day.
-		const sparseAfternoon = [
+	it("instant when same-day frames are afternoon-only and prior day is buffered", () => {
+		const afternoonOnly = [
 			{ timestamp: new Date(2026, 6, 1, 15, 0).toISOString() },
 			{ timestamp: new Date(2026, 6, 1, 18, 0).toISOString() },
 			{ timestamp: new Date(2026, 5, 29, 22, 0).toISOString() },
 		];
-		expect(framesIncludeLocalDay(sparseAfternoon, jul1)).toBe(true);
-		expect(framesHavePriorDayContext(sparseAfternoon, jul1)).toBe(true);
-		expect(canInstantDateNav(sparseAfternoon, jul1)).toBe(true);
-		expect(findLoadedDayLandingIndex(sparseAfternoon, jul1)).toBe(0);
-	});
-
-	it("instant with mid-morning earliest frame and prior-day context", () => {
-		const midMorning = [
-			{ timestamp: new Date(2026, 6, 1, 9, 0).toISOString() },
-			{ timestamp: new Date(2026, 6, 1, 18, 0).toISOString() },
-			{ timestamp: new Date(2026, 5, 29, 22, 0).toISOString() },
-		];
-		expect(canInstantDateNav(midMorning, jul1)).toBe(true);
+		expect(framesIncludeLocalDay(afternoonOnly, jul1)).toBe(true);
+		expect(framesHavePriorDayContext(afternoonOnly, jul1)).toBe(true);
+		expect(canInstantDateNav(afternoonOnly, jul1)).toBe(true);
+		expect(findLoadedDayLandingIndex(afternoonOnly, jul1)).toBe(0);
 	});
 
 	it("lands near startOfDay (oldest end) among that day's frames", () => {
