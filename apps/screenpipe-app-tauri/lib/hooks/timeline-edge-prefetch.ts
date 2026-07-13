@@ -45,6 +45,23 @@ export function edgePrefetchPlan(opts: {
 	};
 }
 
+/**
+ * Detect wheel intent past a clamped frame-array edge.
+ * Frames are descending: index 0 = newest, length-1 = oldest.
+ * Returns which void the scroll tried to enter, or null if within bounds.
+ */
+export function clampedEdgeFromIndexChange(
+	prevIndex: number,
+	indexChange: number,
+	frameCount: number,
+): "newer" | "older" | null {
+	if (frameCount <= 0 || indexChange === 0) return null;
+	const unclamped = prevIndex + indexChange;
+	if (unclamped < 0) return "newer";
+	if (unclamped > frameCount - 1) return "older";
+	return null;
+}
+
 /** Exact day-only fetch key used by `fetchNextDayData` / day fetches. */
 export function exactDayRequestKey(day: Date): string {
 	const start = startOfDay(day);

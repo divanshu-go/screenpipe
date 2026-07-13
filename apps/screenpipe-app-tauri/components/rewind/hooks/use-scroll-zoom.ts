@@ -8,6 +8,7 @@ import { listen } from "@tauri-apps/api/event";
 import type { StreamTimeSeriesResponse } from "@/components/rewind/timeline";
 import { useTimelineSelection } from "@/lib/hooks/use-timeline-selection";
 import { hasFrameNavigableContent, snapFrameIndex } from "@/lib/hooks/timeline-frame-navigation";
+import { clampedEdgeFromIndexChange } from "@/lib/hooks/timeline-edge-prefetch";
 
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 4;
@@ -37,6 +38,8 @@ export function useScrollZoom(opts: {
 	navigateToSearchResultRef: React.RefObject<(index: number) => void>;
 	showSearchModal: boolean;
 	onWheelNavigationStateChange?: (active: boolean) => void;
+	/** Fired when wheel would move past a clamped frame-array edge (void scroll). */
+	onClampedEdgeScroll?: (edge: "newer" | "older") => void;
 }) {
 	const {
 		containerRef,
@@ -58,6 +61,7 @@ export function useScrollZoom(opts: {
 		navigateToSearchResultRef,
 		showSearchModal,
 		onWheelNavigationStateChange,
+		onClampedEdgeScroll,
 	} = opts;
 
 	// Zoom state — owned here so both scroll handler and TimelineSlider share it
@@ -121,6 +125,14 @@ export function useScrollZoom(opts: {
 		if (!indexChange || frames.length === 0) return;
 
 		clearSelectionRange(null);
+
+		const edge = clampedEdgeFromIndexChange(
+			currentIndex,
+			indexChange,
+			frames.length,
+		);
+		if (edge) onClampedEdgeScroll?.(edge);
+
 		setCurrentIndex((prevIndex: number) => {
 			let newIndex: number;
 			if (matchingIndices) {
@@ -151,7 +163,7 @@ export function useScrollZoom(opts: {
 
 			return newIndex;
 		});
-	}, [clearSelectionRange, frames, matchingIndices, setCurrentFrame, setCurrentIndex]);
+	}, [clearSelectionRange, currentIndex, frames, matchingIndices, onClampedEdgeScroll, setCurrentFrame, setCurrentIndex]);
 
 	const queueScrollNavigation = useCallback((signedDelta: number) => {
 		if (signedDelta === 0 || isZoomingRef.current) return;

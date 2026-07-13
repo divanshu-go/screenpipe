@@ -150,6 +150,12 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 	const [isArrowNav, setIsArrowNav] = useState(false);
 	const arrowNavTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const [isWheelNavigating, setIsWheelNavigating] = useState(false);
+	// Bumped when wheel scrolls into a clamped void so edge prefetch can re-arm
+	// without requiring a reverse flick (index alone would not change).
+	const [edgePrefetchBump, setEdgePrefetchBump] = useState(0);
+	const onClampedEdgeScroll = useCallback(() => {
+		setEdgePrefetchBump((n) => n + 1);
+	}, []);
 
 	const dismissSearchHighlight = useSearchHighlight((s) => s.dismiss);
 	const clearSearchHighlight = useSearchHighlight((s) => s.clear);
@@ -307,6 +313,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		navigateToSearchResultRef,
 		showSearchModal,
 		onWheelNavigationStateChange: setIsWheelNavigating,
+		onClampedEdgeScroll,
 	});
 
 	// Prepended frames shift indices; keep currentIndex on the viewed frame via
@@ -1536,6 +1543,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 							filtersRef={filtersRef}
 							scrubberRef={scrubberRef}
 							isWheelNavigating={isWheelNavigating}
+							edgePrefetchBump={edgePrefetchBump}
 						/>
 					) : (
 						<div className="bg-card/80 backdrop-blur-sm p-4 border-t border-border">

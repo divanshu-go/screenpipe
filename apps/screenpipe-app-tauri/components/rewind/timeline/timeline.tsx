@@ -250,7 +250,7 @@ interface TimelineSliderProps {
 	fetchNextDayData: (
 		date: Date,
 		directionHint?: "backward" | "forward",
-	) => Promise<void>;
+	) => Promise<boolean>;
 	currentDate: Date;
 	onSelectionChange?: (selectedFrames: StreamTimeSeriesResponse[]) => void;
 	newFramesCount?: number; // Number of new frames added (for animation)
@@ -285,6 +285,8 @@ interface TimelineSliderProps {
 	scrubberRef?: React.MutableRefObject<HTMLDivElement | null>;
 	/** True while wheel/trackpad navigation is active; use instant recentering to avoid stacked smooth scroll animations. */
 	isWheelNavigating?: boolean;
+	/** Bumped on clamped void-scroll so edge prefetch can re-arm without index change. */
+	edgePrefetchBump?: number;
 }
 
 interface AppGroup {
@@ -577,6 +579,7 @@ export const TimelineSlider = ({
 	filtersRef,
 	scrubberRef,
 	isWheelNavigating = false,
+	edgePrefetchBump = 0,
 }: TimelineSliderProps) => {
 	const containerRef = useRef<HTMLDivElement>(null);
 	// The inner flex content (motion.div) that lays out frame bars and is the
@@ -593,6 +596,12 @@ export const TimelineSlider = ({
 	// Frames are descending (index 0 = newest). Track index delta so we only
 	// arm the edge the user is scrolling toward.
 	const prevIndexForPrefetchRef = useRef(currentIndex);
+	// One-shot absolute-end retry after a failed arm (avoids reverse-flick dependency).
+	const olderPrefetchRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const newerPrefetchRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const olderPrefetchRetryUsedRef = useRef(false);
+	const newerPrefetchRetryUsedRef = useRef(false);
+	const [prefetchRetryTick, setPrefetchRetryTick] = useState(0);
 
 	// Adjacent-day prefetch in flight per strip edge (ISO of the day, or null).
 	// Set by fetchNextDayData; may clear on first frame flush while the request
@@ -1118,9 +1127,11 @@ export const TimelineSlider = ({
 	// Adjacent-day prefetch: ~2 viewports from a loaded edge while scrolling
 	// toward it. Absolute ends (index 0 / last) may arm even with delta 0
 	// because further scroll into the void cannot change currentIndex.
+	// edgePrefetchBump re-runs this when wheel is clamped into the void.
 	useEffect(() => {
 		if (pendingDateSwap || !frames || frames.length === 0) return;
 
+		let cancelled = false;
 		const slotWidth = Math.max(1, frameWidth + frameMargin * 2);
 		const framesPerScreen = Math.max(
 			1,
@@ -1128,20 +1139,38 @@ export const TimelineSlider = ({
 		);
 		// ~2 screens of lead time so the WS fetch can land before the void.
 		const lead = Math.ceil(framesPerScreen * 2);
+		const frameCount = frames.length;
+		const atOlderAbsoluteEnd = currentIndex >= frameCount - 1;
+		const atNewerAbsoluteEnd = currentIndex === 0;
+
+		if (!atOlderAbsoluteEnd) {
+			olderPrefetchRetryUsedRef.current = false;
+			if (olderPrefetchRetryRef.current) {
+				clearTimeout(olderPrefetchRetryRef.current);
+				olderPrefetchRetryRef.current = null;
+			}
+		}
+		if (!atNewerAbsoluteEnd) {
+			newerPrefetchRetryUsedRef.current = false;
+			if (newerPrefetchRetryRef.current) {
+				clearTimeout(newerPrefetchRetryRef.current);
+				newerPrefetchRetryRef.current = null;
+			}
+		}
 
 		const prev = prevIndexForPrefetchRef.current;
 		const { prefetchOlder, prefetchNewer } = edgePrefetchPlan({
 			currentIndex,
 			prevIndex: prev,
-			frameCount: frames.length,
+			frameCount,
 			leadFrames: lead,
 		});
 		prevIndexForPrefetchRef.current = currentIndex;
 
-		const now = new Date();
 		const throttleMs = 1000;
 
-		if (prefetchOlder) {
+		if (prefetchOlder && !stripPrefetchLoading.backward) {
+			const now = new Date();
 			const canFetch =
 				!lastFetchRef.current ||
 				now.getTime() - lastFetchRef.current.getTime() > throttleMs;
@@ -1152,13 +1181,37 @@ export const TimelineSlider = ({
 				const target = subDays(oldestDay, 1);
 				// startAndEndDates.start is the earliest reachable day.
 				if (!isAfter(startOfDay(startAndEndDates.start), target)) {
-					lastFetchRef.current = now;
-					void fetchNextDayData(target, "backward");
+					void fetchNextDayData(target, "backward").then((armed) => {
+						if (armed) {
+							lastFetchRef.current = new Date();
+							if (olderPrefetchRetryRef.current) {
+								clearTimeout(olderPrefetchRetryRef.current);
+								olderPrefetchRetryRef.current = null;
+							}
+							return;
+						}
+						if (
+							cancelled ||
+							!atOlderAbsoluteEnd ||
+							olderPrefetchRetryUsedRef.current
+						) {
+							return;
+						}
+						olderPrefetchRetryUsedRef.current = true;
+						if (olderPrefetchRetryRef.current) {
+							clearTimeout(olderPrefetchRetryRef.current);
+						}
+						olderPrefetchRetryRef.current = setTimeout(() => {
+							olderPrefetchRetryRef.current = null;
+							setPrefetchRetryTick((t) => t + 1);
+						}, 300);
+					});
 				}
 			}
 		}
 
-		if (prefetchNewer) {
+		if (prefetchNewer && !stripPrefetchLoading.forward) {
+			const now = new Date();
 			const canFetch =
 				!lastForwardFetchRef.current ||
 				now.getTime() - lastForwardFetchRef.current.getTime() > throttleMs;
@@ -1167,11 +1220,38 @@ export const TimelineSlider = ({
 				const target = addDays(newestDay, 1);
 				const today = startOfDay(new Date());
 				if (!isAfter(startOfDay(target), today)) {
-					lastForwardFetchRef.current = now;
-					void fetchNextDayData(target, "forward");
+					void fetchNextDayData(target, "forward").then((armed) => {
+						if (armed) {
+							lastForwardFetchRef.current = new Date();
+							if (newerPrefetchRetryRef.current) {
+								clearTimeout(newerPrefetchRetryRef.current);
+								newerPrefetchRetryRef.current = null;
+							}
+							return;
+						}
+						if (
+							cancelled ||
+							!atNewerAbsoluteEnd ||
+							newerPrefetchRetryUsedRef.current
+						) {
+							return;
+						}
+						newerPrefetchRetryUsedRef.current = true;
+						if (newerPrefetchRetryRef.current) {
+							clearTimeout(newerPrefetchRetryRef.current);
+						}
+						newerPrefetchRetryRef.current = setTimeout(() => {
+							newerPrefetchRetryRef.current = null;
+							setPrefetchRetryTick((t) => t + 1);
+						}, 300);
+					});
 				}
 			}
 		}
+
+		return () => {
+			cancelled = true;
+		};
 	}, [
 		currentIndex,
 		frames,
@@ -1181,7 +1261,26 @@ export const TimelineSlider = ({
 		frameMargin,
 		stripViewportWidth,
 		startAndEndDates,
+		edgePrefetchBump,
+		prefetchRetryTick,
+		stripPrefetchLoading.backward,
+		stripPrefetchLoading.forward,
 	]);
+
+	// Clear absolute-end prefetch retries on unmount only (effect re-runs must
+	// not cancel a pending one-shot retry while still pinned at the edge).
+	useEffect(() => {
+		return () => {
+			if (olderPrefetchRetryRef.current) {
+				clearTimeout(olderPrefetchRetryRef.current);
+				olderPrefetchRetryRef.current = null;
+			}
+			if (newerPrefetchRetryRef.current) {
+				clearTimeout(newerPrefetchRetryRef.current);
+				newerPrefetchRetryRef.current = null;
+			}
+		};
+	}, []);
 
 	// Measured scroll on an LTR overflow container. Content uses flex-row-reverse
 	// (oldest left / newest right). Date jumps re-center after content replaces

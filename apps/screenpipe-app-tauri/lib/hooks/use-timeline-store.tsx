@@ -162,7 +162,7 @@ interface TimelineState {
 	fetchNextDayData: (
 		date: Date,
 		directionHint?: "backward" | "forward",
-	) => Promise<void>;
+	) => Promise<boolean>;
 	hasDateBeenFetched: (date: Date) => boolean;
 	flushFrameBuffer: (force?: boolean) => void;
 	onWindowFocus: () => void;
@@ -1024,10 +1024,10 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 	fetchNextDayData: async (
 		date: Date,
 		directionHint?: "backward" | "forward",
-	) => {
+	): Promise<boolean> => {
 		// The socket serves one fetch at a time (last request wins on the
 		// server) — don't let a scroll-prefetch cancel an active date swap.
-		if (get().pendingDateSwap) return;
+		if (get().pendingDateSwap) return false;
 
 		let nextDay = startOfDay(date);
 		const direction: "backward" | "forward" =
@@ -1036,11 +1036,11 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 				? "backward"
 				: "forward");
 
-		if (get().stripPrefetchLoading[direction]) return;
+		if (get().stripPrefetchLoading[direction]) return false;
 		// Skeleton may clear on the first frame flush while this direction is
 		// still streaming — do not arm the next adjacent day until batch_complete
 		// removes the in-flight entry (avoids cancelling the active fetch).
-		if (isPrefetchDirectionInFlight(direction)) return;
+		if (isPrefetchDirectionInFlight(direction)) return false;
 
 		// Skip hasDateBeenFetched: a multi-day nav range can cover an empty gap
 		// midnight without loading frames for it. Only abort when the strip
@@ -1052,17 +1052,17 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 				exactDayRequestSent: hasExactDayRequest(sent, nextDay),
 			})
 		) {
-			return;
+			return false;
 		}
 
 		const hasFrames = await hasFramesForDate(nextDay);
-		if (get().pendingDateSwap) return;
+		if (get().pendingDateSwap) return false;
 
 		if (!hasFrames) {
 			// Skip empty calendar days in the scroll direction via findNearest.
 			const nearest = await findNearestDateWithFrames(nextDay, direction, 7);
-			if (get().pendingDateSwap) return;
-			if (!nearest) return;
+			if (get().pendingDateSwap) return false;
+			if (!nearest) return false;
 			nextDay = startOfDay(nearest);
 			const afterSkip = get();
 			if (
@@ -1077,7 +1077,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					),
 				})
 			) {
-				return;
+				return false;
 			}
 		}
 
@@ -1085,8 +1085,8 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 		const { websocket, sentRequests, pendingDateSwap } = get();
 		const requestKey = `${nextDay.toISOString()}_${endTime.toISOString()}`;
 
-		if (pendingDateSwap) return;
-		if (sentRequests.has(requestKey)) return;
+		if (pendingDateSwap) return false;
+		if (sentRequests.has(requestKey)) return false;
 
 		if (websocket && websocket.readyState === WebSocket.OPEN) {
 			const requestId = ++streamRequestSeq;
@@ -1130,7 +1130,11 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 					);
 				}
 			}, 45_000);
+
+			return true;
 		}
+
+		return false;
 	},
 
 	onWindowFocus: () => {

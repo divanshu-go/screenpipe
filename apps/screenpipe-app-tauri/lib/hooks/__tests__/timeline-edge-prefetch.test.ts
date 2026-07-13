@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { endOfDay, startOfDay, subDays } from "date-fns";
 import { navFetchRange } from "../timeline-nav-range";
 import {
+	clampedEdgeFromIndexChange,
 	edgePrefetchPlan,
 	exactDayRequestKey,
 	framesIncludeLocalDay,
@@ -127,6 +128,25 @@ describe("edgePrefetchPlan", () => {
 			leadFrames: 100,
 		});
 		expect(scrollBack.prefetchNewer).toBe(true);
+	});
+});
+
+describe("clampedEdgeFromIndexChange", () => {
+	it("returns newer when scroll would go below index 0", () => {
+		expect(clampedEdgeFromIndexChange(0, -5, 1000)).toBe("newer");
+		expect(clampedEdgeFromIndexChange(2, -5, 1000)).toBe("newer");
+	});
+
+	it("returns older when scroll would go past last index", () => {
+		expect(clampedEdgeFromIndexChange(999, 5, 1000)).toBe("older");
+		expect(clampedEdgeFromIndexChange(997, 5, 1000)).toBe("older");
+	});
+
+	it("returns null when target stays in bounds", () => {
+		expect(clampedEdgeFromIndexChange(50, -10, 1000)).toBe(null);
+		expect(clampedEdgeFromIndexChange(50, 10, 1000)).toBe(null);
+		expect(clampedEdgeFromIndexChange(0, 0, 1000)).toBe(null);
+		expect(clampedEdgeFromIndexChange(0, -1, 0)).toBe(null);
 	});
 });
 
