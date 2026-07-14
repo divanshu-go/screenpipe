@@ -29,7 +29,7 @@ const SLIDE_WINDOW_SIZES: Record<SlideKey, { width: number; height: number }> =
   {
     login: { width: 500, height: 480 },
     permissions: { width: 500, height: 560 },
-    timeline: { width: 500, height: 560 },
+    timeline: { width: 500, height: 680 },
     engine: { width: 500, height: 620 },
     "connect-apps": { width: 500, height: 680 },
     pipe: { width: 500, height: 500 },

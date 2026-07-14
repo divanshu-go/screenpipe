@@ -6,11 +6,10 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { History } from "lucide-react";
+import { Camera, Check, Cpu, HardDrive } from "lucide-react";
 import posthog from "posthog-js";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useEnterprisePolicy } from "@/lib/hooks/use-enterprise-policy";
-import { Switch } from "@/components/ui/switch";
 
 interface TimelineChoiceProps {
   handleNextSlide: () => void;
@@ -23,15 +22,129 @@ interface TimelineChoiceProps {
 const isLowTier = (tier: string | null | undefined) =>
   (tier ?? "").toLowerCase() === "low";
 
+// ─── Lite in-UI preview ───────────────────────────────────────────────────────
+//
+// New users have never seen a screen timeline, so we show one instead of
+// describing it: a mock screen whose content changes as a playhead scrubs
+// backward through the day. Pure CSS/JS — no video asset, no real frames.
+
+// Each "frame" is a skeleton layout of a different app the user was in.
+const MOCK_FRAMES = [
+  { label: "now · your editor", bars: [85, 60, 72, 40, 65] },
+  { label: "-2m · browser", bars: [50, 90, 45, 78, 30] },
+  { label: "-10m · a meeting", bars: [70, 35, 88, 55, 62] },
+  { label: "-1h · slack", bars: [40, 75, 52, 85, 48] },
+];
+
+const PREVIEW_TICK_MS = 60;
+const PREVIEW_LOOP_MS = 7200;
+
+function TimelinePreview() {
+  // progress runs 0 → 1 then loops; the playhead sweeps right → left so the
+  // preview reads as "scrubbing back in time".
+  const [progress, setProgress] = useState(0);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setProgress((p) => (p + PREVIEW_TICK_MS / PREVIEW_LOOP_MS) % 1);
+    }, PREVIEW_TICK_MS);
+    return () => clearInterval(interval);
+  }, []);
+
+  const frameIdx = Math.min(
+    MOCK_FRAMES.length - 1,
+    Math.floor(progress * MOCK_FRAMES.length),
+  );
+  const frame = MOCK_FRAMES[frameIdx];
+  const playheadPct = (1 - progress) * 100;
+
+  return (
+    <div
+      className="w-full border border-border/50 overflow-hidden select-none"
+      aria-hidden="true"
+    >
+      {/* Mock screen */}
+      <div className="relative bg-foreground/[0.03] px-4 pt-3 pb-2 h-[104px]">
+        {/* window chrome dots */}
+        <div className="flex gap-1 mb-2">
+          <div className="w-1.5 h-1.5 rounded-full bg-foreground/20" />
+          <div className="w-1.5 h-1.5 rounded-full bg-foreground/20" />
+          <div className="w-1.5 h-1.5 rounded-full bg-foreground/20" />
+        </div>
+        {/* skeleton content, crossfades between "apps" */}
+        <motion.div
+          key={frameIdx}
+          className="flex flex-col gap-1.5"
+          initial={{ opacity: 0.3 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.35 }}
+        >
+          {frame.bars.map((w, i) => (
+            <div
+              key={i}
+              className="h-1.5 bg-foreground/15"
+              style={{ width: `${w}%` }}
+            />
+          ))}
+        </motion.div>
+        {/* floating time chip, like the real rewind overlay */}
+        <div className="absolute top-2 right-2 px-2 py-0.5 border border-border/60 bg-background/80 font-mono text-[9px] text-muted-foreground">
+          {frame.label}
+        </div>
+      </div>
+
+      {/* Scrubber bar */}
+      <div className="relative h-6 border-t border-border/50 bg-background">
+        {/* tick marks */}
+        <div className="absolute inset-0 flex justify-between px-1">
+          {Array.from({ length: 25 }, (_, i) => (
+            <div
+              key={i}
+              className={`w-px self-end ${i % 6 === 0 ? "h-3 bg-foreground/25" : "h-1.5 bg-foreground/10"}`}
+            />
+          ))}
+        </div>
+        {/* playhead */}
+        <div
+          className="absolute top-0 bottom-0 w-px bg-foreground"
+          style={{ left: `${playheadPct}%` }}
+        >
+          <div className="absolute -top-0.5 -translate-x-1/2 w-1.5 h-1.5 bg-foreground rounded-full" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Cost explanation rows ───────────────────────────────────────────────────
+
+const COSTS = [
+  {
+    icon: Camera,
+    text: "takes periodic snapshots of your screen as you work",
+  },
+  {
+    icon: HardDrive,
+    text: "stores them on disk so you can scroll back — uses storage over time",
+  },
+  {
+    icon: Cpu,
+    text: "keeps recent frames in memory for instant scrubbing — steady ram + cpu",
+  },
+];
+
+// ─── Main ────────────────────────────────────────────────────────────────────
+
 export default function TimelineChoice({ handleNextSlide }: TimelineChoiceProps) {
   const { settings, updateSettings } = useSettings();
   const { isSettingLocked } = useEnterprisePolicy();
   const mountTimeRef = useRef(Date.now());
   const hasAdvanced = useRef(false);
+  const [saving, setSaving] = useState(false);
 
   const lowTier = isLowTier(settings.deviceTier);
-  const [enabled, setEnabled] = useState(!lowTier);
-  const [saving, setSaving] = useState(false);
+  // Recommendation: keep the timeline on unless the device is low tier.
+  const recommendEnabled = !lowTier;
 
   // Enterprise policy manages disableTimeline — nothing to choose, skip the
   // slide without touching the setting.
@@ -45,13 +158,16 @@ export default function TimelineChoice({ handleNextSlide }: TimelineChoiceProps)
 
   if (locked) return null;
 
-  const handleContinue = async () => {
-    if (saving || hasAdvanced.current) return;
+  const choose = async (enabled: boolean) => {
+    // hasAdvanced is a ref, not state: state updates don't land between two
+    // rapid clicks, so only a synchronous guard prevents a double persist.
+    if (hasAdvanced.current) return;
+    hasAdvanced.current = true;
     setSaving(true);
     posthog.capture("onboarding_timeline_choice", {
       timeline_enabled: enabled,
       device_tier: settings.deviceTier ?? "unknown",
-      followed_recommendation: enabled === !lowTier,
+      followed_recommendation: enabled === recommendEnabled,
       time_spent_ms: Date.now() - mountTimeRef.current,
     });
     try {
@@ -63,9 +179,15 @@ export default function TimelineChoice({ handleNextSlide }: TimelineChoiceProps)
       // non-fatal: the default (timeline on) applies; user can change it
       // later in settings → display
     }
-    hasAdvanced.current = true;
     handleNextSlide();
   };
+
+  const recommendedTag = (
+    <span className="flex items-center gap-1 font-mono text-[9px] normal-case tracking-normal opacity-70">
+      <Check className="w-2.5 h-2.5" strokeWidth={2.5} />
+      recommended for your device
+    </span>
+  );
 
   return (
     <motion.div
@@ -76,14 +198,13 @@ export default function TimelineChoice({ handleNextSlide }: TimelineChoiceProps)
     >
       {/* Header */}
       <motion.div
-        className="flex flex-col items-center mb-6 text-center w-full"
+        className="flex flex-col items-center mb-4 text-center w-full"
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ delay: 0.1 }}
       >
-        <History className="w-6 h-6 mb-3 text-foreground/80" strokeWidth={1.5} />
         <h2 className="font-mono text-base font-bold lowercase">
-          timeline / rewind
+          meet the timeline
         </h2>
         <p className="font-mono text-[10px] text-muted-foreground/60 mt-1 max-w-[320px]">
           scroll back through everything you&apos;ve seen — like a time machine
@@ -91,66 +212,96 @@ export default function TimelineChoice({ handleNextSlide }: TimelineChoiceProps)
         </p>
       </motion.div>
 
-      {/* Toggle card */}
+      {/* Live-ish preview */}
       <motion.div
-        className="w-full border border-border/50 p-4 flex flex-col gap-3"
+        className="w-full"
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.2, duration: 0.3 }}
+        transition={{ delay: 0.15, duration: 0.3 }}
       >
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex flex-col gap-1 min-w-0">
-            <span className="font-mono text-xs font-semibold lowercase">
-              keep timeline on
-            </span>
-            <p className="font-mono text-[10px] text-muted-foreground/60 leading-snug">
-              the timeline keeps recent frames in an in-memory hot cache —
-              every captured frame and audio chunk is buffered in ram and adds
-              steady cpu work
-            </p>
-          </div>
-          <Switch
-            id="onboarding-timeline"
-            aria-label="keep timeline on"
-            checked={enabled}
-            onCheckedChange={setEnabled}
-          />
-        </div>
+        <TimelinePreview />
+      </motion.div>
 
-        {lowTier && (
-          <div className="border border-amber-500/40 bg-amber-500/[0.06] p-3">
-            <p className="font-mono text-[10px] text-amber-500/90 font-semibold lowercase">
-              recommended for this device: off
-            </p>
-            <p className="font-mono text-[10px] text-muted-foreground/70 mt-1 leading-snug">
-              your machine has limited ram/cores — turning the timeline off
-              saves memory and cpu. everything is still recorded and
-              searchable; only the visual rewind view is off.
+      {/* How it works / what it costs */}
+      <motion.div
+        className="w-full flex flex-col gap-2 mt-4"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 0.25 }}
+      >
+        {COSTS.map(({ icon: Icon, text }, i) => (
+          <div key={i} className="flex items-start gap-2">
+            <Icon
+              className="w-3 h-3 mt-0.5 shrink-0 text-muted-foreground/60"
+              strokeWidth={1.5}
+            />
+            <p className="font-mono text-[10px] text-muted-foreground/70 leading-snug">
+              {text}
             </p>
           </div>
-        )}
+        ))}
+      </motion.div>
+
+      {/* Low-tier callout */}
+      {lowTier && (
+        <motion.div
+          className="w-full border border-amber-500/40 bg-amber-500/[0.06] p-3 mt-3"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.3 }}
+        >
+          <p className="font-mono text-[10px] text-amber-500/90 font-semibold lowercase">
+            heads-up: this device has limited ram/cores
+          </p>
+          <p className="font-mono text-[10px] text-muted-foreground/70 mt-1 leading-snug">
+            the timeline can take a real toll on machines like this one.
+            keeping it off saves memory, cpu and disk — everything is still
+            recorded and searchable; only the visual rewind view is off.
+          </p>
+        </motion.div>
+      )}
+
+      {/* Choice */}
+      <motion.div
+        className="w-full flex gap-2 mt-4"
+        initial={{ opacity: 0, y: 4 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.35 }}
+      >
+        <button
+          onClick={() => choose(true)}
+          disabled={saving}
+          className={`flex-1 flex flex-col items-center gap-1 border py-3 font-mono text-xs uppercase tracking-widest transition-colors duration-150 disabled:opacity-60 ${
+            recommendEnabled
+              ? "border-foreground bg-foreground text-background hover:bg-background hover:text-foreground"
+              : "border-border text-foreground hover:border-foreground"
+          }`}
+        >
+          <span>timeline on</span>
+          {recommendEnabled && recommendedTag}
+        </button>
+        <button
+          onClick={() => choose(false)}
+          disabled={saving}
+          className={`flex-1 flex flex-col items-center gap-1 border py-3 font-mono text-xs uppercase tracking-widest transition-colors duration-150 disabled:opacity-60 ${
+            !recommendEnabled
+              ? "border-foreground bg-foreground text-background hover:bg-background hover:text-foreground"
+              : "border-border text-foreground hover:border-foreground"
+          }`}
+        >
+          <span>keep it off</span>
+          {!recommendEnabled && recommendedTag}
+        </button>
       </motion.div>
 
       <motion.p
         className="font-mono text-[9px] text-muted-foreground/30 mt-3 text-center"
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
-        transition={{ delay: 0.35 }}
+        transition={{ delay: 0.45 }}
       >
-        you can change this anytime in settings → display
+        not a forever choice — change it anytime in settings → display
       </motion.p>
-
-      {/* Continue */}
-      <motion.button
-        onClick={handleContinue}
-        disabled={saving}
-        className="mt-5 w-full border border-foreground bg-foreground text-background py-3 font-mono text-sm uppercase tracking-widest hover:bg-background hover:text-foreground transition-colors duration-150 disabled:opacity-60"
-        initial={{ opacity: 0, y: 4 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.4 }}
-      >
-        continue →
-      </motion.button>
     </motion.div>
   );
 }

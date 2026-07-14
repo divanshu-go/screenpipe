@@ -42,19 +42,21 @@ describe("TimelineChoice", () => {
     mocks.isSettingLocked.mockReturnValue(false);
   });
 
-  it("defaults the timeline on for high tier and persists disableTimeline: false", async () => {
+  it("recommends on for high tier and persists disableTimeline: false when chosen", async () => {
     mocks.settings.deviceTier = "high";
     const handleNextSlide = vi.fn();
     render(<TimelineChoice handleNextSlide={handleNextSlide} />);
 
-    const toggle = screen.getByRole("switch", { name: /keep timeline on/i });
-    expect(toggle).toHaveAttribute("aria-checked", "true");
+    const onButton = screen.getByRole("button", { name: /timeline on/i });
+    const offButton = screen.getByRole("button", { name: /keep it off/i });
+    expect(onButton).toHaveTextContent(/recommended for your device/i);
+    expect(offButton).not.toHaveTextContent(/recommended for your device/i);
     expect(
-      screen.queryByText(/recommended for this device: off/i),
+      screen.queryByText(/this device has limited ram\/cores/i),
     ).not.toBeInTheDocument();
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /continue/i }));
+      fireEvent.click(onButton);
     });
 
     expect(mocks.updateSettings).toHaveBeenCalledWith({
@@ -63,32 +65,34 @@ describe("TimelineChoice", () => {
     expect(handleNextSlide).toHaveBeenCalledTimes(1);
   });
 
-  it("treats a missing device tier as non-low (timeline on, no recommendation)", () => {
+  it("treats a missing device tier as non-low (on recommended, no callout)", () => {
     mocks.settings.deviceTier = undefined;
     render(<TimelineChoice handleNextSlide={vi.fn()} />);
 
     expect(
-      screen.getByRole("switch", { name: /keep timeline on/i }),
-    ).toHaveAttribute("aria-checked", "true");
+      screen.getByRole("button", { name: /timeline on/i }),
+    ).toHaveTextContent(/recommended for your device/i);
     expect(
-      screen.queryByText(/recommended for this device: off/i),
+      screen.queryByText(/this device has limited ram\/cores/i),
     ).not.toBeInTheDocument();
   });
 
-  it("recommends off on low tier and persists disableTimeline: true", async () => {
+  it("recommends off on low tier and persists disableTimeline: true when chosen", async () => {
     mocks.settings.deviceTier = "low";
     const handleNextSlide = vi.fn();
     render(<TimelineChoice handleNextSlide={handleNextSlide} />);
 
+    const offButton = screen.getByRole("button", { name: /keep it off/i });
+    expect(offButton).toHaveTextContent(/recommended for your device/i);
     expect(
-      screen.getByRole("switch", { name: /keep timeline on/i }),
-    ).toHaveAttribute("aria-checked", "false");
+      screen.getByRole("button", { name: /timeline on/i }),
+    ).not.toHaveTextContent(/recommended for your device/i);
     expect(
-      screen.getByText(/recommended for this device: off/i),
+      screen.getByText(/this device has limited ram\/cores/i),
     ).toBeInTheDocument();
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /continue/i }));
+      fireEvent.click(offButton);
     });
 
     expect(mocks.updateSettings).toHaveBeenCalledWith({
@@ -97,15 +101,13 @@ describe("TimelineChoice", () => {
     expect(handleNextSlide).toHaveBeenCalledTimes(1);
   });
 
-  it("lets a low-tier user override the recommendation and keep the timeline on", async () => {
+  it("lets a low-tier user override the recommendation and turn the timeline on", async () => {
     mocks.settings.deviceTier = "low";
     const handleNextSlide = vi.fn();
     render(<TimelineChoice handleNextSlide={handleNextSlide} />);
 
-    fireEvent.click(screen.getByRole("switch", { name: /keep timeline on/i }));
-
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /continue/i }));
+      fireEvent.click(screen.getByRole("button", { name: /timeline on/i }));
     });
 
     expect(mocks.updateSettings).toHaveBeenCalledWith({
@@ -132,7 +134,7 @@ describe("TimelineChoice", () => {
     await waitFor(() => expect(handleNextSlide).toHaveBeenCalledTimes(1));
     expect(mocks.updateSettings).not.toHaveBeenCalled();
     expect(
-      screen.queryByRole("switch", { name: /keep timeline on/i }),
+      screen.queryByRole("button", { name: /timeline on/i }),
     ).not.toBeInTheDocument();
   });
 
@@ -143,9 +145,26 @@ describe("TimelineChoice", () => {
     render(<TimelineChoice handleNextSlide={handleNextSlide} />);
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /continue/i }));
+      fireEvent.click(screen.getByRole("button", { name: /timeline on/i }));
     });
 
+    expect(handleNextSlide).toHaveBeenCalledTimes(1);
+  });
+
+  it("only persists the first choice when both buttons are clicked quickly", async () => {
+    mocks.settings.deviceTier = "high";
+    const handleNextSlide = vi.fn();
+    render(<TimelineChoice handleNextSlide={handleNextSlide} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /timeline on/i }));
+      fireEvent.click(screen.getByRole("button", { name: /keep it off/i }));
+    });
+
+    expect(mocks.updateSettings).toHaveBeenCalledTimes(1);
+    expect(mocks.updateSettings).toHaveBeenCalledWith({
+      disableTimeline: false,
+    });
     expect(handleNextSlide).toHaveBeenCalledTimes(1);
   });
 });
