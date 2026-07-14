@@ -220,7 +220,7 @@ fn should_skip_onboarding() -> bool {
 }
 
 /// Flag passed by tauri-plugin-autostart when the OS launches us at login.
-/// Used to skip Home / shortcut reminder so login starts stay in the tray.
+/// Used to skip Home so login starts stay in the tray.
 const AUTOSTART_ARG: &str = "--autostart";
 
 /// True when this process was started by the OS login/autostart entry
@@ -1387,7 +1387,6 @@ async fn main() {
             if store.show_shortcut_overlay
                 && onboarding_store.is_completed
                 && !app_ui_hidden
-                && !from_autostart
                 && !store.recording.disable_timeline
             {
                 let shortcut = store.show_screenpipe_shortcut.clone();
