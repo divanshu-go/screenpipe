@@ -4,14 +4,13 @@
 
 import "@testing-library/jest-dom/vitest";
 import React from "react";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import TimelineChoice from "./timeline-choice";
 
 const mocks = vi.hoisted(() => ({
   updateSettings: vi.fn().mockResolvedValue(undefined),
   settings: { deviceTier: undefined as string | null | undefined },
-  isSettingLocked: vi.fn().mockReturnValue(false),
   capture: vi.fn(),
 }));
 
@@ -19,12 +18,6 @@ vi.mock("@/lib/hooks/use-settings", () => ({
   useSettings: () => ({
     settings: mocks.settings,
     updateSettings: mocks.updateSettings,
-  }),
-}));
-
-vi.mock("@/lib/hooks/use-enterprise-policy", () => ({
-  useEnterprisePolicy: () => ({
-    isSettingLocked: mocks.isSettingLocked,
   }),
 }));
 
@@ -39,7 +32,6 @@ describe("TimelineChoice", () => {
     vi.clearAllMocks();
     mocks.settings.deviceTier = undefined;
     mocks.updateSettings.mockResolvedValue(undefined);
-    mocks.isSettingLocked.mockReturnValue(false);
   });
 
   it("recommends on for high tier and persists disableTimeline: false when chosen", async () => {
@@ -122,20 +114,6 @@ describe("TimelineChoice", () => {
       }),
     );
     expect(handleNextSlide).toHaveBeenCalledTimes(1);
-  });
-
-  it("auto-advances without persisting when disableTimeline is enterprise-managed", async () => {
-    mocks.isSettingLocked.mockImplementation(
-      (key: string) => key === "disableTimeline",
-    );
-    const handleNextSlide = vi.fn();
-    render(<TimelineChoice handleNextSlide={handleNextSlide} />);
-
-    await waitFor(() => expect(handleNextSlide).toHaveBeenCalledTimes(1));
-    expect(mocks.updateSettings).not.toHaveBeenCalled();
-    expect(
-      screen.queryByRole("button", { name: /timeline on/i }),
-    ).not.toBeInTheDocument();
   });
 
   it("still advances when updateSettings fails", async () => {

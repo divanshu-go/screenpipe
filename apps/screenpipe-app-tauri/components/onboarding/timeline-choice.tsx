@@ -4,12 +4,11 @@
 
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { Camera, Check, Cpu, HardDrive } from "lucide-react";
 import posthog from "posthog-js";
 import { useSettings } from "@/lib/hooks/use-settings";
-import { useEnterprisePolicy } from "@/lib/hooks/use-enterprise-policy";
 
 interface TimelineChoiceProps {
   handleNextSlide: () => void;
@@ -26,7 +25,8 @@ const isLowTier = (tier: string | null | undefined) =>
 //
 // New users have never seen a screen timeline, so we show one instead of
 // describing it: a mock screen whose content changes as a playhead scrubs
-// backward through the day. Pure CSS/JS — no video asset, no real frames.
+// backward through the day. Pure CSS keyframes — no video asset, no timers,
+// no re-renders; the whole loop runs on the compositor.
 
 // Each "frame" is a skeleton layout of a different app the user was in.
 const MOCK_FRAMES = [
@@ -36,33 +36,34 @@ const MOCK_FRAMES = [
   { label: "-1h · slack", bars: [40, 75, 52, 85, 48] },
 ];
 
-const PREVIEW_TICK_MS = 60;
-const PREVIEW_LOOP_MS = 7200;
+const FRAME_MS = 1800;
+const LOOP_MS = FRAME_MS * MOCK_FRAMES.length;
+
+// Each frame layer is visible for its quarter of the loop, with a short
+// crossfade at the edges; staggered via negative animation-delay.
+const PREVIEW_CSS = `
+@keyframes ob-tl-frame {
+  0% { opacity: 0; }
+  4%, 21% { opacity: 1; }
+  27%, 100% { opacity: 0; }
+}
+@keyframes ob-tl-playhead {
+  from { left: 100%; }
+  to { left: 0%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ob-tl-frame, .ob-tl-playhead { animation: none !important; }
+  .ob-tl-frame-0 { opacity: 1 !important; }
+}
+`;
 
 function TimelinePreview() {
-  // progress runs 0 → 1 then loops; the playhead sweeps right → left so the
-  // preview reads as "scrubbing back in time".
-  const [progress, setProgress] = useState(0);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setProgress((p) => (p + PREVIEW_TICK_MS / PREVIEW_LOOP_MS) % 1);
-    }, PREVIEW_TICK_MS);
-    return () => clearInterval(interval);
-  }, []);
-
-  const frameIdx = Math.min(
-    MOCK_FRAMES.length - 1,
-    Math.floor(progress * MOCK_FRAMES.length),
-  );
-  const frame = MOCK_FRAMES[frameIdx];
-  const playheadPct = (1 - progress) * 100;
-
   return (
     <div
       className="w-full border border-border/50 overflow-hidden select-none"
       aria-hidden="true"
     >
+      <style>{PREVIEW_CSS}</style>
       {/* Mock screen */}
       <div className="relative bg-foreground/[0.03] px-4 pt-3 pb-2 h-[104px]">
         {/* window chrome dots */}
@@ -71,26 +72,31 @@ function TimelinePreview() {
           <div className="w-1.5 h-1.5 rounded-full bg-foreground/20" />
           <div className="w-1.5 h-1.5 rounded-full bg-foreground/20" />
         </div>
-        {/* skeleton content, crossfades between "apps" */}
-        <motion.div
-          key={frameIdx}
-          className="flex flex-col gap-1.5"
-          initial={{ opacity: 0.3 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: 0.35 }}
-        >
-          {frame.bars.map((w, i) => (
-            <div
-              key={i}
-              className="h-1.5 bg-foreground/15"
-              style={{ width: `${w}%` }}
-            />
-          ))}
-        </motion.div>
-        {/* floating time chip, like the real rewind overlay */}
-        <div className="absolute top-2 right-2 px-2 py-0.5 border border-border/60 bg-background/80 font-mono text-[9px] text-muted-foreground">
-          {frame.label}
-        </div>
+        {/* skeleton content: one stacked layer per "app", crossfaded by CSS */}
+        {MOCK_FRAMES.map((frame, i) => (
+          <div
+            key={i}
+            className={`ob-tl-frame ${i === 0 ? "ob-tl-frame-0" : ""} absolute inset-x-4 top-8 opacity-0`}
+            style={{
+              animation: `ob-tl-frame ${LOOP_MS}ms linear infinite`,
+              animationDelay: `${i * FRAME_MS - LOOP_MS}ms`,
+            }}
+          >
+            <div className="flex flex-col gap-1.5">
+              {frame.bars.map((w, j) => (
+                <div
+                  key={j}
+                  className="h-1.5 bg-foreground/15"
+                  style={{ width: `${w}%` }}
+                />
+              ))}
+            </div>
+            {/* floating time chip, like the real rewind overlay */}
+            <div className="absolute -top-6 right-0 px-2 py-0.5 border border-border/60 bg-background/80 font-mono text-[9px] text-muted-foreground">
+              {frame.label}
+            </div>
+          </div>
+        ))}
       </div>
 
       {/* Scrubber bar */}
@@ -104,10 +110,10 @@ function TimelinePreview() {
             />
           ))}
         </div>
-        {/* playhead */}
+        {/* playhead sweeps right → left: scrubbing back in time */}
         <div
-          className="absolute top-0 bottom-0 w-px bg-foreground"
-          style={{ left: `${playheadPct}%` }}
+          className="ob-tl-playhead absolute top-0 bottom-0 w-px bg-foreground"
+          style={{ animation: `ob-tl-playhead ${LOOP_MS}ms linear infinite` }}
         >
           <div className="absolute -top-0.5 -translate-x-1/2 w-1.5 h-1.5 bg-foreground rounded-full" />
         </div>
@@ -134,10 +140,12 @@ const COSTS = [
 ];
 
 // ─── Main ────────────────────────────────────────────────────────────────────
+//
+// Pure UI: no effects. When disableTimeline is enterprise-policy-managed the
+// slide sequencer in app/onboarding/page.tsx leaves this slide out entirely.
 
 export default function TimelineChoice({ handleNextSlide }: TimelineChoiceProps) {
   const { settings, updateSettings } = useSettings();
-  const { isSettingLocked } = useEnterprisePolicy();
   const mountTimeRef = useRef(Date.now());
   const hasAdvanced = useRef(false);
   const [saving, setSaving] = useState(false);
@@ -145,18 +153,6 @@ export default function TimelineChoice({ handleNextSlide }: TimelineChoiceProps)
   const lowTier = isLowTier(settings.deviceTier);
   // Recommendation: keep the timeline on unless the device is low tier.
   const recommendEnabled = !lowTier;
-
-  // Enterprise policy manages disableTimeline — nothing to choose, skip the
-  // slide without touching the setting.
-  const locked = isSettingLocked("disableTimeline");
-  useEffect(() => {
-    if (locked && !hasAdvanced.current) {
-      hasAdvanced.current = true;
-      handleNextSlide();
-    }
-  }, [locked, handleNextSlide]);
-
-  if (locked) return null;
 
   const choose = async (enabled: boolean) => {
     // hasAdvanced is a ref, not state: state updates don't land between two

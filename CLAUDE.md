@@ -26,6 +26,15 @@ Use `#` for Python, `//` for Rust/TS/JS/Swift. Keep it as the first comment in t
 - Use `bun` for JS/TS (not npm or pnpm)
 - Use `cargo` for Rust
 
+## React effects
+Don't reach for a raw `useEffect` before checking for a simpler primitive (see the `refactor(effects)` series, e.g. #4939, #5021, #5023, #4889):
+- Timers/pollers → shared `useInterval`; DOM listeners → `useEventListener`; Tauri events → `useTauriEvent` (all in `lib/hooks/`)
+- Derived state → compute in render or `useMemo`, never setState-in-effect
+- Ref mirrors of props/state → assign during render, not in an effect
+- Purely decorative time-based visuals → CSS animations, not tickers
+- Slide/flow control → owned by the parent sequencer, not child effects that navigate
+Raw `useEffect` is fine for genuine external synchronization (subscriptions, imperative APIs, one-shot async on mount) — keep it small and say what it syncs with.
+
 ## Testing
 
 Always test your work. Verification and reviewing pull requests is the hardest thing to do for us, so you need to always make sure to do as much as possible end-to-end testing. If necessary, computer use testing and be very rigorous in your testing, and add as many visuals as possible, like screenshots or video recording, in the body of your pull request. 

@@ -14,6 +14,7 @@ import ConnectApps from "@/components/onboarding/connect-apps";
 import PickPipe from "@/components/onboarding/pick-pipe";
 import { useOnboarding } from "@/lib/hooks/use-onboarding";
 import { useIsEnterpriseBuild } from "@/lib/hooks/use-is-enterprise-build";
+import { useEnterprisePolicy } from "@/lib/hooks/use-enterprise-policy";
 import posthog from "posthog-js";
 import { commands } from "@/lib/utils/tauri";
 
@@ -51,6 +52,10 @@ export default function OnboardingPage() {
   const [isTransitioning, setIsTransitioning] = useState(false);
   const { onboardingData, isLoading } = useOnboarding();
   const isEnterprise = useIsEnterpriseBuild();
+  const { isSettingLocked } = useEnterprisePolicy();
+  // When enterprise policy manages disableTimeline there is nothing for the
+  // user to choose — the timeline slide is left out of the sequence entirely.
+  const timelineLocked = isSettingLocked("disableTimeline");
 
   // Enterprise builds skip the login slide
   useEffect(() => {
@@ -72,7 +77,8 @@ export default function OnboardingPage() {
         const stepMap: Record<string, SlideKey> = {
           login: "login",
           permissions: "permissions",
-          timeline: "timeline",
+          // A resume saved at "timeline" skips ahead when policy manages it
+          timeline: timelineLocked ? "engine" : "timeline",
           engine: "engine",
           "connect-apps": "connect-apps",
           integrations: "connect-apps",
@@ -123,14 +129,16 @@ export default function OnboardingPage() {
     setIsTransitioning(true);
 
     posthog.capture(`onboarding_${currentSlide}_completed`);
-    const stepOrder: SlideKey[] = [
-      "login",
-      "permissions",
-      "timeline",
-      "engine",
-      "connect-apps",
-      "pipe",
-    ];
+    const stepOrder: SlideKey[] = (
+      [
+        "login",
+        "permissions",
+        "timeline",
+        "engine",
+        "connect-apps",
+        "pipe",
+      ] as SlideKey[]
+    ).filter((s) => s !== "timeline" || !timelineLocked);
     const currentIdx = stepOrder.indexOf(currentSlide);
     posthog.capture("onboarding_step_reached", {
       step_name: `${currentSlide}_completed`,
