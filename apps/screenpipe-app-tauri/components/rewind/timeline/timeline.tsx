@@ -4,7 +4,7 @@
 import { StreamTimeSeriesResponse, TimeRange } from "@/components/rewind/timeline";
 import { useTimelineSelection } from "@/lib/hooks/use-timeline-selection";
 import { getStore, type ChatConversation } from "@/lib/hooks/use-settings";
-import { isAfter, subDays, addDays, startOfDay, format, formatDistanceToNow } from "date-fns";
+import { isAfter, isSameDay, subDays, addDays, startOfDay, format, formatDistanceToNow } from "date-fns";
 import { motion } from "framer-motion";
 import { ZoomIn, ZoomOut, Mic, Monitor, AppWindow, Globe, Hash, RotateCcw, Phone, PanelBottomClose, PanelBottomOpen, Clock } from "lucide-react";
 import type { Meeting } from "@/lib/hooks/use-meetings";
@@ -21,7 +21,11 @@ import { TimelineTagToolbar } from "./timeline-tag-toolbar";
 import { extractDomain, FaviconImg } from "./favicon-utils";
 import { localFetch, getApiBaseUrl, appendAuthToken } from "@/lib/api";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
-import { edgePrefetchPlan } from "@/lib/hooks/timeline-edge-prefetch";
+import {
+	edgePrefetchPlan,
+	shouldSparseLiveTipBackfill,
+	SPARSE_LIVE_TIP_FILL_RATIO,
+} from "@/lib/hooks/timeline-edge-prefetch";
 import { visibleFrameWindow } from "@/lib/hooks/timeline-visible-window";
 import { scrollDeltaForPlayhead } from "@/lib/hooks/timeline-playhead-scroll";
 
@@ -548,7 +552,7 @@ export const TimelineSlider = ({
 	onFrameChange,
 	fetchNextDayData,
 	startAndEndDates,
-	currentDate: _currentDate,
+	currentDate,
 	onSelectionChange,
 	newFramesCount = 0,
 	lastFlushTimestamp = 0,
@@ -602,6 +606,10 @@ export const TimelineSlider = ({
 	const olderPrefetchRetryUsedRef = useRef(false);
 	const newerPrefetchRetryUsedRef = useRef(false);
 	const [prefetchRetryTick, setPrefetchRetryTick] = useState(0);
+	// Sparse today live tip: cascade older days until ~half viewport filled.
+	const sparseBackfillArmedCountRef = useRef(0);
+	const sparseBackfillExhaustedRef = useRef(false);
+	const sparseBackfillRetryUsedRef = useRef(false);
 
 	// Adjacent-day prefetch in flight per strip edge (ISO of the day, or null).
 	// Set by fetchNextDayData; may clear on first frame flush while the request
@@ -1128,6 +1136,10 @@ export const TimelineSlider = ({
 	// toward it. Absolute ends (index 0 / last) may arm even with delta 0
 	// because further scroll into the void cannot change currentIndex.
 	// edgePrefetchBump re-runs this when wheel is clamped into the void.
+	//
+	// Sparse today live tip: edge prefetch alone never loads older days while
+	// parked at index 0 (newer end). If today's content is under ~half the
+	// viewport, cascade fetchNextDayData(backward) until filled or history ends.
 	useEffect(() => {
 		if (pendingDateSwap || !frames || frames.length === 0) return;
 
@@ -1142,6 +1154,35 @@ export const TimelineSlider = ({
 		const frameCount = frames.length;
 		const atOlderAbsoluteEnd = currentIndex >= frameCount - 1;
 		const atNewerAbsoluteEnd = currentIndex === 0;
+		const viewingToday = isSameDay(currentDate, new Date());
+
+		const sparseWantsOlder = shouldSparseLiveTipBackfill({
+			viewingToday,
+			currentIndex,
+			pendingDateSwap,
+			frameCount,
+			slotWidth,
+			viewportWidth: stripViewportWidth,
+			backwardPrefetchLoading: !!stripPrefetchLoading.backward,
+			exhausted: sparseBackfillExhaustedRef.current,
+			armedDayCount: sparseBackfillArmedCountRef.current,
+		});
+
+		if (!sparseWantsOlder) {
+			if (!viewingToday || currentIndex !== 0) {
+				sparseBackfillArmedCountRef.current = 0;
+				sparseBackfillExhaustedRef.current = false;
+				sparseBackfillRetryUsedRef.current = false;
+			} else if (
+				frameCount * slotWidth >=
+				stripViewportWidth * SPARSE_LIVE_TIP_FILL_RATIO
+			) {
+				// Filled enough — clear session counters for a later sparse tip.
+				sparseBackfillArmedCountRef.current = 0;
+				sparseBackfillExhaustedRef.current = false;
+				sparseBackfillRetryUsedRef.current = false;
+			}
+		}
 
 		if (!atOlderAbsoluteEnd) {
 			olderPrefetchRetryUsedRef.current = false;
@@ -1168,12 +1209,14 @@ export const TimelineSlider = ({
 		prevIndexForPrefetchRef.current = currentIndex;
 
 		const throttleMs = 1000;
+		const wantOlder = prefetchOlder || sparseWantsOlder;
 
-		if (prefetchOlder && !stripPrefetchLoading.backward) {
+		if (wantOlder && !stripPrefetchLoading.backward) {
 			const now = new Date();
-			const canFetch =
-				!lastFetchRef.current ||
-				now.getTime() - lastFetchRef.current.getTime() > throttleMs;
+			const sinceLast = lastFetchRef.current
+				? now.getTime() - lastFetchRef.current.getTime()
+				: Number.POSITIVE_INFINITY;
+			const canFetch = sinceLast > throttleMs;
 			if (canFetch) {
 				const oldestDay = startOfDay(
 					new Date(frames[frames.length - 1].timestamp),
@@ -1184,14 +1227,36 @@ export const TimelineSlider = ({
 					void fetchNextDayData(target, "backward").then((armed) => {
 						if (armed) {
 							lastFetchRef.current = new Date();
+							if (sparseWantsOlder) {
+								sparseBackfillArmedCountRef.current += 1;
+								sparseBackfillRetryUsedRef.current = false;
+							}
 							if (olderPrefetchRetryRef.current) {
 								clearTimeout(olderPrefetchRetryRef.current);
 								olderPrefetchRetryRef.current = null;
 							}
 							return;
 						}
+						if (cancelled) return;
+						if (sparseWantsOlder) {
+							// No older day (new user / gap past findNearest) or
+							// already probed — stop cascading. One retry covers
+							// transient socket-not-ready before exhausting.
+							if (!sparseBackfillRetryUsedRef.current) {
+								sparseBackfillRetryUsedRef.current = true;
+								if (olderPrefetchRetryRef.current) {
+									clearTimeout(olderPrefetchRetryRef.current);
+								}
+								olderPrefetchRetryRef.current = setTimeout(() => {
+									olderPrefetchRetryRef.current = null;
+									setPrefetchRetryTick((t) => t + 1);
+								}, 300);
+								return;
+							}
+							sparseBackfillExhaustedRef.current = true;
+							return;
+						}
 						if (
-							cancelled ||
 							!atOlderAbsoluteEnd ||
 							olderPrefetchRetryUsedRef.current
 						) {
@@ -1206,7 +1271,20 @@ export const TimelineSlider = ({
 							setPrefetchRetryTick((t) => t + 1);
 						}, 300);
 					});
+				} else if (sparseWantsOlder) {
+					// Past the reachable start — nothing older to load.
+					sparseBackfillExhaustedRef.current = true;
 				}
+			} else if (sparseWantsOlder) {
+				// Pace cascade across the shared 1s throttle without stalling.
+				const wait = Math.max(50, throttleMs - sinceLast + 10);
+				if (olderPrefetchRetryRef.current) {
+					clearTimeout(olderPrefetchRetryRef.current);
+				}
+				olderPrefetchRetryRef.current = setTimeout(() => {
+					olderPrefetchRetryRef.current = null;
+					setPrefetchRetryTick((t) => t + 1);
+				}, wait);
 			}
 		}
 
@@ -1254,6 +1332,7 @@ export const TimelineSlider = ({
 		};
 	}, [
 		currentIndex,
+		currentDate,
 		frames,
 		fetchNextDayData,
 		pendingDateSwap,
@@ -1333,12 +1412,20 @@ export const TimelineSlider = ({
 			playheadViewportXRef.current != null;
 		const isJump =
 			justLeftSwap || widthChanged || step > SMOOTH_SCROLL_MAX_STEP;
+		// Index 0 (live tip or historical day's newest) must center — the
+		// margin path parks near containerRight for short reverse strips.
+		// preferCenter alone is enough in the helper (no isJump required).
+		const preferCenter = currentIndex === 0;
 		const smooth =
 			!isJump &&
+			!preferCenter &&
 			!preserveViewportX &&
 			!isWheelNavigating &&
 			step >= 1 &&
 			step <= SMOOTH_SCROLL_MAX_STEP;
+		// Date swap + live tip: retry until the bar is painted and scrollWidth
+		// can absorb the center delta (early layout often clamps scrollLeft).
+		const needsCenterSettle = justLeftSwap || preferCenter;
 
 		const measureAndScroll = () => {
 			const currentTimestamp = frames[currentIndex]?.timestamp;
@@ -1349,6 +1436,7 @@ export const TimelineSlider = ({
 			if (!currentElement) return false;
 
 			const cRect = container.getBoundingClientRect();
+			if (cRect.width < 2) return false;
 			const eRect = currentElement.getBoundingClientRect();
 			const playheadX = eRect.left + eRect.width / 2;
 			const delta = scrollDeltaForPlayhead({
@@ -1356,6 +1444,7 @@ export const TimelineSlider = ({
 				step,
 				isWheelNavigating,
 				isJump,
+				preferCenter,
 				playheadX,
 				anchorViewportX: playheadViewportXRef.current as number,
 				containerLeft: cRect.left,
@@ -1372,13 +1461,20 @@ export const TimelineSlider = ({
 			}
 
 			const after = currentElement.getBoundingClientRect();
-			playheadViewportXRef.current = after.left + after.width / 2;
+			const afterX = after.left + after.width / 2;
+			playheadViewportXRef.current = afterX;
 			lastScrolledIndexRef.current = currentIndex;
+
+			// preferCenter: keep retrying until scrollWidth allows a real center
+			// (clamped no-op leaves the short reverse strip right-biased).
+			if (preferCenter) {
+				const centerX = cRect.left + cRect.width / 2;
+				if (Math.abs(afterX - centerX) > 8) return false;
+			}
 			return true;
 		};
 
-		if (justLeftSwap) {
-			// Content replaced; re-measure to center the landing frame.
+		if (needsCenterSettle) {
 			let raf = 0;
 			let tries = 0;
 			const run = () => {
@@ -1999,6 +2095,7 @@ export const TimelineSlider = ({
 					className={cn(
 						// LTR scrollport + flex-row-reverse (oldest left / newest right).
 						// px-[50vw] keeps the playhead centerable at true content ends.
+						// Do not reintroduce sticky right-0 (right-packs the live tip).
 						"whitespace-nowrap flex flex-row-reverse flex-nowrap w-max justify-center px-[50vw] h-24 scrollbar-hide relative",
 						pendingDateSwap && "invisible pointer-events-none",
 					)}

@@ -103,3 +103,59 @@ export function shouldProbeEdgePrefetchDay(opts: {
 	if (opts.exactDayRequestSent) return false;
 	return true;
 }
+
+/**
+ * Live tip (index 0) while viewing today: if today's strip is visually sparse,
+ * keep loading older days until content fills ~half the viewport left of the
+ * centered playhead.
+ *
+ * Edge prefetch alone does not do this — it only arms older days near the
+ * older absolute edge (or while scrolling toward it). Parked at the live tip,
+ * currentIndex stays 0, so a short today strip never triggers older prefetch.
+ *
+ * Cap attempts in the caller; stop when fetchNextDayData finds no history
+ * (brand-new users with an empty past must not loop).
+ */
+export const SPARSE_LIVE_TIP_FILL_RATIO = 0.5;
+/** Max successful older-day arms from one sparse live-tip session. */
+export const SPARSE_LIVE_TIP_MAX_DAYS = 14;
+
+export function shouldSparseLiveTipBackfill(opts: {
+	viewingToday: boolean;
+	currentIndex: number;
+	pendingDateSwap: boolean;
+	frameCount: number;
+	slotWidth: number;
+	viewportWidth: number;
+	backwardPrefetchLoading: boolean;
+	/** Caller set when a probe found no older day / hit max arms. */
+	exhausted: boolean;
+	armedDayCount: number;
+	maxDays?: number;
+	fillRatio?: number;
+}): boolean {
+	const {
+		viewingToday,
+		currentIndex,
+		pendingDateSwap,
+		frameCount,
+		slotWidth,
+		viewportWidth,
+		backwardPrefetchLoading,
+		exhausted,
+		armedDayCount,
+		maxDays = SPARSE_LIVE_TIP_MAX_DAYS,
+		fillRatio = SPARSE_LIVE_TIP_FILL_RATIO,
+	} = opts;
+
+	if (!viewingToday) return false;
+	if (currentIndex !== 0) return false;
+	if (pendingDateSwap) return false;
+	if (exhausted) return false;
+	if (backwardPrefetchLoading) return false;
+	if (frameCount <= 0 || slotWidth <= 0 || viewportWidth <= 0) return false;
+	if (armedDayCount >= maxDays) return false;
+
+	const contentWidth = frameCount * slotWidth;
+	return contentWidth < viewportWidth * fillRatio;
+}

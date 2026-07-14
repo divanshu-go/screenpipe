@@ -12,6 +12,8 @@ import {
 	framesIncludeLocalDay,
 	hasExactDayRequest,
 	shouldProbeEdgePrefetchDay,
+	shouldSparseLiveTipBackfill,
+	SPARSE_LIVE_TIP_MAX_DAYS,
 } from "../timeline-edge-prefetch";
 
 describe("edgePrefetchPlan", () => {
@@ -250,6 +252,70 @@ describe("exactDayRequestKey", () => {
 		const day = startOfDay(new Date(2026, 6, 1));
 		expect(exactDayRequestKey(day)).toBe(
 			`${day.toISOString()}_${endOfDay(day).toISOString()}`,
+		);
+	});
+});
+
+describe("shouldSparseLiveTipBackfill", () => {
+	const base = {
+		viewingToday: true,
+		currentIndex: 0,
+		pendingDateSwap: false,
+		frameCount: 40,
+		slotWidth: 4,
+		viewportWidth: 1200,
+		backwardPrefetchLoading: false,
+		exhausted: false,
+		armedDayCount: 0,
+	};
+
+	it("arms when today live tip content is under half viewport", () => {
+		// 40 * 4 = 160 < 600
+		expect(shouldSparseLiveTipBackfill(base)).toBe(true);
+	});
+
+	it("stops once content reaches half viewport", () => {
+		expect(
+			shouldSparseLiveTipBackfill({
+				...base,
+				frameCount: 200, // 800 >= 600
+			}),
+		).toBe(false);
+	});
+
+	it("does not arm mid-strip or on historical days", () => {
+		expect(
+			shouldSparseLiveTipBackfill({ ...base, currentIndex: 3 }),
+		).toBe(false);
+		expect(
+			shouldSparseLiveTipBackfill({ ...base, viewingToday: false }),
+		).toBe(false);
+	});
+
+	it("respects swap, in-flight, exhausted, and max-day guards", () => {
+		expect(
+			shouldSparseLiveTipBackfill({ ...base, pendingDateSwap: true }),
+		).toBe(false);
+		expect(
+			shouldSparseLiveTipBackfill({
+				...base,
+				backwardPrefetchLoading: true,
+			}),
+		).toBe(false);
+		expect(
+			shouldSparseLiveTipBackfill({ ...base, exhausted: true }),
+		).toBe(false);
+		expect(
+			shouldSparseLiveTipBackfill({
+				...base,
+				armedDayCount: SPARSE_LIVE_TIP_MAX_DAYS,
+			}),
+		).toBe(false);
+	});
+
+	it("does not arm an empty strip (new-user zero frames)", () => {
+		expect(shouldSparseLiveTipBackfill({ ...base, frameCount: 0 })).toBe(
+			false,
 		);
 	});
 });
