@@ -31,6 +31,11 @@ const { mocks, slideStub } = vi.hoisted(() => {
       showWindow: vi.fn().mockResolvedValue(undefined),
       loadOnboardingStatus: vi.fn().mockResolvedValue(undefined),
       capture: vi.fn(),
+      onboardingData: {
+        isCompleted: false,
+        completedAt: null as string | null,
+        currentStep: null as string | null,
+      },
     },
   };
 });
@@ -55,15 +60,13 @@ vi.mock("@/components/onboarding/pick-pipe", () => ({
 }));
 
 vi.mock("@/lib/hooks/use-onboarding", () => {
-  const onboardingData = {
-    isCompleted: false,
-    completedAt: null,
-    currentStep: null,
-  };
-  const useOnboarding = () => ({ onboardingData, isLoading: false });
+  const useOnboarding = () => ({
+    onboardingData: mocks.onboardingData,
+    isLoading: false,
+  });
   useOnboarding.getState = () => ({
     loadOnboardingStatus: mocks.loadOnboardingStatus,
-    onboardingData,
+    onboardingData: mocks.onboardingData,
   });
   return { useOnboarding };
 });
@@ -113,6 +116,9 @@ describe("OnboardingPage slide sequencing", () => {
     vi.clearAllMocks();
     mocks.isSettingLocked.mockReturnValue(false);
     mocks.setOnboardingStep.mockResolvedValue(undefined);
+    mocks.loadOnboardingStatus.mockResolvedValue(undefined);
+    mocks.onboardingData.isCompleted = false;
+    mocks.onboardingData.currentStep = null;
   });
 
   it("shows the timeline slide between permissions and engine", async () => {
@@ -148,5 +154,41 @@ describe("OnboardingPage slide sequencing", () => {
       screen.queryByRole("button", { name: "timeline-slide" }),
     ).not.toBeInTheDocument();
     expect(mocks.setOnboardingStep).toHaveBeenLastCalledWith("engine");
+  });
+
+  it("renders no slide until the saved step is restored, then resumes it directly", async () => {
+    // Regression: with a saved step past login, the login slide used to mount
+    // during restore and its auto-advance later clobbered the resumed slide
+    // back to "permissions" (timeline flash → permissions → timeline again).
+    let resolveRestore!: () => void;
+    mocks.loadOnboardingStatus.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveRestore = () => {
+            mocks.onboardingData.currentStep = "timeline";
+            resolve();
+          };
+        }),
+    );
+
+    await act(async () => {
+      render(<OnboardingPage />);
+    });
+
+    // restore still pending: spinner only, login must NOT mount
+    expect(
+      screen.queryByRole("button", { name: "login-slide" }),
+    ).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveRestore();
+    });
+
+    expect(
+      screen.getByRole("button", { name: "timeline-slide" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "login-slide" }),
+    ).not.toBeInTheDocument();
   });
 });

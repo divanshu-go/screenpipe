@@ -4,7 +4,7 @@
 
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useToast } from "@/components/ui/use-toast";
 import OnboardingLogin from "@/components/onboarding/login-gate";
 import PermissionsStep from "@/components/onboarding/permissions-step";
@@ -48,8 +48,16 @@ const setWindowSizeForSlide = async (slide: SlideKey) => {
 export default function OnboardingPage() {
   const { toast } = useToast();
   const [currentSlide, setCurrentSlide] = useState<SlideKey>("login");
+  // No slide renders until the saved step is restored: a slide that mounts
+  // before restore completes (e.g. login-gate when already signed in) can
+  // schedule an auto-advance whose stale closure later clobbers the restored
+  // slide back to the start of the flow.
+  const [restoring, setRestoring] = useState(true);
   const [isVisible, setIsVisible] = useState(true);
   const [isTransitioning, setIsTransitioning] = useState(false);
+  // Latest slide for callbacks that outlive their render (see handleNextSlide)
+  const currentSlideRef = useRef(currentSlide);
+  currentSlideRef.current = currentSlide;
   const { onboardingData, isLoading } = useOnboarding();
   const isEnterprise = useIsEnterpriseBuild();
   const { isSettingLocked } = useEnterprisePolicy();
@@ -59,10 +67,10 @@ export default function OnboardingPage() {
 
   // Enterprise builds skip the login slide
   useEffect(() => {
-    if (isEnterprise && currentSlide === "login") {
+    if (!restoring && isEnterprise && currentSlide === "login") {
       setCurrentSlide("permissions");
     }
-  }, [isEnterprise, currentSlide]);
+  }, [restoring, isEnterprise, currentSlide]);
 
   // Restore saved step on mount
   useEffect(() => {
@@ -100,15 +108,18 @@ export default function OnboardingPage() {
         }
       }
     };
-    init();
+    init().finally(() => setRestoring(false));
   }, []);
 
-  // Set window size + track view when slide changes
+  // Set window size + track view when slide changes. Skipped while restoring
+  // so the initial "login" state doesn't emit a spurious view event or resize
+  // the window before the real slide is known.
   useEffect(() => {
+    if (restoring) return;
     setWindowSizeForSlide(currentSlide);
     setIsVisible(true);
     posthog.capture(`onboarding_${currentSlide}_viewed`);
-  }, [currentSlide]);
+  }, [currentSlide, restoring]);
 
   // Redirect if already completed
   useEffect(() => {
@@ -124,8 +135,11 @@ export default function OnboardingPage() {
     // nothing needed for error state currently
   }, [toast]);
 
-  const handleNextSlide = async () => {
-    if (isTransitioning) return;
+  const handleNextSlide = async (from: SlideKey) => {
+    // A slide may only advance the flow while it IS the current slide.
+    // Guards against delayed callbacks from unmounted slides (login-gate's
+    // 500ms auto-advance timer) clobbering a restored/later slide.
+    if (isTransitioning || from !== currentSlideRef.current) return;
     setIsTransitioning(true);
 
     posthog.capture(`onboarding_${currentSlide}_completed`);
@@ -160,7 +174,7 @@ export default function OnboardingPage() {
     }, 300);
   };
 
-  if (isLoading) {
+  if (isLoading || restoring) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-background">
         <div className="w-6 h-6 border border-foreground border-t-transparent rounded-full animate-spin" />
@@ -181,19 +195,25 @@ export default function OnboardingPage() {
           }`}
         >
           {currentSlide === "login" && (
-            <OnboardingLogin handleNextSlide={handleNextSlide} />
+            <OnboardingLogin handleNextSlide={() => handleNextSlide("login")} />
           )}
           {currentSlide === "permissions" && (
-            <PermissionsStep handleNextSlide={handleNextSlide} />
+            <PermissionsStep
+              handleNextSlide={() => handleNextSlide("permissions")}
+            />
           )}
           {currentSlide === "timeline" && (
-            <TimelineChoice handleNextSlide={handleNextSlide} />
+            <TimelineChoice
+              handleNextSlide={() => handleNextSlide("timeline")}
+            />
           )}
           {currentSlide === "engine" && (
-            <EngineStartup handleNextSlide={handleNextSlide} />
+            <EngineStartup handleNextSlide={() => handleNextSlide("engine")} />
           )}
           {currentSlide === "connect-apps" && (
-            <ConnectApps handleNextSlide={handleNextSlide} />
+            <ConnectApps
+              handleNextSlide={() => handleNextSlide("connect-apps")}
+            />
           )}
           {currentSlide === "pipe" && <PickPipe />}
         </div>
