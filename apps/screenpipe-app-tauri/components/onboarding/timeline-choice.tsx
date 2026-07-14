@@ -188,6 +188,11 @@ export default function TimelineChoice({ handleNextSlide }: TimelineChoiceProps)
       recommended for your device
     </span>
   );
+  const subtext = (text: string) => (
+    <span className="font-mono text-[9px] normal-case tracking-normal opacity-70">
+      {text}
+    </span>
+  );
 
   return (
     <motion.div
@@ -278,7 +283,9 @@ export default function TimelineChoice({ handleNextSlide }: TimelineChoiceProps)
           }`}
         >
           <span>timeline on</span>
-          {recommendEnabled && recommendedTag}
+          {recommendEnabled
+            ? recommendedTag
+            : subtext("full visual rewind of your screen")}
         </button>
         <button
           onClick={() => choose(false)}
@@ -290,7 +297,9 @@ export default function TimelineChoice({ handleNextSlide }: TimelineChoiceProps)
           }`}
         >
           <span>keep it off</span>
-          {!recommendEnabled && recommendedTag}
+          {!recommendEnabled
+            ? recommendedTag
+            : subtext("saves ram, cpu & disk")}
         </button>
       </motion.div>
 
