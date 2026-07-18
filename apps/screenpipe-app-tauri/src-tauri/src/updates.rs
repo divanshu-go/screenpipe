@@ -382,6 +382,58 @@ pub fn try_begin_update_restart() -> bool {
     !UPDATE_RESTART_STARTED.swap(true, Ordering::SeqCst)
 }
 
+/// Input-idle threshold before an auto-update restart proceeds (Sparkle's
+/// standard driver uses the same 5-minute bar before interrupting).
+const AUTO_RESTART_IDLE_SECS: f64 = 300.0;
+/// Hard deadline for the idle wait: after this long with a continuously
+/// active user, restart anyway (with the usual 30s warning).
+const AUTO_RESTART_MAX_WAIT: Duration = Duration::from_secs(4 * 3600);
+
+/// Seconds since the last keyboard/mouse event, or +inf where we can't ask
+/// (non-macOS) so callers proceed immediately — the pre-idle-aware behavior.
+#[cfg(target_os = "macos")]
+fn seconds_since_last_user_input() -> f64 {
+    // kCGEventSourceStateHIDSystemState = 1, kCGAnyInputEventType = ~0
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGEventSourceSecondsSinceLastEventType(state_id: u32, event_type: u32) -> f64;
+    }
+    unsafe { CGEventSourceSecondsSinceLastEventType(1, u32::MAX) }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn seconds_since_last_user_input() -> f64 {
+    f64::INFINITY
+}
+
+/// Wait until the user has been away from keyboard/mouse for
+/// `idle_threshold_secs`, or `max_wait` elapses. Replaces the fixed 30s
+/// sleep before an auto-update restart: yanking the app mid-use (screen
+/// recording during a demo, typing in the search box) was the worst-rated
+/// part of auto-update.
+async fn wait_for_restart_opportunity(idle_threshold_secs: f64, max_wait: Duration) {
+    let deadline = tokio::time::Instant::now() + max_wait;
+    loop {
+        let idle = seconds_since_last_user_input();
+        if idle >= idle_threshold_secs {
+            info!(
+                "auto-update restart: input idle {:.0}s ≥ {:.0}s — proceeding",
+                idle.min(86_400.0),
+                idle_threshold_secs
+            );
+            return;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            warn!(
+                "auto-update restart: user continuously active for {}h — restarting anyway",
+                max_wait.as_secs() / 3600
+            );
+            return;
+        }
+        tokio::time::sleep(Duration::from_secs(30)).await;
+    }
+}
+
 /// Decide whether a detected update version is still inside the post-failure
 /// cooldown and should NOT be auto-re-downloaded. Pure (takes the elapsed
 /// duration rather than reading the clock) so it's unit-testable without an
@@ -708,6 +760,20 @@ impl UpdatesManager {
             }
         }
         if let Ok(Some(update)) = check_result {
+            // Already staged this exact version — nothing to do. The periodic
+            // loop keeps checking past a staged download precisely so a NEWER
+            // release can supersede it (a user who ignores the banner for
+            // weeks must not stay pinned to the stale staged version).
+            {
+                let pending = self.pending_update.lock().await;
+                if let Some(p) = pending.as_ref() {
+                    if p.downloaded && p.version == update.version {
+                        debug!("update v{} already staged, nothing to do", update.version);
+                        return Result::Ok(true);
+                    }
+                }
+            }
+
             // Cooldown gate: if this exact version recently failed to
             // download/install, don't auto-re-download it every 5 min. A
             // user-initiated check (`force`) always bypasses this so "click to
@@ -1085,57 +1151,68 @@ impl UpdatesManager {
 
             if auto_update && *self.update_installed.lock().await {
                 info!(
-                    "auto-update enabled, restarting to apply update v{}",
+                    "auto-update enabled, restarting to apply update v{} when the user is idle",
                     update.version
                 );
 
-                // #3622: gate process::exit on boot-ready to avoid the ORT teardown
-                // race. In the common case boot is already ready and this returns
-                // immediately. See `await_restart_gate` for the full rationale.
-                let label = format!("auto-update v{}", update.version);
-                if !await_restart_gate(AUTO_UPDATE_GATE_TIMEOUT, &label)
-                    .await
-                    .should_restart()
-                {
-                    return Result::Ok(true);
-                }
-
-                // Only the first trigger applies; defer to an in-flight restart.
-                if UPDATE_RESTART_STARTED.swap(true, Ordering::SeqCst) {
-                    info!("auto-update: update-restart already in progress, deferring");
-                    return Result::Ok(true);
-                }
-
-                let _ = self.app.emit(
-                    "update-restarting",
-                    serde_json::json!({
-                        "version": update.version,
-                        "delay_secs": 30,
-                    }),
-                );
-                tokio::time::sleep(Duration::from_secs(30)).await;
-                // Time-bounded: never let a wedged capture/audio teardown stall
-                // the relaunch (see PRE_EXIT_TEARDOWN_TIMEOUT / 2026-06-26 report).
-                match bounded_teardown(
-                    PRE_EXIT_TEARDOWN_TIMEOUT,
-                    stop_screenpipe(self.app.state::<RecordingState>(), self.app.clone()),
-                )
-                .await
-                {
-                    TeardownOutcome::Completed => {}
-                    TeardownOutcome::Failed(err) => {
-                        error!("Failed to stop recording before auto-update: {}", err)
+                // Spawned: the idle wait can last hours and must not hold the
+                // CheckGuard (which would block every future periodic check).
+                let app = self.app.clone();
+                let version = update.version.clone();
+                tokio::spawn(async move {
+                    // #3622: gate process::exit on boot-ready to avoid the ORT
+                    // teardown race. See `await_restart_gate`.
+                    let label = format!("auto-update v{}", version);
+                    if !await_restart_gate(AUTO_UPDATE_GATE_TIMEOUT, &label)
+                        .await
+                        .should_restart()
+                    {
+                        return;
                     }
-                    TeardownOutcome::TimedOut => warn!(
-                        "auto-update: teardown exceeded {}s (capture shutdown wedged) — relaunching anyway",
-                        PRE_EXIT_TEARDOWN_TIMEOUT.as_secs()
-                    ),
-                }
-                crate::process_exit::request_app_relaunch(
-                    self.app.clone(),
-                    "auto-update restart",
-                    Duration::from_millis(0),
-                );
+
+                    // Idle-aware: don't yank the app out from under active
+                    // use. The restart-dedupe slot is claimed only AFTER the
+                    // wait, so a banner click during it still restarts
+                    // immediately (this task then finds the slot taken).
+                    wait_for_restart_opportunity(AUTO_RESTART_IDLE_SECS, AUTO_RESTART_MAX_WAIT)
+                        .await;
+
+                    if UPDATE_RESTART_STARTED.swap(true, Ordering::SeqCst) {
+                        info!("auto-update: update-restart already in progress, deferring");
+                        return;
+                    }
+
+                    let _ = app.emit(
+                        "update-restarting",
+                        serde_json::json!({
+                            "version": version,
+                            "delay_secs": 30,
+                        }),
+                    );
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                    // Time-bounded: never let a wedged capture/audio teardown stall
+                    // the relaunch (see PRE_EXIT_TEARDOWN_TIMEOUT / 2026-06-26 report).
+                    match bounded_teardown(
+                        PRE_EXIT_TEARDOWN_TIMEOUT,
+                        stop_screenpipe(app.state::<RecordingState>(), app.clone()),
+                    )
+                    .await
+                    {
+                        TeardownOutcome::Completed => {}
+                        TeardownOutcome::Failed(err) => {
+                            error!("Failed to stop recording before auto-update: {}", err)
+                        }
+                        TeardownOutcome::TimedOut => warn!(
+                            "auto-update: teardown exceeded {}s (capture shutdown wedged) — relaunching anyway",
+                            PRE_EXIT_TEARDOWN_TIMEOUT.as_secs()
+                        ),
+                    }
+                    crate::process_exit::request_app_relaunch(
+                        app.clone(),
+                        "auto-update restart",
+                        Duration::from_millis(0),
+                    );
+                });
             }
 
             return Result::Ok(true);
@@ -1216,12 +1293,14 @@ impl UpdatesManager {
 
         loop {
             interval.tick().await;
-            if !*self.update_available.lock().await {
-                // Don't show dialog for periodic checks - only for manual checks
-                if let Err(e) = self.check_for_updates(false, false).await {
-                    // warn, not error — see updater check() note above.
-                    warn!("Failed to check for updates: {}", e);
-                }
+            // Keep checking even when an update is already staged: if a newer
+            // version ships while the user ignores the banner, it supersedes
+            // the staged one (check_for_updates early-returns when the found
+            // version is the one already staged, so this stays cheap).
+            // Don't show dialog for periodic checks - only for manual checks
+            if let Err(e) = self.check_for_updates(false, false).await {
+                // warn, not error — see updater check() note above.
+                warn!("Failed to check for updates: {}", e);
             }
         }
     }
