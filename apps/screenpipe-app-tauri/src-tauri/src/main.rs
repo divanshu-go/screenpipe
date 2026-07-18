@@ -97,6 +97,7 @@ mod sync;
 mod tray;
 #[cfg(target_os = "macos")]
 mod tray_monitor_preview;
+mod updater_install;
 mod updates;
 mod voice_training;
 mod window;
