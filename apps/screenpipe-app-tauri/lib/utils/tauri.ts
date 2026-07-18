@@ -818,6 +818,9 @@ async getSyncStatus() : Promise<Result<SyncStatusResponse, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async getUpdateCheckConfig() : Promise<UpdateCheckConfig> {
+    return await TAURI_INVOKE("get_update_check_config");
+},
 async hideMainWindow() : Promise<void> {
     await TAURI_INVOKE("hide_main_window");
 },
@@ -3425,6 +3428,18 @@ export type SyncDeviceInfo = { id: string; deviceId: string; deviceName: string 
  * Sync status response.
  */
 export type SyncStatusResponse = { enabled: boolean; isSyncing: boolean; lastSync: string | null; lastError: string | null; storageUsed: number | null; storageLimit: number | null; deviceCount: number | null; deviceLimit: number | null; syncTier: string | null; machineId: string }
+/**
+ * The update endpoint(s) baked into this build plus the auth headers the
+ * backend would send. Single source of truth for the Windows banner path,
+ * which used to hardcode stable/enterprise endpoints — silently switching
+ * beta-channel users to stable and dropping Bearer auth for paid users.
+ */
+export type UpdateCheckConfig = {
+/**
+ * Endpoint templates verbatim from tauri.conf ({{target}} etc. are
+ * substituted by the updater plugin at check time).
+ */
+endpoints: string[]; headers: ([string, string])[] }
 export type User = { id: string | null; name: string | null; email: string | null; image: string | null; token: string | null; clerk_id: string | null; api_key: string | null; credits: Credits | null; stripe_connected: boolean | null; stripe_account_status: string | null; github_username: string | null; bio: string | null; website: string | null; contact: string | null; cloud_subscribed: boolean | null; credits_balance: number | null; app_entitled: boolean | null; subscription_plan: string | null; entitlement: JsonValue | null }
 export type ViewerContent = { kind: "text"; text: string; name: string; path: string; truncated: boolean; total_bytes: number } | { kind: "image"; data_url: string; name: string; path: string } |
 /**
