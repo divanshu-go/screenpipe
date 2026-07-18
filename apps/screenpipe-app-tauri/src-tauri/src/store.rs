@@ -1690,7 +1690,7 @@ impl SettingsStore {
 }
 
 pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
-    println!("Initializing settings store");
+    tracing::info!("Initializing settings store");
 
     let raw_obj = get_store(app, None)
         .ok()
@@ -1811,7 +1811,7 @@ pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
 }
 
 pub fn init_onboarding_store(app: &AppHandle) -> Result<OnboardingStore, String> {
-    println!("Initializing onboarding store");
+    tracing::info!("Initializing onboarding store");
 
     let (onboarding, should_save) = match OnboardingStore::get(app) {
         Ok(Some(onboarding)) => (onboarding, false),
