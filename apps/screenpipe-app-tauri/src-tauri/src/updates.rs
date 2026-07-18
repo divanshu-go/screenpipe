@@ -350,6 +350,13 @@ pub async fn restart_for_update(
     Ok("proceed".to_string())
 }
 
+/// Claim the single update-restart slot. Returns false when another surface
+/// already committed to a teardown+relaunch — callers must then skip their
+/// own restart instead of racing it.
+pub fn try_begin_update_restart() -> bool {
+    !UPDATE_RESTART_STARTED.swap(true, Ordering::SeqCst)
+}
+
 /// Decide whether a detected update version is still inside the post-failure
 /// cooldown and should NOT be auto-re-downloaded. Pure (takes the elapsed
 /// duration rather than reading the clock) so it's unit-testable without an
@@ -361,6 +368,101 @@ fn failed_version_in_cooldown(
     cooldown: Duration,
 ) -> bool {
     matches!(last_failed, Some((v, elapsed)) if v == version && elapsed < cooldown)
+}
+
+/// How a failed download/install should be handled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UpdateErrorClass {
+    /// 401/403 — retrying won't help until the user signs in.
+    Auth,
+    /// Broken signature / corrupt bundle — re-downloading the same bytes
+    /// wastes bandwidth and fires another `app_downloaded`.
+    Unrecoverable,
+    /// Network/disk hiccup — worth the backoff retries.
+    Transient,
+}
+
+/// Classify by the plugin's error variants first; the string sniffing only
+/// remains as a net for `Network(String)` (which flattens HTTP status into
+/// text) and unknown variants (the enum is #[non_exhaustive]). Matching on
+/// variants means an upstream wording change can't silently turn signature
+/// failures back into retry loops.
+fn classify_update_error(e: &tauri_plugin_updater::Error) -> UpdateErrorClass {
+    use tauri_plugin_updater::Error as E;
+    match e {
+        E::Minisign(_) | E::Base64(_) | E::SignatureUtf8(_) => UpdateErrorClass::Unrecoverable,
+        E::Reqwest(err) => match err.status().map(|s| s.as_u16()) {
+            Some(401) | Some(403) => UpdateErrorClass::Auth,
+            _ => UpdateErrorClass::Transient,
+        },
+        other => classify_update_error_text(&other.to_string()),
+    }
+}
+
+fn classify_update_error_text(err_str: &str) -> UpdateErrorClass {
+    if err_str.contains("401")
+        || err_str.contains("403")
+        || err_str.contains("Unauthorized")
+        || err_str.contains("Forbidden")
+    {
+        UpdateErrorClass::Auth
+    } else if err_str.contains("signature")
+        || err_str.contains("Signature")
+        || err_str.contains("verif")
+        || err_str.contains("minisign")
+        || err_str.contains("corrupt")
+    {
+        UpdateErrorClass::Unrecoverable
+    } else {
+        UpdateErrorClass::Transient
+    }
+}
+
+/// Persisted mirror of `last_failed_update` so the download-failure cooldown
+/// survives an app restart. In-memory only, a crash-looping machine
+/// re-downloaded a broken update once per boot — the ~1,400-download incident
+/// damped but not fixed. Stored as `{version, atUnixSecs}` under this key.
+const LAST_FAILED_UPDATE_KEY: &str = "lastFailedUpdate";
+
+fn now_unix_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn save_last_failed_update(app: &tauri::AppHandle, version: &str) {
+    if let Ok(store) = get_store(app, None) {
+        store.set(
+            LAST_FAILED_UPDATE_KEY,
+            serde_json::json!({ "version": version, "atUnixSecs": now_unix_secs() }),
+        );
+        let _ = store.save();
+    }
+}
+
+fn clear_last_failed_update(app: &tauri::AppHandle) {
+    if let Ok(store) = get_store(app, None) {
+        if store.delete(LAST_FAILED_UPDATE_KEY) {
+            let _ = store.save();
+        }
+    }
+}
+
+/// Rehydrate the cooldown marker on boot. The stored wall-clock timestamp is
+/// mapped back onto an `Instant` so `failed_version_in_cooldown` keeps its
+/// monotonic-elapsed contract; a future timestamp (clock skew) counts as a
+/// fresh failure rather than an expired one.
+fn load_last_failed_update(app: &tauri::AppHandle) -> Option<(String, std::time::Instant)> {
+    let store = get_store(app, None).ok()?;
+    let value = store.get(LAST_FAILED_UPDATE_KEY)?;
+    let version = value.get("version")?.as_str()?.to_string();
+    let at = value.get("atUnixSecs")?.as_u64()?;
+    let elapsed = Duration::from_secs(now_unix_secs().saturating_sub(at));
+    let failed_at = std::time::Instant::now()
+        .checked_sub(elapsed)
+        .unwrap_or_else(std::time::Instant::now);
+    Some((version, failed_at))
 }
 
 fn auto_update_enabled_from_settings(settings: Result<Option<SettingsStore>, String>) -> bool {
@@ -465,7 +567,10 @@ impl UpdatesManager {
             app: app.clone(),
             update_menu_item,
             is_checking: AtomicBool::new(false),
-            last_failed_update: Arc::new(Mutex::new(None)),
+            // Rehydrated from the store so the failure cooldown survives
+            // restarts (crash-looping machines otherwise re-download once per
+            // boot).
+            last_failed_update: Arc::new(Mutex::new(load_last_failed_update(app))),
         })
     }
 
@@ -773,32 +878,20 @@ impl UpdatesManager {
                     match &result {
                         Ok(_) => break result,
                         Err(e) => {
-                            let err_str = e.to_string();
-                            // Auth errors won't recover from a retry — bail out and let
-                            // the error arm below emit the sign-in banner.
-                            let is_auth = err_str.contains("401")
-                                || err_str.contains("403")
-                                || err_str.contains("Unauthorized")
-                                || err_str.contains("Forbidden");
-                            // Signature/verification/corrupt-bundle failures are not
-                            // transient either: re-downloading the same broken bundle
-                            // just wastes bandwidth and fires another app_downloaded.
-                            // Bail out immediately like auth errors do.
-                            let is_unrecoverable = is_auth
-                                || err_str.contains("signature")
-                                || err_str.contains("Signature")
-                                || err_str.contains("verif")
-                                || err_str.contains("minisign")
-                                || err_str.contains("corrupt");
+                            // Auth won't recover from a retry (sign-in banner handles
+                            // it); signature/corrupt-bundle failures aren't transient
+                            // either — re-downloading the same broken bytes wastes
+                            // bandwidth and fires another app_downloaded.
+                            let class = classify_update_error(e);
                             let next_delay = retry_delays.get(attempt).copied();
-                            if is_unrecoverable || next_delay.is_none() {
+                            if class != UpdateErrorClass::Transient || next_delay.is_none() {
                                 break result;
                             }
                             let delay = next_delay.unwrap();
                             warn!(
                                 "update download attempt {} failed: {} — retrying in {}s",
                                 attempt + 1,
-                                err_str,
+                                e,
                                 delay.as_secs()
                             );
                             if let Some(ref item) = self.update_menu_item {
@@ -818,6 +911,7 @@ impl UpdatesManager {
                 Ok(_) => {
                     // Clear any prior failure marker — this version is good now.
                     *self.last_failed_update.lock().await = None;
+                    clear_last_failed_update(&self.app);
                     *self.update_installed.lock().await = true;
                     if let Some(snap) = self.pending_update.lock().await.as_mut() {
                         snap.downloaded = true;
@@ -829,11 +923,7 @@ impl UpdatesManager {
                 }
                 Err(e) => {
                     let err_str = e.to_string();
-                    if err_str.contains("401")
-                        || err_str.contains("403")
-                        || err_str.contains("Unauthorized")
-                        || err_str.contains("Forbidden")
-                    {
+                    if classify_update_error(&e) == UpdateErrorClass::Auth {
                         warn!("update download requires authentication: {}", err_str);
                         if let Some(snap) = self.pending_update.lock().await.as_mut() {
                             snap.auth_required = true;
@@ -870,6 +960,7 @@ impl UpdatesManager {
                     warn!("update download failed after retries: {}", err_str);
                     *self.last_failed_update.lock().await =
                         Some((update.version.clone(), std::time::Instant::now()));
+                    save_last_failed_update(&self.app, &update.version);
                     *self.update_available.lock().await = false;
                     *self.pending_update.lock().await = None;
                     if let Some(ref item) = self.update_menu_item {
@@ -1256,6 +1347,34 @@ mod tests {
     use super::*;
 
     const HOUR: Duration = Duration::from_secs(3600);
+
+    #[test]
+    fn error_text_classification() {
+        // Auth strings short-circuit retries into the sign-in banner.
+        assert_eq!(
+            classify_update_error_text("HTTP status client error (403 Forbidden)"),
+            UpdateErrorClass::Auth
+        );
+        // Signature failures never retry: same bytes, same failure.
+        assert_eq!(
+            classify_update_error_text("invalid minisign signature"),
+            UpdateErrorClass::Unrecoverable
+        );
+        assert_eq!(
+            classify_update_error_text("connection reset by peer"),
+            UpdateErrorClass::Transient
+        );
+    }
+
+    #[test]
+    fn typed_errors_beat_string_sniffing() {
+        // A Minisign variant is unrecoverable regardless of its display text.
+        let err = tauri_plugin_updater::Error::SignatureUtf8("bad".into());
+        assert_eq!(classify_update_error(&err), UpdateErrorClass::Unrecoverable);
+        // Io errors have no auth/signature markers → transient (retried).
+        let err = tauri_plugin_updater::Error::Io(std::io::Error::other("disk full"));
+        assert_eq!(classify_update_error(&err), UpdateErrorClass::Transient);
+    }
 
     #[test]
     fn cooldown_blocks_same_version_within_window() {

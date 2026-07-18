@@ -3447,6 +3447,16 @@ pub async fn rollback_to_version(
     use crate::RecordingState;
     info!("rollback_to_version: installing v{}", version);
 
+    // Same #3622 gate as every other restart path: exiting while boot is
+    // mid-AudioManager::new segfaults in onnxruntime teardown. Gate before
+    // the install so we don't swap bundles and then refuse the restart.
+    if !crate::updates::await_restart_gate(std::time::Duration::from_secs(60), "rollback restart")
+        .await
+        .should_restart()
+    {
+        return Err("app is still starting up; retry rollback in a minute".to_string());
+    }
+
     // Stop recording first
     if let Err(e) =
         crate::stop_screenpipe(app_handle.state::<RecordingState>(), app_handle.clone()).await
@@ -3456,6 +3466,14 @@ pub async fn rollback_to_version(
 
     // Download and install the target version
     crate::updates::install_specific_version(&app_handle, &version).await?;
+
+    // Dedupe against a concurrent auto-update restart: whoever claimed the
+    // slot first owns the relaunch; the rollback bundle is already swapped in,
+    // so riding the in-flight restart still boots the rolled-back version.
+    if !crate::updates::try_begin_update_restart() {
+        info!("rollback: update-restart already in progress, riding it");
+        return Ok(());
+    }
 
     info!("rollback: v{} installed, restarting", version);
     crate::process_exit::request_app_relaunch(
