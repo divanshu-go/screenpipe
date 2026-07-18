@@ -148,6 +148,68 @@ fn extract_cf_bundle_executable(info_plist: &str) -> Option<String> {
     Some(rest[..string_end].trim().to_string())
 }
 
+/// `<bundle>.app/Contents/MacOS/<exe>` -> `<bundle>.app`, or None for
+/// non-bundle (dev) binaries.
+#[cfg(any(target_os = "macos", test))]
+fn bundle_root_from_binary(binary: &Path) -> Option<PathBuf> {
+    let macos_directory = binary.parent()?;
+    if macos_directory.file_name() != Some(std::ffi::OsStr::new("MacOS")) {
+        return None;
+    }
+    let contents_directory = macos_directory.parent()?;
+    if contents_directory.file_name() != Some(std::ffi::OsStr::new("Contents")) {
+        return None;
+    }
+    contents_directory.parent().map(Path::to_path_buf)
+}
+
+/// Relaunch through LaunchServices (`/usr/bin/open -n`) instead of spawning the
+/// binary ourselves. launchd spawns the new instance: PID-1 parent, /dev/null
+/// stdio, its own session, TCC attribution to the bundle — nothing inherited
+/// from this dying process. This is how Sparkle relaunches after an update.
+///
+/// Only `--autostart` is replayed: it keeps a login-launched app in the tray
+/// after an overnight auto-update. Everything else in argv (stale deep links,
+/// one-shot flags) must not re-fire in the new instance.
+///
+/// Returns false when the binary isn't in a bundle (dev build) or `open` could
+/// not be spawned, so the caller can fall back to a direct spawn.
+#[cfg(target_os = "macos")]
+fn relaunch_via_launch_services(env: &tauri::Env, binary: &Path) -> bool {
+    let Some(bundle) = bundle_root_from_binary(binary) else {
+        return false;
+    };
+    let mut command = Command::new("/usr/bin/open");
+    // -n: launch a new instance even though LaunchServices still sees this
+    // dying one as running.
+    command.arg("-n").arg(&bundle);
+    if env
+        .args_os
+        .iter()
+        .skip(1)
+        .any(|a| a == std::ffi::OsStr::new(crate::AUTOSTART_ARG))
+    {
+        command.arg("--args").arg(crate::AUTOSTART_ARG);
+    }
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    match command.spawn() {
+        Ok(_) => {
+            info!(
+                "safe relaunch: requested LaunchServices launch of {}",
+                bundle.display()
+            );
+            true
+        }
+        Err(err) => {
+            warn!("safe relaunch: failed to spawn /usr/bin/open: {err}");
+            false
+        }
+    }
+}
+
 fn relaunch_binary(app: &AppHandle) -> Option<PathBuf> {
     let env = app.env();
     let current_binary = match tauri::process::current_binary(&env) {
@@ -176,28 +238,37 @@ fn relaunch_binary(app: &AppHandle) -> Option<PathBuf> {
 pub fn force_app_relaunch(app: AppHandle, status: i32) -> ! {
     let env = app.env();
     if let Some(binary) = relaunch_binary(&app) {
-        let mut command = Command::new(&binary);
-        command.args(env.args_os.iter().skip(1));
-        // Null stdio, don't inherit: our stdout/stderr may be pipes into a
-        // terminal that dies with us. The replacement would hold widowed pipe
-        // write ends, and its first println! would panic (EPIPE) during setup —
-        // startup abort right after an auto-update. Logs go to files anyway.
-        command
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            command.process_group(0);
-        }
-        match command.spawn() {
-            Ok(child) => info!(
-                "safe relaunch: spawned replacement {} (pid {})",
-                binary.display(),
-                child.id()
-            ),
-            Err(err) => warn!("safe relaunch: failed to spawn {}: {err}", binary.display()),
+        #[cfg(target_os = "macos")]
+        let launched = relaunch_via_launch_services(&env, &binary);
+        #[cfg(not(target_os = "macos"))]
+        let launched = false;
+
+        // Direct-spawn fallback: Linux/Windows always, macOS only for
+        // non-bundle dev binaries or if `open` itself failed to spawn.
+        if !launched {
+            let mut command = Command::new(&binary);
+            command.args(env.args_os.iter().skip(1));
+            // Null stdio, don't inherit: our stdout/stderr may be pipes into a
+            // terminal that dies with us. The replacement would hold widowed pipe
+            // write ends, and its first println! would panic (EPIPE) during setup —
+            // startup abort right after an auto-update. Logs go to files anyway.
+            command
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::CommandExt;
+                command.process_group(0);
+            }
+            match command.spawn() {
+                Ok(child) => info!(
+                    "safe relaunch: spawned replacement {} (pid {})",
+                    binary.display(),
+                    child.id()
+                ),
+                Err(err) => warn!("safe relaunch: failed to spawn {}: {err}", binary.display()),
+            }
         }
     }
 
@@ -577,7 +648,26 @@ pub fn request_app_quit(app: AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::extract_cf_bundle_executable;
+    use super::{bundle_root_from_binary, extract_cf_bundle_executable};
+    use std::path::Path;
+
+    #[test]
+    fn bundle_root_derived_from_bundle_binary() {
+        assert_eq!(
+            bundle_root_from_binary(Path::new(
+                "/Applications/screenpipe.app/Contents/MacOS/screenpipe-app"
+            )),
+            Some("/Applications/screenpipe.app".into())
+        );
+    }
+
+    #[test]
+    fn bundle_root_rejects_non_bundle_binary() {
+        assert_eq!(
+            bundle_root_from_binary(Path::new("/tmp/target/debug/screenpipe-app")),
+            None
+        );
+    }
 
     #[test]
     fn extracts_bundle_executable_from_xml_plist() {
