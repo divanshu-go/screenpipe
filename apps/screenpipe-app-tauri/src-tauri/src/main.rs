@@ -286,8 +286,57 @@ macro_rules! define_specta_builder {
     }};
 }
 
+/// Rebind closed or broken standard fds (0-2) to /dev/null.
+///
+/// A GUI app's stdio is only meaningful in dev; in production the fds may be
+/// closed outright (relaunch chains, login items) or be pipes whose reader is
+/// gone (parent terminal closed). Rust's print macros panic on write failure
+/// (EBADF/EPIPE), so a single stray `println!` anywhere aborts the app.
+/// Detect both cases per fd and point the fd at /dev/null instead.
+#[cfg(unix)]
+fn sanitize_stdio_fds() {
+    for fd in 0..=2 {
+        // fcntl fails with EBADF if the fd is not open at all
+        let closed = unsafe { libc::fcntl(fd, libc::F_GETFD) } == -1;
+        // a pipe whose read end is closed reports POLLHUP on macOS (POLLERR on
+        // Linux); writes to it would EPIPE. stdin is exempt: reads from a dead
+        // stdin just return EOF, harmless.
+        let broken = !closed && fd != 0 && {
+            let mut pfd = libc::pollfd {
+                fd,
+                events: libc::POLLOUT,
+                revents: 0,
+            };
+            (unsafe { libc::poll(&mut pfd, 1, 0) }) > 0
+                && (pfd.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL)) != 0
+        };
+        if closed || broken {
+            unsafe {
+                let flags = if fd == 0 {
+                    libc::O_RDONLY
+                } else {
+                    libc::O_WRONLY
+                };
+                let null_fd = libc::open(c"/dev/null".as_ptr(), flags);
+                if null_fd >= 0 && null_fd != fd {
+                    libc::dup2(null_fd, fd);
+                    libc::close(null_fd);
+                }
+            }
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
+    // Rebind dead stdio to /dev/null BEFORE anything can print. When the app
+    // is relaunched by the updater or its parent terminal goes away, fds 0-2
+    // can be closed (EBADF) or pipes with no reader (EPIPE). `println!`/
+    // `eprintln!` panic on write failure, and a panic inside the panic hook's
+    // own eprintln! double-panics into abort() — a guaranteed startup crash.
+    #[cfg(unix)]
+    sanitize_stdio_fds();
+
     // Raise the file-descriptor soft limit BEFORE any DB/socket work. The app
     // embeds the engine in-process, so it never ran the engine binary's main()
     // and kept macOS's default soft RLIMIT_NOFILE of 256 — too low for the
@@ -558,9 +607,12 @@ async fn main() {
     }
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        use std::io::Write;
         // Log the actual panic first — before any processing. Once unwinding hits
         // Obj-C (e.g. tao::send_event), we get panic_cannot_unwind and lose the real message.
-        eprintln!("PANIC: {}", info);
+        // Never eprintln! here: it panics if stderr is dead, and a panic inside
+        // the panic hook is an instant abort() before we log or reach Sentry.
+        let _ = writeln!(std::io::stderr(), "PANIC: {}", info);
 
         let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
             s.to_string()
@@ -575,9 +627,11 @@ async fn main() {
             .unwrap_or_default();
 
         if crate::process_exit::is_orderly_shutdown_panic(&payload) {
-            eprintln!(
+            let _ = writeln!(
+                std::io::stderr(),
                 "(suppressed orderly-shutdown panic at {}: {})",
-                location, payload
+                location,
+                payload
             );
             return;
         }
@@ -593,7 +647,7 @@ async fn main() {
         );
 
         // Log to stderr (survives even if tracing isn't initialized yet)
-        eprintln!("{}", crash_msg);
+        let _ = writeln!(std::io::stderr(), "{}", crash_msg);
 
         // Write to a crash log file — this survives abort() since we fsync
         // Critical for diagnosing panics inside tao's extern "C" callbacks
@@ -607,7 +661,6 @@ async fn main() {
             .append(true)
             .open(&crash_path)
         {
-            use std::io::Write;
             let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
             let _ = writeln!(f, "[{}] {}", timestamp, crash_msg);
             let _ = f.sync_all(); // fsync before abort() kills us
