@@ -227,7 +227,7 @@ fn should_prevent_window_close(label: &str) -> bool {
 
 /// Flag passed by tauri-plugin-autostart when the OS launches us at login.
 /// Used to skip Home so login starts stay in the tray.
-const AUTOSTART_ARG: &str = "--autostart";
+pub(crate) const AUTOSTART_ARG: &str = "--autostart";
 
 /// True when this process was started by the OS login/autostart entry
 /// (LaunchAgent / Run registry), not a manual user launch.
