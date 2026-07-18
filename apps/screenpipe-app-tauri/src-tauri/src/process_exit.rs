@@ -178,6 +178,14 @@ pub fn force_app_relaunch(app: AppHandle, status: i32) -> ! {
     if let Some(binary) = relaunch_binary(&app) {
         let mut command = Command::new(&binary);
         command.args(env.args_os.iter().skip(1));
+        // Null stdio, don't inherit: our stdout/stderr may be pipes into a
+        // terminal that dies with us. The replacement would hold widowed pipe
+        // write ends, and its first println! would panic (EPIPE) during setup —
+        // startup abort right after an auto-update. Logs go to files anyway.
+        command
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
