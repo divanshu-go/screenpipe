@@ -75,6 +75,31 @@ pub async fn install_specific_version(app: &tauri::AppHandle, version: &str) -> 
 
     info!("rollback: downloading v{}", version);
 
+    // macOS: our installer validates the staged bundle against the version we
+    // actually asked for — the rollback manifest deliberately lies (fake high
+    // version so the plugin's comparator accepts it), so `update.version` must
+    // not be trusted here. allow_downgrade skips the downgrade guard that
+    // normal updates enforce.
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(bundle) = crate::updater_install::self_install_target() {
+            let bytes = update
+                .download(|_, _| {}, || {})
+                .await
+                .map_err(|e| format!("failed to download v{}: {}", version, e))?;
+            let app2 = app.clone();
+            let expected = version.to_string();
+            tokio::task::spawn_blocking(move || {
+                crate::updater_install::install_staged(&app2, &expected, bytes, &bundle, true)
+            })
+            .await
+            .map_err(|e| format!("rollback install task panicked: {e}"))?
+            .map_err(|e| format!("failed to install v{}: {}", version, e))?;
+            info!("rollback: v{} installed, restart required", version);
+            return Ok(());
+        }
+    }
+
     update
         .download_and_install(|_, _| {}, || {})
         .await
@@ -848,32 +873,65 @@ impl UpdatesManager {
                     let menu_item = self.update_menu_item.clone();
                     let mut downloaded: u64 = 0;
                     let mut last_pct: u8 = 0;
-                    let result = update
-                        .download_and_install(
-                            move |chunk_len, content_len| {
-                                downloaded += chunk_len as u64;
-                                let pct = content_len
-                                    .map(|total| ((downloaded as f64 / total as f64) * 100.0) as u8)
-                                    .unwrap_or(0);
-                                // Only emit every 5% to avoid flooding
-                                if pct >= last_pct + 5 || pct == 100 {
-                                    last_pct = pct;
-                                    let progress = serde_json::json!({
-                                        "version": update_version,
-                                        "downloaded": downloaded,
-                                        "total": content_len,
-                                        "percent": pct,
-                                    });
-                                    let _ = app_handle.emit("update-download-progress", progress);
-                                    info!("update download: {}%", pct);
+                    let progress_cb = move |chunk_len: usize, content_len: Option<u64>| {
+                        downloaded += chunk_len as u64;
+                        let pct = content_len
+                            .map(|total| ((downloaded as f64 / total as f64) * 100.0) as u8)
+                            .unwrap_or(0);
+                        // Only emit every 5% to avoid flooding
+                        if pct >= last_pct + 5 || pct == 100 {
+                            last_pct = pct;
+                            let progress = serde_json::json!({
+                                "version": update_version,
+                                "downloaded": downloaded,
+                                "total": content_len,
+                                "percent": pct,
+                            });
+                            let _ = app_handle.emit("update-download-progress", progress);
+                            info!("update download: {}%", pct);
+                        }
+                        if let Some(ref m) = menu_item {
+                            let _ = m.set_text(&format!("Downloading update... {}%", pct));
+                        }
+                    };
+                    // macOS: the plugin's installer renames the old app into a
+                    // self-deleting TempDir (backup destroyed even on failure)
+                    // and validates nothing. Download verified bytes through
+                    // the plugin, install via our stage/validate/atomic-swap
+                    // path instead. See updater_install.rs.
+                    #[cfg(target_os = "macos")]
+                    let result = {
+                        if let Some(bundle) = crate::updater_install::self_install_target() {
+                            match update.download(progress_cb, || {}).await {
+                                Ok(bytes) => {
+                                    let app2 = self.app.clone();
+                                    let expected = update.version.clone();
+                                    match tokio::task::spawn_blocking(move || {
+                                        crate::updater_install::install_staged(
+                                            &app2, &expected, bytes, &bundle, false,
+                                        )
+                                    })
+                                    .await
+                                    {
+                                        Ok(Ok(())) => Ok(()),
+                                        Ok(Err(e)) => Err(tauri_plugin_updater::Error::Io(
+                                            std::io::Error::other(e.to_string()),
+                                        )),
+                                        Err(join_err) => Err(tauri_plugin_updater::Error::Io(
+                                            std::io::Error::other(format!(
+                                                "install task panicked: {join_err}"
+                                            )),
+                                        )),
+                                    }
                                 }
-                                if let Some(ref m) = menu_item {
-                                    let _ = m.set_text(&format!("Downloading update... {}%", pct));
-                                }
-                            },
-                            || {},
-                        )
-                        .await;
+                                Err(e) => Err(e),
+                            }
+                        } else {
+                            update.download_and_install(progress_cb, || {}).await
+                        }
+                    };
+                    #[cfg(not(target_os = "macos"))]
+                    let result = update.download_and_install(progress_cb, || {}).await;
 
                     match &result {
                         Ok(_) => break result,
@@ -1318,6 +1376,25 @@ pub fn start_update_check(
 
     // Check if the app was just upgraded and send a "what's new" notification
     check_whats_new(app);
+
+    // Delete the kept-for-rollback previous bundle only once this boot
+    // actually reaches "ready" — a boot-looping release must not GC its own
+    // escape hatch. Errored/stuck boots keep the old bundle on disk.
+    #[cfg(target_os = "macos")]
+    tokio::spawn({
+        let app = app.clone();
+        async move {
+            if crate::health::wait_for_boot_ready(Duration::from_secs(10 * 60)).await
+                == crate::health::BootReadiness::Ready
+            {
+                tokio::task::spawn_blocking(move || {
+                    crate::updater_install::finalize_and_gc(&app)
+                })
+                .await
+                .ok();
+            }
+        }
+    });
 
     // Check for updates at boot
     tokio::spawn({
