@@ -6,7 +6,13 @@ import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useModelUpsellGating } from "@/lib/hooks/use-model-upsell-gating";
 import { usePiModels } from "@/lib/hooks/use-pi-models";
-import { useMemo, useState, useEffect, useCallback } from "react";
+import { useMemo, useState, useEffect, useCallback, useRef } from "react";
+import {
+  ACP_ADAPTERS,
+  acpAdapterInfo,
+  generatePresetName,
+  presetImageSrc,
+} from "@/lib/utils/preset-appearance";
 import {
   Command,
   CommandEmpty,
@@ -230,10 +236,33 @@ export function AIProviderConfig({
     defaultPreset: defaultPreset?.defaultPreset || false,
   });
 
+  // Last name this dialog generated itself. While the field still holds it
+  // (or is empty) provider/agent changes keep regenerating it; a name the
+  // user typed is never overwritten. Empty names get generated on submit.
+  const lastAutoNameRef = useRef<string | null>(null);
+
+  const withAutoName = (
+    updates: Partial<AIPreset>,
+    acpAgentId?: string | null,
+  ): Partial<AIPreset> => {
+    if (defaultPreset?.id) return updates;
+    const currentName = formData.id || "";
+    if (currentName && currentName !== lastAutoNameRef.current) return updates;
+    const autoName = generatePresetName(
+      updates.provider ?? formData.provider,
+      acpAgentId ?? updates.acpAgent?.id ?? formData.acpAgent?.id,
+      (settings?.aiPresets ?? []).map((preset) => preset.id),
+    );
+    lastAutoNameRef.current = autoName;
+    setIdError(null);
+    return { ...updates, id: autoName };
+  };
+
   const validateId = (id: string | undefined): boolean => {
     if (!id?.trim()) {
-      setIdError("name is required");
-      return false;
+      // Empty is fine: a name is generated from the selection on submit.
+      setIdError(null);
+      return true;
     }
 
     // Check if ID ends with 'copy' (case insensitive)
@@ -407,12 +436,32 @@ export function AIProviderConfig({
     try {
       onSubmit({
         ...formData,
-        id: formData.id?.trim() || "",
+        id:
+          formData.id?.trim() ||
+          generatePresetName(
+            formData.provider,
+            formData.acpAgent?.id,
+            (settings?.aiPresets ?? []).map((preset) => preset.id),
+            defaultPreset?.id,
+          ),
       });
     } finally {
       setIsLoading(false);
     }
   };
+
+  // Prefill a generated name for new presets so nobody is forced to invent one.
+  useEffect(() => {
+    if (defaultPreset?.id || formData.id) return;
+    const autoName = generatePresetName(
+      formData.provider,
+      formData.acpAgent?.id,
+      (settings?.aiPresets ?? []).map((preset) => preset.id),
+    );
+    lastAutoNameRef.current = autoName;
+    setFormData((prev) => (prev.id ? prev : { ...prev, id: autoName }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
 
 
@@ -439,7 +488,7 @@ export function AIProviderConfig({
           <Input
             id="name"
             type="text"
-            placeholder="enter preset name"
+            placeholder="generated automatically — type to override"
             value={formData.id || undefined}
             onChange={(e) => handleIdChange(e.target.value)}
             className={cn(
@@ -457,10 +506,7 @@ export function AIProviderConfig({
           />
         </div>
 
-        <div className={cn(
-          "grid gap-2",
-          piAvailable ? "grid-cols-3" : "grid-cols-4"
-        )}>
+        <div className="grid grid-cols-3 gap-2">
           {piAvailable && (
             <Button
               type="button"
@@ -471,9 +517,11 @@ export function AIProviderConfig({
                 setSelectedProvider("screenpipe-cloud");
                 setFormData({
                   ...formData,
-                  provider: "screenpipe-cloud",
-                  url: "",
-                  model: "auto",
+                  ...withAutoName({
+                    provider: "screenpipe-cloud",
+                    url: "",
+                    model: "auto",
+                  }),
                 });
               }}
             >
@@ -490,9 +538,11 @@ export function AIProviderConfig({
               setSelectedProvider("openai-chatgpt");
               setFormData({
                 ...formData,
-                provider: "openai-chatgpt",
-                url: "https://api.openai.com/v1",
-                model: "gpt-5.6-terra",
+                ...withAutoName({
+                  provider: "openai-chatgpt",
+                  url: "https://api.openai.com/v1",
+                  model: "gpt-5.6-terra",
+                }),
               });
             }}
           >
@@ -510,8 +560,10 @@ export function AIProviderConfig({
               setSelectedProvider("native-ollama");
               setFormData({
                 ...formData,
-                provider: "native-ollama",
-                url: "http://localhost:11434/v1",
+                ...withAutoName({
+                  provider: "native-ollama",
+                  url: "http://localhost:11434/v1",
+                }),
               });
             }}
           >
@@ -527,8 +579,10 @@ export function AIProviderConfig({
               setSelectedProvider("custom");
               setFormData({
                 ...formData,
-                provider: "custom",
-                url: "http://localhost:11434/v1",
+                ...withAutoName({
+                  provider: "custom",
+                  url: "http://localhost:11434/v1",
+                }),
               });
             }}
           >
@@ -545,9 +599,11 @@ export function AIProviderConfig({
                 setSelectedProvider("anthropic");
                 setFormData({
                   ...formData,
-                  provider: "anthropic",
-                  url: "",
-                  model: "claude-sonnet-4-6",
+                  ...withAutoName({
+                    provider: "anthropic",
+                    url: "",
+                    model: "claude-sonnet-4-6",
+                  }),
                 });
               }
             }}
@@ -556,7 +612,148 @@ export function AIProviderConfig({
             <img src="/images/claude-ai.svg" alt="Claude API" className="h-3.5 w-3.5 rounded-sm" />
             <span>claude api</span>
           </Button>
+
+          <Button
+            type="button"
+            variant={selectedProvider === "acp" ? "default" : "outline"}
+            className="flex h-8 items-center justify-center gap-1.5 text-xs px-3"
+            onClick={() => {
+              if (selectedProvider === "acp") return;
+              setSelectedProvider("acp");
+              const agentId = formData.acpAgent?.id || "pi-acp";
+              setFormData({
+                ...formData,
+                ...withAutoName(
+                  {
+                    provider: "acp",
+                    url: "",
+                    model: agentId,
+                    acpAgent: formData.acpAgent || { id: "pi-acp" },
+                  },
+                  agentId,
+                ),
+              });
+            }}
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/images/acp.svg" alt="Coding agent" className="h-3.5 w-3.5 rounded-sm" />
+            <span>coding agent</span>
+          </Button>
         </div>
+
+        {selectedProvider === "acp" && (
+          <div className="space-y-2">
+            <Label className="text-xs">agent</Label>
+            <div
+              role="listbox"
+              aria-label="agent"
+              className="grid grid-cols-2 gap-1.5"
+            >
+              {ACP_ADAPTERS.map((adapter) => {
+                const isSelected =
+                  (formData.acpAgent?.id || "pi-acp") === adapter.id;
+                return (
+                  <button
+                    key={adapter.id}
+                    type="button"
+                    role="option"
+                    aria-selected={isSelected}
+                    data-acp-agent-option={adapter.id}
+                    onClick={() =>
+                      setFormData({
+                        ...formData,
+                        ...withAutoName(
+                          {
+                            provider: "acp",
+                            model: adapter.id,
+                            acpAgent: {
+                              id: adapter.id,
+                              command:
+                                adapter.id === "custom"
+                                  ? formData.acpAgent?.command || ""
+                                  : undefined,
+                              args:
+                                adapter.id === "custom"
+                                  ? formData.acpAgent?.args || []
+                                  : undefined,
+                              env: formData.acpAgent?.env || {},
+                            },
+                          },
+                          adapter.id,
+                        ),
+                      })
+                    }
+                    className={cn(
+                      "flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-xs text-left transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                      isSelected ? "border-primary ring-1 ring-primary" : "border-input",
+                    )}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={adapter.imageSrc}
+                      alt=""
+                      className="h-3.5 w-3.5 rounded-sm shrink-0"
+                    />
+                    <span className="truncate">{adapter.name}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <p className="text-[10px] text-muted-foreground">
+              {acpAdapterInfo(formData.acpAgent?.id || "pi-acp").description}{" "}
+              sign-in happens in the chat when the agent asks for it.
+            </p>
+            {(formData.acpAgent?.id || "pi-acp") === "custom" && (
+              <div className="space-y-1">
+                <Label htmlFor="acpCommandQuick" className="text-xs">
+                  agent command
+                </Label>
+                <Input
+                  id="acpCommandQuick"
+                  value={formData.acpAgent?.command || ""}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      acpAgent: {
+                        ...(formData.acpAgent || { id: "custom" }),
+                        command: e.target.value,
+                      },
+                    })
+                  }
+                  placeholder="path or command that starts an ACP agent"
+                  className="h-8 font-mono text-xs"
+                  spellCheck={false}
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                />
+                <Label htmlFor="acpArgsQuick" className="text-xs">
+                  startup options
+                </Label>
+                <Input
+                  id="acpArgsQuick"
+                  value={(formData.acpAgent?.args || []).join(" ")}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      acpAgent: {
+                        ...(formData.acpAgent || { id: "custom" }),
+                        args: e.target.value.split(/\s+/).filter(Boolean),
+                      },
+                    })
+                  }
+                  placeholder="--acp"
+                  className="h-8 font-mono text-xs"
+                  spellCheck={false}
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                />
+                <p className="text-[10px] text-muted-foreground">
+                  environment variables and per-line options live in settings → ai presets
+                </p>
+              </div>
+            )}
+          </div>
+        )}
 
         {selectedProvider === "openai" && (
           <div className="space-y-1">
@@ -910,7 +1107,11 @@ export function AIProviderConfig({
           className="w-full h-7 text-xs"
           disabled={
             isLoading ||
-            Boolean(!formData.id?.length || !formData.model?.length)
+            Boolean(idError) ||
+            !formData.model?.length ||
+            (formData.provider === "acp" &&
+              formData.acpAgent?.id === "custom" &&
+              !formData.acpAgent?.command?.trim())
           }
         >
           {isLoading ? (
@@ -1634,6 +1835,12 @@ export const AIPresetsSelector = ({
                                 : "opacity-0",
                             )}
                           />
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={presetImageSrc(preset.provider, preset.acpAgent?.id)}
+                            alt=""
+                            className="h-4 w-4 rounded-sm shrink-0 opacity-80"
+                          />
                           <span className="font-medium truncate max-w-[120px]" title={preset.id}>
                             {formatPresetName(preset.id)}
                           </span>
@@ -1654,7 +1861,9 @@ export const AIPresetsSelector = ({
                               {preset.provider}
                             </span>
                             <span className="truncate max-w-[120px]">
-                              {preset.model}
+                              {preset.provider === "acp"
+                                ? acpAdapterInfo(preset.acpAgent?.id).name
+                                : preset.model}
                             </span>
                           </div>
                           <div className="flex items-center gap-1">
