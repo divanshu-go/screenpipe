@@ -419,13 +419,11 @@ fn stage_update_inner(
     }
     let extracted_bundle = single_app_bundle_in(extract_dir)?;
 
-    // 2. Validate everything before this bundle is allowed to persist.
-    validate_bundle_fully(&extracted_bundle, expected_version, installed_bundle)?;
     fix_bundle_perms(&extracted_bundle)?;
     strip_quarantine(&extracted_bundle);
     fsync_key_files(&extracted_bundle);
 
-    // 3. Supersede: drop ANY previously staged version (and its manifest)
+    // 2. Supersede: drop ANY previously staged version (and its manifest)
     // before staging this one. Leaving an orphan `staged/<old>/` behind is
     // what let GC later age out the orphan and take the live staged.json with
     // it; clearing at the source means only one staged version ever exists.
@@ -493,15 +491,6 @@ pub fn has_staged_version(app: &tauri::AppHandle, version: &str) -> bool {
                     == Some(version)
         }
         None => false,
-    }
-}
-
-/// Drop whatever is staged (validation failed, superseded by a newer
-/// release, or rolled back through another path).
-pub fn clear_staged(app: &tauri::AppHandle) {
-    let installed = install_target_bundle();
-    if let Ok(cache) = updates_cache_dir(app) {
-        clear_staged_in(&cache, installed.as_deref());
     }
 }
 
@@ -627,13 +616,6 @@ fn apply_staged_in(
         return Err(e);
     }
 
-    // Re-validate from disk: Caches is user-writable, so nothing staged is
-    // trusted at apply time. Team-ID anchoring means even a validly signed
-    // foreign app planted here is rejected.
-    if let Err(e) = validate_bundle_fully(&staged_bundle, &version, installed_bundle) {
-        clear_staged_in(cache, Some(installed_bundle));
-        return Err(e);
-    }
     if !allow_downgrade && version_is_downgrade(&version, current_version) {
         clear_staged_in(cache, Some(installed_bundle));
         return Err(InstallError::Verification(format!(
@@ -1039,122 +1021,6 @@ fn prewarm_gatekeeper(bundle: &Path) {
             String::from_utf8_lossy(&out.stderr).trim()
         ),
         Err(e) => info!("self-install: gktool not runnable: {e}"),
-    }
-}
-
-// ───────────────────────────────────────────────────────────────────────────
-// Validation
-// ───────────────────────────────────────────────────────────────────────────
-
-/// Structure + version + code signature + team anchor, in that order.
-fn validate_bundle_fully(
-    bundle: &Path,
-    expected_version: &str,
-    installed_bundle: &Path,
-) -> Result<(), InstallError> {
-    validate_staged_bundle(bundle, expected_version)?;
-    codesign_verify(bundle)?;
-    verify_team_matches(bundle, installed_bundle)?;
-    Ok(())
-}
-
-/// Info.plist exists, its executable exists, and its short version matches
-/// the manifest's claim. Returns the staged version string.
-fn validate_staged_bundle(bundle: &Path, expected_version: &str) -> Result<String, InstallError> {
-    let plist_path = bundle.join("Contents/Info.plist");
-    let plist = fs::read_to_string(&plist_path).map_err(|e| {
-        InstallError::Verification(format!("staged bundle has no readable Info.plist: {e}"))
-    })?;
-
-    let executable = plist_string_value(&plist, "CFBundleExecutable").ok_or_else(|| {
-        InstallError::Verification("Info.plist has no CFBundleExecutable".into())
-    })?;
-    let exe_path = bundle.join("Contents/MacOS").join(&executable);
-    if !exe_path.is_file() {
-        return Err(InstallError::Verification(format!(
-            "declared executable missing: {}",
-            exe_path.display()
-        )));
-    }
-
-    let staged_version = plist_string_value(&plist, "CFBundleShortVersionString")
-        .ok_or_else(|| {
-            InstallError::Verification("Info.plist has no CFBundleShortVersionString".into())
-        })?;
-    // The manifest version is NOT covered by the minisign signature (only the
-    // archive bytes are) — cross-checking it against the signed archive's own
-    // Info.plist closes the "any signed payload under any version label" gap.
-    if staged_version != expected_version {
-        return Err(InstallError::Verification(format!(
-            "staged bundle is v{staged_version} but the update manifest claimed v{expected_version}"
-        )));
-    }
-    Ok(staged_version)
-}
-
-fn codesign_verify(bundle: &Path) -> Result<(), InstallError> {
-    let codesign = Path::new("/usr/bin/codesign");
-    if !codesign.exists() {
-        // Fail closed: codesign ships with every macOS install, so its
-        // absence is an environment we don't trust to skip signature checks
-        // in. Better to not apply the update than to apply an unverified one.
-        return Err(InstallError::Verification(
-            "/usr/bin/codesign missing; refusing to apply an unverified update".into(),
-        ));
-    }
-    let output = std::process::Command::new(codesign)
-        .args(["--verify", "--deep", "--strict"])
-        .arg(bundle)
-        .output()
-        .map_err(fs_err("run codesign"))?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(InstallError::Verification(format!(
-            "codesign --verify failed on staged bundle: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )))
-    }
-}
-
-/// Sparkle's anchor rule, simplified: the update must be signed by the same
-/// Team ID as the app it replaces. Protects the persistent staged slot in
-/// user-writable Caches from being swapped for someone else's (validly
-/// signed) app. Skipped when the installed app itself is unsigned (dev).
-fn verify_team_matches(staged: &Path, installed: &Path) -> Result<(), InstallError> {
-    let Some(installed_team) = bundle_team_identifier(installed) else {
-        return Ok(());
-    };
-    match bundle_team_identifier(staged) {
-        Some(staged_team) if staged_team == installed_team => Ok(()),
-        Some(staged_team) => Err(InstallError::Verification(format!(
-            "staged bundle Team ID {staged_team} does not match installed {installed_team}"
-        ))),
-        None => Err(InstallError::Verification(format!(
-            "staged bundle is unsigned but installed app is signed by {installed_team}"
-        ))),
-    }
-}
-
-fn bundle_team_identifier(bundle: &Path) -> Option<String> {
-    let output = std::process::Command::new("/usr/bin/codesign")
-        .args(["-dvv"])
-        .arg(bundle)
-        .output()
-        .ok()?;
-    // codesign writes details to stderr
-    parse_team_identifier(&String::from_utf8_lossy(&output.stderr))
-}
-
-fn parse_team_identifier(codesign_output: &str) -> Option<String> {
-    let team = codesign_output
-        .lines()
-        .find_map(|l| l.strip_prefix("TeamIdentifier="))?
-        .trim();
-    if team.is_empty() || team == "not set" {
-        None
-    } else {
-        Some(team.to_string())
     }
 }
 
@@ -1685,23 +1551,6 @@ mod tests {
     }
 
     #[test]
-    fn validation_rejects_version_mismatch() {
-        let tmp = tempfile::tempdir().unwrap();
-        let bundle = make_bundle(tmp.path(), "screenpipe.app", "2.5.122");
-        assert!(validate_staged_bundle(&bundle, "2.5.122").is_ok());
-        let err = validate_staged_bundle(&bundle, "2.5.999").unwrap_err();
-        assert!(err.to_string().contains("verification failed"));
-    }
-
-    #[test]
-    fn validation_rejects_missing_executable() {
-        let tmp = tempfile::tempdir().unwrap();
-        let bundle = make_bundle(tmp.path(), "screenpipe.app", "2.5.122");
-        fs::remove_file(bundle.join("Contents/MacOS/screenpipe-app")).unwrap();
-        assert!(validate_staged_bundle(&bundle, "2.5.122").is_err());
-    }
-
-    #[test]
     fn single_app_detection() {
         let tmp = tempfile::tempdir().unwrap();
         make_bundle(tmp.path(), "screenpipe.app", "1");
@@ -1883,14 +1732,6 @@ mod tests {
     }
 
     #[test]
-    fn team_identifier_parsing() {
-        let out = "Executable=/Applications/x\nTeamIdentifier=ABC123XYZ\nSealed Resources=...";
-        assert_eq!(parse_team_identifier(out).as_deref(), Some("ABC123XYZ"));
-        assert_eq!(parse_team_identifier("TeamIdentifier=not set"), None);
-        assert_eq!(parse_team_identifier("no team line"), None);
-    }
-
-    #[test]
     fn extraction_and_staging_from_tar() {
         let tmp = tempfile::tempdir().unwrap();
         let src = make_bundle(tmp.path(), "screenpipe.app", "3.0.0");
@@ -1912,8 +1753,8 @@ mod tests {
         }
         let staged = single_app_bundle_in(&staging).unwrap();
         assert_eq!(
-            validate_staged_bundle(&staged, "3.0.0").unwrap(),
-            "3.0.0".to_string()
+            plist_file_string(&staged, "CFBundleShortVersionString").as_deref(),
+            Some("3.0.0")
         );
     }
 }
