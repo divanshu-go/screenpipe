@@ -175,7 +175,7 @@ fn bundle_root_from_binary(binary: &Path) -> Option<PathBuf> {
 /// Returns false when the binary isn't in a bundle (dev build) or `open` could
 /// not be spawned, so the caller can fall back to a direct spawn.
 #[cfg(target_os = "macos")]
-fn relaunch_via_launch_services(env: &tauri::Env, binary: &Path) -> bool {
+pub(crate) fn relaunch_via_launch_services(env: &tauri::Env, binary: &Path) -> bool {
     let Some(bundle) = bundle_root_from_binary(binary) else {
         return false;
     };
@@ -210,7 +210,7 @@ fn relaunch_via_launch_services(env: &tauri::Env, binary: &Path) -> bool {
     }
 }
 
-fn relaunch_binary(app: &AppHandle) -> Option<PathBuf> {
+pub(crate) fn relaunch_binary(app: &AppHandle) -> Option<PathBuf> {
     let env = app.env();
     let current_binary = match tauri::process::current_binary(&env) {
         Ok(path) => path,
@@ -236,6 +236,17 @@ fn relaunch_binary(app: &AppHandle) -> Option<PathBuf> {
 /// The replacement gets its own process group: launchd kills a job's whole
 /// process group when the job exits, so an inherited group dies with us.
 pub fn force_app_relaunch(app: AppHandle, status: i32) -> ! {
+    // Apply a staged update first (install-on-restart): the swap happens
+    // only at exit boundaries so the running code and the on-disk bundle
+    // never diverge mid-session. relaunch_binary() below re-reads the (now
+    // new) Info.plist, so a renamed executable still relaunches correctly.
+    #[cfg(target_os = "macos")]
+    match crate::updater_install::apply_staged_update(&app) {
+        Ok(Some(version)) => info!("safe relaunch: applied staged update v{version}"),
+        Ok(None) => {}
+        Err(e) => warn!("safe relaunch: staged update not applied: {e}"),
+    }
+
     let env = app.env();
     if let Some(binary) = relaunch_binary(&app) {
         #[cfg(target_os = "macos")]

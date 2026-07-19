@@ -90,12 +90,14 @@ pub async fn install_specific_version(app: &tauri::AppHandle, version: &str) -> 
             let app2 = app.clone();
             let expected = version.to_string();
             tokio::task::spawn_blocking(move || {
-                crate::updater_install::install_staged(&app2, &expected, bytes, &bundle, true)
+                // allow_downgrade rides in the staged manifest; the swap
+                // happens inside the restart that follows.
+                crate::updater_install::stage_update(&app2, &expected, bytes, &bundle, true)
             })
             .await
             .map_err(|e| format!("rollback install task panicked: {e}"))?
-            .map_err(|e| format!("failed to install v{}: {}", version, e))?;
-            info!("rollback: v{} installed, restart required", version);
+            .map_err(|e| format!("failed to stage v{}: {}", version, e))?;
+            info!("rollback: v{} staged, applies on the restart", version);
             return Ok(());
         }
     }
@@ -968,29 +970,43 @@ impl UpdatesManager {
                     #[cfg(target_os = "macos")]
                     let result = {
                         if let Some(bundle) = crate::updater_install::self_install_target() {
-                            match update.download(progress_cb, || {}).await {
-                                Ok(bytes) => {
-                                    let app2 = self.app.clone();
-                                    let expected = update.version.clone();
-                                    match tokio::task::spawn_blocking(move || {
-                                        crate::updater_install::install_staged(
-                                            &app2, &expected, bytes, &bundle, false,
-                                        )
-                                    })
-                                    .await
-                                    {
-                                        Ok(Ok(())) => Ok(()),
-                                        Ok(Err(e)) => Err(tauri_plugin_updater::Error::Io(
-                                            std::io::Error::other(e.to_string()),
-                                        )),
-                                        Err(join_err) => Err(tauri_plugin_updater::Error::Io(
-                                            std::io::Error::other(format!(
-                                                "install task panicked: {join_err}"
+                            // Persistent staging: a bundle staged by a prior
+                            // session (or a pre-restart attempt) skips the
+                            // download entirely; it re-validates at apply.
+                            if crate::updater_install::has_staged_version(
+                                &self.app,
+                                &update.version,
+                            ) {
+                                info!(
+                                    "update v{} already staged on disk, skipping download",
+                                    update.version
+                                );
+                                Ok(())
+                            } else {
+                                match update.download(progress_cb, || {}).await {
+                                    Ok(bytes) => {
+                                        let app2 = self.app.clone();
+                                        let expected = update.version.clone();
+                                        match tokio::task::spawn_blocking(move || {
+                                            crate::updater_install::stage_update(
+                                                &app2, &expected, bytes, &bundle, false,
+                                            )
+                                        })
+                                        .await
+                                        {
+                                            Ok(Ok(())) => Ok(()),
+                                            Ok(Err(e)) => Err(tauri_plugin_updater::Error::Io(
+                                                std::io::Error::other(e.to_string()),
                                             )),
-                                        )),
+                                            Err(join_err) => Err(tauri_plugin_updater::Error::Io(
+                                                std::io::Error::other(format!(
+                                                    "install task panicked: {join_err}"
+                                                )),
+                                            )),
+                                        }
                                     }
+                                    Err(e) => Err(e),
                                 }
-                                Err(e) => Err(e),
                             }
                         } else {
                             update.download_and_install(progress_cb, || {}).await
@@ -1504,6 +1520,23 @@ pub fn start_update_check(
 
     // Check if the app was just upgraded and send a "what's new" notification
     check_whats_new(app);
+
+    // If the boot-loop guard rolled a broken update back, tell the user.
+    #[cfg(target_os = "macos")]
+    if let Some(failed_version) = crate::updater_install::consume_restore_marker(app) {
+        let app_notif = app.clone();
+        std::thread::spawn(move || {
+            let _ = app_notif
+                .notification()
+                .builder()
+                .title("screenpipe update rolled back")
+                .body(format!(
+                    "v{} failed to start and the previous version was restored",
+                    failed_version
+                ))
+                .show();
+        });
+    }
 
     // Delete the kept-for-rollback previous bundle only once this boot
     // actually reaches "ready" — a boot-looping release must not GC its own

@@ -934,6 +934,26 @@ async fn main() {
         .manage(sync_scheduler)
         .invoke_handler(tauri_helper::tauri_collect_commands!())
         .setup(move |app| {
+            // Update lifecycle, before any subsystem starts. A staged update
+            // present at boot means the previous session downloaded it but
+            // crashed before restarting: apply it and relaunch so this boot
+            // runs the new version. Then the boot-loop guard: a freshly
+            // applied version that repeatedly fails to reach boot-ready gets
+            // swapped back to the parked previous bundle automatically.
+            #[cfg(target_os = "macos")]
+            {
+                let handle = app.handle().clone();
+                match crate::updater_install::apply_staged_update(&handle) {
+                    Ok(Some(version)) => {
+                        log::info!("boot: applied staged update v{version}, relaunching");
+                        crate::process_exit::force_app_relaunch(handle.clone(), 0);
+                    }
+                    Ok(None) => {}
+                    Err(e) => log::warn!("boot: staged update not applied: {e}"),
+                }
+                crate::updater_install::handle_boot_loop_guard(&handle);
+            }
+
             //deep link register_all
             #[cfg(any(windows, target_os = "linux"))]
             {
@@ -2112,6 +2132,17 @@ async fn main() {
 
                 tauri::RunEvent::Exit => {
                     info!("App exiting — running cleanup");
+
+                    // Install-on-quit: a staged update applies at any normal
+                    // exit, so the next manual launch runs the new version
+                    // (Sparkle's model). Restart paths apply it inside
+                    // force_app_relaunch; this covers plain quits.
+                    #[cfg(target_os = "macos")]
+                    match crate::updater_install::apply_staged_update(app_handle.app_handle()) {
+                        Ok(Some(version)) => info!("quit: applied staged update v{version}"),
+                        Ok(None) => {}
+                        Err(e) => warn!("quit: staged update not applied: {e}"),
+                    }
 
                     // Best-effort analytics; do not block _exit on network.
                     let app_handle_v2 = app_handle.app_handle().clone();
