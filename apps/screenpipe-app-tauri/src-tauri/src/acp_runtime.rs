@@ -18,7 +18,8 @@ use agent_client_protocol::schema::v1::{
     ReleaseTerminalRequest, ReleaseTerminalResponse, RequestPermissionOutcome,
     RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome,
     SessionConfigOptionValue, SessionConfigOptionsCapabilities, SessionId, SessionNotification,
-    SetSessionConfigOptionRequest, StopReason, TerminalExitStatus, TerminalOutputRequest,
+    SetSessionConfigOptionRequest, SetSessionModeRequest, StopReason, TerminalExitStatus,
+    TerminalOutputRequest,
     TerminalOutputResponse, TextContent, WaitForTerminalExitRequest, WaitForTerminalExitResponse,
     WriteTextFileRequest, WriteTextFileResponse,
 };
@@ -1950,6 +1951,47 @@ async fn run_protocol(
                                     Err(error) => {
                                         let message = error.to_string();
                                         parent_response(&state.output, "set_config_option", &id, Some(&message));
+                                    }
+                                }
+                            }
+                            // Modes (e.g. permission modes) may be switched even
+                            // while a prompt is streaming.
+                            "set_mode" => {
+                                let mode_id = command
+                                    .get("modeId")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default()
+                                    .to_owned();
+                                if mode_id.is_empty() {
+                                    parent_response(
+                                        &state.output,
+                                        "set_mode",
+                                        &id,
+                                        Some("set_mode requires modeId"),
+                                    );
+                                    continue;
+                                }
+                                match connection
+                                    .send_request(SetSessionModeRequest::new(
+                                        session.session_id.clone(),
+                                        mode_id.clone(),
+                                    ))
+                                    .block_task()
+                                    .await
+                                {
+                                    Ok(_) => {
+                                        state.output.send(json!({
+                                            "type": "acp_update",
+                                            "update": {
+                                                "sessionUpdate": "current_mode_update",
+                                                "currentModeId": mode_id
+                                            }
+                                        }));
+                                        parent_response(&state.output, "set_mode", &id, None);
+                                    }
+                                    Err(error) => {
+                                        let message = error.to_string();
+                                        parent_response(&state.output, "set_mode", &id, Some(&message));
                                     }
                                 }
                             }
