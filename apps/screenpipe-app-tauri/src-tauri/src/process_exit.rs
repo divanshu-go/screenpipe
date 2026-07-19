@@ -236,15 +236,28 @@ pub(crate) fn relaunch_binary(app: &AppHandle) -> Option<PathBuf> {
 /// The replacement gets its own process group: launchd kills a job's whole
 /// process group when the job exits, so an inherited group dies with us.
 pub fn force_app_relaunch(app: AppHandle, status: i32) -> ! {
-    // Apply a staged update first (install-on-restart): the swap happens
-    // only at exit boundaries so the running code and the on-disk bundle
-    // never diverge mid-session. relaunch_binary() below re-reads the (now
-    // new) Info.plist, so a renamed executable still relaunches correctly.
+    // Staged update present: prefer the zero-flash handoff. The wait-apply
+    // helper (this same binary, pre-tauri mode) outlives us, applies the
+    // swap after we die, and relaunches the new version via LaunchServices.
+    // Fallbacks: in-process apply (admin prompt for root-owned bundles),
+    // then the normal relaunch below.
     #[cfg(target_os = "macos")]
-    match crate::updater_install::apply_staged_update(&app) {
-        Ok(Some(version)) => info!("safe relaunch: applied staged update v{version}"),
-        Ok(None) => {}
-        Err(e) => warn!("safe relaunch: staged update not applied: {e}"),
+    if crate::updater_install::has_staged_update(&app) {
+        if let Some(bundle) = crate::updater_install::install_target_bundle() {
+            if crate::updater_install::bundle_writable(&bundle)
+                && crate::updater_install::spawn_wait_apply_helper(&app, &bundle, true)
+            {
+                info!("safe relaunch: handed swap+relaunch to update helper");
+                force_process_exit(status);
+            }
+            match crate::updater_install::apply_staged_update(&app, true) {
+                Ok(Some(version)) => {
+                    info!("safe relaunch: applied staged update v{version} in-process")
+                }
+                Ok(None) => {}
+                Err(e) => warn!("safe relaunch: staged update not applied: {e}"),
+            }
+        }
     }
 
     let env = app.env();

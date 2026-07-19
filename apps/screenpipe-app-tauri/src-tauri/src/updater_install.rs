@@ -26,9 +26,11 @@
 //!   boot-ready three times, the parked previous bundle is swapped back and
 //!   relaunched automatically (offline self-rollback).
 //!
-//! Privileged installs stay on the plugin path: if the bundle or its parent
-//! isn't writable, `self_install_target` returns None and the caller uses
-//! the plugin's installer as before.
+//! The helper mode (`screenpipe-app --update-helper ...`) is this same
+//! binary running pre-tauri: restart paths hand it the swap so it happens
+//! after this process dies (zero-flash, crash-safe), and admin-installed
+//! bundles apply through the standard macOS admin prompt running OUR swap
+//! logic as root — the plugin installer is never used for bundle installs.
 //!
 //! Cache layout (`~/Library/Caches/<identifier>/updates/`):
 //!   staged.json           what is staged: {version, bundle, allowDowngrade}
@@ -92,21 +94,68 @@ fn now_unix_secs() -> u64 {
 // Paths and environment
 // ───────────────────────────────────────────────────────────────────────────
 
-/// The installed bundle we can swap without privilege escalation, or None
-/// when the plugin's installer should handle it (dev binary outside a
-/// bundle, or bundle/parent not writable by this user).
-pub fn self_install_target() -> Option<PathBuf> {
+/// The installed bundle this process runs from, or None for non-bundle
+/// (dev) binaries. Staging works regardless of writability; only the
+/// apply-time swap needs privileges (see `bundle_writable`).
+pub fn install_target_bundle() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
-    let bundle = bundle_root_from_executable(&exe)?;
-    let parent = bundle.parent()?;
-    if !path_writable(&bundle) || !path_writable(parent) {
-        info!(
-            "self-install: {} or its parent not writable, deferring to plugin installer",
-            bundle.display()
-        );
-        return None;
+    bundle_root_from_executable(&exe)
+}
+
+/// Whether the swap can happen without privilege escalation.
+pub fn bundle_writable(bundle: &Path) -> bool {
+    let Some(parent) = bundle.parent() else {
+        return false;
+    };
+    path_writable(bundle) && path_writable(parent)
+}
+
+/// Why updates cannot install from this launch location, if so. Sparkle
+/// refuses upfront with a clear message instead of failing mid-install.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InstallBlocker {
+    /// Gatekeeper app translocation: quarantined app launched from
+    /// Downloads/DMG runs from a randomized read-only mount.
+    Translocated,
+    /// Running from a read-only volume (typically the mounted DMG).
+    ReadOnlyVolume,
+}
+
+impl InstallBlocker {
+    pub fn user_message(self) -> &'static str {
+        match self {
+            InstallBlocker::Translocated | InstallBlocker::ReadOnlyVolume => {
+                "move screenpipe to your Applications folder to enable updates"
+            }
+        }
     }
-    Some(bundle)
+}
+
+pub fn install_blocked_reason() -> Option<InstallBlocker> {
+    let exe = std::env::current_exe().ok()?;
+    if exe
+        .components()
+        .any(|c| c.as_os_str() == std::ffi::OsStr::new("AppTranslocation"))
+    {
+        return Some(InstallBlocker::Translocated);
+    }
+    let bundle = bundle_root_from_executable(&exe)?;
+    if volume_is_read_only(&bundle) {
+        return Some(InstallBlocker::ReadOnlyVolume);
+    }
+    None
+}
+
+fn volume_is_read_only(path: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(cpath) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+    let mut stat: libc::statfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statfs(cpath.as_ptr(), &mut stat) } != 0 {
+        return false;
+    }
+    (stat.f_flags & libc::MNT_RDONLY as u32) != 0
 }
 
 /// `<bundle>.app/Contents/MacOS/<exe>` -> `<bundle>.app`
@@ -223,6 +272,7 @@ fn stage_update_inner(
     // 2. Validate everything before this bundle is allowed to persist.
     validate_bundle_fully(&extracted_bundle, expected_version, installed_bundle)?;
     fix_bundle_perms(&extracted_bundle)?;
+    strip_quarantine(&extracted_bundle);
     fsync_key_files(&extracted_bundle);
 
     // 3. Move into the persistent staged slot (same volume, so a rename).
@@ -298,15 +348,38 @@ pub fn has_staged_version(app: &tauri::AppHandle, version: &str) -> bool {
 /// release, or rolled back through another path).
 pub fn clear_staged(app: &tauri::AppHandle) {
     if let Ok(cache) = updates_cache_dir(app) {
-        if let Some((_, bundle, _)) = read_staged_manifest(&cache) {
-            // Covers the cross-volume slot too; bundle sits in <slot>/<ver>/.
-            if let Some(version_dir) = bundle.parent() {
-                let _ = fs::remove_dir_all(version_dir);
-            }
-        }
-        let _ = fs::remove_file(cache.join("staged.json"));
-        let _ = fs::remove_dir_all(cache.join("staged"));
+        clear_staged_in(&cache);
     }
+}
+
+fn clear_staged_in(cache: &Path) {
+    if let Some((_, bundle, _)) = read_staged_manifest(cache) {
+        // Covers the cross-volume slot too; bundle sits in <slot>/<ver>/.
+        if let Some(version_dir) = bundle.parent() {
+            let _ = fs::remove_dir_all(version_dir);
+        }
+    }
+    let _ = fs::remove_file(cache.join("staged.json"));
+    let _ = fs::remove_dir_all(cache.join("staged"));
+}
+
+/// Seconds since the staged bundle was written, for nag escalation.
+pub fn staged_age_secs(app: &tauri::AppHandle) -> Option<u64> {
+    let cache = updates_cache_dir(app).ok()?;
+    let raw = fs::read_to_string(cache.join("staged.json")).ok()?;
+    let at = serde_json::from_str::<serde_json::Value>(&raw)
+        .ok()?
+        .get("atUnixSecs")?
+        .as_u64()?;
+    Some(now_unix_secs().saturating_sub(at))
+}
+
+/// Cheap: is anything staged at all?
+pub fn has_staged_update(app: &tauri::AppHandle) -> bool {
+    updates_cache_dir(app)
+        .ok()
+        .map(|c| c.join("staged.json").is_file())
+        .unwrap_or(false)
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -322,34 +395,66 @@ pub fn clear_staged(app: &tauri::AppHandle) {
 /// Called from every controlled exit: `force_app_relaunch` (restart paths),
 /// `RunEvent::Exit` (normal quit = install-on-quit), and early boot (crash
 /// recovery). Idempotent: the first caller consumes the staged bundle.
-pub fn apply_staged_update(app: &tauri::AppHandle) -> Result<Option<String>, InstallError> {
+pub fn apply_staged_update(
+    app: &tauri::AppHandle,
+    interactive: bool,
+) -> Result<Option<String>, InstallError> {
     let cache = updates_cache_dir(app)?;
-    let Some((version, staged_bundle, allow_downgrade)) = read_staged_manifest(&cache) else {
+    if read_staged_manifest(&cache).is_none() {
         return Ok(None);
-    };
-
-    let Some(installed_bundle) = self_install_target() else {
-        // Bundle became non-writable since staging (perms changed, moved).
-        // Keep the staged bundle; a later exit may succeed.
+    }
+    let Some(installed_bundle) = install_target_bundle() else {
         return Err(InstallError::Fs(
-            "installed bundle not writable, staged update kept".into(),
+            "not running from an app bundle, staged update kept".into(),
         ));
+    };
+    if !bundle_writable(&installed_bundle) {
+        // Admin-installed bundle: the swap needs root. Prompt only on
+        // user-initiated restarts; quiet exits keep the staged bundle and a
+        // later restart applies it.
+        if !interactive {
+            return Err(InstallError::Fs(
+                "bundle requires admin rights; update applies on the next user-initiated restart"
+                    .into(),
+            ));
+        }
+        return apply_privileged(&cache, &installed_bundle);
+    }
+    let current_version = app.package_info().version.to_string();
+    apply_staged_in(&cache, &installed_bundle, &current_version)
+}
+
+/// AppHandle-free core so the `--update-helper` mode (no tauri runtime,
+/// possibly running as root) can share the exact same logic.
+fn apply_staged_in(
+    cache: &Path,
+    installed_bundle: &Path,
+    current_version: &str,
+) -> Result<Option<String>, InstallError> {
+    let Some((version, staged_bundle, allow_downgrade)) = read_staged_manifest(cache) else {
+        return Ok(None);
     };
 
     // Re-validate from disk: Caches is user-writable, so nothing staged is
     // trusted at apply time. Team-ID anchoring means even a validly signed
     // foreign app planted here is rejected.
-    let current_version = app.package_info().version.to_string();
-    if let Err(e) = validate_bundle_fully(&staged_bundle, &version, &installed_bundle) {
-        clear_staged(app);
+    if let Err(e) = validate_bundle_fully(&staged_bundle, &version, installed_bundle) {
+        clear_staged_in(cache);
         return Err(e);
     }
-    if !allow_downgrade && version_is_downgrade(&version, &current_version) {
-        clear_staged(app);
+    if !allow_downgrade && version_is_downgrade(&version, current_version) {
+        clear_staged_in(cache);
         return Err(InstallError::Verification(format!(
             "staged v{version} is older than running v{current_version}; refusing downgrade"
         )));
     }
+
+    // Running as root (privileged apply): preserve the installed bundle's
+    // ownership on the incoming files, like Sparkle's owner/group matching.
+    let owner = fs::metadata(installed_bundle).ok().map(|m| {
+        use std::os::unix::fs::MetadataExt;
+        (m.uid(), m.gid())
+    });
 
     // Park slot for the displaced old bundle.
     let previous_slot = cache
@@ -362,7 +467,13 @@ pub fn apply_staged_update(app: &tauri::AppHandle) -> Result<Option<String>, Ins
             .unwrap_or_else(|| std::ffi::OsStr::new("previous.app")),
     );
 
-    swap_bundles(&staged_bundle, &installed_bundle, &old_bundle_dest)?;
+    swap_bundles(&staged_bundle, installed_bundle, &old_bundle_dest)?;
+
+    if unsafe { libc::geteuid() } == 0 {
+        if let Some((uid, gid)) = owner {
+            chown_tree(installed_bundle, uid, gid);
+        }
+    }
 
     let marker = serde_json::json!({
         "installedVersion": version,
@@ -379,7 +490,7 @@ pub fn apply_staged_update(app: &tauri::AppHandle) -> Result<Option<String>, Ins
     let _ = fs::remove_file(cache.join("staged.json"));
     let _ = fs::remove_dir_all(cache.join("staged"));
 
-    prewarm_gatekeeper(&installed_bundle);
+    prewarm_gatekeeper(installed_bundle);
 
     info!(
         "self-install: v{version} swapped into {} (old v{current_version} kept at {})",
@@ -387,6 +498,240 @@ pub fn apply_staged_update(app: &tauri::AppHandle) -> Result<Option<String>, Ins
         old_bundle_dest.display()
     );
     Ok(Some(version))
+}
+
+/// Apply through the standard macOS admin prompt, running THIS binary's
+/// helper mode as root — our validate/atomic-swap/restore logic, never the
+/// plugin's `rm -rf`. Paths with quote characters are rejected outright
+/// rather than escaped into the shell string.
+fn apply_privileged(cache: &Path, installed_bundle: &Path) -> Result<Option<String>, InstallError> {
+    let exe = std::env::current_exe().map_err(fs_err("resolve current exe"))?;
+    for path in [&exe, &cache.to_path_buf(), &installed_bundle.to_path_buf()] {
+        let text = path.to_string_lossy();
+        if text.contains('\'') || text.contains('"') || text.contains('\\') {
+            return Err(InstallError::Fs(
+                "path contains shell quote characters, refusing privileged apply".into(),
+            ));
+        }
+    }
+    let shell = format!(
+        "'{}' --update-helper apply --cache '{}' --bundle '{}'",
+        exe.display(),
+        cache.display(),
+        installed_bundle.display()
+    );
+    let script = format!("do shell script \"{shell}\" with administrator privileges");
+    let output = std::process::Command::new("/usr/bin/osascript")
+        .args(["-e", &script])
+        .output()
+        .map_err(fs_err("run osascript"))?;
+    if !output.status.success() {
+        return Err(InstallError::Fs(format!(
+            "privileged apply failed or was cancelled: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    // The helper consumed staged.json and wrote pending.json.
+    let applied = fs::read_to_string(cache.join("pending.json"))
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|v| {
+            v.get("installedVersion")
+                .and_then(|x| x.as_str())
+                .map(str::to_string)
+        });
+    Ok(applied)
+}
+
+/// Recursive lchown (never follows symlinks, like Sparkle's fchown walk).
+fn chown_tree(root: &Path, uid: u32, gid: u32) {
+    let _ = std::os::unix::fs::lchown(root, Some(uid), Some(gid));
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        let is_symlink = entry.file_type().map(|t| t.is_symlink()).unwrap_or(false);
+        let _ = std::os::unix::fs::lchown(&path, Some(uid), Some(gid));
+        if is_dir && !is_symlink {
+            chown_tree(&path, uid, gid);
+        }
+    }
+}
+
+/// Drop `com.apple.quarantine` from the staged tree. tar never sets it, so
+/// this is defense in depth against future archive paths.
+fn strip_quarantine(bundle: &Path) {
+    let _ = std::process::Command::new("/usr/bin/xattr")
+        .args(["-dr", "com.apple.quarantine"])
+        .arg(bundle)
+        .output();
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Helper mode: `screenpipe-app --update-helper <cmd> ...`
+//
+// This binary, pre-tauri, no runtime. Restart paths spawn it in wait-apply
+// mode (own process group, null stdio): it outlives this process, waits for
+// the PID to die, applies the swap, and relaunches through LaunchServices —
+// Sparkle's Autoupdate model without bundling a second binary. The `apply`
+// mode runs immediately (used under the admin prompt).
+// ───────────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, PartialEq, Eq)]
+struct HelperArgs {
+    wait_first: bool,
+    cache: PathBuf,
+    bundle: PathBuf,
+    wait_pid: Option<i32>,
+    relaunch: bool,
+}
+
+fn parse_helper_args(args: &[String]) -> Option<HelperArgs> {
+    let mut iter = args.iter();
+    let wait_first = match iter.next().map(String::as_str) {
+        Some("wait-apply") => true,
+        Some("apply") => false,
+        _ => return None,
+    };
+    let (mut cache, mut bundle, mut wait_pid, mut relaunch) = (None, None, None, false);
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--cache" => cache = iter.next().map(PathBuf::from),
+            "--bundle" => bundle = iter.next().map(PathBuf::from),
+            "--wait-pid" => wait_pid = iter.next().and_then(|v| v.parse::<i32>().ok()),
+            "--relaunch" => relaunch = true,
+            _ => return None,
+        }
+    }
+    Some(HelperArgs {
+        wait_first,
+        cache: cache?,
+        bundle: bundle?,
+        wait_pid,
+        relaunch,
+    })
+}
+
+/// Entry point, called from main() before tauri initializes. Never returns.
+pub fn run_update_helper(args: &[String]) -> ! {
+    let code = update_helper_main(args);
+    std::process::exit(code);
+}
+
+fn update_helper_main(args: &[String]) -> i32 {
+    let Some(parsed) = parse_helper_args(args) else {
+        eprintln!("usage: --update-helper <wait-apply|apply> --cache <dir> --bundle <app> [--wait-pid <pid>] [--relaunch]");
+        return 2;
+    };
+    let log = |msg: &str| {
+        use std::io::Write;
+        if let Ok(mut f) = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(parsed.cache.join("helper.log"))
+        {
+            let _ = writeln!(f, "[{}] {}", now_unix_secs(), msg);
+        }
+    };
+    log(&format!("helper start: {parsed:?}"));
+
+    if parsed.wait_first {
+        let Some(pid) = parsed.wait_pid else {
+            log("wait-apply requires --wait-pid");
+            return 2;
+        };
+        // Never swap under a live app. If the parent refuses to die, give up.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        while unsafe { libc::kill(pid, 0) } == 0 {
+            if std::time::Instant::now() > deadline {
+                log("parent still alive after 120s, aborting (staged update kept)");
+                return 3;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+
+    // The version being replaced comes from the installed bundle itself; the
+    // helper may outlive the process that knew it.
+    let current_version =
+        plist_file_string(&parsed.bundle, "CFBundleShortVersionString").unwrap_or_default();
+    let result = apply_staged_in(&parsed.cache, &parsed.bundle, &current_version);
+    let code = match &result {
+        Ok(Some(v)) => {
+            log(&format!("applied v{v}"));
+            0
+        }
+        Ok(None) => {
+            log("nothing staged");
+            0
+        }
+        Err(e) => {
+            log(&format!("apply failed: {e}"));
+            1
+        }
+    };
+
+    if parsed.relaunch {
+        // Relaunch whatever is now at the bundle path — the new version on
+        // success, the untouched old version on failure. The restart path
+        // that spawned us already exited counting on this.
+        let status = std::process::Command::new("/usr/bin/open")
+            .arg("-n")
+            .arg(&parsed.bundle)
+            .status();
+        log(&format!("relaunch via open: {status:?}"));
+    }
+    code
+}
+
+/// Spawn the wait-apply helper (own process group, null stdio) so the swap
+/// and relaunch happen after this process dies. Returns false if it could
+/// not be spawned; the caller falls back to the in-process apply.
+pub fn spawn_wait_apply_helper(app: &tauri::AppHandle, bundle: &Path, relaunch: bool) -> bool {
+    let Ok(cache) = updates_cache_dir(app) else {
+        return false;
+    };
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    let mut command = std::process::Command::new(exe);
+    command
+        .arg("--update-helper")
+        .arg("wait-apply")
+        .arg("--cache")
+        .arg(&cache)
+        .arg("--bundle")
+        .arg(bundle)
+        .arg("--wait-pid")
+        .arg(std::process::id().to_string());
+    if relaunch {
+        command.arg("--relaunch");
+    }
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    {
+        use std::os::unix::process::CommandExt;
+        // Escape the process group so launchd's group-kill on our job exit
+        // can't take the helper down with us (#5260).
+        command.process_group(0);
+    }
+    match command.spawn() {
+        Ok(child) => {
+            info!(
+                "self-install: wait-apply helper spawned (pid {}, relaunch={relaunch})",
+                child.id()
+            );
+            true
+        }
+        Err(e) => {
+            warn!("self-install: failed to spawn update helper: {e}");
+            false
+        }
+    }
 }
 
 /// Ask Gatekeeper to assess the new bundle now so the relaunched app skips
@@ -730,8 +1075,8 @@ pub fn handle_boot_loop_guard(app: &tauri::AppHandle) {
         let _ = fs::remove_file(&attempts_path);
         return;
     };
-    let Some(installed_bundle) = self_install_target() else {
-        warn!("boot-loop guard: installed bundle not writable, cannot restore");
+    let Some(installed_bundle) = install_target_bundle().filter(|b| bundle_writable(b)) else {
+        warn!("boot-loop guard: installed bundle missing or not writable, cannot restore");
         return;
     };
 
@@ -818,8 +1163,25 @@ pub fn finalize_and_gc(app: &tauri::AppHandle) {
         }
     }
 
-    for sub in ["extract", "staged", "previous"] {
-        let Ok(entries) = fs::read_dir(cache.join(sub)) else {
+    let mut gc_roots: Vec<PathBuf> = ["extract", "staged", "previous"]
+        .iter()
+        .map(|sub| cache.join(sub))
+        .collect();
+    // The rare cross-volume staging slot lives next to the bundle, outside
+    // the cache dir; sweep it by the same age rule.
+    if let Some(alt) = install_target_bundle()
+        .and_then(|b| b.parent().map(|p| p.join(".screenpipe-update-staging")))
+    {
+        gc_roots.push(alt.join("extract"));
+        gc_roots.push(alt.join("staged"));
+    }
+    for root in gc_roots {
+        let sub = if root.parent() == Some(cache.as_path()) {
+            root.file_name().and_then(|n| n.to_str()).unwrap_or("")
+        } else {
+            ""
+        };
+        let Ok(entries) = fs::read_dir(&root) else {
             continue;
         };
         for entry in entries.filter_map(|e| e.ok()) {
@@ -970,6 +1332,35 @@ mod tests {
         );
         // no record: fresh
         assert_eq!(next_boot_attempts(None, "2.0.0", 0, 86_400), 1);
+    }
+
+    #[test]
+    fn helper_args_parsing() {
+        let args: Vec<String> = [
+            "wait-apply", "--cache", "/c", "--bundle", "/Applications/s.app",
+            "--wait-pid", "123", "--relaunch",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let parsed = parse_helper_args(&args).unwrap();
+        assert!(parsed.wait_first);
+        assert_eq!(parsed.wait_pid, Some(123));
+        assert!(parsed.relaunch);
+        assert_eq!(parsed.bundle, PathBuf::from("/Applications/s.app"));
+
+        let args: Vec<String> = ["apply", "--cache", "/c", "--bundle", "/b"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let parsed = parse_helper_args(&args).unwrap();
+        assert!(!parsed.wait_first);
+        assert_eq!(parsed.wait_pid, None);
+        assert!(!parsed.relaunch);
+
+        // unknown flag or missing required args: rejected
+        assert!(parse_helper_args(&["apply".into(), "--nope".into()]).is_none());
+        assert!(parse_helper_args(&["wait-apply".into()]).is_none());
     }
 
     #[test]

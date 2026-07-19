@@ -403,6 +403,18 @@ async fn main() {
     // before any Tauri initialization. Used by the permission system to run
     // this binary via launchctl (detached from Terminal) so that macOS TCC
     // checks the binary's own identity instead of Terminal's.
+    // Update helper mode: this same binary, no tauri runtime. Restart/quit
+    // paths spawn it to swap the staged update in after this process dies
+    // (see updater_install.rs). Must run before any tauri/single-instance
+    // initialization.
+    #[cfg(target_os = "macos")]
+    {
+        let raw: Vec<String> = std::env::args().collect();
+        if raw.get(1).map(String::as_str) == Some("--update-helper") {
+            updater_install::run_update_helper(&raw[2..]);
+        }
+    }
+
     #[cfg(target_os = "macos")]
     {
         let early_args: Vec<String> = std::env::args().collect();
@@ -943,7 +955,7 @@ async fn main() {
             #[cfg(target_os = "macos")]
             {
                 let handle = app.handle().clone();
-                match crate::updater_install::apply_staged_update(&handle) {
+                match crate::updater_install::apply_staged_update(&handle, false) {
                     Ok(Some(version)) => {
                         log::info!("boot: applied staged update v{version}, relaunching");
                         crate::process_exit::force_app_relaunch(handle.clone(), 0);
@@ -2135,13 +2147,34 @@ async fn main() {
 
                     // Install-on-quit: a staged update applies at any normal
                     // exit, so the next manual launch runs the new version
-                    // (Sparkle's model). Restart paths apply it inside
-                    // force_app_relaunch; this covers plain quits.
+                    // (Sparkle's model). The wait-apply helper does the swap
+                    // after this process dies so quit stays instant; the
+                    // in-process apply is the fallback. Restart paths hand
+                    // off inside force_app_relaunch.
                     #[cfg(target_os = "macos")]
-                    match crate::updater_install::apply_staged_update(app_handle.app_handle()) {
-                        Ok(Some(version)) => info!("quit: applied staged update v{version}"),
-                        Ok(None) => {}
-                        Err(e) => warn!("quit: staged update not applied: {e}"),
+                    if crate::updater_install::has_staged_update(app_handle.app_handle()) {
+                        let handed_off = crate::updater_install::install_target_bundle()
+                            .filter(|b| crate::updater_install::bundle_writable(b))
+                            .map(|b| {
+                                crate::updater_install::spawn_wait_apply_helper(
+                                    app_handle.app_handle(),
+                                    &b,
+                                    false,
+                                )
+                            })
+                            .unwrap_or(false);
+                        if !handed_off {
+                            match crate::updater_install::apply_staged_update(
+                                app_handle.app_handle(),
+                                false,
+                            ) {
+                                Ok(Some(version)) => {
+                                    info!("quit: applied staged update v{version}")
+                                }
+                                Ok(None) => {}
+                                Err(e) => warn!("quit: staged update not applied: {e}"),
+                            }
+                        }
                     }
 
                     // Best-effort analytics; do not block _exit on network.

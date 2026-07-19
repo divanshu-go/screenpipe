@@ -82,7 +82,7 @@ pub async fn install_specific_version(app: &tauri::AppHandle, version: &str) -> 
     // normal updates enforce.
     #[cfg(target_os = "macos")]
     {
-        if let Some(bundle) = crate::updater_install::self_install_target() {
+        if let Some(bundle) = crate::updater_install::install_target_bundle() {
             let bytes = update
                 .download(|_, _| {}, || {})
                 .await
@@ -391,6 +391,71 @@ const AUTO_RESTART_IDLE_SECS: f64 = 300.0;
 /// active user, restart anyway (with the usual 30s warning).
 const AUTO_RESTART_MAX_WAIT: Duration = Duration::from_secs(4 * 3600);
 
+/// A staged update older than this escalates the nag once per session,
+/// only when auto-update is on (apply-at-exit makes the message honest:
+/// quitting installs it). Sparkle's impatient interval.
+const STAGED_NAG_ESCALATION: Duration = Duration::from_secs(7 * 24 * 3600);
+
+/// One escalation per session; the store-free flag is fine because the
+/// escalation exists precisely for long-running sessions.
+static STAGED_NAG_ESCALATED: AtomicBool = AtomicBool::new(false);
+
+/// True when a display-sleep power assertion is held (video playback,
+/// presentation, screen sharing, an active meeting) — the user is present
+/// even though input is idle. Same signal Sparkle checks before showing
+/// scheduled update UI.
+#[cfg(target_os = "macos")]
+fn display_sleep_assertion_active() -> bool {
+    use core_foundation::base::TCFType;
+    use core_foundation::string::CFString;
+    use core_foundation_sys::base::CFRelease;
+    use core_foundation_sys::dictionary::{CFDictionaryGetValueIfPresent, CFDictionaryRef};
+    use core_foundation_sys::number::{kCFNumberIntType, CFNumberGetValue, CFNumberRef};
+
+    #[link(name = "IOKit", kind = "framework")]
+    extern "C" {
+        fn IOPMCopyAssertionsStatus(assertions_status: *mut CFDictionaryRef) -> i32;
+    }
+
+    let mut dict: CFDictionaryRef = std::ptr::null();
+    if unsafe { IOPMCopyAssertionsStatus(&mut dict) } != 0 || dict.is_null() {
+        return false;
+    }
+    let mut active = false;
+    for key in ["NoDisplaySleepAssertion", "PreventUserIdleDisplaySleep"] {
+        let cf_key = CFString::new(key);
+        let mut value: *const std::ffi::c_void = std::ptr::null();
+        let present = unsafe {
+            CFDictionaryGetValueIfPresent(
+                dict,
+                cf_key.as_concrete_TypeRef() as *const _,
+                &mut value,
+            )
+        };
+        if present != 0 && !value.is_null() {
+            let mut level: i32 = 0;
+            let ok = unsafe {
+                CFNumberGetValue(
+                    value as CFNumberRef,
+                    kCFNumberIntType,
+                    &mut level as *mut i32 as *mut std::ffi::c_void,
+                )
+            };
+            if ok && level > 0 {
+                active = true;
+                break;
+            }
+        }
+    }
+    unsafe { CFRelease(dict as *const _) };
+    active
+}
+
+#[cfg(not(target_os = "macos"))]
+fn display_sleep_assertion_active() -> bool {
+    false
+}
+
 /// Seconds since the last keyboard/mouse event, or +inf where we can't ask
 /// (non-macOS) so callers proceed immediately — the pre-idle-aware behavior.
 #[cfg(target_os = "macos")]
@@ -417,9 +482,11 @@ async fn wait_for_restart_opportunity(idle_threshold_secs: f64, max_wait: Durati
     let deadline = tokio::time::Instant::now() + max_wait;
     loop {
         let idle = seconds_since_last_user_input();
-        if idle >= idle_threshold_secs {
+        // Idle input is not enough: a held display-sleep assertion means
+        // video/presentation/meeting — the user is present, hands off.
+        if idle >= idle_threshold_secs && !display_sleep_assertion_active() {
             info!(
-                "auto-update restart: input idle {:.0}s ≥ {:.0}s — proceeding",
+                "auto-update restart: input idle {:.0}s ≥ {:.0}s, no display assertions — proceeding",
                 idle.min(86_400.0),
                 idle_threshold_secs
             );
@@ -762,6 +829,37 @@ impl UpdatesManager {
             }
         }
         if let Ok(Some(update)) = check_result {
+            // Running translocated or from the DMG: no install can succeed.
+            // Say so clearly instead of failing mid-install (Sparkle's
+            // SURunningTranslocated behavior).
+            #[cfg(target_os = "macos")]
+            if let Some(blocker) = crate::updater_install::install_blocked_reason() {
+                warn!(
+                    "update v{} available but install is blocked: {:?}",
+                    update.version, blocker
+                );
+                if let Some(ref item) = self.update_menu_item {
+                    item.set_enabled(false)?;
+                    item.set_text("Move screenpipe to Applications to update")?;
+                }
+                let _ = self.app.emit(
+                    "update-blocked",
+                    serde_json::json!({
+                        "version": update.version,
+                        "reason": blocker.user_message(),
+                    }),
+                );
+                if show_dialog {
+                    self.app
+                        .dialog()
+                        .message(blocker.user_message())
+                        .title("screenpipe can't update from here")
+                        .buttons(MessageDialogButtons::Ok)
+                        .show(|_| {});
+                }
+                return Result::Ok(false);
+            }
+
             // Already staged this exact version — nothing to do. The periodic
             // loop keeps checking past a staged download precisely so a NEWER
             // release can supersede it (a user who ignores the banner for
@@ -771,6 +869,7 @@ impl UpdatesManager {
                 if let Some(p) = pending.as_ref() {
                     if p.downloaded && p.version == update.version {
                         debug!("update v{} already staged, nothing to do", update.version);
+                        self.maybe_escalate_staged_nag(&update.version);
                         return Result::Ok(true);
                     }
                 }
@@ -969,7 +1068,7 @@ impl UpdatesManager {
                     // path instead. See updater_install.rs.
                     #[cfg(target_os = "macos")]
                     let result = {
-                        if let Some(bundle) = crate::updater_install::self_install_target() {
+                        if let Some(bundle) = crate::updater_install::install_target_bundle() {
                             // Persistent staging: a bundle staged by a prior
                             // session (or a pre-restart attempt) skips the
                             // download entirely; it re-validates at apply.
@@ -1257,6 +1356,40 @@ impl UpdatesManager {
     pub async fn has_update_installed(&self) -> bool {
         *self.update_installed.lock().await
     }
+
+    /// Once a staged update has waited a week with auto-update on, remind
+    /// the user once per session that any quit or restart applies it
+    /// (Sparkle's impatient interval). Auto-update off means the banner is
+    /// the deliberate consent surface; no extra nagging there.
+    #[cfg(target_os = "macos")]
+    fn maybe_escalate_staged_nag(&self, version: &str) {
+        if !load_auto_update_enabled(&self.app) {
+            return;
+        }
+        let age = crate::updater_install::staged_age_secs(&self.app).unwrap_or(0);
+        if age < STAGED_NAG_ESCALATION.as_secs() {
+            return;
+        }
+        if STAGED_NAG_ESCALATED.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let app_notif = self.app.clone();
+        let version = version.to_string();
+        std::thread::spawn(move || {
+            let _ = app_notif
+                .notification()
+                .builder()
+                .title("screenpipe update still pending")
+                .body(format!(
+                    "v{} has been ready for a week — quit or restart screenpipe whenever, it installs itself",
+                    version
+                ))
+                .show();
+        });
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn maybe_escalate_staged_nag(&self, _version: &str) {}
 
     /// Read the current pending update snapshot, for the frontend banner to
     /// hydrate when its listener mounts late and misses the event.

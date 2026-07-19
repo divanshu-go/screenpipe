@@ -251,7 +251,10 @@ export function UpdateBanner({ className, compact = false, variant = "default" }
           <div className="text-xs font-medium text-foreground truncate">
             {isInstalling ? "Restarting…" : "Restart to update"}
           </div>
-          <div className="text-[10px] text-muted-foreground truncate">v{updateInfo.version}</div>
+          <div className="text-[10px] text-muted-foreground truncate">
+            v{updateInfo.version}
+            {platform() === "macos" ? " · installs on quit too" : ""}
+          </div>
         </div>
       </button>
     );
@@ -287,6 +290,9 @@ export function UpdateBanner({ className, compact = false, variant = "default" }
         <Sparkles className="h-4 w-4 text-primary" />
         <span>
           screenpipe <span className="font-medium">v{updateInfo.version}</span> is ready
+          {platform() === "macos" ? (
+            <span className="text-muted-foreground"> (installs on quit or restart)</span>
+          ) : null}
         </span>
       </div>
       <div className="flex items-center gap-2">
