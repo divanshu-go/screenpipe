@@ -70,6 +70,7 @@ import {
 } from "@/lib/chat-utils";
 import { deriveFallbackConversationTitle } from "@/lib/utils/chat-title";
 import { isInternalTitleSession } from "@/lib/utils/internal-session";
+import { useAcpSessionConfig } from "@/lib/stores/acp-session-config";
 import {
   getPersistedViewedAt,
   useChatStore,
@@ -178,6 +179,13 @@ export async function handlePiEvent(envelope: AgentEventEnvelope) {
   if (!sid || !inner) return; // events without a session id or body can't be routed
   // Internal Pi sessions (title generation, etc.) — never routed to chat store
   if (isInternalTitleSession(sid)) return;
+  // ACP adapters advertise their model/mode selectors per session. Pure
+  // runtime metadata: capture it for the composer picker and stop — it must
+  // not lazy-create a chat row or touch message content.
+  if ((inner as { type?: string }).type === "acp_session_config") {
+    useAcpSessionConfig.getState().setFromEvent(sid, inner);
+    return;
+  }
   // Pipe sessions are only routed when chat-store already has a record
   // for them — i.e. the user clicked into a pipe-watch view, which
   // upserted the session. Unwatched pipes go to the pipe-run-recorder
@@ -297,6 +305,7 @@ export function handleTerminated(payload: AgentTerminatedPayload) {
   // streaming dot.
   const sid = payload.sessionId;
   if (!sid) return;
+  useAcpSessionConfig.getState().clear(sid);
   const store = useChatStore.getState();
   if (!store.sessions[sid]) return;
   removeAgentActionsFromSession(sid);

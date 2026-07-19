@@ -590,3 +590,70 @@ describe("pi-event-router: agent_terminated", () => {
     );
   });
 });
+
+describe("pi-event-router: acp session config capture", () => {
+  beforeEach(reset);
+
+  it("stores advertised select options without creating a chat row", async () => {
+    const { useAcpSessionConfig } = await import("../stores/acp-session-config");
+    await handlePiEvent(
+      piEvt("A", {
+        type: "acp_session_config",
+        configOptions: [
+          {
+            id: "model",
+            name: "Model",
+            type: "select",
+            currentValue: "claude-sonnet-4-6",
+            options: [
+              { value: "claude-fable-5", name: "Claude Fable 5" },
+              { value: "claude-sonnet-4-6", name: "Claude Sonnet" },
+            ],
+          },
+        ],
+      } as unknown as AgentInnerEvent),
+    );
+
+    // Pure runtime metadata: no lazy-created session in the chat store.
+    expect(useChatStore.getState().sessions["A"]).toBeUndefined();
+    const options = useAcpSessionConfig.getState().sessions["A"];
+    expect(options).toHaveLength(1);
+    expect(options[0].id).toBe("model");
+    expect(options[0].currentValue).toBe("claude-sonnet-4-6");
+    expect(options[0].values.map((value) => value.value)).toEqual([
+      "claude-fable-5",
+      "claude-sonnet-4-6",
+    ]);
+  });
+
+  it("flattens grouped options and clears on termination", async () => {
+    const { useAcpSessionConfig } = await import("../stores/acp-session-config");
+    seed("A");
+    await handlePiEvent(
+      piEvt("A", {
+        type: "acp_session_config",
+        configOptions: [
+          {
+            id: "model",
+            name: "Model",
+            type: "select",
+            currentValue: "gpt-5.5",
+            options: [
+              { name: "Frontier", options: [{ value: "gpt-5.5", name: "GPT-5.5" }] },
+              { name: "Fast", options: [{ value: "gpt-5.5-mini", name: "GPT-5.5 Mini" }] },
+            ],
+          },
+        ],
+      } as unknown as AgentInnerEvent),
+    );
+
+    const options = useAcpSessionConfig.getState().sessions["A"];
+    expect(options[0].values.map((value) => value.value)).toEqual([
+      "gpt-5.5",
+      "gpt-5.5-mini",
+    ]);
+
+    handleTerminated({ sessionId: "A", source: "pi", exitCode: 0 });
+    expect(useAcpSessionConfig.getState().sessions["A"]).toBeUndefined();
+  });
+});

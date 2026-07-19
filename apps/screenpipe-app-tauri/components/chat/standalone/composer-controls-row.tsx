@@ -11,6 +11,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { AIPresetsSelector } from "@/components/rewind/ai-presets-selector";
+import { AcpConfigSelector } from "@/components/chat/standalone/acp-config-selector";
 import { ThinkingLevelSelector } from "@/components/thinking-level-selector";
 import { ComposerUtilityMenu } from "@/components/chat/standalone/composer-utility-menu";
 import type {
@@ -132,6 +133,10 @@ export function ComposerControlsRow({
             void modelControls.onPresetSaved(match);
           }
         }}
+      />
+      <AcpConfigSelector
+        sessionId={modelControls.currentQueueSessionId}
+        streaming={isStreaming}
       />
       <ThinkingLevelSelector
         streaming={isStreaming}
