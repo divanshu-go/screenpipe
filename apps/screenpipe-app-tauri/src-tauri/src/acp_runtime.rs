@@ -942,20 +942,58 @@ fn content_text(content: Option<&Value>) -> Option<String> {
     if let Some(text) = content.as_str() {
         return Some(text.to_owned());
     }
-    if content.get("type").and_then(Value::as_str) == Some("text") {
-        return content
-            .get("text")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
+    if let Some(items) = content.as_array() {
+        let joined = items
+            .iter()
+            .filter_map(|item| tool_content_item_text(item))
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Some(joined);
+    }
+    if let Some(text) = tool_content_item_text(content) {
+        return Some(text);
     }
     serde_json::to_string(content).ok()
 }
 
+/// Human-readable text for one ACP ToolCallContent item. Adapters report tool
+/// results as arrays of these rather than raw strings.
+fn tool_content_item_text(item: &Value) -> Option<String> {
+    match item.get("type").and_then(Value::as_str) {
+        Some("text") => item.get("text").and_then(Value::as_str).map(str::to_owned),
+        Some("content") => content_text(item.get("content")),
+        Some("diff") => {
+            let path = item.get("path").and_then(Value::as_str).unwrap_or("file");
+            let new_text = item
+                .get("newText")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            Some(match item.get("oldText").and_then(Value::as_str) {
+                Some(old_text) if !old_text.is_empty() => {
+                    format!("Edited {path}\n--- before\n{old_text}\n+++ after\n{new_text}")
+                }
+                _ => format!("Wrote {path}\n{new_text}"),
+            })
+        }
+        Some("terminal") => {
+            let id = item
+                .get("terminalId")
+                .and_then(Value::as_str)
+                .unwrap_or("terminal");
+            Some(format!("[output in terminal {id}]"))
+        }
+        _ => serde_json::to_string(item).ok(),
+    }
+}
+
 fn tool_name(update: &Value) -> String {
+    // The title is the human-readable name ("Grep", "mcp__screenpipe__search");
+    // kind is only a UX category (read/edit/search/execute/...).
     update
-        .get("kind")
+        .get("title")
         .and_then(Value::as_str)
-        .or_else(|| update.get("title").and_then(Value::as_str))
+        .filter(|title| !title.trim().is_empty())
+        .or_else(|| update.get("kind").and_then(Value::as_str))
         .unwrap_or("tool")
         .to_owned()
 }
@@ -969,16 +1007,29 @@ fn update_status_finished(update: &Value) -> bool {
 
 fn finish_tool(output: &ParentOutput, id: &str, update: &Value) {
     let result = update
-        .get("rawOutput")
-        .or_else(|| update.get("content"))
+        .get("content")
+        .filter(|value| value.as_array().is_some_and(|items| !items.is_empty()))
+        .or_else(|| update.get("rawOutput"))
         .and_then(|value| content_text(Some(value)))
         .unwrap_or_default();
     output.send(json!({
         "type": "tool_execution_end",
         "toolCallId": id,
         "toolName": tool_name(update),
-        "result": result,
+        // The desktop event router reads the raw-Pi result shape
+        // ({content: [{text}]}), not a bare string.
+        "result": { "content": [{ "type": "text", "text": result }] },
         "isError": update.get("status").and_then(Value::as_str) == Some("failed")
+    }));
+}
+
+/// Mirror the adapter's advertised session configuration (model/mode
+/// selectors) to the desktop so the UI can render pickers for them.
+fn send_session_config(output: &ParentOutput, session: &NewSessionResponse) {
+    output.send(json!({
+        "type": "acp_session_config",
+        "modes": session.modes,
+        "configOptions": session.config_options,
     }));
 }
 
@@ -2128,6 +2179,33 @@ mod tests {
             content_text(Some(&json!({ "type": "text", "text": "hello" }))),
             Some("hello".into())
         );
+        // ACP tool results arrive as arrays of ToolCallContent items.
+        assert_eq!(
+            content_text(Some(&json!([
+                { "type": "content", "content": { "type": "text", "text": "line one" } },
+                { "type": "text", "text": "line two" }
+            ]))),
+            Some("line one\nline two".into())
+        );
+        assert_eq!(
+            content_text(Some(&json!([{
+                "type": "diff",
+                "path": "src/main.rs",
+                "oldText": "a",
+                "newText": "b"
+            }]))),
+            Some("Edited src/main.rs\n--- before\na\n+++ after\nb".into())
+        );
+    }
+
+    #[test]
+    fn tool_name_prefers_human_title_over_kind_category() {
+        assert_eq!(
+            tool_name(&json!({ "kind": "search", "title": "Grep" })),
+            "Grep"
+        );
+        assert_eq!(tool_name(&json!({ "kind": "execute", "title": "" })), "execute");
+        assert_eq!(tool_name(&json!({})), "tool");
     }
 
     #[cfg(windows)]
