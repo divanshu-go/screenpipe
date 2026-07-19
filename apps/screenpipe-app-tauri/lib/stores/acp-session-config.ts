@@ -36,9 +36,34 @@ export interface AcpSessionConfig {
 
 interface AcpSessionConfigState {
   sessions: Record<string, AcpSessionConfig>;
+  /** Last advertisement seen per adapter id, kept across sessions (and app
+   *  restarts via localStorage) so the preset editors can offer model/mode
+   *  defaults without a live session. */
+  byAgent: Record<string, AcpSessionConfig>;
   setFromEvent: (sessionId: string, event: unknown) => void;
   applyUpdate: (sessionId: string, update: unknown) => void;
   clear: (sessionId: string) => void;
+}
+
+const BY_AGENT_STORAGE_KEY = "acp-adapter-advertisements";
+
+function loadByAgent(): Record<string, AcpSessionConfig> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(BY_AGENT_STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as Record<string, AcpSessionConfig>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveByAgent(byAgent: Record<string, AcpSessionConfig>) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(BY_AGENT_STORAGE_KEY, JSON.stringify(byAgent));
+  } catch {
+    // best-effort cache; the composer still works from live events
+  }
 }
 
 /** Flatten grouped and ungrouped ACP select options into one value list. */
@@ -89,6 +114,7 @@ function parseModes(raw: any): AcpSessionModes | null {
 
 export const useAcpSessionConfig = create<AcpSessionConfigState>()((set) => ({
   sessions: {},
+  byAgent: loadByAgent(),
   setFromEvent: (sessionId, event) => {
     const raw = event as any;
     // Partial events (e.g. a set_config_option ack) omit modes; merge so an
@@ -101,7 +127,13 @@ export const useAcpSessionConfig = create<AcpSessionConfigState>()((set) => ({
           : (prior?.options ?? []),
         modes: raw?.modes !== undefined ? parseModes(raw.modes) : (prior?.modes ?? null),
       };
-      return { sessions: { ...state.sessions, [sessionId]: next } };
+      const agentId = typeof raw?.agentId === "string" ? raw.agentId : null;
+      const byAgent =
+        agentId && (next.options.length > 0 || next.modes)
+          ? { ...state.byAgent, [agentId]: next }
+          : state.byAgent;
+      if (byAgent !== state.byAgent) saveByAgent(byAgent);
+      return { sessions: { ...state.sessions, [sessionId]: next }, byAgent };
     });
   },
   applyUpdate: (sessionId, update) => {

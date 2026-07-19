@@ -32,7 +32,11 @@ export function AcpConfigSelector({
   const selects = (config?.options ?? []).filter(
     (option) => option.type === "select" && option.values.length > 0,
   );
-  const modes = config?.modes ?? null;
+  // Some adapters (Claude Code) advertise their permission mode both as the
+  // modes state and as a "mode" config option; render it once.
+  const modes = selects.some((option) => option.category === "mode")
+    ? null
+    : (config?.modes ?? null);
   if (!sessionId || (selects.length === 0 && !modes)) return null;
 
   const run = async (key: string, action: () => Promise<void>, label: string) => {

@@ -1074,6 +1074,14 @@ pub struct AcpAgentPresetConfig {
     /// Keys with empty values inherit from the desktop process environment.
     #[serde(default)]
     pub env: HashMap<String, String>,
+    /// Default session config option values (option id -> value id), applied
+    /// after every session/new. Options the adapter no longer advertises are
+    /// ignored at apply time.
+    #[serde(default)]
+    pub config: HashMap<String, String>,
+    /// Default session mode id, applied after every session/new.
+    #[serde(default)]
+    pub mode_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Type, Clone)]
