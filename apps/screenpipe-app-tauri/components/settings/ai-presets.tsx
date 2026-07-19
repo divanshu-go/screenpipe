@@ -439,8 +439,11 @@ const AISection = ({
         id:
           settingsPreset?.id?.trim() ||
           generatePresetName(
-            settingsPreset?.provider,
-            settingsPreset?.acpAgent?.id,
+            {
+              provider: settingsPreset?.provider,
+              acpAgentId: settingsPreset?.acpAgent?.id,
+              model: settingsPreset?.model,
+            },
             visiblePresets.map((p) => p.id),
             preset?.id,
           ),
@@ -632,40 +635,50 @@ const AISection = ({
     if (newValue === "acp") {
       updates.acpAgent = settingsPreset?.acpAgent || { id: "pi-acp" };
     }
-    // Auto-name when creating: fill empty names or replace a previous
-    // auto-name, but never touch something the user typed themselves.
-    const currentName = settingsPreset?.id || "";
-    if (!currentName || currentName === lastAutoNameRef.current) {
-      const autoName = generatePresetName(
-        newValue,
-        updates.acpAgent?.id ?? settingsPreset?.acpAgent?.id,
-        visiblePresets.map((p) => p.id),
-        preset?.id,
-      );
-      updates.id = autoName;
-      lastAutoNameRef.current = autoName;
-    }
 
     updateSettingsPreset(updates);
-  }, [settingsPreset?.acpAgent, settingsPreset?.id, settingsPreset?.model, settingsPreset?.provider, settingsPreset?.url, updateSettingsPreset, visiblePresets, preset?.id]);
+  }, [settingsPreset?.acpAgent, settingsPreset?.model, settingsPreset?.provider, settingsPreset?.url, updateSettingsPreset]);
 
   const updateAcpAgent = useCallback((changes: Partial<NonNullable<AIPreset["acpAgent"]>>) => {
     const current = settingsPreset?.acpAgent || { id: "pi-acp" };
     const next = { ...current, ...changes };
-    const updates: Partial<AIPreset> = { acpAgent: next, model: next.id };
-    const currentName = settingsPreset?.id || "";
-    if (!currentName || currentName === lastAutoNameRef.current) {
-      const autoName = generatePresetName(
-        "acp",
-        next.id,
-        visiblePresets.map((p) => p.id),
-        preset?.id,
-      );
-      updates.id = autoName;
-      lastAutoNameRef.current = autoName;
-    }
-    updateSettingsPreset(updates);
-  }, [settingsPreset?.acpAgent, settingsPreset?.id, updateSettingsPreset, visiblePresets, preset?.id]);
+    updateSettingsPreset({ acpAgent: next, model: next.id });
+  }, [settingsPreset?.acpAgent, updateSettingsPreset]);
+
+  // Live auto-naming: whenever the selection changes (provider, model, or
+  // agent), write the generated name straight into the name field. It keeps
+  // following the selection while the field holds a generated value or is
+  // empty; the moment the user types their own name it is never touched
+  // again. Name-field edits themselves never trigger this.
+  useEffect(() => {
+    if (preset && !isDuplicating) return;
+    if (!settingsPreset?.provider) return;
+    const currentName = settingsPreset.id || "";
+    if (currentName && currentName !== lastAutoNameRef.current) return;
+    const autoName = generatePresetName(
+      {
+        provider: settingsPreset.provider,
+        acpAgentId: settingsPreset.acpAgent?.id,
+        model: settingsPreset.model,
+      },
+      visiblePresets.map((p) => p.id),
+      preset?.id,
+    );
+    if (autoName === currentName) return;
+    lastAutoNameRef.current = autoName;
+    updateSettingsPreset({ id: autoName });
+    // The current name is read but intentionally not a dependency: retyping
+    // or clearing the field must not fight the user's input.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    settingsPreset?.provider,
+    settingsPreset?.model,
+    settingsPreset?.acpAgent?.id,
+    preset,
+    isDuplicating,
+    visiblePresets,
+    updateSettingsPreset,
+  ]);
 
   const [models, setModels] = useState<AIModel[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
@@ -1359,12 +1372,12 @@ const AISection = ({
             ? validatePresetName(value, visiblePresets, preset?.id)
             : { isValid: true }
         }
-        placeholder="Generated automatically — type to override"
+        placeholder="Preset name"
         required={false}
         spellCheck={false}
         autoCorrect="off"
         disabled={!!preset && !isDuplicating && preset.id !== undefined}
-        helperText="Optional. Letters, numbers, spaces, hyphens, and underscores; a name is generated for you if left empty"
+        helperText="Follows your selection automatically, or type your own"
       />
 
       {settingsPreset?.provider === "acp" && (
