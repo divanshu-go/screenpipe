@@ -1250,8 +1250,11 @@ impl UpdatesManager {
                 let notification = app_notif.notification().builder();
                 let result = if auto_update {
                     notification
-                        .title("screenpipe updating")
-                        .body(format!("v{} downloaded — restarting now", version_str))
+                        .title("screenpipe update ready")
+                        .body(format!(
+                            "v{} downloaded — will restart when you step away",
+                            version_str
+                        ))
                         .show()
                 } else {
                     notification

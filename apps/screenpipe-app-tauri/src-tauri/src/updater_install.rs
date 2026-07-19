@@ -417,6 +417,20 @@ fn stage_update_inner(
     }
     let extracted_bundle = single_app_bundle_in(extract_dir)?;
 
+    // Refuse to stage a bundle whose own version disagrees with the manifest
+    // label. minisign guarantees the bytes came from us, but not that the
+    // server served the artifact it named; a mismatch means it's being staged
+    // under the wrong version.
+    if let Some(bundle_version) =
+        plist_file_string(&extracted_bundle, "CFBundleShortVersionString")
+    {
+        if bundle_version != expected_version {
+            return Err(InstallError::Verification(format!(
+                "downloaded bundle is v{bundle_version} but the manifest claimed v{expected_version}"
+            )));
+        }
+    }
+
     fix_bundle_perms(&extracted_bundle)?;
     strip_quarantine(&extracted_bundle);
     fsync_key_files(&extracted_bundle);
