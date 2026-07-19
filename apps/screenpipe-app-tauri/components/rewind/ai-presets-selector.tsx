@@ -238,26 +238,39 @@ export function AIProviderConfig({
   });
 
   // Last name this dialog generated itself. While the field still holds it
-  // (or is empty) provider/agent changes keep regenerating it; a name the
-  // user typed is never overwritten. Empty names get generated on submit.
+  // (or is empty) selection changes keep regenerating it; a name the user
+  // typed is never overwritten. Empty names get generated on submit.
   const lastAutoNameRef = useRef<string | null>(null);
 
-  const withAutoName = (
-    updates: Partial<AIPreset>,
-    acpAgentId?: string | null,
-  ): Partial<AIPreset> => {
-    if (defaultPreset?.id) return updates;
+  // Live auto-naming: write the generated name straight into the name field
+  // whenever the selection (provider, model, agent) changes. Name-field
+  // edits themselves never trigger this, so typing is never fought.
+  useEffect(() => {
+    if (defaultPreset?.id) return;
     const currentName = formData.id || "";
-    if (currentName && currentName !== lastAutoNameRef.current) return updates;
+    if (currentName && currentName !== lastAutoNameRef.current) return;
     const autoName = generatePresetName(
-      updates.provider ?? formData.provider,
-      acpAgentId ?? updates.acpAgent?.id ?? formData.acpAgent?.id,
+      {
+        provider: formData.provider,
+        acpAgentId: formData.acpAgent?.id,
+        model: formData.model,
+      },
       (settings?.aiPresets ?? []).map((preset) => preset.id),
     );
+    if (autoName === currentName) return;
     lastAutoNameRef.current = autoName;
+    setFormData((prev) => ({ ...prev, id: autoName }));
     setIdError(null);
-    return { ...updates, id: autoName };
-  };
+    // formData.id is read but intentionally not a dependency: clearing or
+    // retyping the name must not refill it mid-edit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    formData.provider,
+    formData.model,
+    formData.acpAgent?.id,
+    defaultPreset?.id,
+    settings?.aiPresets,
+  ]);
 
   const validateId = (id: string | undefined): boolean => {
     if (!id?.trim()) {
@@ -440,8 +453,11 @@ export function AIProviderConfig({
         id:
           formData.id?.trim() ||
           generatePresetName(
-            formData.provider,
-            formData.acpAgent?.id,
+            {
+              provider: formData.provider,
+              acpAgentId: formData.acpAgent?.id,
+              model: formData.model,
+            },
             (settings?.aiPresets ?? []).map((preset) => preset.id),
             defaultPreset?.id,
           ),
@@ -450,19 +466,6 @@ export function AIProviderConfig({
       setIsLoading(false);
     }
   };
-
-  // Prefill a generated name for new presets so nobody is forced to invent one.
-  useEffect(() => {
-    if (defaultPreset?.id || formData.id) return;
-    const autoName = generatePresetName(
-      formData.provider,
-      formData.acpAgent?.id,
-      (settings?.aiPresets ?? []).map((preset) => preset.id),
-    );
-    lastAutoNameRef.current = autoName;
-    setFormData((prev) => (prev.id ? prev : { ...prev, id: autoName }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
 
 
@@ -489,7 +492,7 @@ export function AIProviderConfig({
           <Input
             id="name"
             type="text"
-            placeholder="generated automatically — type to override"
+            placeholder="preset name"
             value={formData.id || undefined}
             onChange={(e) => handleIdChange(e.target.value)}
             className={cn(
@@ -518,11 +521,9 @@ export function AIProviderConfig({
                 setSelectedProvider("screenpipe-cloud");
                 setFormData({
                   ...formData,
-                  ...withAutoName({
-                    provider: "screenpipe-cloud",
-                    url: "",
-                    model: "auto",
-                  }),
+                  provider: "screenpipe-cloud",
+                  url: "",
+                  model: "auto",
                 });
               }}
             >
@@ -539,11 +540,9 @@ export function AIProviderConfig({
               setSelectedProvider("openai-chatgpt");
               setFormData({
                 ...formData,
-                ...withAutoName({
-                  provider: "openai-chatgpt",
-                  url: "https://api.openai.com/v1",
-                  model: "gpt-5.6-terra",
-                }),
+                provider: "openai-chatgpt",
+                url: "https://api.openai.com/v1",
+                model: "gpt-5.6-terra",
               });
             }}
           >
@@ -561,10 +560,8 @@ export function AIProviderConfig({
               setSelectedProvider("native-ollama");
               setFormData({
                 ...formData,
-                ...withAutoName({
-                  provider: "native-ollama",
-                  url: "http://localhost:11434/v1",
-                }),
+                provider: "native-ollama",
+                url: "http://localhost:11434/v1",
               });
             }}
           >
@@ -580,10 +577,8 @@ export function AIProviderConfig({
               setSelectedProvider("custom");
               setFormData({
                 ...formData,
-                ...withAutoName({
-                  provider: "custom",
-                  url: "http://localhost:11434/v1",
-                }),
+                provider: "custom",
+                url: "http://localhost:11434/v1",
               });
             }}
           >
@@ -600,11 +595,9 @@ export function AIProviderConfig({
                 setSelectedProvider("anthropic");
                 setFormData({
                   ...formData,
-                  ...withAutoName({
-                    provider: "anthropic",
-                    url: "",
-                    model: "claude-sonnet-5",
-                  }),
+                  provider: "anthropic",
+                  url: "",
+                  model: "claude-sonnet-5",
                 });
               }
             }}
@@ -624,15 +617,10 @@ export function AIProviderConfig({
               const agentId = formData.acpAgent?.id || "pi-acp";
               setFormData({
                 ...formData,
-                ...withAutoName(
-                  {
-                    provider: "acp",
-                    url: "",
-                    model: agentId,
-                    acpAgent: formData.acpAgent || { id: "pi-acp" },
-                  },
-                  agentId,
-                ),
+                provider: "acp",
+                url: "",
+                model: agentId,
+                acpAgent: formData.acpAgent || { id: "pi-acp" },
               });
             }}
           >
@@ -670,25 +658,20 @@ export function AIProviderConfig({
                     onClick={() =>
                       setFormData({
                         ...formData,
-                        ...withAutoName(
-                          {
-                            provider: "acp",
-                            model: adapter.id,
-                            acpAgent: {
-                              id: adapter.id,
-                              command:
-                                adapter.id === "custom"
-                                  ? formData.acpAgent?.command || ""
-                                  : undefined,
-                              args:
-                                adapter.id === "custom"
-                                  ? formData.acpAgent?.args || []
-                                  : undefined,
-                              env: formData.acpAgent?.env || {},
-                            },
-                          },
-                          adapter.id,
-                        ),
+                        provider: "acp",
+                        model: adapter.id,
+                        acpAgent: {
+                          id: adapter.id,
+                          command:
+                            adapter.id === "custom"
+                              ? formData.acpAgent?.command || ""
+                              : undefined,
+                          args:
+                            adapter.id === "custom"
+                              ? formData.acpAgent?.args || []
+                              : undefined,
+                          env: formData.acpAgent?.env || {},
+                        },
                       })
                     }
                     className={cn(

@@ -124,12 +124,31 @@ const PROVIDER_PRESET_NAMES: Record<string, string> = {
   custom: "custom",
 };
 
-/** Base preset name for a provider selection (before uniqueness suffixing). */
+/** Reduce any string to the allowed preset name characters. */
+const sanitizePresetName = (value: string): string =>
+  value
+    .replace(/[^a-zA-Z0-9\s\-_]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^[-\s]+|[-\s]+$/g, "");
+
+/** What the user actually picked: the agent for acp, the model for model
+ *  providers ("gpt-5-6-terra", "llama3-8b"), the provider as a last resort. */
+export interface PresetNameSelection {
+  provider?: string | null;
+  acpAgentId?: string | null;
+  model?: string | null;
+}
+
+/** Base preset name for a selection (before uniqueness suffixing). */
 export function defaultPresetBaseName(
-  provider?: string | null,
-  acpAgentId?: string | null,
+  selection: PresetNameSelection,
 ): string {
+  const { provider, acpAgentId, model } = selection;
   if (provider === "acp") return acpAdapterInfo(acpAgentId).presetName;
+  if (model && model !== "auto") {
+    const sanitized = sanitizePresetName(model);
+    if (sanitized && !sanitized.toLowerCase().endsWith("copy")) return sanitized;
+  }
   return PROVIDER_PRESET_NAMES[provider ?? ""] ?? "preset";
 }
 
@@ -153,15 +172,14 @@ export function uniquePresetName(
   }
 }
 
-/** One-call helper: unique auto-name for the current provider/agent choice. */
+/** One-call helper: unique auto-name for the current selection. */
 export function generatePresetName(
-  provider: string | null | undefined,
-  acpAgentId: string | null | undefined,
+  selection: PresetNameSelection,
   existingIds: readonly string[],
   currentId?: string | null,
 ): string {
   return uniquePresetName(
-    defaultPresetBaseName(provider, acpAgentId),
+    defaultPresetBaseName(selection),
     existingIds,
     currentId,
   );

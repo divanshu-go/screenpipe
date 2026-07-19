@@ -82,17 +82,39 @@ describe("uniquePresetName", () => {
 
 describe("generatePresetName", () => {
   it("names acp presets after the selected agent", () => {
-    expect(generatePresetName("acp", "claude-acp", [])).toBe("claude code");
-    expect(generatePresetName("acp", "custom", [])).toBe("acp agent");
+    expect(generatePresetName({ provider: "acp", acpAgentId: "claude-acp" }, [])).toBe(
+      "claude code",
+    );
+    expect(generatePresetName({ provider: "acp", acpAgentId: "custom" }, [])).toBe(
+      "acp agent",
+    );
+    // The acp model mirrors the adapter id and must not leak into the name
+    expect(
+      generatePresetName({ provider: "acp", acpAgentId: "codex-acp", model: "codex-acp" }, []),
+    ).toBe("codex");
   });
 
-  it("names provider presets after the provider", () => {
-    expect(generatePresetName("openai-chatgpt", undefined, [])).toBe("chatgpt");
-    expect(generatePresetName("native-ollama", undefined, ["ollama"])).toBe("ollama 2");
+  it("names model providers after the model, sanitized to allowed characters", () => {
+    expect(
+      generatePresetName({ provider: "openai-chatgpt", model: "gpt-5.6-terra" }, []),
+    ).toBe("gpt-5-6-terra");
+    expect(
+      generatePresetName({ provider: "native-ollama", model: "llama3:8b" }, []),
+    ).toBe("llama3-8b");
+  });
+
+  it("falls back to the provider when no meaningful model is picked", () => {
+    expect(generatePresetName({ provider: "screenpipe-cloud", model: "auto" }, [])).toBe(
+      "screenpipe-cloud",
+    );
+    expect(generatePresetName({ provider: "native-ollama" }, ["ollama"])).toBe("ollama 2");
+    expect(generatePresetName({ provider: "openai-chatgpt", model: "..." }, [])).toBe(
+      "chatgpt",
+    );
   });
 
   it("falls back to a safe generic base", () => {
-    expect(defaultPresetBaseName("something-new")).toBe("preset");
-    expect(generatePresetName(undefined, undefined, [])).toBe("preset");
+    expect(defaultPresetBaseName({ provider: "something-new" })).toBe("preset");
+    expect(generatePresetName({}, [])).toBe("preset");
   });
 });
