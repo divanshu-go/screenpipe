@@ -8,6 +8,7 @@ import {
   acpAdapterInfo,
   defaultPresetBaseName,
   generatePresetName,
+  presetImageClass,
   presetImageSrc,
   uniquePresetName,
 } from "./preset-appearance";
@@ -49,6 +50,19 @@ describe("presetImageSrc", () => {
     expect(presetImageSrc("acp")).not.toBe("/images/screenpipe.png");
     expect(presetImageSrc("never-heard-of-it")).toBe("/images/custom.png");
     expect(presetImageSrc(undefined)).toBe("/images/custom.png");
+  });
+});
+
+describe("presetImageClass", () => {
+  it("inverts monochrome light marks in dark mode", () => {
+    expect(presetImageSrc("acp", "opencode")).toBe("/images/opencode.svg");
+    expect(presetImageClass("acp", "opencode")).toBe("dark:invert");
+  });
+
+  it("leaves self-contained icons alone", () => {
+    expect(presetImageClass("acp", "pi-acp")).toBe("");
+    expect(presetImageClass("acp", "codex-acp")).toBe("");
+    expect(presetImageClass("openai-chatgpt")).toBe("");
   });
 });
 

@@ -10,6 +10,9 @@ export interface AcpAdapterInfo {
   id: string;
   name: string;
   imageSrc: string;
+  /** Monochrome marks drawn for light backgrounds set this so callsites can
+   *  apply `dark:invert`, matching the brand's own dark variant. */
+  invertInDark?: boolean;
   /** Base for an auto-generated preset name. Must satisfy the preset name
    *  rules: letters, numbers, spaces, hyphens, underscores only. */
   presetName: string;
@@ -48,7 +51,8 @@ export const ACP_ADAPTERS: readonly AcpAdapterInfo[] = [
   {
     id: "opencode",
     name: "OpenCode",
-    imageSrc: "/images/opencode.png",
+    imageSrc: "/images/opencode.svg",
+    invertInDark: true,
     presetName: "opencode",
     description:
       "Use your installed OpenCode agent. First-time login currently requires `opencode auth login` in a terminal.",
@@ -97,6 +101,18 @@ export function presetImageSrc(
 ): string {
   if (provider === "acp") return acpAdapterInfo(acpAgentId).imageSrc;
   return PROVIDER_IMAGE_SRC[provider ?? ""] ?? "/images/custom.png";
+}
+
+/** Extra img className for a preset icon, e.g. dark-mode inversion for
+ *  monochrome marks. Pair with presetImageSrc. */
+export function presetImageClass(
+  provider?: string | null,
+  acpAgentId?: string | null,
+): string {
+  if (provider === "acp" && acpAdapterInfo(acpAgentId).invertInDark) {
+    return "dark:invert";
+  }
+  return "";
 }
 
 const PROVIDER_PRESET_NAMES: Record<string, string> = {
