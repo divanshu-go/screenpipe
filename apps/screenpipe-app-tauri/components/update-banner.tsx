@@ -256,9 +256,7 @@ export function UpdateBanner({ className, compact = false, variant = "default" }
           <div className="text-xs font-medium text-foreground truncate">
             {isInstalling ? "Restarting…" : "Restart to update"}
           </div>
-          <div className="text-[10px] text-muted-foreground truncate">
-            v{updateInfo.version}
-          </div>
+          <div className="text-[10px] text-muted-foreground truncate">v{updateInfo.version}</div>
         </div>
       </button>
     );
