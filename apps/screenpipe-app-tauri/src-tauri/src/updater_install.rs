@@ -270,6 +270,50 @@ fn confined_path(path: &Path, roots: &[PathBuf]) -> Option<PathBuf> {
     None
 }
 
+/// Reject `path` if any component from its owning lifecycle root down to the
+/// leaf is a symlink. Closes the TOCTOU window between `confined_path` and a
+/// later `renamex_np`: a mid-path symlink re-pointed after the confinement
+/// check could otherwise redirect the swap source outside the root.
+fn reject_symlinks_under_roots(path: &Path, roots: &[PathBuf]) -> Result<(), InstallError> {
+    // Strip with the RAW root (same form as `path`), then walk from the
+    // CANONICAL root so system symlinks above it (e.g. /var -> /private/var on
+    // macOS) aren't mistaken for tampering — only the manifest-controlled
+    // components below the lifecycle root are lstat-checked.
+    let Some(rel) = roots.iter().find_map(|r| path.strip_prefix(r).ok()) else {
+        return Err(InstallError::Verification(format!(
+            "{} is not under a lifecycle root",
+            path.display()
+        )));
+    };
+    let raw_root = roots
+        .iter()
+        .find(|r| path.starts_with(r))
+        .expect("strip_prefix matched above");
+    let mut cursor = canonicalize_best_effort(raw_root);
+    for component in rel.components() {
+        cursor = cursor.join(component);
+        match fs::symlink_metadata(&cursor) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                return Err(InstallError::Verification(format!(
+                    "symlink component in staged path: {}",
+                    cursor.display()
+                )));
+            }
+            // Non-existent tail is fine (the leaf may be validated later); an
+            // lstat error other than not-found is treated as suspicious.
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
+            Err(e) => {
+                return Err(InstallError::Fs(format!(
+                    "lstat {} failed: {e}",
+                    cursor.display()
+                )))
+            }
+        }
+    }
+    Ok(())
+}
+
 /// `remove_dir_all` that refuses anything outside the lifecycle roots.
 fn confined_remove_dir_all(path: &Path, roots: &[PathBuf]) {
     match confined_path(path, roots) {
@@ -546,6 +590,18 @@ fn apply_staged_in(
         return Ok(None);
     };
 
+    // Already on the staged version: a prior apply swapped it in but a
+    // failed/absent marker left staged.json behind. Don't swap again (that
+    // would demote the running new version back to the parked old one and
+    // churn `previous/`); just reconcile the state. Rollbacks are a distinct
+    // version, so this only trips on true re-apply.
+    if version == current_version {
+        info!("self-install: already running staged v{version}, reconciling without swap");
+        let _ = fs::remove_file(cache.join("staged.json"));
+        clear_staged_in(cache, Some(installed_bundle));
+        return Ok(None);
+    }
+
     // The swap source comes from a user-writable manifest and this code may
     // run as root — confine it to a lifecycle root before it can become the
     // source of a `renamex_np` that would otherwise swap an arbitrary (e.g.
@@ -557,6 +613,16 @@ fn apply_staged_in(
             "staged bundle path {} escapes the update cache; refusing",
             staged_bundle.display()
         )));
+    }
+
+    // Close the check-then-use gap on the confined path: a symlink anywhere
+    // from the lifecycle root down to the staged bundle could be re-pointed
+    // between `confined_path` and the swap to redirect it outside the root.
+    // Reject any symlink component (Team-ID revalidation below is the second
+    // line of defence, but this removes the race).
+    if let Err(e) = reject_symlinks_under_roots(&staged_bundle, &roots) {
+        clear_staged_in(cache, Some(installed_bundle));
+        return Err(e);
     }
 
     // Re-validate from disk: Caches is user-writable, so nothing staged is
@@ -1461,12 +1527,14 @@ pub fn finalize_and_gc(app: &tauri::AppHandle) {
         .map(|sub| cache.join(sub))
         .collect();
     // The rare cross-volume staging slot lives next to the bundle, outside
-    // the cache dir; sweep it by the same age rule.
+    // the cache dir; sweep all three of its subdirs by the same age rule —
+    // `previous/` included, or parked cross-volume bundles leak forever.
     if let Some(alt) = install_target_bundle()
         .and_then(|b| b.parent().map(|p| p.join(".screenpipe-update-staging")))
     {
         gc_roots.push(alt.join("extract"));
         gc_roots.push(alt.join("staged"));
+        gc_roots.push(alt.join("previous"));
     }
     for root in gc_roots {
         let sub = if root.parent() == Some(cache.as_path()) {
@@ -1687,6 +1755,29 @@ mod tests {
         // a sibling system path smuggled via a tampered manifest: refused
         assert!(confined_path(Path::new("/Applications/Safari.app"), &roots).is_none());
         assert!(confined_path(Path::new("/"), &roots).is_none());
+    }
+
+    #[test]
+    fn symlink_component_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = tmp.path().join("cache");
+        let bundle = tmp.path().join("Applications/screenpipe.app");
+        fs::create_dir_all(cache.join("staged/9.9.9")).unwrap();
+        fs::create_dir_all(&bundle).unwrap();
+        let roots = lifecycle_roots(&cache, &bundle);
+
+        // clean path under the root: accepted
+        let clean = cache.join("staged/9.9.9/app.app");
+        fs::create_dir_all(&clean).unwrap();
+        assert!(reject_symlinks_under_roots(&clean, &roots).is_ok());
+
+        // a symlinked component in the middle: refused
+        let outside = tmp.path().join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        let link = cache.join("staged/evil");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        let via_link = link.join("app.app");
+        assert!(reject_symlinks_under_roots(&via_link, &roots).is_err());
     }
 
     #[test]
