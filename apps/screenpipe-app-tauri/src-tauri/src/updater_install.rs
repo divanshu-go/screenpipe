@@ -10,12 +10,10 @@
 //! and never validates what it extracted. This module replaces the *install*
 //! step (check/download/minisign stay in the plugin) with Sparkle's model:
 //!
-//! - `stage_update`: extract verified bytes into a persistent staged slot on
-//!   the destination volume and validate everything (Info.plist, executable,
-//!   version matches the manifest claim, `codesign --verify --deep`, Team ID
-//!   matches the installed app, 0755 perms, fsync). The staged bundle
+//! - `stage_update`: extract minisign-verified bytes into a persistent staged
+//!   slot on the destination volume (0755 perms, fsync). The staged bundle
 //!   survives restarts, so an interrupted flow never re-downloads.
-//! - `apply_staged_update`: re-validate, then swap old↔new with
+//! - `apply_staged_update`: swap old↔new with
 //!   `renamex_np(RENAME_SWAP)` (one atomic syscall, no no-app window;
 //!   fallback move-dance restores the old app on failure). Runs at restart
 //!   time / normal quit / early boot — never while the app keeps running, so
@@ -352,9 +350,9 @@ fn write_json_durable(path: &Path, value: &serde_json::Value) -> std::io::Result
 // Stage: extract + validate into the persistent staged slot
 // ───────────────────────────────────────────────────────────────────────────
 
-/// Extract verified update bytes and keep the validated bundle in the staged
+/// Extract minisign-verified update bytes and keep the bundle in the staged
 /// slot, ready for `apply_staged_update` at the next exit. Blocking (tar
-/// extraction + codesign); call via `spawn_blocking`.
+/// extraction); call via `spawn_blocking`.
 pub fn stage_update(
     app: &tauri::AppHandle,
     expected_version: &str,
@@ -477,8 +475,7 @@ fn read_staged_manifest(cache: &Path) -> Option<(String, PathBuf, bool)> {
     Some((version, bundle, allow_downgrade))
 }
 
-/// True when a staged bundle for exactly `version` is present and plausibly
-/// intact (full codesign re-verification happens at apply time). Lets the
+/// True when a staged bundle for exactly `version` is present. Lets the
 /// updater skip re-downloading after a restart.
 pub fn has_staged_version(app: &tauri::AppHandle, version: &str) -> bool {
     let Ok(cache) = updates_cache_dir(app) else {
@@ -532,11 +529,9 @@ pub fn has_staged_update(app: &tauri::AppHandle) -> bool {
 // Apply: the swap, at exit/restart/boot only
 // ───────────────────────────────────────────────────────────────────────────
 
-/// Apply a staged update if one exists: re-validate, atomic-swap it into
-/// place, park the old bundle for rollback, pre-warm Gatekeeper. Returns the
-/// applied version, or None when nothing is staged. Never leaves a broken
-/// install: validation failures clear the staged bundle and keep the
-/// installed app untouched.
+/// Apply a staged update if one exists: atomic-swap it into place, park the
+/// old bundle for rollback, pre-warm Gatekeeper. Returns the applied version,
+/// or None when nothing is staged.
 ///
 /// Called from every controlled exit: `force_app_relaunch` (restart paths),
 /// `RunEvent::Exit` (normal quit = install-on-quit), and early boot (crash
@@ -609,8 +604,7 @@ fn apply_staged_in(
     // Close the check-then-use gap on the confined path: a symlink anywhere
     // from the lifecycle root down to the staged bundle could be re-pointed
     // between `confined_path` and the swap to redirect it outside the root.
-    // Reject any symlink component (Team-ID revalidation below is the second
-    // line of defence, but this removes the race).
+    // Reject any symlink component.
     if let Err(e) = reject_symlinks_under_roots(&staged_bundle, &roots) {
         clear_staged_in(cache, Some(installed_bundle));
         return Err(e);
