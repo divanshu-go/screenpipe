@@ -1318,6 +1318,7 @@ const AISection = ({
             title="Coding agent"
             description="Use Pi, Codex, Claude Code, Gemini, OpenCode, Cursor, or any ACP-compatible agent"
             imageSrc="/images/acp.svg"
+            imageClassName="dark:invert"
             selected={settingsPreset?.provider === "acp"}
             onClick={() => handleAiProviderChange("acp")}
           />

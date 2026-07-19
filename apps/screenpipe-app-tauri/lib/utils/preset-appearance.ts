@@ -20,7 +20,7 @@ export const ACP_ADAPTERS: readonly AcpAdapterInfo[] = [
   {
     id: "pi-acp",
     name: "Pi",
-    imageSrc: "/images/screenpipe.png",
+    imageSrc: "/images/pi.svg",
     presetName: "pi",
     description: "Screenpipe's current agent through the shared ACP interface.",
   },

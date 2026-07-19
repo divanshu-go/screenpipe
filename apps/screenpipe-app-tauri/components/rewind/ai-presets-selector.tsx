@@ -636,7 +636,14 @@ export function AIProviderConfig({
             }}
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/images/acp.svg" alt="Coding agent" className="h-3.5 w-3.5 rounded-sm" />
+            <img
+              src="/images/acp.svg"
+              alt="Coding agent"
+              className={cn(
+                "h-3.5 w-3.5 rounded-sm dark:invert",
+                selectedProvider === "acp" && "invert dark:invert-0",
+              )}
+            />
             <span>coding agent</span>
           </Button>
         </div>
