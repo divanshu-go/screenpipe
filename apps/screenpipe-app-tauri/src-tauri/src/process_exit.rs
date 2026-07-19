@@ -236,6 +236,11 @@ pub(crate) fn relaunch_binary(app: &AppHandle) -> Option<PathBuf> {
 /// The replacement gets its own process group: launchd kills a job's whole
 /// process group when the job exits, so an inherited group dies with us.
 pub fn force_app_relaunch(app: AppHandle, status: i32) -> ! {
+    // A restart is an orderly exit: clear the boot sentinel so this session
+    // isn't counted as a failed boot if it hadn't reached ready yet.
+    #[cfg(target_os = "macos")]
+    crate::updater_install::note_orderly_exit(&app);
+
     // Staged update present: prefer the zero-flash handoff. The wait-apply
     // helper (this same binary, pre-tauri mode) outlives us, applies the
     // swap after we die, and relaunches the new version via LaunchServices.
@@ -666,6 +671,30 @@ pub fn request_app_quit(app: AppHandle) {
                 PRE_EXIT_TEARDOWN_TIMEOUT.as_secs()
             ),
         }
+
+        // Install-on-quit lives HERE, not only in RunEvent::Exit: tray/menu
+        // quit force-exits directly and never reaches that event. This is the
+        // exit path that makes "installs on quit" true. A clean quit before
+        // boot-ready also clears the boot sentinel so it isn't miscounted as a
+        // failed boot.
+        #[cfg(target_os = "macos")]
+        {
+            crate::updater_install::note_orderly_exit(&app);
+            if crate::updater_install::has_staged_update(&app) {
+                let handed_off = crate::updater_install::install_target_bundle()
+                    .filter(|b| crate::updater_install::bundle_writable(b))
+                    .map(|b| crate::updater_install::spawn_wait_apply_helper(&app, &b, false))
+                    .unwrap_or(false);
+                if !handed_off {
+                    match crate::updater_install::apply_staged_update(&app, false) {
+                        Ok(Some(v)) => info!("quit: applied staged update v{v}"),
+                        Ok(None) => {}
+                        Err(e) => warn!("quit: staged update not applied: {e}"),
+                    }
+                }
+            }
+        }
+
         force_process_exit(0);
     });
 }

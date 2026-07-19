@@ -43,7 +43,7 @@
 
 #![cfg(target_os = "macos")]
 
-use log::{info, warn};
+use log::{error, info, warn};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::Manager;
@@ -199,6 +199,112 @@ fn same_volume(a: &Path, b: &Path) -> bool {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+// Path confinement
+//
+// staged.json / pending.json live in user-writable Caches and are read back by
+// code that may run as ROOT (privileged apply/restore). Every path taken from
+// those files — a swap source, a delete target — must be proven to sit inside
+// a lifecycle root before use, or a tampered manifest turns into an arbitrary
+// `rm -rf` / swap of a system bundle. Directories the lifecycle constructs
+// itself are always safe; paths read from disk are not.
+// ───────────────────────────────────────────────────────────────────────────
+
+/// The directories this lifecycle owns: the Caches root, plus the
+/// same-volume-as-the-bundle alt root used for cross-volume installs.
+fn lifecycle_roots(cache: &Path, installed_bundle: &Path) -> Vec<PathBuf> {
+    let mut roots = vec![cache.to_path_buf()];
+    if let Some(parent) = installed_bundle.parent() {
+        roots.push(parent.join(".screenpipe-update-staging"));
+    }
+    roots
+}
+
+/// The lifecycle root a staged/parked bundle belongs to (`<root>/staged/<ver>/
+/// <app>` or `<root>/previous/<slot>/<app>`), so `previous/` can be parked on
+/// the SAME root — hence the same volume as the installed bundle — and neither
+/// the park rename nor a later rollback swap hits `EXDEV`.
+fn lifecycle_root_of(bundle: &Path, cache: &Path, installed_bundle: &Path) -> PathBuf {
+    if let Some(root) = bundle.ancestors().nth(3) {
+        if lifecycle_roots(cache, installed_bundle)
+            .iter()
+            .any(|r| r == root)
+        {
+            return root.to_path_buf();
+        }
+    }
+    cache.to_path_buf()
+}
+
+/// Canonicalize the longest existing prefix (so a symlink mid-path can't
+/// escape confinement) and re-attach the non-existent tail.
+fn canonicalize_best_effort(path: &Path) -> PathBuf {
+    let mut existing = path;
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    while !existing.exists() {
+        match (existing.file_name(), existing.parent()) {
+            (Some(name), Some(parent)) => {
+                tail.push(name.to_os_string());
+                existing = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
+    let mut base = existing
+        .canonicalize()
+        .unwrap_or_else(|_| existing.to_path_buf());
+    for seg in tail.iter().rev() {
+        base.push(seg);
+    }
+    base
+}
+
+/// `Some(canonical)` only when `path` sits strictly below one of `roots`.
+fn confined_path(path: &Path, roots: &[PathBuf]) -> Option<PathBuf> {
+    let canonical = canonicalize_best_effort(path);
+    for root in roots {
+        let croot = canonicalize_best_effort(root);
+        if canonical != croot && canonical.starts_with(&croot) {
+            return Some(canonical);
+        }
+    }
+    None
+}
+
+/// `remove_dir_all` that refuses anything outside the lifecycle roots.
+fn confined_remove_dir_all(path: &Path, roots: &[PathBuf]) {
+    match confined_path(path, roots) {
+        Some(safe) => {
+            let _ = fs::remove_dir_all(&safe);
+        }
+        None => warn!(
+            "self-install: refusing to delete {} (outside lifecycle roots)",
+            path.display()
+        ),
+    }
+}
+
+/// Write JSON durably: temp file, fsync, atomic rename, fsync parent dir. A
+/// post-write crash or power loss then still finds the file (the rollback
+/// breadcrumb must survive exactly the disk-pressure moment it guards against).
+fn write_json_durable(path: &Path, value: &serde_json::Value) -> std::io::Result<()> {
+    use std::io::Write;
+    let bytes = serde_json::to_vec_pretty(value).unwrap_or_default();
+    let tmp = path.with_extension("json.tmp");
+    {
+        let mut f = fs::File::create(&tmp)?;
+        f.write_all(&bytes)?;
+        f.sync_all()?;
+    }
+    fs::rename(&tmp, path)?;
+    if let Some(dir) = path.parent() {
+        if let Ok(d) = fs::File::open(dir) {
+            let _ = d.sync_all();
+        }
+    }
+    Ok(())
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 // Stage: extract + validate into the persistent staged slot
 // ───────────────────────────────────────────────────────────────────────────
 
@@ -347,20 +453,25 @@ pub fn has_staged_version(app: &tauri::AppHandle, version: &str) -> bool {
 /// Drop whatever is staged (validation failed, superseded by a newer
 /// release, or rolled back through another path).
 pub fn clear_staged(app: &tauri::AppHandle) {
+    let installed = install_target_bundle();
     if let Ok(cache) = updates_cache_dir(app) {
-        clear_staged_in(&cache);
+        clear_staged_in(&cache, installed.as_deref());
     }
 }
 
-fn clear_staged_in(cache: &Path) {
-    if let Some((_, bundle, _)) = read_staged_manifest(cache) {
-        // Covers the cross-volume slot too; bundle sits in <slot>/<ver>/.
-        if let Some(version_dir) = bundle.parent() {
-            let _ = fs::remove_dir_all(version_dir);
+/// Remove the staged manifest and bundle. Deletes ONLY the `staged/`
+/// directories the lifecycle constructs itself (in the Caches root and the
+/// cross-volume alt root) — never a path read back from staged.json, so a
+/// tampered manifest can't redirect the delete. `installed_bundle` is needed
+/// to locate the alt root; None falls back to the Caches root only.
+fn clear_staged_in(cache: &Path, installed_bundle: Option<&Path>) {
+    let _ = fs::remove_dir_all(cache.join("staged"));
+    if let Some(bundle) = installed_bundle {
+        if let Some(parent) = bundle.parent() {
+            let _ = fs::remove_dir_all(parent.join(".screenpipe-update-staging").join("staged"));
         }
     }
     let _ = fs::remove_file(cache.join("staged.json"));
-    let _ = fs::remove_dir_all(cache.join("staged"));
 }
 
 /// Seconds since the staged bundle was written, for nag escalation.
@@ -435,15 +546,28 @@ fn apply_staged_in(
         return Ok(None);
     };
 
+    // The swap source comes from a user-writable manifest and this code may
+    // run as root — confine it to a lifecycle root before it can become the
+    // source of a `renamex_np` that would otherwise swap an arbitrary (e.g.
+    // system) bundle into place.
+    let roots = lifecycle_roots(cache, installed_bundle);
+    if confined_path(&staged_bundle, &roots).is_none() {
+        clear_staged_in(cache, Some(installed_bundle));
+        return Err(InstallError::Verification(format!(
+            "staged bundle path {} escapes the update cache; refusing",
+            staged_bundle.display()
+        )));
+    }
+
     // Re-validate from disk: Caches is user-writable, so nothing staged is
     // trusted at apply time. Team-ID anchoring means even a validly signed
     // foreign app planted here is rejected.
     if let Err(e) = validate_bundle_fully(&staged_bundle, &version, installed_bundle) {
-        clear_staged_in(cache);
+        clear_staged_in(cache, Some(installed_bundle));
         return Err(e);
     }
     if !allow_downgrade && version_is_downgrade(&version, current_version) {
-        clear_staged_in(cache);
+        clear_staged_in(cache, Some(installed_bundle));
         return Err(InstallError::Verification(format!(
             "staged v{version} is older than running v{current_version}; refusing downgrade"
         )));
@@ -456,8 +580,11 @@ fn apply_staged_in(
         (m.uid(), m.gid())
     });
 
-    // Park slot for the displaced old bundle.
-    let previous_slot = cache
+    // Park the displaced old bundle on the SAME lifecycle root as the staged
+    // bundle (same volume as the installed bundle by construction), so neither
+    // this park rename nor a future rollback swap can hit EXDEV.
+    let root = lifecycle_root_of(&staged_bundle, cache, installed_bundle);
+    let previous_slot = root
         .join("previous")
         .join(format!("{}-{}", current_version, uuid::Uuid::new_v4()));
     fs::create_dir_all(&previous_slot).map_err(fs_err("create previous dir"))?;
@@ -475,20 +602,30 @@ fn apply_staged_in(
         }
     }
 
+    // Persist the rollback breadcrumb DURABLY before reporting success or
+    // clearing staged state: a post-swap crash must still leave a pending.json
+    // the boot-loop guard can act on. If even the durable write fails (disk
+    // full), the swap already succeeded — the install is valid, we just log
+    // that auto-rollback is unavailable and leave staged.json for the boot
+    // path to reconcile rather than lying about failure.
     let marker = serde_json::json!({
         "installedVersion": version,
         "previousVersion": current_version,
         "previousBundle": old_bundle_dest,
         "atUnixSecs": now_unix_secs(),
     });
-    if let Err(e) = fs::write(
-        cache.join("pending.json"),
-        serde_json::to_vec_pretty(&marker).unwrap_or_default(),
-    ) {
-        warn!("self-install: failed to write pending marker: {e}");
+    match write_json_durable(&cache.join("pending.json"), &marker) {
+        Ok(()) => {
+            let _ = fs::remove_file(cache.join("staged.json"));
+            clear_staged_in(cache, Some(installed_bundle));
+        }
+        Err(e) => {
+            error!(
+                "self-install: v{version} installed but rollback marker could not be persisted \
+                 ({e}); auto-rollback unavailable for this update"
+            );
+        }
     }
-    let _ = fs::remove_file(cache.join("staged.json"));
-    let _ = fs::remove_dir_all(cache.join("staged"));
 
     prewarm_gatekeeper(installed_bundle);
 
@@ -580,35 +717,55 @@ fn strip_quarantine(bundle: &Path) {
 // ───────────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, PartialEq, Eq)]
+enum HelperMode {
+    /// Wait for `--wait-pid` to die, then apply.
+    WaitApply,
+    /// Apply immediately (used under the admin prompt).
+    Apply,
+    /// Restore `--previous` over the installed bundle (boot-loop rollback,
+    /// used under the admin prompt for root-owned installs).
+    Restore,
+}
+
+#[derive(Debug, PartialEq, Eq)]
 struct HelperArgs {
-    wait_first: bool,
+    mode: HelperMode,
     cache: PathBuf,
     bundle: PathBuf,
+    previous: Option<PathBuf>,
     wait_pid: Option<i32>,
     relaunch: bool,
 }
 
 fn parse_helper_args(args: &[String]) -> Option<HelperArgs> {
     let mut iter = args.iter();
-    let wait_first = match iter.next().map(String::as_str) {
-        Some("wait-apply") => true,
-        Some("apply") => false,
+    let mode = match iter.next().map(String::as_str) {
+        Some("wait-apply") => HelperMode::WaitApply,
+        Some("apply") => HelperMode::Apply,
+        Some("restore") => HelperMode::Restore,
         _ => return None,
     };
-    let (mut cache, mut bundle, mut wait_pid, mut relaunch) = (None, None, None, false);
+    let (mut cache, mut bundle, mut previous, mut wait_pid, mut relaunch) =
+        (None, None, None, None, false);
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--cache" => cache = iter.next().map(PathBuf::from),
             "--bundle" => bundle = iter.next().map(PathBuf::from),
+            "--previous" => previous = iter.next().map(PathBuf::from),
             "--wait-pid" => wait_pid = iter.next().and_then(|v| v.parse::<i32>().ok()),
             "--relaunch" => relaunch = true,
             _ => return None,
         }
     }
+    // Restore needs a --previous; the others must not carry one.
+    if matches!(mode, HelperMode::Restore) && previous.is_none() {
+        return None;
+    }
     Some(HelperArgs {
-        wait_first,
+        mode,
         cache: cache?,
         bundle: bundle?,
+        previous,
         wait_pid,
         relaunch,
     })
@@ -637,7 +794,30 @@ fn update_helper_main(args: &[String]) -> i32 {
     };
     log(&format!("helper start: {parsed:?}"));
 
-    if parsed.wait_first {
+    // Restore mode: boot-loop rollback for a root-owned install.
+    if matches!(parsed.mode, HelperMode::Restore) {
+        let previous = parsed.previous.clone().unwrap_or_default();
+        // Confine the source: this runs as root off a user-writable path.
+        let roots = lifecycle_roots(&parsed.cache, &parsed.bundle);
+        if confined_path(&previous, &roots).is_none() {
+            log("restore source escapes lifecycle roots, refusing");
+            return 1;
+        }
+        let failed_version =
+            plist_file_string(&parsed.bundle, "CFBundleShortVersionString").unwrap_or_default();
+        return match restore_previous(&parsed.cache, &parsed.bundle, &previous, &failed_version) {
+            Ok(()) => {
+                log("restored previous bundle");
+                0
+            }
+            Err(e) => {
+                log(&format!("restore failed: {e}"));
+                1
+            }
+        };
+    }
+
+    if matches!(parsed.mode, HelperMode::WaitApply) {
         let Some(pid) = parsed.wait_pid else {
             log("wait-apply requires --wait-pid");
             return 2;
@@ -992,9 +1172,10 @@ fn swap_bundles(staged: &Path, installed: &Path, old_dest: &Path) -> Result<(), 
 // Boot-loop guard: automatic local rollback
 // ───────────────────────────────────────────────────────────────────────────
 
-/// Pure decision: given the previous attempts record and the running
-/// version, produce the updated attempt count (1-based for this boot).
-fn next_boot_attempts(
+/// Prior consecutive-failure count for `running`, or 0 when the record is for
+/// another version or older than the window. The +1 for the current failure
+/// is applied by the caller only when a failure is actually observed.
+fn prior_failure_count(
     prev: Option<(&str, u32, u64)>,
     running: &str,
     now: u64,
@@ -1004,23 +1185,47 @@ fn next_boot_attempts(
         Some((v, attempts, first_at))
             if v == running && now.saturating_sub(first_at) <= window_secs =>
         {
-            attempts + 1
+            attempts
         }
-        _ => 1,
+        _ => 0,
     }
 }
 
-/// Call once, early in boot, before subsystems that could crash. If the
-/// version applied by the last update has now failed to reach boot-ready
-/// more than `BOOT_ATTEMPT_LIMIT` times, swap the parked previous bundle
-/// back and relaunch it. The restored session finds `restored.json` and
-/// notifies the user.
+/// Written at boot-loop-guard time, removed when boot reaches ready
+/// (`finalize_and_gc`) or on an orderly exit (`note_orderly_exit`). Its
+/// survival to the NEXT boot is the signal that the previous boot neither
+/// became ready nor quit cleanly, i.e. a genuine failure — so ordinary quick
+/// quits during startup don't count toward rollback.
+fn boot_sentinel_version(cache: &Path) -> Option<String> {
+    let raw = fs::read_to_string(cache.join("boot_in_progress.json")).ok()?;
+    serde_json::from_str::<serde_json::Value>(&raw)
+        .ok()?
+        .get("version")?
+        .as_str()
+        .map(str::to_string)
+}
+
+/// Remove the in-progress sentinel: the current boot ended in a defined way
+/// (reached ready, or exited on purpose) rather than crashing/hanging.
+pub fn note_orderly_exit(app: &tauri::AppHandle) {
+    if let Ok(cache) = updates_cache_dir(app) {
+        let _ = fs::remove_file(cache.join("boot_in_progress.json"));
+    }
+}
+
+/// Call once, early in boot, before subsystems that could crash. Accounts for
+/// the PREVIOUS boot (sentinel still present => it failed), then arms a fresh
+/// sentinel for this boot. After `BOOT_ATTEMPT_LIMIT` failed boots of a freshly
+/// applied version, swap the parked previous bundle back and relaunch it — via
+/// an admin prompt for root-owned installs. The restored session finds
+/// `restored.json` and notifies the user.
 pub fn handle_boot_loop_guard(app: &tauri::AppHandle) {
     let Ok(cache) = updates_cache_dir(app) else {
         return;
     };
     let running = app.package_info().version.to_string();
     let attempts_path = cache.join("boot_attempts.json");
+    let sentinel_path = cache.join("boot_in_progress.json");
 
     // Only boots of a freshly applied version are counted.
     let pending = fs::read_to_string(cache.join("pending.json"))
@@ -1028,11 +1233,16 @@ pub fn handle_boot_loop_guard(app: &tauri::AppHandle) {
         .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok());
     let Some(pending) = pending else {
         let _ = fs::remove_file(&attempts_path);
+        let _ = fs::remove_file(&sentinel_path);
         return;
     };
     if pending.get("installedVersion").and_then(|v| v.as_str()) != Some(running.as_str()) {
         return;
     }
+
+    let now = now_unix_secs();
+    // The previous boot of THIS version failed iff its sentinel survived.
+    let previous_boot_failed = boot_sentinel_version(&cache).as_deref() == Some(running.as_str());
 
     let prev_record = fs::read_to_string(&attempts_path)
         .ok()
@@ -1044,27 +1254,28 @@ pub fn handle_boot_loop_guard(app: &tauri::AppHandle) {
             v.get("firstAtUnixSecs")?.as_u64()?,
         ))
     });
-    let now = now_unix_secs();
-    let attempts = next_boot_attempts(prev, &running, now, BOOT_ATTEMPT_WINDOW_SECS);
+    let prior = prior_failure_count(prev, &running, now, BOOT_ATTEMPT_WINDOW_SECS);
+    let attempts = prior + u32::from(previous_boot_failed);
     let first_at = match prev {
-        Some((v, _, first)) if v == running && attempts > 1 => first,
+        Some((v, _, first)) if v == running && prior > 0 => first,
         _ => now,
     };
-    let _ = fs::write(
+    let _ = write_json_durable(
         &attempts_path,
-        serde_json::to_vec_pretty(&serde_json::json!({
+        &serde_json::json!({
             "version": running,
             "attempts": attempts,
             "firstAtUnixSecs": first_at,
-        }))
-        .unwrap_or_default(),
+        }),
     );
+    // Arm the sentinel for this boot; finalize/orderly-exit clears it.
+    let _ = write_json_durable(&sentinel_path, &serde_json::json!({ "version": running }));
 
-    if attempts <= BOOT_ATTEMPT_LIMIT {
+    if attempts < BOOT_ATTEMPT_LIMIT {
         return;
     }
 
-    // Limit exceeded: this version never reached boot-ready. Restore.
+    // Limit reached: this version keeps failing to reach ready. Restore.
     let Some(previous_bundle) = pending
         .get("previousBundle")
         .and_then(|v| v.as_str())
@@ -1075,36 +1286,36 @@ pub fn handle_boot_loop_guard(app: &tauri::AppHandle) {
         let _ = fs::remove_file(&attempts_path);
         return;
     };
-    let Some(installed_bundle) = install_target_bundle().filter(|b| bundle_writable(b)) else {
-        warn!("boot-loop guard: installed bundle missing or not writable, cannot restore");
+    let Some(installed_bundle) = install_target_bundle() else {
+        warn!("boot-loop guard: not running from a bundle, cannot restore");
         return;
     };
-
-    warn!(
-        "boot-loop guard: v{running} failed to reach boot-ready {}x, restoring {}",
-        attempts - 1,
-        previous_bundle.display()
-    );
-    // The failing version gets parked where the old bundle was kept.
-    let failed_dest = previous_bundle
-        .parent()
-        .map(|p| p.join("failed.app"))
-        .unwrap_or_else(|| cache.join("previous").join("failed.app"));
-    if let Err(e) = swap_bundles(&previous_bundle, &installed_bundle, &failed_dest) {
-        warn!("boot-loop guard: restore failed: {e}");
+    // The restore source came from pending.json (user-writable); confine it
+    // before it can be a swap source under root.
+    let roots = lifecycle_roots(&cache, &installed_bundle);
+    if confined_path(&previous_bundle, &roots).is_none() {
+        warn!(
+            "boot-loop guard: previous bundle {} escapes lifecycle roots, refusing restore",
+            previous_bundle.display()
+        );
         return;
     }
-    let _ = fs::write(
-        cache.join("restored.json"),
-        serde_json::to_vec_pretty(&serde_json::json!({
-            "failedVersion": running,
-            "atUnixSecs": now,
-        }))
-        .unwrap_or_default(),
+
+    warn!(
+        "boot-loop guard: v{running} failed to reach boot-ready {attempts}x, restoring {}",
+        previous_bundle.display()
     );
-    let _ = fs::remove_file(cache.join("pending.json"));
-    let _ = fs::remove_file(&attempts_path);
-    clear_staged(app);
+
+    let restored = if bundle_writable(&installed_bundle) {
+        restore_previous(&cache, &installed_bundle, &previous_bundle, &running).is_ok()
+    } else {
+        // Root-owned install: one-shot admin prompt (the app is already
+        // broken, so this is expected). A guard flag prevents prompt loops.
+        restore_previous_privileged(&cache, &installed_bundle, &previous_bundle)
+    };
+    if !restored {
+        return;
+    }
 
     // Relaunch the restored version through LaunchServices and exit.
     let env = app.env();
@@ -1112,6 +1323,76 @@ pub fn handle_boot_loop_guard(app: &tauri::AppHandle) {
         let _ = crate::process_exit::relaunch_via_launch_services(&env, &binary);
     }
     crate::process_exit::force_process_exit(0);
+}
+
+/// Swap the previous bundle back into place, park the failing one, and record
+/// the rollback. Shared by the writable and privileged (root helper) paths.
+fn restore_previous(
+    cache: &Path,
+    installed_bundle: &Path,
+    previous_bundle: &Path,
+    failed_version: &str,
+) -> Result<(), InstallError> {
+    let failed_dest = previous_bundle
+        .parent()
+        .map(|p| p.join("failed.app"))
+        .unwrap_or_else(|| cache.join("previous").join("failed.app"));
+    let _ = fs::remove_dir_all(&failed_dest);
+    swap_bundles(previous_bundle, installed_bundle, &failed_dest)?;
+    let _ = write_json_durable(
+        &cache.join("restored.json"),
+        &serde_json::json!({ "failedVersion": failed_version, "atUnixSecs": now_unix_secs() }),
+    );
+    let _ = fs::remove_file(cache.join("pending.json"));
+    let _ = fs::remove_file(cache.join("boot_attempts.json"));
+    let _ = fs::remove_file(cache.join("boot_in_progress.json"));
+    clear_staged_in(cache, Some(installed_bundle));
+    Ok(())
+}
+
+/// Run `restore_previous` as root via the same admin-prompt helper the apply
+/// path uses. A `restore_attempted.json` flag makes it one-shot so a
+/// still-broken app can't prompt on every boot.
+fn restore_previous_privileged(
+    cache: &Path,
+    installed_bundle: &Path,
+    previous_bundle: &Path,
+) -> bool {
+    let flag = cache.join("restore_attempted.json");
+    if flag.exists() {
+        warn!("boot-loop guard: privileged restore already attempted, not re-prompting");
+        return false;
+    }
+    let _ = write_json_durable(&flag, &serde_json::json!({ "atUnixSecs": now_unix_secs() }));
+
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    for path in [&exe, &cache.to_path_buf(), &installed_bundle.to_path_buf(), &previous_bundle.to_path_buf()] {
+        let text = path.to_string_lossy();
+        if text.contains('\'') || text.contains('"') || text.contains('\\') {
+            warn!("boot-loop guard: path has shell quote chars, refusing privileged restore");
+            return false;
+        }
+    }
+    let shell = format!(
+        "'{}' --update-helper restore --cache '{}' --bundle '{}' --previous '{}'",
+        exe.display(),
+        cache.display(),
+        installed_bundle.display(),
+        previous_bundle.display()
+    );
+    let script = format!("do shell script \"{shell}\" with administrator privileges");
+    match std::process::Command::new("/usr/bin/osascript")
+        .args(["-e", &script])
+        .status()
+    {
+        Ok(s) if s.success() => true,
+        other => {
+            warn!("boot-loop guard: privileged restore failed or cancelled: {other:?}");
+            false
+        }
+    }
 }
 
 /// If the boot-loop guard rolled back on a previous boot, return the failed
@@ -1151,16 +1432,28 @@ pub fn finalize_and_gc(app: &tauri::AppHandle) {
                 .and_then(|v| v.as_str())
                 .unwrap_or_default();
             if installed == running {
+                // This boot reached ready: the previous bundle is no longer
+                // an escape hatch, and none of the failure/attempt state
+                // applies. Delete the parked bundle (confined — the path came
+                // from pending.json) and clear the boot accounting.
                 if let Some(prev) = marker.get("previousBundle").and_then(|v| v.as_str()) {
-                    if let Some(slot) = Path::new(prev).parent() {
-                        let _ = fs::remove_dir_all(slot);
+                    if let (Some(slot), Some(bundle)) =
+                        (Path::new(prev).parent(), install_target_bundle())
+                    {
+                        confined_remove_dir_all(slot, &lifecycle_roots(&cache, &bundle));
                     }
                 }
                 let _ = fs::remove_file(&pending_path);
                 let _ = fs::remove_file(cache.join("boot_attempts.json"));
+                let _ = fs::remove_file(cache.join("boot_in_progress.json"));
+                let _ = fs::remove_file(cache.join("restore_attempted.json"));
                 info!("self-install: v{running} booted ready, previous bundle cleaned up");
             }
         }
+    } else {
+        // No pending install: a clean boot with no update in flight still
+        // clears the in-progress sentinel so it can't accrue false failures.
+        let _ = fs::remove_file(cache.join("boot_in_progress.json"));
     }
 
     let mut gc_roots: Vec<PathBuf> = ["extract", "staged", "previous"]
@@ -1314,24 +1607,24 @@ mod tests {
     }
 
     #[test]
-    fn boot_attempts_increment_and_reset() {
-        // same version inside window: increments
+    fn prior_failure_count_windowing() {
+        // same version inside window: prior count preserved (caller adds +1)
         assert_eq!(
-            next_boot_attempts(Some(("2.0.0", 2, 1000)), "2.0.0", 2000, 86_400),
-            3
+            prior_failure_count(Some(("2.0.0", 2, 1000)), "2.0.0", 2000, 86_400),
+            2
         );
-        // different version: fresh count
+        // different version: reset
         assert_eq!(
-            next_boot_attempts(Some(("1.0.0", 2, 1000)), "2.0.0", 2000, 86_400),
-            1
+            prior_failure_count(Some(("1.0.0", 2, 1000)), "2.0.0", 2000, 86_400),
+            0
         );
-        // outside the window: stale, fresh count
+        // outside the window: stale, reset
         assert_eq!(
-            next_boot_attempts(Some(("2.0.0", 2, 1000)), "2.0.0", 100_000, 86_400),
-            1
+            prior_failure_count(Some(("2.0.0", 2, 1000)), "2.0.0", 100_000, 86_400),
+            0
         );
-        // no record: fresh
-        assert_eq!(next_boot_attempts(None, "2.0.0", 0, 86_400), 1);
+        // no record: 0
+        assert_eq!(prior_failure_count(None, "2.0.0", 0, 86_400), 0);
     }
 
     #[test]
@@ -1344,7 +1637,7 @@ mod tests {
         .map(|s| s.to_string())
         .collect();
         let parsed = parse_helper_args(&args).unwrap();
-        assert!(parsed.wait_first);
+        assert_eq!(parsed.mode, HelperMode::WaitApply);
         assert_eq!(parsed.wait_pid, Some(123));
         assert!(parsed.relaunch);
         assert_eq!(parsed.bundle, PathBuf::from("/Applications/s.app"));
@@ -1354,13 +1647,70 @@ mod tests {
             .map(|s| s.to_string())
             .collect();
         let parsed = parse_helper_args(&args).unwrap();
-        assert!(!parsed.wait_first);
+        assert_eq!(parsed.mode, HelperMode::Apply);
         assert_eq!(parsed.wait_pid, None);
         assert!(!parsed.relaunch);
+
+        // restore requires --previous
+        let ok: Vec<String> =
+            ["restore", "--cache", "/c", "--bundle", "/b", "--previous", "/p"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+        assert_eq!(parse_helper_args(&ok).unwrap().mode, HelperMode::Restore);
+        assert!(parse_helper_args(
+            &["restore", "--cache", "/c", "--bundle", "/b"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+        )
+        .is_none());
 
         // unknown flag or missing required args: rejected
         assert!(parse_helper_args(&["apply".into(), "--nope".into()]).is_none());
         assert!(parse_helper_args(&["wait-apply".into()]).is_none());
+    }
+
+    #[test]
+    fn confinement_rejects_paths_outside_roots() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = tmp.path().join("cache");
+        let bundle = tmp.path().join("Applications/screenpipe.app");
+        fs::create_dir_all(cache.join("staged/9.9.9")).unwrap();
+        fs::create_dir_all(&bundle).unwrap();
+        let roots = lifecycle_roots(&cache, &bundle);
+
+        // inside the cache root: allowed
+        assert!(confined_path(&cache.join("staged/9.9.9"), &roots).is_some());
+        // the root itself: refused (never delete a root)
+        assert!(confined_path(&cache, &roots).is_none());
+        // a sibling system path smuggled via a tampered manifest: refused
+        assert!(confined_path(Path::new("/Applications/Safari.app"), &roots).is_none());
+        assert!(confined_path(Path::new("/"), &roots).is_none());
+    }
+
+    #[test]
+    fn lifecycle_root_of_prefers_bundle_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = tmp.path().join("cache");
+        let bundle = tmp.path().join("ext/screenpipe.app");
+        fs::create_dir_all(&cache).unwrap();
+        fs::create_dir_all(&bundle).unwrap();
+        let alt = tmp.path().join("ext/.screenpipe-update-staging");
+        let staged_in_cache = cache.join("staged/9.9.9/screenpipe.app");
+        assert_eq!(lifecycle_root_of(&staged_in_cache, &cache, &bundle), cache);
+        let staged_in_alt = alt.join("staged/9.9.9/screenpipe.app");
+        assert_eq!(lifecycle_root_of(&staged_in_alt, &cache, &bundle), alt);
+    }
+
+    #[test]
+    fn durable_write_roundtrip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("pending.json");
+        write_json_durable(&path, &serde_json::json!({ "installedVersion": "9.9.9" })).unwrap();
+        let raw = fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("9.9.9"));
+        assert!(!tmp.path().join("pending.json.tmp").exists());
     }
 
     #[test]

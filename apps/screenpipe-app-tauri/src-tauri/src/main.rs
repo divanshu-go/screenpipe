@@ -2152,6 +2152,8 @@ async fn main() {
                     // in-process apply is the fallback. Restart paths hand
                     // off inside force_app_relaunch.
                     #[cfg(target_os = "macos")]
+                    crate::updater_install::note_orderly_exit(app_handle.app_handle());
+                    #[cfg(target_os = "macos")]
                     if crate::updater_install::has_staged_update(app_handle.app_handle()) {
                         let handed_off = crate::updater_install::install_target_bundle()
                             .filter(|b| crate::updater_install::bundle_writable(b))
