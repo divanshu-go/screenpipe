@@ -45,6 +45,8 @@ export function usePiForegroundEvents({
   flushStreamingMessageRender,
   forceQueueModeRef,
   handleAgentEventDataRef,
+  handleAgentActionEvent,
+  clearAgentActionsForSession,
   handleInvalidatedAuthToken,
   lastUserMessageRef,
   markTurnIntentConsumed,
@@ -165,6 +167,23 @@ export function usePiForegroundEvents({
     const handlePiEventData = (payload: unknown) => {
       const data = piEventDataFromUnknown(payload);
       if (!data) return;
+
+      const actionSessionId = piSessionIdRef.current;
+      if (actionSessionId && handleAgentActionEvent(data, actionSessionId)) return;
+
+      if (data.type === "acp_auth_cancelled") {
+        // Dismissing an interactive ACP sign-in is a user stop, not a crash.
+        // Mark the imminent termination as intentional so the normal crash
+        // recovery loop does not immediately reopen the same login card.
+        piStoppedIntentionallyRef.current = true;
+        setPiInfo(null);
+        setIsLoading(false);
+        setIsStreaming(false);
+        window.setTimeout(() => {
+          piStoppedIntentionallyRef.current = false;
+        }, 15_000);
+        return;
+      }
 
         const emitSessionActivity = (
           partial: {
@@ -976,6 +995,7 @@ export function usePiForegroundEvents({
       busUnregistrations.push(onAgentTerminated(async (payload) => {
         if (!mounted) return;
         if (payload.sessionId !== piSessionIdRef.current) return;
+        clearAgentActionsForSession(payload.sessionId);
         const terminatedPid = payload.pid;
         const termKey = `${payload.sessionId}:${typeof terminatedPid === "number" ? terminatedPid : "unknown"}`;
         const nowMs = Date.now();
@@ -1066,6 +1086,8 @@ export function usePiForegroundEvents({
                 // Keep running-config ref in sync so preset watcher doesn't re-trigger
                 if (providerConfig) {
                   piRunningConfigRef.current = {
+                    backend: providerConfig.backend === "acp" ? "acp" : null,
+                    acpAgentSignature: providerConfig.acpAgent ? JSON.stringify(providerConfig.acpAgent) : null,
                     provider: providerConfig.provider,
                     model: providerConfig.model,
                     url: providerConfig.url,
