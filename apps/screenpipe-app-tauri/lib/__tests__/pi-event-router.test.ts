@@ -616,7 +616,7 @@ describe("pi-event-router: acp session config capture", () => {
 
     // Pure runtime metadata: no lazy-created session in the chat store.
     expect(useChatStore.getState().sessions["A"]).toBeUndefined();
-    const options = useAcpSessionConfig.getState().sessions["A"];
+    const { options } = useAcpSessionConfig.getState().sessions["A"];
     expect(options).toHaveLength(1);
     expect(options[0].id).toBe("model");
     expect(options[0].currentValue).toBe("claude-sonnet-4-6");
@@ -647,7 +647,7 @@ describe("pi-event-router: acp session config capture", () => {
       } as unknown as AgentInnerEvent),
     );
 
-    const options = useAcpSessionConfig.getState().sessions["A"];
+    const { options } = useAcpSessionConfig.getState().sessions["A"];
     expect(options[0].values.map((value) => value.value)).toEqual([
       "gpt-5.5",
       "gpt-5.5-mini",
@@ -655,5 +655,56 @@ describe("pi-event-router: acp session config capture", () => {
 
     handleTerminated({ sessionId: "A", source: "pi", exitCode: 0 });
     expect(useAcpSessionConfig.getState().sessions["A"]).toBeUndefined();
+  });
+});
+
+describe("pi-event-router: acp modes", () => {
+  beforeEach(reset);
+
+  it("captures modes and follows current_mode_update notifications", async () => {
+    const { useAcpSessionConfig } = await import("../stores/acp-session-config");
+    seed("A");
+    await handlePiEvent(
+      piEvt("A", {
+        type: "acp_session_config",
+        configOptions: [],
+        modes: {
+          currentModeId: "default",
+          availableModes: [
+            { id: "default", name: "Default" },
+            { id: "acceptEdits", name: "Accept Edits" },
+          ],
+        },
+      } as unknown as AgentInnerEvent),
+    );
+
+    let config = useAcpSessionConfig.getState().sessions["A"];
+    expect(config.modes?.currentModeId).toBe("default");
+    expect(config.modes?.availableModes.map((mode) => mode.value)).toEqual([
+      "default",
+      "acceptEdits",
+    ]);
+
+    await handlePiEvent(
+      piEvt("A", {
+        type: "acp_update",
+        update: { sessionUpdate: "current_mode_update", currentModeId: "acceptEdits" },
+      } as unknown as AgentInnerEvent),
+    );
+    config = useAcpSessionConfig.getState().sessions["A"];
+    expect(config.modes?.currentModeId).toBe("acceptEdits");
+
+    // An options-only refresh (set_config_option ack) must not wipe modes.
+    await handlePiEvent(
+      piEvt("A", {
+        type: "acp_session_config",
+        configOptions: [
+          { id: "model", name: "Model", type: "select", currentValue: "x", options: [] },
+        ],
+      } as unknown as AgentInnerEvent),
+    );
+    config = useAcpSessionConfig.getState().sessions["A"];
+    expect(config.modes?.currentModeId).toBe("acceptEdits");
+    expect(config.options[0].id).toBe("model");
   });
 });

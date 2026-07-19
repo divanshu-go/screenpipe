@@ -3430,6 +3430,41 @@ pub async fn pi_acp_set_config_option(
         .map_err(|_| "Pi command queue dropped".to_string())?
 }
 
+/// Switch the ACP session mode (e.g. a permission mode) advertised through
+/// `acp_session_config`. Allowed while a prompt is streaming.
+#[tauri::command]
+#[specta::specta]
+pub async fn pi_acp_set_mode(
+    state: State<'_, PiState>,
+    session_id: Option<String>,
+    mode_id: String,
+) -> Result<(), String> {
+    let sid = session_id.unwrap_or_else(|| "chat".to_string());
+
+    let queue = {
+        let mut pool = state.0.lock().await;
+        let m = pool.sessions.get_mut(&sid).ok_or("Pi not initialized")?;
+        if !m.is_running() {
+            return Err("agent is not running".to_string());
+        }
+        m.last_activity = std::time::Instant::now();
+        m.queue_handle
+            .clone()
+            .ok_or("Pi command queue not initialized")?
+    };
+
+    let cmd = json!({
+        "type": "set_mode",
+        "modeId": mode_id,
+    });
+
+    let rx = queue
+        .send(cmd, crate::pi_command_queue::WaitMode::WaitDone)
+        .await?;
+    rx.await
+        .map_err(|_| "Pi command queue dropped".to_string())?
+}
+
 fn write_pi_settings(settings: &serde_json::Value) -> Result<(), String> {
     let config_dir = get_pi_config_dir()?;
     std::fs::create_dir_all(&config_dir)

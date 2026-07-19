@@ -186,6 +186,17 @@ export async function handlePiEvent(envelope: AgentEventEnvelope) {
     useAcpSessionConfig.getState().setFromEvent(sid, inner);
     return;
   }
+  // Mode/option changes stream as generic acp_update notifications; mirror
+  // them into the config store and keep routing the event as before.
+  if ((inner as { type?: string }).type === "acp_update") {
+    const update = (inner as { update?: { sessionUpdate?: string } }).update;
+    if (
+      update?.sessionUpdate === "current_mode_update" ||
+      update?.sessionUpdate === "config_option_update"
+    ) {
+      useAcpSessionConfig.getState().applyUpdate(sid, update);
+    }
+  }
   // Pipe sessions are only routed when chat-store already has a record
   // for them — i.e. the user clicked into a pipe-watch view, which
   // upserted the session. Unwatched pipes go to the pipe-run-recorder

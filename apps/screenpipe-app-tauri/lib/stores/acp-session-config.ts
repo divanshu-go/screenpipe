@@ -4,16 +4,16 @@
 
 import { create } from "zustand";
 
-/** One selectable value of an ACP session config option. */
+/** One selectable value of an ACP session config option or mode. */
 export interface AcpConfigValue {
   value: string;
   name: string;
   description?: string | null;
 }
 
-/** An ACP session configuration option (model, mode, ...) as advertised by
- *  the adapter in acp_session_config events. Only select options are
- *  surfaced in the UI for now. */
+/** An ACP session configuration option (model, ...) as advertised by the
+ *  adapter in acp_session_config events. Only select options are surfaced
+ *  in the UI for now. */
 export interface AcpConfigOption {
   id: string;
   name: string;
@@ -24,9 +24,20 @@ export interface AcpConfigOption {
   values: AcpConfigValue[];
 }
 
+export interface AcpSessionModes {
+  currentModeId: string;
+  availableModes: AcpConfigValue[];
+}
+
+export interface AcpSessionConfig {
+  options: AcpConfigOption[];
+  modes: AcpSessionModes | null;
+}
+
 interface AcpSessionConfigState {
-  sessions: Record<string, AcpConfigOption[]>;
+  sessions: Record<string, AcpSessionConfig>;
   setFromEvent: (sessionId: string, event: unknown) => void;
+  applyUpdate: (sessionId: string, update: unknown) => void;
   clear: (sessionId: string) => void;
 }
 
@@ -46,23 +57,80 @@ function flattenValues(options: unknown): AcpConfigValue[] {
   });
 }
 
+function parseOptions(raw: unknown): AcpConfigOption[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((option: any) => typeof option?.id === "string")
+    .map((option: any) => ({
+      id: option.id,
+      name: typeof option.name === "string" ? option.name : option.id,
+      description: option.description ?? null,
+      category: option.category ?? null,
+      type: option.type,
+      currentValue: option.currentValue,
+      values: flattenValues(option.options),
+    }));
+}
+
+function parseModes(raw: any): AcpSessionModes | null {
+  if (typeof raw?.currentModeId !== "string" || !Array.isArray(raw?.availableModes)) {
+    return null;
+  }
+  const availableModes = raw.availableModes
+    .filter((mode: any) => typeof mode?.id === "string")
+    .map((mode: any) => ({
+      value: mode.id,
+      name: typeof mode.name === "string" ? mode.name : mode.id,
+      description: mode.description ?? null,
+    }));
+  if (availableModes.length === 0) return null;
+  return { currentModeId: raw.currentModeId, availableModes };
+}
+
 export const useAcpSessionConfig = create<AcpSessionConfigState>()((set) => ({
   sessions: {},
   setFromEvent: (sessionId, event) => {
-    const raw = (event as any)?.configOptions;
-    if (!Array.isArray(raw)) return;
-    const parsed: AcpConfigOption[] = raw
-      .filter((option: any) => typeof option?.id === "string")
-      .map((option: any) => ({
-        id: option.id,
-        name: typeof option.name === "string" ? option.name : option.id,
-        description: option.description ?? null,
-        category: option.category ?? null,
-        type: option.type,
-        currentValue: option.currentValue,
-        values: flattenValues(option.options),
-      }));
-    set((state) => ({ sessions: { ...state.sessions, [sessionId]: parsed } }));
+    const raw = event as any;
+    // Partial events (e.g. a set_config_option ack) omit modes; merge so an
+    // options-only refresh never wipes the advertised modes.
+    set((state) => {
+      const prior = state.sessions[sessionId];
+      const next: AcpSessionConfig = {
+        options: Array.isArray(raw?.configOptions)
+          ? parseOptions(raw.configOptions)
+          : (prior?.options ?? []),
+        modes: raw?.modes !== undefined ? parseModes(raw.modes) : (prior?.modes ?? null),
+      };
+      return { sessions: { ...state.sessions, [sessionId]: next } };
+    });
+  },
+  applyUpdate: (sessionId, update) => {
+    const raw = update as any;
+    set((state) => {
+      const prior = state.sessions[sessionId];
+      if (!prior) return state;
+      if (raw?.sessionUpdate === "current_mode_update" && typeof raw.currentModeId === "string") {
+        if (!prior.modes) return state;
+        return {
+          sessions: {
+            ...state.sessions,
+            [sessionId]: {
+              ...prior,
+              modes: { ...prior.modes, currentModeId: raw.currentModeId },
+            },
+          },
+        };
+      }
+      if (raw?.sessionUpdate === "config_option_update" && Array.isArray(raw.configOptions)) {
+        return {
+          sessions: {
+            ...state.sessions,
+            [sessionId]: { ...prior, options: parseOptions(raw.configOptions) },
+          },
+        };
+      }
+      return state;
+    });
   },
   clear: (sessionId) =>
     set((state) => {

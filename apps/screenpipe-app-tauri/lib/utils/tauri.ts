@@ -1368,6 +1368,18 @@ async piAcpSetConfigOption(sessionId: string | null, optionId: string, value: st
 }
 },
 /**
+ * Switch the ACP session mode (e.g. a permission mode) advertised through
+ * `acp_session_config`. Allowed while a prompt is streaming.
+ */
+async piAcpSetMode(sessionId: string | null, modeId: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("pi_acp_set_mode", { sessionId, modeId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Cancel a single queued prompt. Returns true if it was still in the queue
  * (and is now removed), false if it had already been pulled into the
  * in-flight slot — at that point `pi_abort` is the right tool.
