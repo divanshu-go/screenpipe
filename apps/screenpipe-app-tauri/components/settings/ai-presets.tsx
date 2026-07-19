@@ -34,6 +34,12 @@ import {
 import { screenpipeWebUrl } from "@/lib/web-url";
 import { Label } from "../ui/label";
 import { Input } from "../ui/input";
+import {
+  ACP_ADAPTERS,
+  acpAdapterInfo,
+  generatePresetName,
+  presetImageSrc,
+} from "@/lib/utils/preset-appearance";
 import { ValidatedInput } from "../ui/validated-input";
 import { ValidatedTextarea } from "../ui/validated-textarea";
 import {
@@ -181,44 +187,6 @@ export interface AIProviderCardProps {
   imageClassName?: string;
 }
 
-const ACP_ADAPTERS = [
-  {
-    id: "pi-acp",
-    name: "Pi",
-    description: "Screenpipe's current agent through the shared ACP interface.",
-  },
-  {
-    id: "codex-acp",
-    name: "Codex",
-    description: "Use your existing Codex account and configuration.",
-  },
-  {
-    id: "claude-acp",
-    name: "Claude Code",
-    description: "Use your existing Claude Code account and configuration.",
-  },
-  {
-    id: "gemini",
-    name: "Gemini CLI",
-    description: "Use your existing Gemini CLI account and configuration.",
-  },
-  {
-    id: "opencode",
-    name: "OpenCode",
-    description: "Use your installed OpenCode agent. First-time login currently requires `opencode auth login` in a terminal.",
-  },
-  {
-    id: "cursor",
-    name: "Cursor",
-    description: "Use Cursor's ACP agent installed on this computer.",
-  },
-  {
-    id: "custom",
-    name: "Another ACP agent",
-    description: "Connect any ACP-compatible command installed on this computer.",
-  },
-] as const;
-
 const inheritedEnvFromText = (value: string): Record<string, string> =>
   Object.fromEntries(
     value
@@ -340,6 +308,10 @@ const AISection = ({
   const [isLoading, setIsLoading] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
+  // Last name this dialog generated itself. While the field still holds this
+  // value (or is empty) we keep regenerating on provider/agent changes; the
+  // moment the user types their own name we leave it alone.
+  const lastAutoNameRef = useRef<string | null>(null);
   const [testStatus, setTestStatus] = useState<"idle" | "testing" | "done">("idle");
   const [testResults, setTestResults] = useState<DiagnosticResults>(INITIAL_DIAGNOSTICS);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
@@ -431,9 +403,9 @@ const AISection = ({
       settingsPreset?.provider !== "acp" ||
       (Boolean(settingsPreset.acpAgent?.id) &&
         (settingsPreset.acpAgent?.id !== "custom" || Boolean(settingsPreset.acpAgent?.command?.trim())));
-    return Object.keys(validationErrors).length === 0 && 
-           settingsPreset?.id && 
-           settingsPreset?.provider && 
+    // Name is not required: an empty name gets auto-generated at save time.
+    return Object.keys(validationErrors).length === 0 &&
+           settingsPreset?.provider &&
            hasAgent &&
            (settingsPreset.provider === "acp" || settingsPreset?.model);
   }, [validationErrors, settingsPreset]);
@@ -459,19 +431,24 @@ const AISection = ({
 
     setIsLoading(true);
     try {
-      if (!settingsPreset?.id) {
-        toast({
-          title: "Please enter a name",
-          description: "Name is required",
-          variant: "destructive",
-        });
-        return;
-      }
+      // Never force the user to invent a name: an empty field gets a unique
+      // generated one derived from the provider/agent selection.
+      const presetToSave = {
+        ...settingsPreset,
+        id:
+          settingsPreset?.id?.trim() ||
+          generatePresetName(
+            settingsPreset?.provider,
+            settingsPreset?.acpAgent?.id,
+            visiblePresets.map((p) => p.id),
+            preset?.id,
+          ),
+      };
 
       // If this is the first preset, make it default
       if (!settings.aiPresets.length) {
         const defaultPreset = {
-          ...settingsPreset,
+          ...presetToSave,
           prompt: settingsPreset?.prompt || DEFAULT_PROMPT,
           maxContextChars: settingsPreset?.maxContextChars || 512000,
           defaultPreset: true,
@@ -495,7 +472,7 @@ const AISection = ({
         const updatedPresets = settings.aiPresets.map((p) => {
           if (p.id === preset.id) {
             return {
-              ...settingsPreset,
+              ...presetToSave,
               prompt: settingsPreset?.prompt || DEFAULT_PROMPT,
               maxContextChars: settingsPreset?.maxContextChars || 512000,
               defaultPreset: p.defaultPreset,
@@ -515,7 +492,7 @@ const AISection = ({
       } else {
         // Handle create case (new preset or duplicate)
         const newPreset = {
-          ...settingsPreset,
+          ...presetToSave,
           prompt: settingsPreset?.prompt || DEFAULT_PROMPT,
           maxContextChars: settingsPreset?.maxContextChars || 512000,
           defaultPreset: false,
@@ -615,15 +592,6 @@ const AISection = ({
     setChatgptLoggedIn(false);
     // chatgptChecking is managed by the status-check effect, not here
 
-    const defaultNames: Record<string, string> = {
-      "openai-chatgpt": "chatgpt",
-      "openai": "openai",
-      "anthropic": "claude",
-      "native-ollama": "ollama",
-      "screenpipe-cloud": "screenpipe-cloud",
-      "acp": "coding-agent",
-    };
-
     let newUrl = "";
     let newModel = settingsPreset?.model;
 
@@ -659,19 +627,40 @@ const AISection = ({
     if (newValue === "acp") {
       updates.acpAgent = settingsPreset?.acpAgent || { id: "pi-acp" };
     }
-    // Auto-fill name only when creating a new preset (no existing id)
-    if (!settingsPreset?.id && defaultNames[newValue]) {
-      updates.id = defaultNames[newValue];
+    // Auto-name when creating: fill empty names or replace a previous
+    // auto-name, but never touch something the user typed themselves.
+    const currentName = settingsPreset?.id || "";
+    if (!currentName || currentName === lastAutoNameRef.current) {
+      const autoName = generatePresetName(
+        newValue,
+        updates.acpAgent?.id ?? settingsPreset?.acpAgent?.id,
+        visiblePresets.map((p) => p.id),
+        preset?.id,
+      );
+      updates.id = autoName;
+      lastAutoNameRef.current = autoName;
     }
 
     updateSettingsPreset(updates);
-  }, [settingsPreset?.acpAgent, settingsPreset?.id, settingsPreset?.model, settingsPreset?.provider, settingsPreset?.url, updateSettingsPreset]);
+  }, [settingsPreset?.acpAgent, settingsPreset?.id, settingsPreset?.model, settingsPreset?.provider, settingsPreset?.url, updateSettingsPreset, visiblePresets, preset?.id]);
 
   const updateAcpAgent = useCallback((changes: Partial<NonNullable<AIPreset["acpAgent"]>>) => {
     const current = settingsPreset?.acpAgent || { id: "pi-acp" };
     const next = { ...current, ...changes };
-    updateSettingsPreset({ acpAgent: next, model: next.id });
-  }, [settingsPreset?.acpAgent, updateSettingsPreset]);
+    const updates: Partial<AIPreset> = { acpAgent: next, model: next.id };
+    const currentName = settingsPreset?.id || "";
+    if (!currentName || currentName === lastAutoNameRef.current) {
+      const autoName = generatePresetName(
+        "acp",
+        next.id,
+        visiblePresets.map((p) => p.id),
+        preset?.id,
+      );
+      updates.id = autoName;
+      lastAutoNameRef.current = autoName;
+    }
+    updateSettingsPreset(updates);
+  }, [settingsPreset?.acpAgent, settingsPreset?.id, updateSettingsPreset, visiblePresets, preset?.id]);
 
   const [models, setModels] = useState<AIModel[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
@@ -1334,7 +1323,7 @@ const AISection = ({
             type="acp"
             title="Coding agent"
             description="Use Pi, Codex, Claude Code, Gemini, OpenCode, Cursor, or any ACP-compatible agent"
-            imageSrc="/images/screenpipe.png"
+            imageSrc="/images/acp.svg"
             selected={settingsPreset?.provider === "acp"}
             onClick={() => handleAiProviderChange("acp")}
           />
@@ -1369,13 +1358,17 @@ const AISection = ({
         label="Preset Name"
         value={settingsPreset?.id || ""}
         onChange={(value, isValid) => updateSettingsPreset({ id: value })}
-        validation={(value) => validatePresetName(value, visiblePresets, preset?.id)}
-        placeholder="Enter preset name"
-        required={true}
+        validation={(value) =>
+          value.trim()
+            ? validatePresetName(value, visiblePresets, preset?.id)
+            : { isValid: true }
+        }
+        placeholder="Generated automatically — type to override"
+        required={false}
         spellCheck={false}
         autoCorrect="off"
         disabled={!!preset && !isDuplicating && preset.id !== undefined}
-        helperText="Only letters, numbers, spaces, hyphens, and underscores allowed"
+        helperText="Optional. Letters, numbers, spaces, hyphens, and underscores; a name is generated for you if left empty"
       />
 
       {settingsPreset?.provider === "acp" && (
@@ -1386,26 +1379,51 @@ const AISection = ({
               Choose the coding agent Screenpipe should run. Your existing sign-in and agent settings stay in that app.
             </p>
           </div>
-          <select
+          {/* Inline listbox instead of a native select or portal dropdown:
+              options can carry each agent's icon, and portal-based menus are
+              painted over by the native webview on Windows. */}
+          <div
             id="acpAgent"
-            value={settingsPreset.acpAgent?.id || "pi-acp"}
-            onChange={(event) => {
-              const id = event.target.value;
-              updateAcpAgent({
-                id,
-                command: id === "custom" ? settingsPreset.acpAgent?.command || "" : undefined,
-                args: id === "custom" ? settingsPreset.acpAgent?.args || [] : undefined,
-                env: settingsPreset.acpAgent?.env || {},
-              });
-            }}
-            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            role="listbox"
+            aria-label="Agent"
+            className="grid grid-cols-2 gap-2 sm:grid-cols-3"
           >
-            {ACP_ADAPTERS.map((adapter) => (
-              <option key={adapter.id} value={adapter.id}>{adapter.name}</option>
-            ))}
-          </select>
+            {ACP_ADAPTERS.map((adapter) => {
+              const selectedAgent = settingsPreset.acpAgent?.id || "pi-acp";
+              const isSelected = selectedAgent === adapter.id;
+              return (
+                <button
+                  key={adapter.id}
+                  type="button"
+                  role="option"
+                  aria-selected={isSelected}
+                  data-acp-agent-option={adapter.id}
+                  onClick={() =>
+                    updateAcpAgent({
+                      id: adapter.id,
+                      command: adapter.id === "custom" ? settingsPreset.acpAgent?.command || "" : undefined,
+                      args: adapter.id === "custom" ? settingsPreset.acpAgent?.args || [] : undefined,
+                      env: settingsPreset.acpAgent?.env || {},
+                    })
+                  }
+                  className={cn(
+                    "flex items-center gap-2 rounded-md border border-input bg-background px-3 py-2 text-sm text-left transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    isSelected && "border-primary ring-1 ring-primary",
+                  )}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={adapter.imageSrc}
+                    alt=""
+                    className="size-5 rounded shrink-0"
+                  />
+                  <span className="truncate">{adapter.name}</span>
+                </button>
+              );
+            })}
+          </div>
           <p className="text-xs text-muted-foreground">
-            {ACP_ADAPTERS.find((adapter) => adapter.id === (settingsPreset.acpAgent?.id || "pi-acp"))?.description}
+            {acpAdapterInfo(settingsPreset.acpAgent?.id || "pi-acp").description}
           </p>
 
           <p className="text-xs text-muted-foreground">
@@ -2037,9 +2055,9 @@ const AISection = ({
             </TooltipTrigger>
             {!isFormValid && !isLoading && (
               <TooltipContent>
-                {!settingsPreset?.id
-                  ? "Enter a preset name to continue"
-                  : !settingsPreset?.model
+                {!settingsPreset?.provider
+                  ? "Pick a provider to continue"
+                  : !settingsPreset?.model && settingsPreset.provider !== "acp"
                   ? "Select a model to continue"
                   : "Fix validation errors to continue"}
               </TooltipContent>
@@ -2049,18 +2067,6 @@ const AISection = ({
       </div>
     </div>
   );
-};
-
-const providerImageSrc: Record<string, string> = {
-  openai: "/images/openai.png",
-  "openai-chatgpt": "/images/openai.png",
-  anthropic: "/images/claude-ai.svg",
-  "native-ollama": "/images/ollama.png",
-  custom: "/images/custom.png",
-  pi: "/images/screenpipe.png",
-  screenpipe: "/images/screenpipe.png",
-  "screenpipe-cloud": "/images/screenpipe.png",
-  acp: "/images/screenpipe.png",
 };
 
 // Sortable preset card for drag-and-drop reordering
@@ -2134,7 +2140,7 @@ function SortablePresetCard({
             </button>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src={providerImageSrc[preset.provider]}
+              src={presetImageSrc(preset.provider, preset.acpAgent?.id)}
               alt={`${preset.provider} logo`}
               className="w-6 h-6 opacity-80 rounded shrink-0"
             />

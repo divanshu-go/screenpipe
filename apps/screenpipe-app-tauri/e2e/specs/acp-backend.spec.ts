@@ -551,8 +551,11 @@ describe("ACP backend", function () {
     const selector = await $("#acpAgent");
     await selector.waitForExist({ timeout: t(10_000) });
     const options = (await browser.execute(() =>
-      Array.from(document.querySelectorAll<HTMLOptionElement>("#acpAgent option"))
-        .map((option) => ({ value: option.value, label: option.textContent?.trim() })))) as Array<{
+      Array.from(document.querySelectorAll<HTMLElement>("#acpAgent [data-acp-agent-option]"))
+        .map((option) => ({
+          value: option.dataset.acpAgentOption,
+          label: option.textContent?.trim(),
+        })))) as Array<{
       value: string;
       label?: string;
     }>;
