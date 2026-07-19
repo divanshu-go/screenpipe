@@ -1512,6 +1512,19 @@ async piAbortActive(sessionId: string | null) : Promise<Result<null, string>> {
 }
 },
 /**
+ * Change one ACP session configuration option (model, mode, or any other
+ * selector the adapter advertised through `acp_session_config`). Select
+ * options take the value id string; boolean options take "true"/"false".
+ */
+async piAcpSetConfigOption(sessionId: string | null, optionId: string, value: string, isBoolean: boolean | null) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("pi_acp_set_config_option", { sessionId, optionId, value, isBoolean }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Cancel a single queued prompt. Returns true if it was still in the queue
  * (and is now removed), false if it had already been pulled into the
  * in-flight slot — at that point `pi_abort` is the right tool.

@@ -3755,6 +3755,50 @@ pub async fn pi_set_model(
         .map_err(|_| "Pi command queue dropped".to_string())?
 }
 
+/// Change one ACP session configuration option (model, mode, or any other
+/// selector the adapter advertised through `acp_session_config`). Select
+/// options take the value id string; boolean options take "true"/"false".
+#[tauri::command]
+#[specta::specta]
+pub async fn pi_acp_set_config_option(
+    state: State<'_, PiState>,
+    session_id: Option<String>,
+    option_id: String,
+    value: String,
+    is_boolean: Option<bool>,
+) -> Result<(), String> {
+    let sid = session_id.unwrap_or_else(|| "chat".to_string());
+
+    let queue = {
+        let mut pool = state.0.lock().await;
+        let m = pool.sessions.get_mut(&sid).ok_or("Pi not initialized")?;
+        if !m.is_running() {
+            return Err("agent is not running".to_string());
+        }
+        m.last_activity = std::time::Instant::now();
+        m.queue_handle
+            .clone()
+            .ok_or("Pi command queue not initialized")?
+    };
+
+    let value_json = if is_boolean.unwrap_or(false) {
+        json!(value == "true")
+    } else {
+        json!(value)
+    };
+    let cmd = json!({
+        "type": "set_config_option",
+        "optionId": option_id,
+        "value": value_json,
+    });
+
+    let rx = queue
+        .send(cmd, crate::pi_command_queue::WaitMode::WaitDone)
+        .await?;
+    rx.await
+        .map_err(|_| "Pi command queue dropped".to_string())?
+}
+
 fn write_pi_settings(settings: &serde_json::Value) -> Result<(), String> {
     let config_dir = get_pi_config_dir()?;
     std::fs::create_dir_all(&config_dir)

@@ -10,16 +10,17 @@
 //! handwritten protocol implementation is shipped.
 
 use agent_client_protocol::schema::v1::{
-    AuthenticateRequest, CancelNotification, ClientCapabilities, CloseSessionRequest, ContentBlock,
-    CreateTerminalRequest, CreateTerminalResponse, EnvVariable, FileSystemCapabilities,
-    ImageContent, Implementation, InitializeRequest, InitializeResponse, KillTerminalRequest,
-    KillTerminalResponse, McpServer, McpServerStdio, NewSessionRequest, NewSessionResponse,
-    PromptRequest, ReadTextFileRequest, ReadTextFileResponse, ReleaseTerminalRequest,
-    ReleaseTerminalResponse, RequestPermissionOutcome, RequestPermissionRequest,
-    RequestPermissionResponse, SelectedPermissionOutcome, SessionId, SessionNotification,
-    StopReason, TerminalExitStatus, TerminalOutputRequest, TerminalOutputResponse, TextContent,
-    WaitForTerminalExitRequest, WaitForTerminalExitResponse, WriteTextFileRequest,
-    WriteTextFileResponse,
+    AuthenticateRequest, CancelNotification, ClientCapabilities, ClientSessionCapabilities,
+    CloseSessionRequest, ContentBlock, CreateTerminalRequest, CreateTerminalResponse, EnvVariable,
+    FileSystemCapabilities, ImageContent, Implementation, InitializeRequest, InitializeResponse,
+    KillTerminalRequest, KillTerminalResponse, McpServer, McpServerStdio, NewSessionRequest,
+    NewSessionResponse, PromptRequest, ReadTextFileRequest, ReadTextFileResponse,
+    ReleaseTerminalRequest, ReleaseTerminalResponse, RequestPermissionOutcome,
+    RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome,
+    SessionConfigOptionValue, SessionConfigOptionsCapabilities, SessionId, SessionNotification,
+    SetSessionConfigOptionRequest, StopReason, TerminalExitStatus, TerminalOutputRequest,
+    TerminalOutputResponse, TextContent, WaitForTerminalExitRequest, WaitForTerminalExitResponse,
+    WriteTextFileRequest, WriteTextFileResponse,
 };
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::{Agent, Client, ConnectionTo, Error, ErrorCode, Lines};
@@ -1768,7 +1769,14 @@ async fn run_protocol(
                                         .read_text_file(true)
                                         .write_text_file(true),
                                 )
-                                .terminal(true),
+                                .terminal(true)
+                                // Agents only advertise their model/mode
+                                // selectors (session config options) to
+                                // clients that declare support for them.
+                                .session(
+                                    ClientSessionCapabilities::new()
+                                        .config_options(SessionConfigOptionsCapabilities::new()),
+                                ),
                         )
                         .client_info(
                             Implementation::new("screenpipe", env!("CARGO_PKG_VERSION"))
@@ -1791,6 +1799,7 @@ async fn run_protocol(
                 "agentInfo": init.agent_info,
                 "capabilities": init.agent_capabilities
             }));
+            send_session_config(&state.output, &session);
 
             let image_supported = init.agent_capabilities.prompt_capabilities.image;
             let close_supported = init.agent_capabilities.session_capabilities.close.is_some();
@@ -1880,7 +1889,69 @@ async fn run_protocol(
                                 )
                                 .await?;
                                 state.reset_system_context(config.system_context.clone());
+                                send_session_config(&state.output, &session);
                                 parent_response(&state.output, "new_session", &id, None);
+                            }
+                            "set_config_option" if active => {
+                                let message = "cannot change ACP session configuration during an active prompt";
+                                parent_response(&state.output, "set_config_option", &id, Some(message));
+                            }
+                            "set_config_option" => {
+                                let option_id = command
+                                    .get("optionId")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default()
+                                    .to_owned();
+                                let value = match command.get("value") {
+                                    Some(Value::Bool(flag)) => {
+                                        Some(SessionConfigOptionValue::Boolean { value: *flag })
+                                    }
+                                    Some(Value::String(value_id)) => {
+                                        Some(SessionConfigOptionValue::from(value_id.as_str()))
+                                    }
+                                    _ => None,
+                                };
+                                let Some(value) = value else {
+                                    parent_response(
+                                        &state.output,
+                                        "set_config_option",
+                                        &id,
+                                        Some("set_config_option requires a string or boolean value"),
+                                    );
+                                    continue;
+                                };
+                                if option_id.is_empty() {
+                                    parent_response(
+                                        &state.output,
+                                        "set_config_option",
+                                        &id,
+                                        Some("set_config_option requires optionId"),
+                                    );
+                                    continue;
+                                }
+                                match connection
+                                    .send_request(SetSessionConfigOptionRequest::new(
+                                        session.session_id.clone(),
+                                        option_id,
+                                        value,
+                                    ))
+                                    .block_task()
+                                    .await
+                                {
+                                    Ok(response) => {
+                                        // The response is the authoritative new
+                                        // option state; mirror it to the UI.
+                                        state.output.send(json!({
+                                            "type": "acp_session_config",
+                                            "configOptions": response.config_options,
+                                        }));
+                                        parent_response(&state.output, "set_config_option", &id, None);
+                                    }
+                                    Err(error) => {
+                                        let message = error.to_string();
+                                        parent_response(&state.output, "set_config_option", &id, Some(&message));
+                                    }
+                                }
                             }
                             _ => parent_response(&state.output, command_type, &id, None),
                         }
