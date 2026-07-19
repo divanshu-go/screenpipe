@@ -8,7 +8,7 @@ import { listen } from "@tauri-apps/api/event";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { commands } from "@/lib/utils/tauri";
 import { check, type Update } from "@tauri-apps/plugin-updater";
-import { platform } from "@tauri-apps/plugin-os";
+import { platform, arch } from "@tauri-apps/plugin-os";
 import { useToast } from "@/components/ui/use-toast";
 import { cn } from "@/lib/utils";
 
@@ -65,21 +65,26 @@ interface UpdateBannerProps {
 }
 
 async function getWindowsUpdateOptions() {
-  // Backend is the single source of truth for endpoint + auth: it returns the
-  // channel endpoint baked into this build (stable/beta/enterprise) and the
-  // headers the backend update path itself would send. The old hardcoded list
-  // silently switched beta users to stable and dropped Bearer auth for paid
-  // downloads.
-  const config = await commands.getUpdateCheckConfig();
-  const headers: Record<string, string> = Object.fromEntries(config.headers);
-  const hasHeaders = Object.keys(headers).length > 0;
+  const cpuArch = arch();
+  const isEnterprise = await commands.isEnterpriseBuildCmd().catch(() => false);
+  const channel = isEnterprise ? "enterprise" : "stable";
+  const headers: Record<string, string> = {};
+
+  if (isEnterprise) {
+    const licenseKey = await commands.getEnterpriseLicenseKey().catch(() => null);
+    if (licenseKey) {
+      headers["X-License-Key"] = licenseKey;
+    }
+  }
 
   return {
     checkOptions: {
-      ...(config.endpoints.length > 0 ? { endpoints: config.endpoints } : {}),
-      ...(hasHeaders ? { headers } : {}),
+      endpoints: [
+        `https://screenpipe.com/api/app-update/${channel}/windows-${cpuArch}/{{current_version}}`,
+      ],
+      ...(Object.keys(headers).length > 0 ? { headers } : {}),
     },
-    downloadOptions: hasHeaders ? { headers } : undefined,
+    downloadOptions: Object.keys(headers).length > 0 ? { headers } : undefined,
   };
 }
 
