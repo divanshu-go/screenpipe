@@ -40,6 +40,8 @@ type SaveConversation = (
 ) => Promise<void>;
 
 type PiRunningConfig = {
+  backend?: "acp" | null;
+  acpAgentSignature?: string | null;
   provider: string;
   model: string;
   url: string;
@@ -244,6 +246,8 @@ export type PiForegroundEventsOptions = {
   flushStreamingMessageRender: NonNullable<StreamingActions["flushStreamingMessageRender"]>;
   forceQueueModeRef: PiTransportRefs["forceQueueModeRef"];
   handleAgentEventDataRef: React.MutableRefObject<((data: unknown) => void) | null>;
+  handleAgentActionEvent: (data: unknown, sessionId: string) => boolean;
+  clearAgentActionsForSession: (sessionId: string) => void;
   handleInvalidatedAuthToken: () => Promise<void> | void;
   lastUserMessageRef: PiTransportRefs["lastUserMessageRef"];
   markTurnIntentConsumed: TurnIntentActions["markTurnIntentConsumed"];
