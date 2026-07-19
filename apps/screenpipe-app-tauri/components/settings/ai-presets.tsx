@@ -680,6 +680,25 @@ const AISection = ({
     updateSettingsPreset,
   ]);
 
+  // A cleared name refills the moment the field loses focus, so it can never
+  // sit empty. Re-selecting the already-selected agent also lands here (the
+  // click blurs the field) even though the selection effect sees no change.
+  const refillEmptyName = useCallback(() => {
+    if (settingsPreset?.id?.trim()) return;
+    if (!settingsPreset?.provider) return;
+    const autoName = generatePresetName(
+      {
+        provider: settingsPreset.provider,
+        acpAgentId: settingsPreset.acpAgent?.id,
+        model: settingsPreset.model,
+      },
+      visiblePresets.map((p) => p.id),
+      preset?.id,
+    );
+    lastAutoNameRef.current = autoName;
+    updateSettingsPreset({ id: autoName });
+  }, [settingsPreset, visiblePresets, preset?.id, updateSettingsPreset]);
+
   const [models, setModels] = useState<AIModel[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [isModelPickerOpen, setIsModelPickerOpen] = useState(false);
@@ -1376,6 +1395,7 @@ const AISection = ({
         required={false}
         spellCheck={false}
         autoCorrect="off"
+        onBlur={refillEmptyName}
         disabled={!!preset && !isDuplicating && preset.id !== undefined}
         helperText="Follows your selection automatically, or type your own"
       />

@@ -272,6 +272,23 @@ export function AIProviderConfig({
     settings?.aiPresets,
   ]);
 
+  // A cleared name refills when the field loses focus, so it never sits
+  // empty even when the selection itself does not change again.
+  const refillEmptyName = () => {
+    if (defaultPreset?.id || formData.id?.trim()) return;
+    const autoName = generatePresetName(
+      {
+        provider: formData.provider,
+        acpAgentId: formData.acpAgent?.id,
+        model: formData.model,
+      },
+      (settings?.aiPresets ?? []).map((preset) => preset.id),
+    );
+    lastAutoNameRef.current = autoName;
+    setFormData((prev) => ({ ...prev, id: autoName }));
+    setIdError(null);
+  };
+
   const validateId = (id: string | undefined): boolean => {
     if (!id?.trim()) {
       // Empty is fine: a name is generated from the selection on submit.
@@ -495,6 +512,7 @@ export function AIProviderConfig({
             placeholder="preset name"
             value={formData.id || undefined}
             onChange={(e) => handleIdChange(e.target.value)}
+            onBlur={refillEmptyName}
             className={cn(
               "font-mono h-8 text-sm",
               idError && "border-destructive focus-visible:ring-destructive",
