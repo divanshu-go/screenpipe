@@ -32,6 +32,7 @@ use tracing_oslog::OsLogger;
 use updates::start_update_check;
 use window::ShowRewindWindow;
 
+mod acp_runtime;
 mod analytics;
 mod auth_session;
 #[allow(deprecated)]
@@ -146,8 +147,8 @@ use sentry;
 use tauri::AppHandle;
 #[cfg(target_os = "macos")]
 mod dock_menu;
-mod health;
 mod headless;
+mod health;
 mod log_files;
 mod media_commands;
 mod native_notification;
@@ -318,6 +319,39 @@ macro_rules! define_specta_builder {
 
 #[tokio::main]
 async fn main() {
+    if acp_runtime::is_process_guard_mode() {
+        let exit_code = match acp_runtime::run_process_guard() {
+            Ok(exit_code) => exit_code,
+            Err(error) => {
+                eprintln!("[acp-process-guard] {error}");
+                1
+            }
+        };
+        std::process::exit(exit_code);
+    }
+
+    // ACP runs in a hidden mode of this same executable. Keeping the protocol
+    // runtime in Rust avoids shipping a second sidecar while ensuring this path
+    // exits before any Tauri, database, or recording initialization.
+    if acp_runtime::is_runtime_mode() {
+        let exit_code = match acp_runtime::run_from_env().await {
+            Ok(()) => 0,
+            Err(error) => {
+                use std::io::Write as _;
+                let mut stdout = std::io::stdout().lock();
+                let _ = writeln!(
+                    stdout,
+                    "{}",
+                    serde_json::json!({ "type": "acp_fatal", "error": error })
+                );
+                let _ = stdout.flush();
+                eprintln!("[acp-runtime] {error}");
+                1
+            }
+        };
+        std::process::exit(exit_code);
+    }
+
     #[cfg(target_os = "linux")]
     linux_webkit_env::configure();
 
@@ -2236,8 +2270,7 @@ async fn main() {
                 tauri::RunEvent::Reopen { .. } => {
                     // Defer off the event stack so run handler stays panic-free.
                     // Open the settings/app window (not the timeline overlay).
-                    if crate::enterprise_policy::is_app_ui_hidden()
-                        || crate::headless::is_dormant()
+                    if crate::enterprise_policy::is_app_ui_hidden() || crate::headless::is_dormant()
                     {
                         return;
                     }
@@ -2268,7 +2301,10 @@ mod autostart_arg_tests {
     #[test]
     fn ignores_unrelated_args() {
         assert!(!args_contain_autostart(["screenpipe"]));
-        assert!(!args_contain_autostart(["screenpipe", "--check-arc-automation"]));
+        assert!(!args_contain_autostart([
+            "screenpipe",
+            "--check-arc-automation"
+        ]));
         assert!(!args_contain_autostart(["screenpipe", "--autostarted"]));
     }
 }
