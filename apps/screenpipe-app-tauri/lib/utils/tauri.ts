@@ -356,6 +356,20 @@ async doPermissionsCheck(initialCheck: boolean) : Promise<OSPermissionsCheck> {
     return await TAURI_INVOKE("do_permissions_check", { initialCheck });
 },
 /**
+ * E2E helper: run the real Pi/ACP startup path while keeping its expected
+ * failure inside Rust. WebDriver implementations can surface a rejected Tauri
+ * invocation as the browser command result even when page JavaScript catches
+ * the promise, which makes negative-path process cleanup tests nondeterministic.
+ */
+async e2eCapturePiStartError(sessionId: string, projectDir: string, providerConfig: PiProviderConfig | null) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("e2e_capture_pi_start_error", { sessionId, projectDir, providerConfig }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * E2E helper: emit a deterministic chat stream from the Rust side.
  *
  * This keeps chat performance tests close to production's Pi stdout path:
@@ -1319,7 +1333,7 @@ async performOcrOnImage(imageBase64: string) : Promise<Result<string, string>> {
 },
 /**
  * Abort current Pi operation. Priority command — cancels all pending commands
- * in the queue and sends abort directly. Waits for the SDK's done event.
+ * in the queue and sends abort directly. Waits for its exact SDK response.
  */
 async piAbort(sessionId: string | null) : Promise<Result<null, string>> {
     try {
@@ -1425,7 +1439,7 @@ async piListExtensionPackages() : Promise<Result<PiExtensionPackage[], string>> 
 /**
  * Start a new Pi session (clears conversation history).
  * Serialized through the queue — waits for any in-flight work to complete,
- * then sends new_session and waits for the SDK's done event before returning.
+ * then sends new_session and waits for its exact SDK response before returning.
  */
 async piNewSession(sessionId: string | null) : Promise<Result<null, string>> {
     try {
@@ -2482,8 +2496,34 @@ async writeBrowserLogs(entries: BrowserLogEntry[]) : Promise<void> {
 
 /** user-defined types **/
 
-export type AIPreset = { id: string; prompt: string; provider: AIProviderType; url?: string; model?: string; defaultPreset: boolean; apiKey: string | null; maxContextChars: number; maxTokens?: number }
-export type AIProviderType = "openai" | "openai-chatgpt" | "native-ollama" | "custom" | "screenpipe-cloud" | "pi" | "anthropic"
+export type AIPreset = { id: string; prompt: string; provider: AIProviderType; acpAgent?: AcpAgentPresetConfig | null; url?: string; model?: string; defaultPreset: boolean; apiKey: string | null; maxContextChars: number; maxTokens?: number }
+export type AIProviderType = "openai" | "openai-chatgpt" | "native-ollama" | "custom" | "screenpipe-cloud" | "acp" | "pi" | "anthropic"
+export type AcpAgentConfig = {
+/**
+ * Registry id (for example `codex-acp`) or `custom`.
+ */
+id: string;
+/**
+ * Optional executable. Built-in registry adapters resolve by id when absent.
+ */
+command?: string | null;
+/**
+ * Arguments passed verbatim without a shell.
+ */
+args?: string[];
+/**
+ * Environment passed only to the supervised adapter process.
+ */
+env?: { [key in string]: string };
+/**
+ * Optional ACP authentication method id.
+ */
+authMethod?: string | null }
+export type AcpAgentPresetConfig = { id: string; command?: string | null; args?: string[];
+/**
+ * Keys with empty values inherit from the desktop process environment.
+ */
+env?: { [key in string]: string } }
 export type AecMode = "off" | "screenpipe" | "macos" | "windows"
 export type AudioDeviceInfo = { name: string; isDefault: boolean;
 /**
@@ -2651,17 +2691,32 @@ downloaded: boolean;
  * True when download failed with 401/403 — user must sign in.
  */
 auth_required: boolean }
+/**
+ * Configuration for which AI provider Pi should use
+ */
+export type PiBackend = "acp"
 export type PiCheckResult = { available: boolean; path: string | null }
 export type PiExtensionPackage = { source: string; scope: string; filtered: boolean; installed: boolean }
 /**
  * Image content for Pi RPC protocol (pi-ai ImageContent format)
  */
 export type PiImageContent = { type: string; mimeType: string; data: string }
-export type PiInfo = { running: boolean; projectDir: string | null; pid: number | null; sessionId: string | null }
+export type PiInfo = { running: boolean; projectDir: string | null; pid: number | null; sessionId: string | null;
 /**
- * Configuration for which AI provider Pi should use
+ * A non-fatal startup outcome, such as the user declining an ACP login.
+ * Genuine process/configuration failures still use the command error.
  */
+startupError: string | null }
 export type PiProviderConfig = {
+/**
+ * Transport backend. Omitted keeps the native Pi RPC implementation;
+ * `acp` runs a registry-compatible adapter through the official Rust SDK.
+ */
+backend?: PiBackend | null;
+/**
+ * ACP adapter configuration when `backend` is `acp`.
+ */
+acpAgent?: AcpAgentConfig | null;
 /**
  * Provider type: "openai", "native-ollama", "custom", "screenpipe-cloud"
  */
