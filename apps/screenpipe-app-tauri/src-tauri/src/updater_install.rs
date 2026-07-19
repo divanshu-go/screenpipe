@@ -425,9 +425,12 @@ fn stage_update_inner(
     strip_quarantine(&extracted_bundle);
     fsync_key_files(&extracted_bundle);
 
-    // 3. Move into the persistent staged slot (same volume, so a rename).
+    // 3. Supersede: drop ANY previously staged version (and its manifest)
+    // before staging this one. Leaving an orphan `staged/<old>/` behind is
+    // what let GC later age out the orphan and take the live staged.json with
+    // it; clearing at the source means only one staged version ever exists.
+    clear_staged_in(cache, Some(installed_bundle));
     let staged_dir = lifecycle_root.join("staged").join(expected_version);
-    let _ = fs::remove_dir_all(&staged_dir);
     fs::create_dir_all(&staged_dir).map_err(fs_err("create staged dir"))?;
     let staged_bundle = staged_dir.join(
         extracted_bundle
@@ -458,11 +461,10 @@ fn write_staged_manifest(
         "allowDowngrade": allow_downgrade,
         "atUnixSecs": now_unix_secs(),
     });
-    fs::write(
-        cache.join("staged.json"),
-        serde_json::to_vec_pretty(&manifest).unwrap_or_default(),
-    )
-    .map_err(fs_err("write staged manifest"))
+    // Durable, like pending.json: a validated bundle sits on disk, so a torn
+    // staged.json (crash mid-write) would strand it (re-download or a failed
+    // apply). temp + fsync + rename + dir fsync closes that.
+    write_json_durable(&cache.join("staged.json"), &manifest).map_err(fs_err("write staged manifest"))
 }
 
 fn read_staged_manifest(cache: &Path) -> Option<(String, PathBuf, bool)> {
@@ -800,6 +802,9 @@ struct HelperArgs {
     bundle: PathBuf,
     previous: Option<PathBuf>,
     wait_pid: Option<i32>,
+    /// Executable path of the process named by `--wait-pid`, so the helper can
+    /// tell a still-alive parent from a reused PID.
+    wait_exe: Option<PathBuf>,
     relaunch: bool,
 }
 
@@ -811,14 +816,15 @@ fn parse_helper_args(args: &[String]) -> Option<HelperArgs> {
         Some("restore") => HelperMode::Restore,
         _ => return None,
     };
-    let (mut cache, mut bundle, mut previous, mut wait_pid, mut relaunch) =
-        (None, None, None, None, false);
+    let (mut cache, mut bundle, mut previous, mut wait_pid, mut wait_exe, mut relaunch) =
+        (None, None, None, None, None, false);
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--cache" => cache = iter.next().map(PathBuf::from),
             "--bundle" => bundle = iter.next().map(PathBuf::from),
             "--previous" => previous = iter.next().map(PathBuf::from),
             "--wait-pid" => wait_pid = iter.next().and_then(|v| v.parse::<i32>().ok()),
+            "--wait-exe" => wait_exe = iter.next().map(PathBuf::from),
             "--relaunch" => relaunch = true,
             _ => return None,
         }
@@ -833,8 +839,24 @@ fn parse_helper_args(args: &[String]) -> Option<HelperArgs> {
         bundle: bundle?,
         previous,
         wait_pid,
+        wait_exe,
         relaunch,
     })
+}
+
+/// Executable path of `pid` via `proc_pidpath`, or None if the process is gone
+/// or unreadable. Used to distinguish the original parent from a later process
+/// that reused its PID (macOS recycles PIDs quickly).
+fn process_exe_path(pid: i32) -> Option<PathBuf> {
+    let mut buf = [0u8; 4096];
+    let n = unsafe {
+        libc::proc_pidpath(pid, buf.as_mut_ptr() as *mut libc::c_void, buf.len() as u32)
+    };
+    if n <= 0 {
+        return None;
+    }
+    let s = std::str::from_utf8(&buf[..n as usize]).ok()?;
+    Some(PathBuf::from(s))
 }
 
 /// Entry point, called from main() before tauri initializes. Never returns.
@@ -891,6 +913,19 @@ fn update_helper_main(args: &[String]) -> i32 {
         // Never swap under a live app. If the parent refuses to die, give up.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
         while unsafe { libc::kill(pid, 0) } == 0 {
+            // PID-reuse guard: if the PID is now held by a DIFFERENT process
+            // (its executable path differs from the parent we were told to
+            // wait on), our parent already exited and we can proceed. Only a
+            // positive mismatch proceeds; an unreadable path keeps waiting, so
+            // we never swap under a possibly-live app.
+            if let Some(expected) = parsed.wait_exe.as_deref() {
+                if let Some(current) = process_exe_path(pid) {
+                    if current != expected {
+                        log("wait pid reused by another process; parent already exited");
+                        break;
+                    }
+                }
+            }
             if std::time::Instant::now() > deadline {
                 log("parent still alive after 120s, aborting (staged update kept)");
                 return 3;
@@ -952,6 +987,10 @@ pub fn spawn_wait_apply_helper(app: &tauri::AppHandle, bundle: &Path, relaunch: 
         .arg(bundle)
         .arg("--wait-pid")
         .arg(std::process::id().to_string());
+    // Pass our own executable path so the helper can detect PID reuse.
+    if let Ok(exe) = std::env::current_exe() {
+        command.arg("--wait-exe").arg(exe);
+    }
     if relaunch {
         command.arg("--relaunch");
     }
@@ -1056,8 +1095,12 @@ fn validate_staged_bundle(bundle: &Path, expected_version: &str) -> Result<Strin
 fn codesign_verify(bundle: &Path) -> Result<(), InstallError> {
     let codesign = Path::new("/usr/bin/codesign");
     if !codesign.exists() {
-        warn!("self-install: /usr/bin/codesign missing, skipping signature check");
-        return Ok(());
+        // Fail closed: codesign ships with every macOS install, so its
+        // absence is an environment we don't trust to skip signature checks
+        // in. Better to not apply the update than to apply an unverified one.
+        return Err(InstallError::Verification(
+            "/usr/bin/codesign missing; refusing to apply an unverified update".into(),
+        ));
     }
     let output = std::process::Command::new(codesign)
         .args(["--verify", "--deep", "--strict"])
@@ -1484,6 +1527,17 @@ pub fn consume_restore_marker(app: &tauri::AppHandle) -> Option<String> {
 /// purpose — delete it and clear the boot-attempt counter. Independently GC
 /// staged/previous/extract entries older than 10 days (Sparkle's cache
 /// sweep interval) so failed installs don't accumulate bundles.
+/// Whether GC deleting `dir` should also unlink `staged.json`. True only when
+/// `dir` is the live manifest's own version directory; an orphaned sibling
+/// under `staged/` must never take the live manifest down with it.
+fn gc_deletes_live_manifest(
+    dir: &Path,
+    is_staged_root: bool,
+    live_version_dir: Option<&Path>,
+) -> bool {
+    is_staged_root && live_version_dir == Some(dir)
+}
+
 pub fn finalize_and_gc(app: &tauri::AppHandle) {
     let Ok(cache) = updates_cache_dir(app) else {
         return;
@@ -1522,6 +1576,13 @@ pub fn finalize_and_gc(app: &tauri::AppHandle) {
         let _ = fs::remove_file(cache.join("boot_in_progress.json"));
     }
 
+    // The version dir the live manifest points at, if any:
+    // `<root>/staged/<version>/<app>.app`, so the version dir is its parent.
+    // GC must only unlink staged.json when it deletes THIS dir, never an
+    // orphaned sibling (which would silently wipe the live staged update).
+    let live_staged_version_dir =
+        read_staged_manifest(&cache).and_then(|(_, bundle, _)| bundle.parent().map(Path::to_path_buf));
+
     let mut gc_roots: Vec<PathBuf> = ["extract", "staged", "previous"]
         .iter()
         .map(|sub| cache.join(sub))
@@ -1537,11 +1598,7 @@ pub fn finalize_and_gc(app: &tauri::AppHandle) {
         gc_roots.push(alt.join("previous"));
     }
     for root in gc_roots {
-        let sub = if root.parent() == Some(cache.as_path()) {
-            root.file_name().and_then(|n| n.to_str()).unwrap_or("")
-        } else {
-            ""
-        };
+        let is_staged_root = root.file_name() == Some(std::ffi::OsStr::new("staged"));
         let Ok(entries) = fs::read_dir(&root) else {
             continue;
         };
@@ -1554,9 +1611,16 @@ pub fn finalize_and_gc(app: &tauri::AppHandle) {
                 .map(|age| age.as_secs() > GC_AGE_SECS)
                 .unwrap_or(false);
             if stale {
-                let _ = fs::remove_dir_all(entry.path());
-                // A GC'd staged bundle must not leave a dangling manifest.
-                if sub == "staged" {
+                let path = entry.path();
+                // Unlink the manifest only if the dir we're deleting IS the
+                // one it references; an aged-out orphan leaves it alone.
+                let is_live = gc_deletes_live_manifest(
+                    &path,
+                    is_staged_root,
+                    live_staged_version_dir.as_deref(),
+                );
+                let _ = fs::remove_dir_all(&path);
+                if is_live {
                     let _ = fs::remove_file(cache.join("staged.json"));
                 }
             }
@@ -1755,6 +1819,20 @@ mod tests {
         // a sibling system path smuggled via a tampered manifest: refused
         assert!(confined_path(Path::new("/Applications/Safari.app"), &roots).is_none());
         assert!(confined_path(Path::new("/"), &roots).is_none());
+    }
+
+    #[test]
+    fn gc_spares_manifest_when_orphan_ages_out() {
+        let live = PathBuf::from("/c/updates/staged/2.5.122");
+        let orphan = PathBuf::from("/c/updates/staged/2.5.121");
+        // deleting an aged-out orphan must NOT unlink the live manifest
+        assert!(!gc_deletes_live_manifest(&orphan, true, Some(&live)));
+        // deleting the live version dir does unlink it
+        assert!(gc_deletes_live_manifest(&live, true, Some(&live)));
+        // non-staged roots (previous/, extract/) never touch the manifest
+        assert!(!gc_deletes_live_manifest(&live, false, Some(&live)));
+        // no live manifest at all: nothing to unlink
+        assert!(!gc_deletes_live_manifest(&orphan, true, None));
     }
 
     #[test]
