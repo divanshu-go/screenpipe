@@ -11,6 +11,7 @@ import {
   ACP_ADAPTERS,
   acpAdapterInfo,
   generatePresetName,
+  presetImageClass,
   presetImageSrc,
 } from "@/lib/utils/preset-appearance";
 import {
@@ -699,7 +700,10 @@ export function AIProviderConfig({
                     <img
                       src={adapter.imageSrc}
                       alt=""
-                      className="h-3.5 w-3.5 rounded-sm shrink-0"
+                      className={cn(
+                        "h-3.5 w-3.5 rounded-sm shrink-0",
+                        adapter.invertInDark && "dark:invert",
+                      )}
                     />
                     <span className="truncate">{adapter.name}</span>
                   </button>
@@ -1846,7 +1850,10 @@ export const AIPresetsSelector = ({
                           <img
                             src={presetImageSrc(preset.provider, preset.acpAgent?.id)}
                             alt=""
-                            className="h-4 w-4 rounded-sm shrink-0 opacity-80"
+                            className={cn(
+                              "h-4 w-4 rounded-sm shrink-0 opacity-80",
+                              presetImageClass(preset.provider, preset.acpAgent?.id),
+                            )}
                           />
                           <span className="font-medium truncate max-w-[120px]" title={preset.id}>
                             {formatPresetName(preset.id)}

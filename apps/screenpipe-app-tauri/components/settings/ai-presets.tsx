@@ -38,6 +38,7 @@ import {
   ACP_ADAPTERS,
   acpAdapterInfo,
   generatePresetName,
+  presetImageClass,
   presetImageSrc,
 } from "@/lib/utils/preset-appearance";
 import { ValidatedInput } from "../ui/validated-input";
@@ -1416,7 +1417,10 @@ const AISection = ({
                   <img
                     src={adapter.imageSrc}
                     alt=""
-                    className="size-5 rounded shrink-0"
+                    className={cn(
+                      "size-5 rounded shrink-0",
+                      adapter.invertInDark && "dark:invert",
+                    )}
                   />
                   <span className="truncate">{adapter.name}</span>
                 </button>
@@ -2143,7 +2147,10 @@ function SortablePresetCard({
             <img
               src={presetImageSrc(preset.provider, preset.acpAgent?.id)}
               alt={`${preset.provider} logo`}
-              className="w-6 h-6 opacity-80 rounded shrink-0"
+              className={cn(
+                "w-6 h-6 opacity-80 rounded shrink-0",
+                presetImageClass(preset.provider, preset.acpAgent?.id),
+              )}
             />
             <h3 className="text-sm font-semibold text-foreground truncate" title={preset.id}>
               {formatPresetName(preset.id)}
