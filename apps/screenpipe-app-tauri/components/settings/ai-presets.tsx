@@ -41,6 +41,7 @@ import {
   presetImageClass,
   presetImageSrc,
 } from "@/lib/utils/preset-appearance";
+import { AcpPresetDefaults } from "@/components/settings/acp-preset-defaults";
 import { ValidatedInput } from "../ui/validated-input";
 import { ValidatedTextarea } from "../ui/validated-textarea";
 import {
@@ -1463,6 +1464,13 @@ const AISection = ({
           <p className="text-xs text-muted-foreground">
             {acpAdapterInfo(settingsPreset.acpAgent?.id || "pi-acp").description}
           </p>
+
+          <AcpPresetDefaults
+            agentId={settingsPreset.acpAgent?.id || "pi-acp"}
+            config={settingsPreset.acpAgent?.config}
+            modeId={settingsPreset.acpAgent?.modeId}
+            onChange={(change) => updateAcpAgent(change)}
+          />
 
           <p className="text-xs text-muted-foreground">
             Sign-in happens in the chat when the agent asks for it. Browser login is recommended;

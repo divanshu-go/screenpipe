@@ -129,6 +129,18 @@ struct RuntimeConfig {
     bun_path: String,
     preferred_auth_method: Option<String>,
     system_context: Option<String>,
+    session_defaults: SessionDefaults,
+}
+
+/// Preset-stored defaults applied after every session/new. Options or modes
+/// the adapter no longer advertises are skipped without failing startup.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionDefaults {
+    #[serde(default)]
+    options: HashMap<String, String>,
+    #[serde(default)]
+    mode_id: Option<String>,
 }
 
 impl RuntimeConfig {
@@ -162,6 +174,10 @@ impl RuntimeConfig {
             bun_path,
             preferred_auth_method: env_nonempty("SCREENPIPE_ACP_AUTH_METHOD"),
             system_context: env_nonempty("SCREENPIPE_ACP_SYSTEM_PROMPT"),
+            session_defaults: parse_json_env::<SessionDefaults>(
+                "SCREENPIPE_ACP_SESSION_CONFIG_JSON",
+            )?
+            .unwrap_or_default(),
         })
     }
 }
@@ -1026,10 +1042,13 @@ fn finish_tool(output: &ParentOutput, id: &str, update: &Value) {
 }
 
 /// Mirror the adapter's advertised session configuration (model/mode
-/// selectors) to the desktop so the UI can render pickers for them.
-fn send_session_config(output: &ParentOutput, session: &NewSessionResponse) {
+/// selectors) to the desktop so the UI can render pickers for them. The
+/// agent id lets the desktop cache advertisements per adapter for the
+/// preset editors.
+fn send_session_config(output: &ParentOutput, agent_id: &str, session: &NewSessionResponse) {
     output.send(json!({
         "type": "acp_session_config",
+        "agentId": agent_id,
         "modes": session.modes,
         "configOptions": session.config_options,
     }));
@@ -1303,6 +1322,70 @@ async fn create_session(
         .send_request(NewSessionRequest::new(&config.project_dir).mcp_servers(mcp_servers(config)))
         .block_task()
         .await
+}
+
+/// Apply the preset's default config options and mode to a fresh session.
+/// Tolerant on purpose: options, values, or modes the adapter no longer
+/// advertises are skipped so a stale preset can never block startup.
+async fn apply_session_defaults(
+    connection: &ConnectionTo<Agent>,
+    config: &RuntimeConfig,
+    session: &mut NewSessionResponse,
+) {
+    let defaults = &config.session_defaults;
+    for (option_id, value) in &defaults.options {
+        let advertised = session
+            .config_options
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .any(|option| option.id.to_string() == *option_id);
+        if !advertised {
+            continue;
+        }
+        match connection
+            .send_request(SetSessionConfigOptionRequest::new(
+                session.session_id.clone(),
+                option_id.clone(),
+                SessionConfigOptionValue::value_id(value.clone()),
+            ))
+            .block_task()
+            .await
+        {
+            Ok(response) => session.config_options = Some(response.config_options),
+            Err(error) => eprintln!(
+                "[acp-runtime] preset default for option '{option_id}' was not applied: {error}"
+            ),
+        }
+    }
+
+    let Some(mode_id) = defaults.mode_id.as_deref().filter(|id| !id.is_empty()) else {
+        return;
+    };
+    let advertised = session
+        .modes
+        .as_ref()
+        .is_some_and(|modes| modes.available_modes.iter().any(|mode| mode.id.to_string() == mode_id));
+    if !advertised {
+        return;
+    }
+    match connection
+        .send_request(SetSessionModeRequest::new(
+            session.session_id.clone(),
+            mode_id.to_owned(),
+        ))
+        .block_task()
+        .await
+    {
+        Ok(_) => {
+            if let Some(modes) = session.modes.as_mut() {
+                modes.current_mode_id = mode_id.to_owned().into();
+            }
+        }
+        Err(error) => eprintln!(
+            "[acp-runtime] preset default mode '{mode_id}' was not applied: {error}"
+        ),
+    }
 }
 
 fn auth_error(error: &Error) -> bool {
@@ -1800,7 +1883,8 @@ async fn run_protocol(
                 "agentInfo": init.agent_info,
                 "capabilities": init.agent_capabilities
             }));
-            send_session_config(&state.output, &session);
+            apply_session_defaults(&connection, &config, &mut session).await;
+            send_session_config(&state.output, &config.agent_id, &session);
 
             let image_supported = init.agent_capabilities.prompt_capabilities.image;
             let close_supported = init.agent_capabilities.session_capabilities.close.is_some();
@@ -1890,7 +1974,8 @@ async fn run_protocol(
                                 )
                                 .await?;
                                 state.reset_system_context(config.system_context.clone());
-                                send_session_config(&state.output, &session);
+                                apply_session_defaults(&connection, &config, &mut session).await;
+                                send_session_config(&state.output, &config.agent_id, &session);
                                 parent_response(&state.output, "new_session", &id, None);
                             }
                             "set_config_option" if active => {
@@ -2202,6 +2287,7 @@ mod tests {
             bun_path: "/bun".into(),
             preferred_auth_method: None,
             system_context: None,
+            session_defaults: SessionDefaults::default(),
         }
     }
 

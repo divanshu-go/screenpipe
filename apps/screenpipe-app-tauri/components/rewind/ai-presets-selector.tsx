@@ -14,6 +14,7 @@ import {
   presetImageClass,
   presetImageSrc,
 } from "@/lib/utils/preset-appearance";
+import { AcpPresetDefaults } from "@/components/settings/acp-preset-defaults";
 import {
   Command,
   CommandEmpty,
@@ -715,6 +716,21 @@ export function AIProviderConfig({
               {acpAdapterInfo(formData.acpAgent?.id || "pi-acp").description}{" "}
               sign-in happens in the chat when the agent asks for it.
             </p>
+            <AcpPresetDefaults
+              compact
+              agentId={formData.acpAgent?.id || "pi-acp"}
+              config={formData.acpAgent?.config}
+              modeId={formData.acpAgent?.modeId}
+              onChange={(change) =>
+                setFormData({
+                  ...formData,
+                  acpAgent: {
+                    ...(formData.acpAgent || { id: "pi-acp" }),
+                    ...change,
+                  },
+                })
+              }
+            />
             {(formData.acpAgent?.id || "pi-acp") === "custom" && (
               <div className="space-y-1">
                 <Label htmlFor="acpCommandQuick" className="text-xs">

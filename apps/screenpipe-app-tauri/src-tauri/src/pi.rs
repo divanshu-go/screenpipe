@@ -1546,6 +1546,13 @@ pub struct AcpAgentConfig {
     /// Optional ACP authentication method id.
     #[serde(default)]
     pub auth_method: Option<String>,
+    /// Default session config option values (option id -> value id), applied
+    /// after every session/new.
+    #[serde(default)]
+    pub config: HashMap<String, String>,
+    /// Default session mode id, applied after every session/new.
+    #[serde(default)]
+    pub mode_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -2420,6 +2427,14 @@ pub async fn pi_start_inner(
             .env(
                 "SCREENPIPE_ACP_ENV_JSON",
                 serde_json::to_string(&resolved_env).map_err(|e| e.to_string())?,
+            )
+            .env(
+                "SCREENPIPE_ACP_SESSION_CONFIG_JSON",
+                serde_json::to_string(&serde_json::json!({
+                    "options": acp.config,
+                    "modeId": acp.mode_id,
+                }))
+                .map_err(|e| e.to_string())?,
             )
             .env_remove("SCREENPIPE_ACP_COMMAND")
             .env_remove("SCREENPIPE_ACP_AUTH_METHOD")

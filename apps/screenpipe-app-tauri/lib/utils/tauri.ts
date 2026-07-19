@@ -2754,12 +2754,31 @@ env?: { [key in string]: string };
 /**
  * Optional ACP authentication method id.
  */
-authMethod?: string | null }
+authMethod?: string | null;
+/**
+ * Default session config option values (option id -> value id), applied
+ * after every session/new.
+ */
+config?: { [key in string]: string };
+/**
+ * Default session mode id, applied after every session/new.
+ */
+modeId?: string | null }
 export type AcpAgentPresetConfig = { id: string; command?: string | null; args?: string[];
 /**
  * Keys with empty values inherit from the desktop process environment.
  */
-env?: { [key in string]: string } }
+env?: { [key in string]: string };
+/**
+ * Default session config option values (option id -> value id), applied
+ * after every session/new. Options the adapter no longer advertises are
+ * ignored at apply time.
+ */
+config?: { [key in string]: string };
+/**
+ * Default session mode id, applied after every session/new.
+ */
+modeId?: string | null }
 export type AecMode = "off" | "screenpipe" | "macos" | "windows"
 export type AudioDeviceInfo = { name: string; isDefault: boolean;
 /**
