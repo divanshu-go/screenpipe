@@ -1210,6 +1210,55 @@ pub async fn trigger_update_check(
         .map_err(|e| e.to_string())
 }
 
+/// The update endpoint(s) baked into this build plus the auth headers the
+/// backend would send. Single source of truth for the Windows banner path,
+/// which used to hardcode stable/enterprise endpoints — silently switching
+/// beta-channel users to stable and dropping Bearer auth for paid users.
+#[derive(serde::Serialize, specta::Type)]
+pub struct UpdateCheckConfig {
+    /// Endpoint templates verbatim from tauri.conf ({{target}} etc. are
+    /// substituted by the updater plugin at check time).
+    pub endpoints: Vec<String>,
+    pub headers: Vec<(String, String)>,
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_update_check_config(app: tauri::AppHandle) -> UpdateCheckConfig {
+    let endpoints = app
+        .config()
+        .plugins
+        .0
+        .get("updater")
+        .and_then(|u| u.get("endpoints"))
+        .and_then(|e| e.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut headers: Vec<(String, String)> = Vec::new();
+    if is_enterprise_build(&app) {
+        if let Some(license_key) = crate::commands::get_enterprise_license_key() {
+            headers.push(("X-License-Key".to_string(), license_key));
+        }
+    } else if let Ok(Some(settings)) = SettingsStore::get(&app) {
+        if let Some(token) = settings
+            .user
+            .token
+            .clone()
+            .filter(|t| !t.is_empty())
+            .or_else(crate::auth_token::cached_cloud_token)
+        {
+            headers.push(("Authorization".to_string(), format!("Bearer {token}")));
+        }
+    }
+
+    UpdateCheckConfig { endpoints, headers }
+}
+
 pub fn start_update_check(
     app: &tauri::AppHandle,
     interval_minutes: u64,
