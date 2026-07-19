@@ -3,7 +3,7 @@
 import { Button } from "@/components/ui/button";
 import { Sparkles, X } from "lucide-react";
 import { create } from "zustand";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { commands } from "@/lib/utils/tauri";
@@ -332,10 +332,15 @@ interface PendingUpdateSnapshot {
 // registered (boot-time webview race).
 export function useUpdateListener() {
   const { setIsVisible, setUpdateInfo, setAuthRequired } = useUpdateBanner();
+  const { toast } = useToast();
+  // update-blocked re-fires on every periodic check while running from the
+  // DMG / a translocated path; toast once per version, not every check.
+  const blockedSeen = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     let unlistenAvailable: (() => void) | undefined;
     let unlistenAuth: (() => void) | undefined;
+    let unlistenBlocked: (() => void) | undefined;
 
     // Rust re-emits update-available on every periodic check, and providers
     // hydration runs on every remount — both would otherwise resurrect a
@@ -365,6 +370,22 @@ export function useUpdateListener() {
         showAuthIfNotDismissed(event.payload);
       });
 
+      // An update is available but can't install from this location (running
+      // from the DMG, or Gatekeeper-translocated). Tell the user once.
+      unlistenBlocked = await listen<{ version: string; reason: string }>(
+        "update-blocked",
+        (event) => {
+          const { version, reason } = event.payload;
+          if (blockedSeen.current.has(version)) return;
+          blockedSeen.current.add(version);
+          toast({
+            title: "screenpipe can't update from here",
+            description: reason,
+            duration: 12000,
+          });
+        }
+      );
+
       // Hydrate from Rust in case the event fired before we mounted.
       try {
         const resPending = await commands.getPendingUpdate();
@@ -387,6 +408,7 @@ export function useUpdateListener() {
     return () => {
       unlistenAvailable?.();
       unlistenAuth?.();
+      unlistenBlocked?.();
     };
-  }, [setIsVisible, setUpdateInfo, setAuthRequired]);
+  }, [setIsVisible, setUpdateInfo, setAuthRequired, toast]);
 }
