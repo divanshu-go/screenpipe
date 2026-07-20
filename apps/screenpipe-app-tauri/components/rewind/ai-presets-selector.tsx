@@ -718,7 +718,12 @@ export function AIProviderConfig({
             </p>
             <AcpPresetDefaults
               compact
-              agentId={formData.acpAgent?.id || "pi-acp"}
+              agent={{
+                id: formData.acpAgent?.id || "pi-acp",
+                command: formData.acpAgent?.command,
+                args: formData.acpAgent?.args,
+                env: formData.acpAgent?.env,
+              }}
               config={formData.acpAgent?.config}
               modeId={formData.acpAgent?.modeId}
               onChange={(change) =>
