@@ -6,7 +6,7 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import { commands } from "@/lib/utils/tauri";
-import { useAcpSessionConfig } from "@/lib/stores/acp-session-config";
+import { dedupedModes, useAcpSessionConfig } from "@/lib/stores/acp-session-config";
 import { cn } from "@/lib/utils";
 
 const SELECT_CLASS =
@@ -32,11 +32,7 @@ export function AcpConfigSelector({
   const selects = (config?.options ?? []).filter(
     (option) => option.type === "select" && option.values.length > 0,
   );
-  // Some adapters (Claude Code) advertise their permission mode both as the
-  // modes state and as a "mode" config option; render it once.
-  const modes = selects.some((option) => option.category === "mode")
-    ? null
-    : (config?.modes ?? null);
+  const modes = dedupedModes(config);
   if (!sessionId || (selects.length === 0 && !modes)) return null;
 
   const run = async (key: string, action: () => Promise<void>, label: string) => {

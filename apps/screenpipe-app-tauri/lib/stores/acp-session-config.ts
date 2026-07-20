@@ -114,6 +114,28 @@ function parseModes(raw: any): AcpSessionModes | null {
   return { currentModeId: raw.currentModeId, availableModes };
 }
 
+/** Modes worth rendering as their own dropdown. Adapters double-advertise:
+ *  Claude exposes a "mode" config option, Pi mirrors its thinking levels as
+ *  session modes. Returns null when a select option already covers the same
+ *  choices (by category or by identical value sets). */
+export function dedupedModes(
+  config: AcpSessionConfig | null | undefined,
+): AcpSessionModes | null {
+  const modes = config?.modes ?? null;
+  if (!modes) return null;
+  const selects = (config?.options ?? []).filter(
+    (option) => option.type === "select" && option.values.length > 0,
+  );
+  if (selects.some((option) => option.category === "mode")) return null;
+  const modeIds = new Set(modes.availableModes.map((mode) => mode.value));
+  const duplicated = selects.some(
+    (option) =>
+      option.values.length === modeIds.size &&
+      option.values.every((value) => modeIds.has(value.value)),
+  );
+  return duplicated ? null : modes;
+}
+
 export const useAcpSessionConfig = create<AcpSessionConfigState>()((set) => ({
   sessions: {},
   byAgent: loadByAgent(),
