@@ -3814,6 +3814,99 @@ pub async fn pi_acp_set_config_option(
         .map_err(|_| "Pi command queue dropped".to_string())?
 }
 
+/// Probe an ACP adapter for its advertised model/mode selectors without a
+/// chat: spawn the hidden runtime, let it initialize and create a session,
+/// capture the acp_session_config event, and tear everything down. Returns
+/// the raw event JSON. Fails soft with the adapter's error message (e.g.
+/// sign-in required) so the preset editor can show it as a hint.
+#[tauri::command]
+#[specta::specta]
+pub async fn pi_acp_probe_agent(agent: AcpAgentConfig) -> Result<String, String> {
+    let bun_path = find_bun_executable().ok_or("bun executable not found")?;
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let project_dir = dirs::home_dir().unwrap_or_else(std::env::temp_dir);
+
+    let mut std_cmd = std::process::Command::new(exe);
+    // Own process group so cleanup group-kills can never target the app.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        std_cmd.process_group(0);
+    }
+    let mut cmd = tokio::process::Command::from(std_cmd);
+    cmd.arg(crate::acp_runtime::RUNTIME_ARG)
+        .env("SCREENPIPE_ACP_ID", &agent.id)
+        .env("SCREENPIPE_BUN_PATH", &bun_path)
+        .env("SCREENPIPE_ACP_CWD", &project_dir)
+        .env(
+            "SCREENPIPE_ACP_ARGS_JSON",
+            serde_json::to_string(&agent.args).map_err(|e| e.to_string())?,
+        )
+        .env(
+            "SCREENPIPE_ACP_ENV_JSON",
+            serde_json::to_string(&agent.env).map_err(|e| e.to_string())?,
+        )
+        .env_remove("SCREENPIPE_ACP_COMMAND")
+        .env_remove("SCREENPIPE_ACP_AUTH_METHOD")
+        .env_remove("SCREENPIPE_ACP_SYSTEM_PROMPT")
+        .env_remove("SCREENPIPE_ACP_SESSION_CONFIG_JSON")
+        .env_remove(crate::acp_runtime::CLOUD_API_KEY_ENV)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    if let Some(command) = agent
+        .command
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        cmd.env("SCREENPIPE_ACP_COMMAND", command);
+    }
+
+    let mut child = cmd.spawn().map_err(|e| format!("probe spawn failed: {e}"))?;
+    let stdout = child.stdout.take().ok_or("probe stdout unavailable")?;
+    use tokio::io::AsyncBufReadExt as _;
+    let mut lines = tokio::io::BufReader::new(stdout).lines();
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(120), async {
+        while let Ok(Some(line)) = lines.next_line().await {
+            let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else {
+                continue;
+            };
+            match event.get("type").and_then(|t| t.as_str()) {
+                Some("acp_session_config") => return Ok(line),
+                Some("acp_fatal") => {
+                    return Err(event
+                        .get("error")
+                        .and_then(|e| e.as_str())
+                        .unwrap_or("the agent failed to start")
+                        .to_string())
+                }
+                // Agent-managed login would block forever without a UI;
+                // report it instead so the editor can hint at signing in.
+                Some("extension_ui_request") => {
+                    return Err("this agent asks to sign in first; start a chat with it once to log in".to_string())
+                }
+                _ => {}
+            }
+        }
+        Err("the agent exited before advertising its options".to_string())
+    })
+    .await
+    .unwrap_or_else(|_| Err("timed out waiting for the agent to start".to_string()));
+
+    // Dropping stdin asks the runtime to shut its process tree down; the
+    // group kill is the safety net for wedged adapters.
+    drop(child.stdin.take());
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), child.wait()).await;
+    if let Some(pid) = child.id() {
+        terminate_acp_process_tree(pid);
+    }
+    let _ = child.start_kill();
+
+    result
+}
+
 /// Switch the ACP session mode (e.g. a permission mode) advertised through
 /// `acp_session_config`. Allowed while a prompt is streaming.
 #[tauri::command]

@@ -1512,6 +1512,21 @@ async piAbortActive(sessionId: string | null) : Promise<Result<null, string>> {
 }
 },
 /**
+ * Probe an ACP adapter for its advertised model/mode selectors without a
+ * chat: spawn the hidden runtime, let it initialize and create a session,
+ * capture the acp_session_config event, and tear everything down. Returns
+ * the raw event JSON. Fails soft with the adapter's error message (e.g.
+ * sign-in required) so the preset editor can show it as a hint.
+ */
+async piAcpProbeAgent(agent: AcpAgentConfig) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("pi_acp_probe_agent", { agent }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Change one ACP session configuration option (model, mode, or any other
  * selector the adapter advertised through `acp_session_config`). Select
  * options take the value id string; boolean options take "true"/"false".

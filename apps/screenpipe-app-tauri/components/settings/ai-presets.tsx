@@ -1466,7 +1466,12 @@ const AISection = ({
           </p>
 
           <AcpPresetDefaults
-            agentId={settingsPreset.acpAgent?.id || "pi-acp"}
+            agent={{
+              id: settingsPreset.acpAgent?.id || "pi-acp",
+              command: settingsPreset.acpAgent?.command,
+              args: settingsPreset.acpAgent?.args,
+              env: settingsPreset.acpAgent?.env,
+            }}
             config={settingsPreset.acpAgent?.config}
             modeId={settingsPreset.acpAgent?.modeId}
             onChange={(change) => updateAcpAgent(change)}

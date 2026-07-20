@@ -41,6 +41,8 @@ interface AcpSessionConfigState {
    *  defaults without a live session. */
   byAgent: Record<string, AcpSessionConfig>;
   setFromEvent: (sessionId: string, event: unknown) => void;
+  /** Cache an advertisement that has no live session (adapter probe). */
+  cacheAdvertisement: (event: unknown) => void;
   applyUpdate: (sessionId: string, update: unknown) => void;
   clear: (sessionId: string) => void;
 }
@@ -134,6 +136,21 @@ export const useAcpSessionConfig = create<AcpSessionConfigState>()((set) => ({
           : state.byAgent;
       if (byAgent !== state.byAgent) saveByAgent(byAgent);
       return { sessions: { ...state.sessions, [sessionId]: next }, byAgent };
+    });
+  },
+  cacheAdvertisement: (event) => {
+    const raw = event as any;
+    const agentId = typeof raw?.agentId === "string" ? raw.agentId : null;
+    if (!agentId) return;
+    const next: AcpSessionConfig = {
+      options: parseOptions(raw?.configOptions),
+      modes: parseModes(raw?.modes),
+    };
+    if (next.options.length === 0 && !next.modes) return;
+    set((state) => {
+      const byAgent = { ...state.byAgent, [agentId]: next };
+      saveByAgent(byAgent);
+      return { byAgent };
     });
   },
   applyUpdate: (sessionId, update) => {
