@@ -70,7 +70,9 @@ async fn api(
     let mut builder = Request::builder().method(method).uri(path_and_query);
     let request = if let Some(b) = body {
         builder = builder.header(header::CONTENT_TYPE, "application/json");
-        builder.body(Body::from(serde_json::to_vec(b).map_err(|e| e.to_string())?))
+        builder.body(Body::from(
+            serde_json::to_vec(b).map_err(|e| e.to_string())?,
+        ))
     } else {
         builder.body(Body::empty())
     }
@@ -159,12 +161,7 @@ fn join_tags(content: &Value) -> Option<String> {
     if tags.is_empty() {
         return None;
     }
-    Some(
-        tags.iter()
-            .map(disp)
-            .collect::<Vec<_>>()
-            .join(", "),
-    )
+    Some(tags.iter().map(disp).collect::<Vec<_>>().join(", "))
 }
 
 async fn execute(state: &McpState, name: &str, args: &Value) -> Result<Value, String> {
@@ -314,8 +311,14 @@ async fn search_content(router: &Router, args: &Value) -> Result<Value, String> 
         }
     }
 
-    let total = pagination.get("total").and_then(|t| t.as_i64()).unwrap_or(0);
-    let offset = pagination.get("offset").and_then(|o| o.as_i64()).unwrap_or(0);
+    let total = pagination
+        .get("total")
+        .and_then(|t| t.as_i64())
+        .unwrap_or(0);
+    let offset = pagination
+        .get("offset")
+        .and_then(|o| o.as_i64())
+        .unwrap_or(0);
     let total_disp = if total != 0 {
         total.to_string()
     } else {
@@ -400,7 +403,8 @@ async fn list_meetings(router: &Router, args: &Value) -> Result<Value, String> {
                 .unwrap_or_default();
             let note_str = field_str(m, "note").trim().to_string();
             let note = if note_str.is_empty() {
-                "\nNote: (none — use get-meeting with include_transcript to reconstruct)".to_string()
+                "\nNote: (none — use get-meeting with include_transcript to reconstruct)"
+                    .to_string()
             } else if note_str.chars().count() > 200 {
                 let head: String = note_str.chars().take(200).collect();
                 format!("\nNote: {head}…")
@@ -701,7 +705,10 @@ async fn export_video(router: &Router, args: &Value) -> Result<Value, String> {
 
 async fn update_memory(router: &Router, args: &Value) -> Result<Value, String> {
     let id = int_arg(args, "id").filter(|id| *id != 0);
-    let delete = args.get("delete").and_then(|d| d.as_bool()).unwrap_or(false);
+    let delete = args
+        .get("delete")
+        .and_then(|d| d.as_bool())
+        .unwrap_or(false);
     if delete {
         if let Some(id) = id {
             api_ok(router, Method::DELETE, &format!("/memories/{id}"), None).await?;
@@ -724,7 +731,9 @@ async fn update_memory(router: &Router, args: &Value) -> Result<Value, String> {
         )));
     }
     let Some(content) = args.get("content").filter(|c| !c.is_null()) else {
-        return Ok(text_content("Error: 'content' is required to create a memory"));
+        return Ok(text_content(
+            "Error: 'content' is required to create a memory",
+        ));
     };
     let mut body = json!({
         "content": content,
@@ -764,7 +773,9 @@ async fn send_notification(args: &Value) -> Result<Value, String> {
     }
 
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_millis(NOTIFICATION_DAEMON_TIMEOUT_MS))
+        .timeout(std::time::Duration::from_millis(
+            NOTIFICATION_DAEMON_TIMEOUT_MS,
+        ))
         .build()
         .map_err(|e| e.to_string())?;
     let response = client
@@ -821,7 +832,10 @@ async fn list_audio_devices(router: &Router) -> Result<Value, String> {
             format!("{star}{}{device_type}", field_str(d, "name"))
         })
         .collect();
-    Ok(text_content(format!("Audio devices:\n{}", formatted.join("\n"))))
+    Ok(text_content(format!(
+        "Audio devices:\n{}",
+        formatted.join("\n")
+    )))
 }
 
 async fn list_monitors(router: &Router) -> Result<Value, String> {
@@ -867,7 +881,9 @@ async fn add_tags(router: &Router, args: &Value) -> Result<Value, String> {
     let id = int_arg(args, "id").unwrap_or(0);
     let tags = args.get("tags").and_then(|t| t.as_array());
     let (false, true, Some(tags)) = (content_type.is_empty(), id != 0, tags) else {
-        return Ok(text_content("Error: content_type, id, and tags are required"));
+        return Ok(text_content(
+            "Error: content_type, id, and tags are required",
+        ));
     };
     api_ok(
         router,
@@ -877,7 +893,9 @@ async fn add_tags(router: &Router, args: &Value) -> Result<Value, String> {
     )
     .await?;
     let joined = tags.iter().map(disp).collect::<Vec<_>>().join(", ");
-    Ok(text_content(format!("Tags added to {content_type}/{id}: {joined}")))
+    Ok(text_content(format!(
+        "Tags added to {content_type}/{id}: {joined}"
+    )))
 }
 
 async fn search_speakers(router: &Router, args: &Value) -> Result<Value, String> {
@@ -974,7 +992,9 @@ async fn merge_speakers(router: &Router, args: &Value) -> Result<Value, String> 
         Some(&json!({ "speaker_to_keep_id": keep_id, "speaker_to_merge_id": merge_id })),
     )
     .await?;
-    Ok(text_content(format!("Merged speaker {merge_id} into {keep_id}.")))
+    Ok(text_content(format!(
+        "Merged speaker {merge_id} into {keep_id}."
+    )))
 }
 
 async fn start_meeting(router: &Router, args: &Value) -> Result<Value, String> {
@@ -1000,7 +1020,13 @@ async fn get_meeting(router: &Router, args: &Value) -> Result<Value, String> {
     let Some(meeting_id) = int_arg(args, "id").filter(|id| *id != 0) else {
         return Ok(text_content("Error: id is required"));
     };
-    let response = api_ok(router, Method::GET, &format!("/meetings/{meeting_id}"), None).await?;
+    let response = api_ok(
+        router,
+        Method::GET,
+        &format!("/meetings/{meeting_id}"),
+        None,
+    )
+    .await?;
     let meeting = response.json();
     let mut text = serde_json::to_string_pretty(&meeting).unwrap_or_default();
 
@@ -1298,8 +1324,14 @@ async fn create_pipe(state: &McpState, args: &Value) -> Result<Value, String> {
                 .to_string(),
         );
     }
-    let prompt = str_arg(args, "prompt").unwrap_or_default().trim().to_string();
-    let schedule = str_arg(args, "schedule").unwrap_or_default().trim().to_string();
+    let prompt = str_arg(args, "prompt")
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let schedule = str_arg(args, "schedule")
+        .unwrap_or_default()
+        .trim()
+        .to_string();
     if prompt.is_empty() {
         return Err("prompt is required".to_string());
     }
@@ -1314,7 +1346,11 @@ async fn create_pipe(state: &McpState, args: &Value) -> Result<Value, String> {
         format!("schedule: {schedule}"),
         format!("enabled: {enabled}"),
     ];
-    if let Some(preset) = args.get("preset").and_then(|p| p.as_array()).filter(|p| !p.is_empty()) {
+    if let Some(preset) = args
+        .get("preset")
+        .and_then(|p| p.as_array())
+        .filter(|p| !p.is_empty())
+    {
         fm.push(format!(
             "preset: {}",
             serde_json::to_string(preset).map_err(|e| e.to_string())?
@@ -1360,8 +1396,7 @@ async fn create_pipe(state: &McpState, args: &Value) -> Result<Value, String> {
         .to_string();
     steps.push(format!("installed as \"{pipe_id}\""));
 
-    let encoded_id: String =
-        url::form_urlencoded::byte_serialize(pipe_id.as_bytes()).collect();
+    let encoded_id: String = url::form_urlencoded::byte_serialize(pipe_id.as_bytes()).collect();
     if enabled {
         api_ok(
             router,
@@ -1375,7 +1410,14 @@ async fn create_pipe(state: &McpState, args: &Value) -> Result<Value, String> {
 
     let mut run_note = String::new();
     if run_now {
-        match api_ok(router, Method::POST, &format!("/pipes/{encoded_id}/run"), None).await {
+        match api_ok(
+            router,
+            Method::POST,
+            &format!("/pipes/{encoded_id}/run"),
+            None,
+        )
+        .await
+        {
             Ok(_) => {
                 steps.push("started a test run".to_string());
                 run_note = format!(

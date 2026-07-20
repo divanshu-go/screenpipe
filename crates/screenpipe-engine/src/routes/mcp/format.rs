@@ -120,7 +120,10 @@ pub fn normalize_time(input: &str) -> String {
         return format!("{}T00:00:00Z", Utc::now().format("%Y-%m-%d"));
     }
     if lower == "tomorrow" {
-        return format!("{}T00:00:00Z", (Utc::now() + Duration::days(1)).format("%Y-%m-%d"));
+        return format!(
+            "{}T00:00:00Z",
+            (Utc::now() + Duration::days(1)).format("%Y-%m-%d")
+        );
     }
     if is_bare_date(s) {
         return format!("{s}T00:00:00Z");
@@ -198,7 +201,10 @@ mod tests {
         assert!(normalize_time("today").ends_with("T00:00:00Z"));
         assert_eq!(normalize_time("2026-05-17"), "2026-05-17T00:00:00Z");
         assert_eq!(normalize_time("3h ago"), "3h ago");
-        assert_eq!(normalize_time("2026-05-17T10:00:00Z"), "2026-05-17T10:00:00Z");
+        assert_eq!(
+            normalize_time("2026-05-17T10:00:00Z"),
+            "2026-05-17T10:00:00Z"
+        );
     }
 
     #[test]

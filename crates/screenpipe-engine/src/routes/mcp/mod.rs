@@ -66,7 +66,9 @@ pub fn router(app_state: Arc<AppState>, api: Router) -> Router {
     Router::new()
         .route(
             "/mcp",
-            post(handle_post).get(method_not_allowed).delete(method_not_allowed),
+            post(handle_post)
+                .get(method_not_allowed)
+                .delete(method_not_allowed),
         )
         .with_state(state)
 }
@@ -143,7 +145,11 @@ async fn process_message(state: &McpState, msg: Value) -> Option<Value> {
     let Some(method) = method else {
         // A response or malformed message; only answer if it claims an id.
         return id.filter(|i| !i.is_null()).map(|id| {
-            error_response(id, INVALID_REQUEST, "Invalid request: missing method".to_string())
+            error_response(
+                id,
+                INVALID_REQUEST,
+                "Invalid request: missing method".to_string(),
+            )
         });
     };
 
@@ -163,7 +169,10 @@ async fn process_message(state: &McpState, msg: Value) -> Option<Value> {
         "resources/list" => Ok(json!({ "resources": resources::list() })),
         "resources/templates/list" => Ok(json!({ "resourceTemplates": [] })),
         "resources/read" => match params.get("uri").and_then(|u| u.as_str()) {
-            None => Err((INVALID_PARAMS, "Invalid params: uri is required".to_string())),
+            None => Err((
+                INVALID_PARAMS,
+                "Invalid params: uri is required".to_string(),
+            )),
             Some(uri) => resources::read(uri)
                 .ok_or_else(|| (RESOURCE_NOT_FOUND, format!("Unknown resource: {uri}"))),
         },

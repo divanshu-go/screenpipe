@@ -188,10 +188,7 @@ mod tests {
         let tools = body["result"]["tools"].as_array().unwrap();
         assert_eq!(tools.len(), 27);
 
-        let names: Vec<&str> = tools
-            .iter()
-            .map(|t| t["name"].as_str().unwrap())
-            .collect();
+        let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         for expected in [
             "search-content",
             "list-meetings",
@@ -258,9 +255,15 @@ mod tests {
 
         assert_eq!(status, StatusCode::OK);
         let result = &body["result"];
-        assert!(result.get("isError").is_none(), "unexpected error: {result}");
+        assert!(
+            result.get("isError").is_none(),
+            "unexpected error: {result}"
+        );
         let text = result["content"][0]["text"].as_str().unwrap();
-        assert!(text.starts_with("Results: 1/1"), "unexpected header: {text}");
+        assert!(
+            text.starts_with("Results: 1/1"),
+            "unexpected header: {text}"
+        );
         assert!(text.contains("mcp sentinel exactmatch"));
         assert!(text.contains("McpFixtureApp | Mcp Fixture Window"));
     }
@@ -286,7 +289,11 @@ mod tests {
         let (app, _db) = setup_test_app().await;
         let (_, body) = post_mcp(
             &app,
-            rpc(5, "tools/call", json!({ "name": "health-check", "arguments": {} })),
+            rpc(
+                5,
+                "tools/call",
+                json!({ "name": "health-check", "arguments": {} }),
+            ),
         )
         .await;
         let text = body["result"]["content"][0]["text"].as_str().unwrap();
@@ -299,7 +306,11 @@ mod tests {
         let (app, _db) = setup_test_app().await;
         let (status, body) = post_mcp(
             &app,
-            rpc(6, "tools/call", json!({ "name": "no-such-tool", "arguments": {} })),
+            rpc(
+                6,
+                "tools/call",
+                json!({ "name": "no-such-tool", "arguments": {} }),
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -316,7 +327,11 @@ mod tests {
         // carry the hint, flagged as an error.
         let (status, body) = post_mcp(
             &app,
-            rpc(7, "tools/call", json!({ "name": "activity-summary", "arguments": {} })),
+            rpc(
+                7,
+                "tools/call",
+                json!({ "name": "activity-summary", "arguments": {} }),
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -415,7 +430,11 @@ mod tests {
 
         let (_, body) = post_mcp(
             &app,
-            rpc(13, "resources/read", json!({ "uri": "screenpipe://context" })),
+            rpc(
+                13,
+                "resources/read",
+                json!({ "uri": "screenpipe://context" }),
+            ),
         )
         .await;
         let content = &body["result"]["contents"][0];
@@ -436,7 +455,11 @@ mod tests {
         let (app, _db) = setup_server(Some("test-key-123")).await;
 
         let (status, _) = post_mcp(&app, rpc(15, "tools/list", json!({}))).await;
-        assert_eq!(status, StatusCode::FORBIDDEN, "/mcp must not be auth-exempt");
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "/mcp must not be auth-exempt"
+        );
 
         let (status, body) =
             post_mcp_with_auth(&app, rpc(16, "tools/list", json!({})), Some("test-key-123")).await;
@@ -467,9 +490,11 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK);
         let result = &body["result"];
-        assert!(result.get("isError").is_none(), "unexpected error: {result}");
+        assert!(
+            result.get("isError").is_none(),
+            "unexpected error: {result}"
+        );
         let text = result["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("mcp sentinel exactmatch"));
     }
 }
-
