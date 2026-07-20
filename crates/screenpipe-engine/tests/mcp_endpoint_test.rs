@@ -18,6 +18,13 @@ mod tests {
     use tower::ServiceExt;
 
     async fn setup_server(api_auth_key: Option<&str>) -> (Router, Arc<DatabaseManager>) {
+        setup_server_on(23949, api_auth_key).await
+    }
+
+    async fn setup_server_on(
+        port: u16,
+        api_auth_key: Option<&str>,
+    ) -> (Router, Arc<DatabaseManager>) {
         let unique_suffix = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -44,7 +51,7 @@ mod tests {
 
         let mut app = SCServer::new(
             db.clone(),
-            SocketAddr::from(([127, 0, 0, 1], 23949)),
+            SocketAddr::from(([127, 0, 0, 1], port)),
             screenpipe_dir,
             false,
             false,
@@ -465,6 +472,104 @@ mod tests {
             post_mcp_with_auth(&app, rpc(16, "tools/list", json!({})), Some("test-key-123")).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["result"]["tools"].as_array().unwrap().len(), 27);
+    }
+
+    #[tokio::test]
+    async fn engine_self_registers_in_mcp_server_registry() {
+        // Pi's mcp-bridge (sp_mcp_list_tools / sp_mcp_call) proxies servers
+        // from the /mcp-servers registry; the engine seeds its own /mcp there
+        // at boot so in-app agents get the native tools with no sidecar.
+        let (app, _db) = setup_server(Some("test-key-123")).await;
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/mcp-servers")
+                    .header("authorization", "Bearer test-key-123")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let list: Value = serde_json::from_slice(&body).unwrap();
+        let servers = list
+            .as_array()
+            .cloned()
+            .or_else(|| list.get("servers").and_then(|s| s.as_array()).cloned())
+            .or_else(|| list.get("data").and_then(|s| s.as_array()).cloned())
+            .unwrap_or_default();
+        let own = servers
+            .iter()
+            .find(|s| s["id"] == "screenpipe")
+            .unwrap_or_else(|| panic!("self entry missing in {list}"));
+        assert_eq!(own["url"], "http://localhost:23949/mcp");
+        assert_eq!(own["enabled"], true);
+        assert!(own["header_names"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("Authorization")));
+    }
+
+    #[tokio::test]
+    async fn bridge_path_reaches_own_mcp_over_live_loopback() {
+        // The mcp-bridge extension calls GET /mcp-servers/screenpipe/tools and
+        // POST /mcp-servers/screenpipe/call; the engine then acts as an MCP
+        // client against its own /mcp over real loopback HTTP. Bind first so
+        // the self-registered URL carries the right port, then exercise the
+        // whole loop.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (app, db) = setup_server_on(port, None).await;
+        seed_ocr_frame(&db).await;
+        let serve_app = app.clone();
+        tokio::spawn(async move {
+            axum::serve(listener, serve_app).await.unwrap();
+        });
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/mcp-servers/screenpipe/tools")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let listed: Value = serde_json::from_slice(&body).unwrap();
+        let tools = listed["data"]["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 27, "self-probe should surface all tools");
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mcp-servers/screenpipe/call")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "tool": "search-content",
+                            "arguments": { "q": "mcp sentinel exactmatch", "content_type": "ocr" }
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let called: Value = serde_json::from_slice(&body).unwrap();
+        let text = called["data"]["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.contains("mcp sentinel exactmatch"),
+            "unexpected result: {text}"
+        );
     }
 
     #[tokio::test]

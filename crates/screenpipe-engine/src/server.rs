@@ -1082,6 +1082,19 @@ impl SCServer {
                 self.screenpipe_dir.clone(),
                 self.secret_store.clone(),
             ));
+        // Self-register the engine's own /mcp endpoint so in-app agents reach
+        // the native screenpipe tools through the existing mcp-bridge proxy
+        // (sp_mcp_list_tools / sp_mcp_call) without any sidecar. Re-upserted
+        // on every boot so the bearer header always carries the current key.
+        if let Err(e) = seed_self_mcp_server(
+            &mcp_store,
+            self.addr.port(),
+            self.api_auth.then(|| self.api_auth_key.clone()).flatten(),
+        )
+        .await
+        {
+            tracing::warn!("failed to self-register /mcp in the MCP server registry: {e}");
+        }
         let router = router.nest(
             "/mcp-servers",
             crate::mcp_servers_api::router(mcp_store, self.mcp_session_access.clone()),
@@ -1291,6 +1304,50 @@ impl SCServer {
             .layer(cors)
             .layer(TraceLayer::new_for_http().make_span_with(DefaultMakeSpan::default()))
     }
+}
+
+/// Keep a registry entry pointing at this server's own /mcp endpoint. Fixed
+/// id so every boot replaces the previous entry (the local API key can rotate
+/// between runs, and the bearer header must track it).
+async fn seed_self_mcp_server(
+    store: &crate::mcp_servers_api::SharedMcpServerStore,
+    port: u16,
+    api_key: Option<String>,
+) -> anyhow::Result<()> {
+    use screenpipe_connect::mcp_servers::{McpHeader, McpServerConfig, McpTransport};
+
+    const SELF_MCP_ID: &str = "screenpipe";
+    let created_at = store
+        .get(SELF_MCP_ID)
+        .await
+        .ok()
+        .flatten()
+        .map(|existing| existing.created_at)
+        .unwrap_or_else(|| chrono::Utc::now().timestamp());
+    let headers: Vec<McpHeader> = api_key
+        .map(|key| {
+            vec![McpHeader {
+                name: "Authorization".to_string(),
+                value: format!("Bearer {key}"),
+            }]
+        })
+        .unwrap_or_default();
+    let cfg = McpServerConfig {
+        id: SELF_MCP_ID.to_string(),
+        name: "screenpipe".to_string(),
+        url: format!("http://localhost:{port}/mcp"),
+        transport: McpTransport::Http,
+        command: None,
+        args: None,
+        env: None,
+        header_names: headers.iter().map(|h| h.name.clone()).collect(),
+        auth_mode: Default::default(),
+        oauth: None,
+        enabled: true,
+        created_at,
+    };
+    store.upsert(cfg, Some(headers)).await?;
+    Ok(())
 }
 
 #[cfg(test)]
