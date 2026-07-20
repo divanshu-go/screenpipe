@@ -232,6 +232,7 @@ export function AIProviderConfig({
     apiKey: defaultPreset?.apiKey || "",
     url: defaultPreset?.url || "",
     model: defaultPreset?.model || "",
+    acpAgent: defaultPreset?.acpAgent,
     maxContextChars: defaultPreset?.maxContextChars || 512000,
     prompt: defaultPreset?.prompt || DEFAULT_PROMPT,
     id: defaultPreset?.id || "",
@@ -511,7 +512,7 @@ export function AIProviderConfig({
             id="name"
             type="text"
             placeholder="preset name"
-            value={formData.id || undefined}
+            value={formData.id ?? ""}
             onChange={(e) => handleIdChange(e.target.value)}
             onBlur={refillEmptyName}
             className={cn(
@@ -1208,6 +1209,9 @@ export const AIPresetDialog = ({
       id: providerData.id,
       maxContextChars: providerData.maxContextChars,
       prompt: providerData.prompt,
+      // Coding agent presets are defined by their agent config; dropping it
+      // here saved presets with provider "acp" but no agent.
+      acpAgent: providerData.provider === "acp" ? providerData.acpAgent : undefined,
     };
 
     // Screenpipe Cloud: max output is defined per model in the gateway catalog (see screenpipe_cloud_models in Rust).
@@ -1234,6 +1238,7 @@ export const AIPresetDialog = ({
         provider: preset.provider,
         url: preset.url,
         model: preset.model,
+        acpAgent: preset.acpAgent,
         maxContextChars: preset.maxContextChars,
         ...(preset.provider !== "screenpipe-cloud"
           ? { maxTokens: (preset as any).maxTokens ?? 4096 }

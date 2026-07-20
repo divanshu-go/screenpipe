@@ -2214,9 +2214,6 @@ function SortablePresetCard({
             {!hasValidation && (
               <AlertCircle className="h-3.5 w-3.5 text-destructive shrink-0" />
             )}
-            {!hasValidation && (
-              <AlertCircle className="h-3.5 w-3.5 text-destructive shrink-0" />
-            )}
             {chatgptTokenExpired && (
               <TooltipProvider>
                 <Tooltip>
