@@ -1102,7 +1102,7 @@ impl SCServer {
         };
 
         // NOTE: websockets and sse is not supported by openapi so we move it down here
-        router
+        let router = router
             .route("/stream/frames", get(stream_frames_handler))
             .route("/ws/events", get(ws_events_handler))
             .route("/ws/health", get(ws_health_handler))
@@ -1169,7 +1169,18 @@ impl SCServer {
             ))
             .layer(axum::middleware::from_fn(
                 crate::routes::timezone::timestamp_middleware,
-            ))
+            ));
+
+        // MCP over HTTP (POST /mcp). Merged AFTER the layers above so the /mcp
+        // response body (JSON-RPC) is never rewritten by timestamp_middleware,
+        // and BEFORE the auth layer below so /mcp itself requires the bearer
+        // token. The router snapshot passed in is used for in-process tool
+        // dispatch — the same surface the npm MCP sidecar called over
+        // localhost, minus auth (the outer /mcp request already passed it).
+        let api_snapshot = router.clone();
+        let router = router.merge(crate::routes::mcp::router(app_state.clone(), api_snapshot));
+
+        router
             .layer({
                 // API auth middleware — when api_auth is enabled, ALL requests
                 // (including localhost) must include a valid bearer token.
