@@ -399,6 +399,53 @@ function FriendlyToolDetails({ toolCall }: { toolCall: ToolCall }) {
 }
 
 // Single tool call row in the progress rail
+function formatElapsedSeconds(totalSeconds: number): string {
+  const seconds = Math.max(0, Math.floor(totalSeconds));
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
+}
+
+/** One-line live status for a running tool: subagent type, elapsed time,
+ *  retry hints, and the tail of streamed output. Quiet for quick tools. */
+function RunningToolStatus({ toolCall }: { toolCall: ToolCall }) {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (!toolCall.isRunning) return;
+    const id = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [toolCall.isRunning]);
+  if (!toolCall.isRunning) return null;
+
+  const localElapsed = toolCall.startedAtMs ? (nowMs - toolCall.startedAtMs) / 1000 : 0;
+  const elapsed = Math.max(toolCall.elapsedSeconds ?? 0, localElapsed);
+  const retry = toolCall.retry;
+  const retryLabel = retry
+    ? typeof retry === "object" && retry !== null && "attempt" in retry
+      ? `retry ${(retry as { attempt?: unknown }).attempt}`
+      : "retrying"
+    : null;
+  const outputTail = toolCall.progress
+    ?.split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .pop();
+  const showStatus = Boolean(
+    toolCall.subagentType || retryLabel || outputTail || elapsed >= 5,
+  );
+  if (!showStatus) return null;
+
+  return (
+    <div className="min-w-0 text-[10px] font-mono text-foreground/40">
+      <div className="truncate">
+        {toolCall.subagentType && <span>{toolCall.subagentType} · </span>}
+        <span>{formatElapsedSeconds(elapsed)}</span>
+        {retryLabel && <span> · {retryLabel}</span>}
+      </div>
+      {outputTail && <div className="truncate text-foreground/30">{outputTail}</div>}
+    </div>
+  );
+}
+
 function ToolCallRailItem({
   toolCall,
   isLast,
@@ -476,6 +523,7 @@ function ToolCallRailItem({
             )}
           </button>
         )}
+        {!isAskUser && <RunningToolStatus toolCall={toolCall} />}
         <AnimatePresence>
           {!isAskUser && expanded && (
             <motion.div
@@ -487,6 +535,13 @@ function ToolCallRailItem({
             >
               <div className="border-l border-border ml-0 pl-3 mt-1 mb-1">
                 <FriendlyToolDetails toolCall={toolCall} />
+                {toolCall.isRunning && toolCall.progress && (
+                  <div className="mt-1 pt-1 border-t border-border/50">
+                    <pre className="whitespace-pre-wrap break-words max-h-[200px] overflow-y-auto overflow-x-hidden max-w-full text-xs font-mono text-foreground/50">
+                      {toolCall.progress}
+                    </pre>
+                  </div>
+                )}
                 {toolCall.result !== undefined && toolCall.toolName !== "bash" && (
                   <div className="mt-1 pt-1 border-t border-border/50">
                     <pre className={cn(
@@ -1135,6 +1190,44 @@ function friendlyCompletedSummary(summary?: string): string | undefined {
   return summary;
 }
 
+// Renders a work summary, animating only the trailing duration of a "Working …"
+// string so the elapsed time can tick without re-animating the whole label.
+function WorkSummaryText({
+  text,
+  animateRunningDuration,
+}: {
+  text: string;
+  animateRunningDuration: boolean;
+}) {
+  const prefix = "Working";
+
+  if (!animateRunningDuration || !text.startsWith(prefix)) {
+    return <>{text}</>;
+  }
+
+  const durationSuffix = text.slice(prefix.length);
+
+  return (
+    <>
+      {prefix}
+      <AnimatePresence initial={false}>
+        {durationSuffix && (
+          <motion.span
+            key="running-duration"
+            initial={{ opacity: 0, y: 2 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -2 }}
+            transition={{ duration: 0.16, ease: "easeOut" }}
+            className="inline-block whitespace-pre"
+          >
+            {durationSuffix}
+          </motion.span>
+        )}
+      </AnimatePresence>
+    </>
+  );
+}
+
 function ToolCallGroup({
   toolCalls,
   defaultExpanded = false,
@@ -1164,7 +1257,9 @@ function ToolCallGroup({
   const hasRunningTool = toolCalls.some((tc) => tc.isRunning);
   const isWorking = hasRunningTool || isGenerating;
   const hasInteractiveTool = toolCalls.some(isAskUserToolCall);
+  const hasError = toolCalls.some((tc) => tc.isError);
   const allDone = !isWorking;
+  const total = toolCalls.length;
   const startedAtMs = toolWorkStartedAt(toolCalls, workStartedAtMs);
   const endedAtMs = allDone ? toolWorkEndedAt(toolCalls) : undefined;
   const completedDurationMs = startedAtMs && endedAtMs ? Math.max(1, endedAtMs - startedAtMs) : undefined;
@@ -1222,29 +1317,50 @@ function ToolCallGroup({
     <div className="w-full min-w-0 self-stretch">
       {!hideSummary && (
         <div className="mb-2 w-full min-w-full">
-          <button
-            onClick={() => setManualExpand(isExpanded ? false : true)}
-            className="w-full flex items-center gap-1.5 py-1 text-left min-w-0 group cursor-pointer disabled:cursor-default focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground"
-            data-testid="tool-activity-summary"
-            aria-expanded={isExpanded}
-            disabled={forceCollapsed || hasInteractiveTool}
-          >
-            {isWorking && (
+          {/* Header — plain text while working, clickable with chevron when done */}
+          {isWorking ? (
+            <div
+              className="w-full flex items-center gap-1.5 py-1 text-left min-w-0"
+              data-testid="tool-activity-summary"
+            >
+              {/* Keep a testid'd running indicator so the collapsed-running
+                  state has a visible loading affordance (and satisfies the
+                  activity-spinner E2E contract), alongside the heartbeat text. */}
               <RefreshCw
                 className="h-3 w-3 shrink-0 animate-spin text-foreground/40"
                 data-testid="tool-activity-running-indicator"
                 aria-hidden="true"
               />
-            )}
-            <span className="truncate text-xs text-foreground/50 group-hover:text-foreground/80 transition-colors duration-150">
-              {isWorking ? runningSummary : summary}
-            </span>
-            {!forceCollapsed && !hasInteractiveTool && (isExpanded ? (
-              <ChevronDown className="h-3.5 w-3.5 flex-shrink-0 text-foreground/30 group-hover:text-foreground/60 transition-colors duration-150" />
-            ) : (
-              <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-foreground/30 group-hover:text-foreground/60 transition-colors duration-150" />
-            ))}
-          </button>
+              <span className="truncate text-xs font-mono text-foreground/50">
+                <WorkSummaryText text={runningSummary} animateRunningDuration />
+                {total > 1 && (
+                  <span className="text-foreground/30">
+                    {" "}· {toolCalls.filter((tc) => !tc.isRunning).length}/{total} done
+                  </span>
+                )}
+              </span>
+            </div>
+          ) : (
+            <button
+              onClick={() => setManualExpand(isExpanded ? false : true)}
+              className="w-full flex items-center gap-1.5 py-1 text-left min-w-0 group cursor-pointer disabled:cursor-default focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground"
+              data-testid="tool-activity-summary"
+              aria-expanded={isExpanded}
+              disabled={forceCollapsed || hasInteractiveTool}
+            >
+              <span className="truncate text-xs font-mono text-foreground/50 group-hover:text-foreground/80 transition-colors duration-150">
+                <WorkSummaryText text={summary || `${total} steps`} animateRunningDuration={false} />
+                {hasError && (
+                  <span className="ml-1.5 text-foreground/30">· {toolCalls.filter(tc => tc.isError).length} failed</span>
+                )}
+              </span>
+              {!forceCollapsed && !hasInteractiveTool && (isExpanded ? (
+                <ChevronDown className="h-3.5 w-3.5 flex-shrink-0 text-foreground/30 group-hover:text-foreground/60 transition-colors duration-150" />
+              ) : (
+                <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-foreground/30 group-hover:text-foreground/60 transition-colors duration-150" />
+              ))}
+            </button>
+          )}
           <div className="w-full min-w-full border-t border-border/50" />
         </div>
       )}
@@ -1260,20 +1376,54 @@ function ToolCallGroup({
             className="overflow-hidden"
           >
             <div className="pl-1 pt-1" data-testid="tool-activity-list">
-              {toolCalls.map((tc, i) => (
-                <motion.div
-                  key={toolCallRenderKey(tc, i)}
-                  initial={{ opacity: 0, x: -8 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ duration: 0.15, delay: i * 0.03 }}
-                >
-                  <ToolCallRailItem
-                    toolCall={tc}
-                    isLast={i === toolCalls.length - 1}
-                    onAskUserReply={onAskUserReply}
-                  />
-                </motion.div>
-              ))}
+              {(() => {
+                // Subagent child calls (parentToolCallId) nest under their
+                // spawning Task row instead of cluttering the rail as
+                // siblings. One level deep, matching the wire format.
+                const ids = new Set(toolCalls.map((tc) => tc.id));
+                const childrenByParent = new Map<string, ToolCall[]>();
+                const topLevel: ToolCall[] = [];
+                for (const tc of toolCalls) {
+                  const parent = tc.parentToolCallId;
+                  if (parent && parent !== tc.id && ids.has(parent)) {
+                    const siblings = childrenByParent.get(parent) ?? [];
+                    siblings.push(tc);
+                    childrenByParent.set(parent, siblings);
+                  } else {
+                    topLevel.push(tc);
+                  }
+                }
+                return topLevel.map((tc, i) => {
+                  const children = childrenByParent.get(tc.id) ?? [];
+                  const isLastTop = i === topLevel.length - 1;
+                  return (
+                    <motion.div
+                      key={toolCallRenderKey(tc, i)}
+                      initial={{ opacity: 0, x: -8 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ duration: 0.15, delay: i * 0.03 }}
+                    >
+                      <ToolCallRailItem
+                        toolCall={tc}
+                        isLast={isLastTop && children.length === 0}
+                        onAskUserReply={onAskUserReply}
+                      />
+                      {children.length > 0 && (
+                        <div className="ml-5">
+                          {children.map((child, j) => (
+                            <ToolCallRailItem
+                              key={toolCallRenderKey(child, j)}
+                              toolCall={child}
+                              isLast={isLastTop && j === children.length - 1}
+                              onAskUserReply={onAskUserReply}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </motion.div>
+                  );
+                });
+              })()}
             </div>
           </motion.div>
         )}

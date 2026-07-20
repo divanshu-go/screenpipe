@@ -39,6 +39,16 @@ export interface ToolCall {
   isRunning: boolean;
   startedAtMs?: number;
   endedAtMs?: number;
+  /** Spawning Task's tool call id for subagent child calls (ACP `_meta`). */
+  parentToolCallId?: string;
+  /** Agent-reported elapsed seconds from the latest progress heartbeat. */
+  elapsedSeconds?: number;
+  /** Subagent type from the heartbeat, e.g. "researcher". */
+  subagentType?: string;
+  /** Raw retry info when the agent reports a stalled/retrying spawn. */
+  retry?: unknown;
+  /** Rolling tail of streamed output while running (capped). */
+  progress?: string;
 }
 
 export type AgentActionOption = {

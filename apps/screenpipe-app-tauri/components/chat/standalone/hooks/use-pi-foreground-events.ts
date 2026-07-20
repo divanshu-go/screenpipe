@@ -337,15 +337,44 @@ export function usePiForegroundEvents({
           if (!ensureAssistantPlaceholder()) return;
           if (piMessageIdRef.current) {
             const msgId = piMessageIdRef.current;
+            const parentToolCallId = stringValue(data.parentToolCallId);
             const toolCall: ToolCall = {
               id: stringValue(data.toolCallId, Date.now().toString()),
               toolName: stringValue(data.toolName, "unknown"),
               args: isRecord(data.args) ? data.args : {},
               isRunning: true,
               startedAtMs: Date.now(),
+              ...(parentToolCallId ? { parentToolCallId } : {}),
             };
             // Add tool block (text before it is already its own block)
             piContentBlocksRef.current.push({ type: "tool", toolCall });
+            const contentBlocks = [...piContentBlocksRef.current];
+            setMessages((prev) =>
+              prev.map((m) => m.id === msgId ? { ...m, contentBlocks } : m)
+            );
+          }
+        } else if (data.type === "tool_execution_progress") {
+          // Subagent heartbeats and streamed output on a running tool.
+          if (piMessageIdRef.current) {
+            const msgId = piMessageIdRef.current;
+            const toolCallId = stringValue(data.toolCallId);
+            for (const block of piContentBlocksRef.current) {
+              if (block.type !== "tool" || block.toolCall.id !== toolCallId) continue;
+              if (typeof data.elapsedSeconds === "number") {
+                block.toolCall.elapsedSeconds = data.elapsedSeconds;
+              }
+              const subagentType = stringValue(data.subagentType);
+              if (subagentType) block.toolCall.subagentType = subagentType;
+              if (data.retry !== undefined) block.toolCall.retry = data.retry;
+              const title = stringValue(data.title);
+              if (title) block.toolCall.toolName = title;
+              const outputDelta = stringValue(data.outputDelta);
+              if (outputDelta) {
+                const combined = `${block.toolCall.progress ?? ""}${outputDelta}`;
+                block.toolCall.progress =
+                  combined.length > 4000 ? combined.slice(-4000) : combined;
+              }
+            }
             const contentBlocks = [...piContentBlocksRef.current];
             setMessages((prev) =>
               prev.map((m) => m.id === msgId ? { ...m, contentBlocks } : m)
