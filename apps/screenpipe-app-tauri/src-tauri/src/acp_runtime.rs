@@ -10,18 +10,18 @@
 //! handwritten protocol implementation is shipped.
 
 use agent_client_protocol::schema::v1::{
-    AuthenticateRequest, CancelNotification, ClientCapabilities, ClientSessionCapabilities,
-    CloseSessionRequest, ContentBlock, CreateTerminalRequest, CreateTerminalResponse, EnvVariable,
-    FileSystemCapabilities, ImageContent, Implementation, InitializeRequest, InitializeResponse,
-    KillTerminalRequest, KillTerminalResponse, McpServer, McpServerStdio, NewSessionRequest,
-    NewSessionResponse, PromptRequest, ReadTextFileRequest, ReadTextFileResponse,
-    ReleaseTerminalRequest, ReleaseTerminalResponse, RequestPermissionOutcome,
-    RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome,
-    SessionConfigOptionValue, SessionConfigOptionsCapabilities, SessionId, SessionNotification,
+    AuthenticateRequest, BooleanConfigOptionCapabilities, CancelNotification, ClientCapabilities,
+    ClientSessionCapabilities, CloseSessionRequest, ContentBlock, CreateTerminalRequest,
+    CreateTerminalResponse, EnvVariable, FileSystemCapabilities, ImageContent, Implementation,
+    InitializeRequest, InitializeResponse, KillTerminalRequest, KillTerminalResponse, McpServer,
+    McpServerStdio, NewSessionRequest, NewSessionResponse, PromptRequest, ReadTextFileRequest,
+    ReadTextFileResponse, ReleaseTerminalRequest, ReleaseTerminalResponse,
+    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+    SelectedPermissionOutcome, SessionConfigKind, SessionConfigOptionValue,
+    SessionConfigOptionsCapabilities, SessionId, SessionNotification,
     SetSessionConfigOptionRequest, SetSessionModeRequest, StopReason, TerminalExitStatus,
-    TerminalOutputRequest,
-    TerminalOutputResponse, TextContent, WaitForTerminalExitRequest, WaitForTerminalExitResponse,
-    WriteTextFileRequest, WriteTextFileResponse,
+    TerminalOutputRequest, TerminalOutputResponse, TextContent, WaitForTerminalExitRequest,
+    WaitForTerminalExitResponse, WriteTextFileRequest, WriteTextFileResponse,
 };
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::{Agent, Client, ConnectionTo, Error, ErrorCode, Lines};
@@ -1324,6 +1324,31 @@ async fn create_session(
         .await
 }
 
+/// Build the wire value for a preset default, matching the ADVERTISED kind
+/// of the option: boolean options take {"type":"boolean"} values, everything
+/// else a value id string. None when the option is unknown or the stored
+/// string is not valid for the kind.
+fn default_option_value(
+    session: &NewSessionResponse,
+    option_id: &str,
+    raw: &str,
+) -> Option<SessionConfigOptionValue> {
+    let option = session
+        .config_options
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .find(|option| option.id.to_string() == option_id)?;
+    match &option.kind {
+        SessionConfigKind::Boolean(_) => match raw {
+            "true" => Some(SessionConfigOptionValue::boolean(true)),
+            "false" => Some(SessionConfigOptionValue::boolean(false)),
+            _ => None,
+        },
+        _ => Some(SessionConfigOptionValue::value_id(raw.to_owned())),
+    }
+}
+
 /// Apply the preset's default config options and mode to a fresh session.
 /// Tolerant on purpose: options, values, or modes the adapter no longer
 /// advertises are skipped so a stale preset can never block startup.
@@ -1334,20 +1359,14 @@ async fn apply_session_defaults(
 ) {
     let defaults = &config.session_defaults;
     for (option_id, value) in &defaults.options {
-        let advertised = session
-            .config_options
-            .as_deref()
-            .unwrap_or_default()
-            .iter()
-            .any(|option| option.id.to_string() == *option_id);
-        if !advertised {
+        let Some(wire_value) = default_option_value(session, option_id, value) else {
             continue;
-        }
+        };
         match connection
             .send_request(SetSessionConfigOptionRequest::new(
                 session.session_id.clone(),
                 option_id.clone(),
-                SessionConfigOptionValue::value_id(value.clone()),
+                wire_value,
             ))
             .block_task()
             .await
@@ -1856,10 +1875,14 @@ async fn run_protocol(
                                 .terminal(true)
                                 // Agents only advertise their model/mode
                                 // selectors (session config options) to
-                                // clients that declare support for them.
+                                // clients that declare support for them;
+                                // boolean must be declared separately or
+                                // toggle options are withheld.
                                 .session(
-                                    ClientSessionCapabilities::new()
-                                        .config_options(SessionConfigOptionsCapabilities::new()),
+                                    ClientSessionCapabilities::new().config_options(
+                                        SessionConfigOptionsCapabilities::new()
+                                            .boolean(BooleanConfigOptionCapabilities::new()),
+                                    ),
                                 ),
                         )
                         .client_info(
@@ -1978,10 +2001,10 @@ async fn run_protocol(
                                 send_session_config(&state.output, &config.agent_id, &session);
                                 parent_response(&state.output, "new_session", &id, None);
                             }
-                            "set_config_option" if active => {
-                                let message = "cannot change ACP session configuration during an active prompt";
-                                parent_response(&state.output, "set_config_option", &id, Some(message));
-                            }
+                            // Config options may change at any point in a
+                            // session per the ACP spec, including mid-turn.
+                            // The request resolves via callback so a slow
+                            // adapter cannot stall this command loop.
                             "set_config_option" => {
                                 let option_id = command
                                     .get("optionId")
@@ -2015,29 +2038,32 @@ async fn run_protocol(
                                     );
                                     continue;
                                 }
-                                match connection
+                                let output = state.output.clone();
+                                let request_id = id.clone();
+                                connection
                                     .send_request(SetSessionConfigOptionRequest::new(
                                         session.session_id.clone(),
                                         option_id,
                                         value,
                                     ))
-                                    .block_task()
-                                    .await
-                                {
-                                    Ok(response) => {
-                                        // The response is the authoritative new
-                                        // option state; mirror it to the UI.
-                                        state.output.send(json!({
-                                            "type": "acp_session_config",
-                                            "configOptions": response.config_options,
-                                        }));
-                                        parent_response(&state.output, "set_config_option", &id, None);
-                                    }
-                                    Err(error) => {
-                                        let message = error.to_string();
-                                        parent_response(&state.output, "set_config_option", &id, Some(&message));
-                                    }
-                                }
+                                    .on_receiving_result(move |result| async move {
+                                        match result {
+                                            Ok(response) => {
+                                                // The response is the authoritative
+                                                // new option state; mirror it to the UI.
+                                                output.send(json!({
+                                                    "type": "acp_session_config",
+                                                    "configOptions": response.config_options,
+                                                }));
+                                                parent_response(&output, "set_config_option", &request_id, None);
+                                            }
+                                            Err(error) => {
+                                                let message = error.to_string();
+                                                parent_response(&output, "set_config_option", &request_id, Some(&message));
+                                            }
+                                        }
+                                        Ok(())
+                                    })?;
                             }
                             // Modes (e.g. permission modes) may be switched even
                             // while a prompt is streaming.
@@ -2056,29 +2082,32 @@ async fn run_protocol(
                                     );
                                     continue;
                                 }
-                                match connection
+                                let output = state.output.clone();
+                                let request_id = id.clone();
+                                connection
                                     .send_request(SetSessionModeRequest::new(
                                         session.session_id.clone(),
                                         mode_id.clone(),
                                     ))
-                                    .block_task()
-                                    .await
-                                {
-                                    Ok(_) => {
-                                        state.output.send(json!({
-                                            "type": "acp_update",
-                                            "update": {
-                                                "sessionUpdate": "current_mode_update",
-                                                "currentModeId": mode_id
+                                    .on_receiving_result(move |result| async move {
+                                        match result {
+                                            Ok(_) => {
+                                                output.send(json!({
+                                                    "type": "acp_update",
+                                                    "update": {
+                                                        "sessionUpdate": "current_mode_update",
+                                                        "currentModeId": mode_id
+                                                    }
+                                                }));
+                                                parent_response(&output, "set_mode", &request_id, None);
                                             }
-                                        }));
-                                        parent_response(&state.output, "set_mode", &id, None);
-                                    }
-                                    Err(error) => {
-                                        let message = error.to_string();
-                                        parent_response(&state.output, "set_mode", &id, Some(&message));
-                                    }
-                                }
+                                            Err(error) => {
+                                                let message = error.to_string();
+                                                parent_response(&output, "set_mode", &request_id, Some(&message));
+                                            }
+                                        }
+                                        Ok(())
+                                    })?;
                             }
                             _ => parent_response(&state.output, command_type, &id, None),
                         }
@@ -2198,24 +2227,37 @@ pub async fn run_from_env() -> Result<(), String> {
         }
     });
 
+    // Explicit EOF signal: SDK 1.2.0 never resolves the protocol future when
+    // the transport hits bare EOF (fixed upstream in #261), so a wedged
+    // adapter that closes stdout without exiting would hang every in-flight
+    // request forever without this.
+    let (stdout_eof_tx, mut stdout_eof_rx) = oneshot::channel::<()>();
     let incoming = futures::stream::unfold(
-        tokio::io::BufReader::new(stdout).lines(),
-        |mut lines| async move {
+        (
+            tokio::io::BufReader::new(stdout).lines(),
+            Some(stdout_eof_tx),
+        ),
+        |(mut lines, mut eof_tx)| async move {
             loop {
                 match lines.next_line().await {
                     Ok(Some(line)) => {
                         if serde_json::from_str::<agent_client_protocol::RawJsonRpcMessage>(&line)
                             .is_ok()
                         {
-                            return Some((Ok(line), lines));
+                            return Some((Ok(line), (lines, eof_tx)));
                         }
                         eprintln!(
                             "[acp-runtime] ignored non-JSON agent stdout: {}",
                             line.chars().take(300).collect::<String>()
                         );
                     }
-                    Ok(None) => return None,
-                    Err(error) => return Some((Err(error), lines)),
+                    Ok(None) => {
+                        if let Some(eof_tx) = eof_tx.take() {
+                            let _ = eof_tx.send(());
+                        }
+                        return None;
+                    }
+                    Err(error) => return Some((Err(error), (lines, eof_tx))),
                 }
             }
         },
@@ -2227,7 +2269,14 @@ pub async fn run_from_env() -> Result<(), String> {
         Ok::<_, std::io::Error>(stdin)
     });
     let transport = Lines::new(outgoing, incoming);
-    let protocol = run_protocol(transport, config.clone(), state.clone(), command_rx);
+    // Fused so the EOF arm below can safely poll it even if it already
+    // completed in a race (a fused finished future parks instead of panicking).
+    let protocol = futures::FutureExt::fuse(run_protocol(
+        transport,
+        config.clone(),
+        state.clone(),
+        command_rx,
+    ));
     tokio::pin!(protocol);
 
     let result = tokio::select! {
@@ -2248,6 +2297,22 @@ pub async fn run_from_env() -> Result<(), String> {
         status = child.wait() => {
             let status = status.map_err(|error| format!("failed waiting for {}: {error}", config.agent_id))?;
             Err(format!("{} exited ({})", config.agent_id, status.code().map(|code| code.to_string()).unwrap_or_else(|| "signal".into())))
+        },
+        _ = &mut stdout_eof_rx => {
+            // The adapter closed its output while the process may still be
+            // alive. Give the protocol a short grace to finish, then prefer
+            // the real exit status when the process died too; a clean exit
+            // here is a graceful shutdown, not an error.
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(2), &mut protocol).await;
+            match tokio::time::timeout(std::time::Duration::from_millis(150), child.wait()).await {
+                Ok(Ok(status)) if status.success() => Ok(()),
+                Ok(Ok(status)) => Err(format!(
+                    "{} exited ({})",
+                    config.agent_id,
+                    status.code().map(|code| code.to_string()).unwrap_or_else(|| "signal".into())
+                )),
+                _ => Err(format!("{} closed its output stream", config.agent_id)),
+            }
         },
         _ = &mut parent_closed_rx => {
             state.cancel_all_selections();
@@ -2395,6 +2460,34 @@ mod tests {
             }]))),
             Some("Edited src/main.rs\n--- before\na\n+++ after\nb".into())
         );
+    }
+
+    #[test]
+    fn preset_defaults_match_the_advertised_option_kind() {
+        let session: NewSessionResponse = serde_json::from_value(json!({
+            "sessionId": "sid",
+            "configOptions": [
+                {
+                    "id": "model", "name": "Model", "type": "select",
+                    "currentValue": "a",
+                    "options": [{ "value": "a", "name": "A" }]
+                },
+                { "id": "fast", "name": "Fast", "type": "boolean", "currentValue": false }
+            ]
+        }))
+        .expect("session");
+
+        assert!(matches!(
+            default_option_value(&session, "model", "a"),
+            Some(SessionConfigOptionValue::ValueId { .. })
+        ));
+        assert!(matches!(
+            default_option_value(&session, "fast", "true"),
+            Some(SessionConfigOptionValue::Boolean { value: true })
+        ));
+        // Invalid boolean strings and unknown options are skipped, never sent.
+        assert_eq!(default_option_value(&session, "fast", "yes"), None);
+        assert_eq!(default_option_value(&session, "gone", "a"), None);
     }
 
     #[test]
