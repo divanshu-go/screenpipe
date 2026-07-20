@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import { Loader2, RefreshCw } from "lucide-react";
 import { Label } from "@/components/ui/label";
 import { commands } from "@/lib/utils/tauri";
-import { useAcpSessionConfig } from "@/lib/stores/acp-session-config";
+import { dedupedModes, useAcpSessionConfig } from "@/lib/stores/acp-session-config";
 import { cn } from "@/lib/utils";
 
 export interface AcpPresetDefaultsChange {
@@ -24,6 +24,10 @@ export interface AcpPresetAgent {
 
 /** One probe per adapter at a time, shared across both preset editors. */
 const probesInFlight = new Set<string>();
+
+/** The no-override choice, named after what the agent will actually use. */
+const defaultChoiceLabel = (name?: string) =>
+  name ? `default (${name})` : "agent default";
 
 /** Model/mode default pickers for an ACP preset. Choices come from the
  *  adapter's advertised selectors: cached from earlier sessions, otherwise
@@ -90,11 +94,7 @@ export function AcpPresetDefaults({
   const selects = (advertised?.options ?? []).filter(
     (option) => option.type === "select" && option.values.length > 0,
   );
-  // Adapters may advertise the permission mode both as modes state and as a
-  // "mode" config option; offer it once, through the config option.
-  const modes = selects.some((option) => option.category === "mode")
-    ? null
-    : (advertised?.modes ?? null);
+  const modes = dedupedModes(advertised);
 
   const labelClass = compact ? "text-xs" : undefined;
   const selectClass = cn(
@@ -162,7 +162,13 @@ export function AcpPresetDefaults({
             }}
             className={selectClass}
           >
-            <option value="">agent default</option>
+            <option value="">
+              {defaultChoiceLabel(
+                option.values.find(
+                  (value) => value.value === String(option.currentValue ?? ""),
+                )?.name,
+              )}
+            </option>
             {option.values.map((value) => (
               <option key={value.value} value={value.value}>
                 {value.name}
@@ -185,7 +191,13 @@ export function AcpPresetDefaults({
             }
             className={selectClass}
           >
-            <option value="">agent default</option>
+            <option value="">
+              {defaultChoiceLabel(
+                modes.availableModes.find(
+                  (mode) => mode.value === modes.currentModeId,
+                )?.name,
+              )}
+            </option>
             {modes.availableModes.map((mode) => (
               <option key={mode.value} value={mode.value}>
                 {mode.name}
