@@ -708,3 +708,98 @@ describe("pi-event-router: acp modes", () => {
     expect(config.options[0].id).toBe("model");
   });
 });
+
+describe("pi-event-router: subagent tool progress", () => {
+  beforeEach(reset);
+
+  it("links children to their parent task and patches live progress", async () => {
+    seed("A");
+    useChatStore.setState({ currentId: "B" });
+    await handlePiEvent(
+      piEvt("A", { type: "message_start", message: { role: "assistant" } }),
+    );
+    await handlePiEvent(
+      piEvt("A", {
+        type: "tool_execution_start",
+        toolCallId: "task-1",
+        toolName: "research the codebase",
+        args: {},
+      } as unknown as AgentInnerEvent),
+    );
+    await handlePiEvent(
+      piEvt("A", {
+        type: "tool_execution_start",
+        toolCallId: "grep-1",
+        toolName: "Grep",
+        args: { pattern: "foo" },
+        parentToolCallId: "task-1",
+      } as unknown as AgentInnerEvent),
+    );
+
+    // Heartbeat on the parent task, streamed output on the child.
+    await handlePiEvent(
+      piEvt("A", {
+        type: "tool_execution_progress",
+        toolCallId: "task-1",
+        elapsedSeconds: 42.5,
+        subagentType: "researcher",
+        retry: { attempt: 2 },
+      } as unknown as AgentInnerEvent),
+    );
+    await handlePiEvent(
+      piEvt("A", {
+        type: "tool_execution_progress",
+        toolCallId: "grep-1",
+        outputDelta: "src/a.rs\n",
+      } as unknown as AgentInnerEvent),
+    );
+    await handlePiEvent(
+      piEvt("A", {
+        type: "tool_execution_progress",
+        toolCallId: "grep-1",
+        outputDelta: "src/b.rs\n",
+      } as unknown as AgentInnerEvent),
+    );
+
+    const session = useChatStore.getState().sessions.A;
+    const tools = (session.contentBlocks as any[]).filter((b) => b.type === "tool");
+    const task = tools.find((b) => b.toolCall.id === "task-1").toolCall;
+    const grep = tools.find((b) => b.toolCall.id === "grep-1").toolCall;
+    expect(grep.parentToolCallId).toBe("task-1");
+    expect(task.elapsedSeconds).toBe(42.5);
+    expect(task.subagentType).toBe("researcher");
+    expect(task.retry).toEqual({ attempt: 2 });
+    expect(grep.progress).toBe("src/a.rs\nsrc/b.rs\n");
+    expect(grep.isRunning).toBe(true);
+  });
+
+  it("caps the live output buffer instead of growing without bound", async () => {
+    seed("A");
+    useChatStore.setState({ currentId: "B" });
+    await handlePiEvent(
+      piEvt("A", { type: "message_start", message: { role: "assistant" } }),
+    );
+    await handlePiEvent(
+      piEvt("A", {
+        type: "tool_execution_start",
+        toolCallId: "cmd-1",
+        toolName: "bash",
+        args: {},
+      } as unknown as AgentInnerEvent),
+    );
+    for (let i = 0; i < 6; i++) {
+      await handlePiEvent(
+        piEvt("A", {
+          type: "tool_execution_progress",
+          toolCallId: "cmd-1",
+          outputDelta: "x".repeat(1000),
+        } as unknown as AgentInnerEvent),
+      );
+    }
+    const session = useChatStore.getState().sessions.A;
+    const cmd = (session.contentBlocks as any[]).find(
+      (b) => b.type === "tool" && b.toolCall.id === "cmd-1",
+    ).toolCall;
+    expect(cmd.progress.length).toBe(4000);
+  });
+});

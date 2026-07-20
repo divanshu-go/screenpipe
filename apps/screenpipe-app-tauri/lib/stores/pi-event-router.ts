@@ -709,14 +709,48 @@ function applyEventToSessionContent(sid: string, payload: PiInnerEvent) {
     const cur = store.sessions[sid];
     if (!cur?.streamingMessageId) return;
     const msgId = cur.streamingMessageId;
+    const parentToolCallId = (payload as any).parentToolCallId;
     const tool = {
       id: (payload as any).toolCallId || `${Date.now()}`,
       toolName: (payload as any).toolName || "unknown",
       args: (payload as any).args || {},
       isRunning: true,
       startedAtMs: Date.now(),
+      ...(typeof parentToolCallId === "string" && parentToolCallId
+        ? { parentToolCallId }
+        : {}),
     };
     const blocks = [...((cur.contentBlocks as any[]) ?? []), { type: "tool", toolCall: tool }];
+    store.actions.setStreaming(sid, { contentBlocks: blocks });
+    store.actions.patchMessage(sid, msgId, (m: any) => ({
+      ...m,
+      contentBlocks: blocks,
+    }));
+    return;
+  }
+
+  // Live progress on a running tool: subagent heartbeats (elapsed, type,
+  // retry), streamed output tails, and mid-run title refinements. Patched in
+  // place so a 30-minute Task visibly advances instead of just pulsing.
+  if (t === "tool_execution_progress") {
+    const cur = store.sessions[sid];
+    if (!cur?.streamingMessageId) return;
+    const msgId = cur.streamingMessageId;
+    const toolCallId = (payload as any).toolCallId;
+    const blocks = ((cur.contentBlocks as any[]) ?? []).map((b: any) => {
+      if (b.type !== "tool" || b.toolCall?.id !== toolCallId) return b;
+      const p = payload as any;
+      const next = { ...b.toolCall };
+      if (typeof p.elapsedSeconds === "number") next.elapsedSeconds = p.elapsedSeconds;
+      if (typeof p.subagentType === "string") next.subagentType = p.subagentType;
+      if (p.retry !== undefined) next.retry = p.retry;
+      if (typeof p.title === "string" && p.title) next.toolName = p.title;
+      if (typeof p.outputDelta === "string" && p.outputDelta) {
+        const combined = `${next.progress ?? ""}${p.outputDelta}`;
+        next.progress = combined.length > 4000 ? combined.slice(-4000) : combined;
+      }
+      return { ...b, toolCall: next };
+    });
     store.actions.setStreaming(sid, { contentBlocks: blocks });
     store.actions.patchMessage(sid, msgId, (m: any) => ({
       ...m,

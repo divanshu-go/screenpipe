@@ -800,12 +800,18 @@ impl RuntimeState {
                     .map(str::to_owned)
                     .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
                 turn.active_tools.insert(id.clone(), update.clone());
-                self.output.send(json!({
+                let mut start = json!({
                     "type": "tool_execution_start",
                     "toolCallId": id,
                     "toolName": tool_name(&update),
                     "args": update.get("rawInput").filter(|value| value.is_object()).cloned().unwrap_or_else(|| json!({}))
-                }));
+                });
+                // Subagent child calls arrive flat; the parent linkage lets
+                // the chat group them under their spawning Task row.
+                if let Some(parent) = parent_tool_call_id(&update) {
+                    start["parentToolCallId"] = json!(parent);
+                }
+                self.output.send(start);
                 if update_status_finished(&update) {
                     finish_tool(&self.output, &id, &update);
                     turn.active_tools.remove(&id);
@@ -823,6 +829,17 @@ impl RuntimeState {
                 if update_status_finished(&merged) {
                     finish_tool(&self.output, &id, &merged);
                     turn.active_tools.remove(&id);
+                } else if let Some(progress) = tool_progress(&update) {
+                    let mut event = json!({
+                        "type": "tool_execution_progress",
+                        "toolCallId": id,
+                    });
+                    if let (Some(event_map), Value::Object(fields)) =
+                        (event.as_object_mut(), progress)
+                    {
+                        event_map.extend(fields);
+                    }
+                    self.output.send(event);
                 }
             }
             _ => self
@@ -1001,6 +1018,68 @@ fn tool_content_item_text(item: &Value) -> Option<String> {
             Some(format!("[output in terminal {id}]"))
         }
         _ => serde_json::to_string(item).ok(),
+    }
+}
+
+/// Parent Task linkage for subagent child tool calls. Claude Code stamps
+/// `_meta.claudeCode.parentToolUseId` on every update a subagent produces.
+fn parent_tool_call_id(update: &Value) -> Option<&str> {
+    update
+        .get("_meta")?
+        .get("claudeCode")?
+        .get("parentToolUseId")?
+        .as_str()
+        .filter(|value| !value.is_empty())
+}
+
+/// Live progress carried by a non-final tool_call_update: subagent
+/// heartbeats (elapsed/type/retry from Claude Code), streamed command or
+/// MCP output deltas (Codex), and mid-run title refinements. None when the
+/// update carries nothing renderable, so idle merges stay silent.
+fn tool_progress(update: &Value) -> Option<Value> {
+    let mut fields = serde_json::Map::new();
+    let meta = update.get("_meta");
+    if let Some(heartbeat) = meta
+        .and_then(|meta| meta.get("claudeCode"))
+        .and_then(|claude| claude.get("toolResponse"))
+    {
+        if let Some(elapsed) = heartbeat.get("elapsedTimeSeconds").and_then(Value::as_f64) {
+            fields.insert("elapsedSeconds".into(), json!(elapsed));
+        }
+        if let Some(kind) = heartbeat.get("subagentType").and_then(Value::as_str) {
+            fields.insert("subagentType".into(), json!(kind));
+        }
+        match heartbeat.get("subagentRetry") {
+            Some(retry) if !retry.is_null() => {
+                fields.insert("retry".into(), retry.clone());
+            }
+            _ => {}
+        }
+    }
+    let mut output_delta = String::new();
+    for key in ["terminal_output_delta", "mcp_output_delta"] {
+        if let Some(data) = meta
+            .and_then(|meta| meta.get(key))
+            .and_then(|delta| delta.get("data"))
+            .and_then(Value::as_str)
+        {
+            output_delta.push_str(data);
+        }
+    }
+    if !output_delta.is_empty() {
+        fields.insert("outputDelta".into(), json!(output_delta));
+    }
+    if let Some(title) = update
+        .get("title")
+        .and_then(Value::as_str)
+        .filter(|title| !title.trim().is_empty())
+    {
+        fields.insert("title".into(), json!(title));
+    }
+    if fields.is_empty() {
+        None
+    } else {
+        Some(Value::Object(fields))
     }
 }
 
@@ -2488,6 +2567,41 @@ mod tests {
         // Invalid boolean strings and unknown options are skipped, never sent.
         assert_eq!(default_option_value(&session, "fast", "yes"), None);
         assert_eq!(default_option_value(&session, "gone", "a"), None);
+    }
+
+    #[test]
+    fn subagent_meta_maps_to_parent_linkage_and_progress() {
+        assert_eq!(
+            parent_tool_call_id(&json!({
+                "_meta": { "claudeCode": { "parentToolUseId": "toolu_parent" } }
+            })),
+            Some("toolu_parent")
+        );
+        assert_eq!(parent_tool_call_id(&json!({ "_meta": {} })), None);
+
+        // Claude Code Task heartbeat.
+        let progress = tool_progress(&json!({
+            "status": "in_progress",
+            "_meta": { "claudeCode": { "toolResponse": {
+                "elapsedTimeSeconds": 42.5,
+                "subagentType": "researcher",
+                "subagentRetry": { "attempt": 2 }
+            } } }
+        }))
+        .expect("heartbeat progress");
+        assert_eq!(progress["elapsedSeconds"], json!(42.5));
+        assert_eq!(progress["subagentType"], json!("researcher"));
+        assert_eq!(progress["retry"]["attempt"], json!(2));
+
+        // Codex streamed command output.
+        let progress = tool_progress(&json!({
+            "_meta": { "terminal_output_delta": { "data": "compiling...\n", "terminal_id": "t1" } }
+        }))
+        .expect("output progress");
+        assert_eq!(progress["outputDelta"], json!("compiling...\n"));
+
+        // A bare status merge carries nothing renderable.
+        assert_eq!(tool_progress(&json!({ "status": "in_progress" })), None);
     }
 
     #[test]

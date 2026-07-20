@@ -436,6 +436,53 @@ function FriendlyToolDetails({ toolCall }: { toolCall: ToolCall }) {
 }
 
 // Single tool call row in the progress rail
+function formatElapsedSeconds(totalSeconds: number): string {
+  const seconds = Math.max(0, Math.floor(totalSeconds));
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
+}
+
+/** One-line live status for a running tool: subagent type, elapsed time,
+ *  retry hints, and the tail of streamed output. Quiet for quick tools. */
+function RunningToolStatus({ toolCall }: { toolCall: ToolCall }) {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (!toolCall.isRunning) return;
+    const id = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [toolCall.isRunning]);
+  if (!toolCall.isRunning) return null;
+
+  const localElapsed = toolCall.startedAtMs ? (nowMs - toolCall.startedAtMs) / 1000 : 0;
+  const elapsed = Math.max(toolCall.elapsedSeconds ?? 0, localElapsed);
+  const retry = toolCall.retry;
+  const retryLabel = retry
+    ? typeof retry === "object" && retry !== null && "attempt" in retry
+      ? `retry ${(retry as { attempt?: unknown }).attempt}`
+      : "retrying"
+    : null;
+  const outputTail = toolCall.progress
+    ?.split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .pop();
+  const showStatus = Boolean(
+    toolCall.subagentType || retryLabel || outputTail || elapsed >= 5,
+  );
+  if (!showStatus) return null;
+
+  return (
+    <div className="min-w-0 text-[10px] font-mono text-foreground/40">
+      <div className="truncate">
+        {toolCall.subagentType && <span>{toolCall.subagentType} · </span>}
+        <span>{formatElapsedSeconds(elapsed)}</span>
+        {retryLabel && <span> · {retryLabel}</span>}
+      </div>
+      {outputTail && <div className="truncate text-foreground/30">{outputTail}</div>}
+    </div>
+  );
+}
+
 function ToolCallRailItem({
   toolCall,
   isLast,
@@ -508,6 +555,7 @@ function ToolCallRailItem({
             </span>
           </button>
         )}
+        {!isAskUser && <RunningToolStatus toolCall={toolCall} />}
         <AnimatePresence>
           {!isAskUser && expanded && (
             <motion.div
@@ -519,6 +567,13 @@ function ToolCallRailItem({
             >
               <div className="border-l border-border ml-0 pl-3 mt-1 mb-1">
                 <FriendlyToolDetails toolCall={toolCall} />
+                {toolCall.isRunning && toolCall.progress && (
+                  <div className="mt-1 pt-1 border-t border-border/50">
+                    <pre className="whitespace-pre-wrap break-words max-h-[200px] overflow-y-auto overflow-x-hidden max-w-full text-xs font-mono text-foreground/50">
+                      {toolCall.progress}
+                    </pre>
+                  </div>
+                )}
                 {toolCall.result !== undefined && toolCall.toolName !== "bash" && (
                   <div className="mt-1 pt-1 border-t border-border/50">
                     <pre className={cn(
@@ -1284,6 +1339,11 @@ function ToolCallGroup({
             <div className="w-full flex items-center gap-1.5 py-1 text-left min-w-0">
               <span className="truncate text-xs font-mono text-foreground/50">
                 <WorkSummaryText text={runningSummary} animateRunningDuration />
+                {total > 1 && (
+                  <span className="text-foreground/30">
+                    {" "}· {toolCalls.filter((tc) => !tc.isRunning).length}/{total} done
+                  </span>
+                )}
               </span>
             </div>
           ) : (
@@ -1319,20 +1379,54 @@ function ToolCallGroup({
             className="overflow-hidden"
           >
             <div className="pl-1 pt-1">
-              {toolCalls.map((tc, i) => (
-                <motion.div
-                  key={toolCallRenderKey(tc, i)}
-                  initial={{ opacity: 0, x: -8 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ duration: 0.15, delay: i * 0.03 }}
-                >
-                  <ToolCallRailItem
-                    toolCall={tc}
-                    isLast={i === toolCalls.length - 1}
-                    onAskUserReply={onAskUserReply}
-                  />
-                </motion.div>
-              ))}
+              {(() => {
+                // Subagent child calls (parentToolCallId) nest under their
+                // spawning Task row instead of cluttering the rail as
+                // siblings. One level deep, matching the wire format.
+                const ids = new Set(toolCalls.map((tc) => tc.id));
+                const childrenByParent = new Map<string, ToolCall[]>();
+                const topLevel: ToolCall[] = [];
+                for (const tc of toolCalls) {
+                  const parent = tc.parentToolCallId;
+                  if (parent && parent !== tc.id && ids.has(parent)) {
+                    const siblings = childrenByParent.get(parent) ?? [];
+                    siblings.push(tc);
+                    childrenByParent.set(parent, siblings);
+                  } else {
+                    topLevel.push(tc);
+                  }
+                }
+                return topLevel.map((tc, i) => {
+                  const children = childrenByParent.get(tc.id) ?? [];
+                  const isLastTop = i === topLevel.length - 1;
+                  return (
+                    <motion.div
+                      key={toolCallRenderKey(tc, i)}
+                      initial={{ opacity: 0, x: -8 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ duration: 0.15, delay: i * 0.03 }}
+                    >
+                      <ToolCallRailItem
+                        toolCall={tc}
+                        isLast={isLastTop && children.length === 0}
+                        onAskUserReply={onAskUserReply}
+                      />
+                      {children.length > 0 && (
+                        <div className="ml-5">
+                          {children.map((child, j) => (
+                            <ToolCallRailItem
+                              key={toolCallRenderKey(child, j)}
+                              toolCall={child}
+                              isLast={isLastTop && j === children.length - 1}
+                              onAskUserReply={onAskUserReply}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </motion.div>
+                  );
+                });
+              })()}
             </div>
           </motion.div>
         )}
