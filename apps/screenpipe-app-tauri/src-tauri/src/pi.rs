@@ -2460,6 +2460,12 @@ pub async fn pi_start_inner(
         {
             cmd.env("SCREENPIPE_ACP_SYSTEM_PROMPT", system_prompt);
         }
+        // Forward the user's own MCP servers so the harness gets the same
+        // tool surface raw Pi gets from the mcp-bridge extension.
+        cmd.env_remove("SCREENPIPE_ACP_USER_MCP_JSON");
+        if let Some(user_mcp) = resolve_user_mcp_servers_json().await {
+            cmd.env("SCREENPIPE_ACP_USER_MCP_JSON", user_mcp);
+        }
     }
 
     // Ensure bun is discoverable by pi.exe shim: the bun global-install shim (pi.exe)
@@ -3276,6 +3282,51 @@ async fn await_prompt_start(
     }
 
     result
+}
+
+/// Resolve the user's enabled MCP servers into the JSON the ACP runtime
+/// forwards to the adapter in session/new. HTTP header secrets are resolved
+/// here (desktop-side) via the SecretStore; the "screenpipe" built-in server
+/// is skipped since the runtime always injects it. Returns None when there is
+/// nothing to forward.
+async fn resolve_user_mcp_servers_json() -> Option<String> {
+    use screenpipe_connect::mcp_servers::{McpServerStore, McpTransport};
+    let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
+    let secret_store = open_secret_store_for_connection_context()
+        .await
+        .map(std::sync::Arc::new);
+    let store = McpServerStore::new(data_dir, secret_store);
+    let servers = store.list().await.ok()?;
+    let mut out = Vec::new();
+    for cfg in servers {
+        if !cfg.enabled || cfg.name.eq_ignore_ascii_case("screenpipe") {
+            continue;
+        }
+        let is_stdio = matches!(cfg.transport, McpTransport::Stdio);
+        let headers: Vec<(String, String)> = if is_stdio {
+            Vec::new()
+        } else {
+            store
+                .get_headers(&cfg.id)
+                .await
+                .into_iter()
+                .map(|header| (header.name, header.value))
+                .collect()
+        };
+        out.push(serde_json::json!({
+            "name": cfg.name,
+            "transport": if is_stdio { "stdio" } else { "http" },
+            "url": cfg.url,
+            "headers": headers,
+            "command": cfg.command,
+            "args": cfg.args.unwrap_or_default(),
+            "env": cfg.env.unwrap_or_default(),
+        }));
+    }
+    if out.is_empty() {
+        return None;
+    }
+    serde_json::to_string(&out).ok()
 }
 
 async fn open_secret_store_for_connection_context() -> Option<screenpipe_secrets::SecretStore> {

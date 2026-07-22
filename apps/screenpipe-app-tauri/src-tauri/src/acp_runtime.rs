@@ -12,9 +12,10 @@
 use agent_client_protocol::schema::v1::{
     AuthenticateRequest, BooleanConfigOptionCapabilities, CancelNotification, ClientCapabilities,
     ClientSessionCapabilities, CloseSessionRequest, ContentBlock, CreateTerminalRequest,
-    CreateTerminalResponse, EnvVariable, FileSystemCapabilities, ImageContent, Implementation,
-    InitializeRequest, InitializeResponse, KillTerminalRequest, KillTerminalResponse, McpServer,
-    McpServerStdio, NewSessionRequest, NewSessionResponse, PromptRequest, ReadTextFileRequest,
+    CreateTerminalResponse, EnvVariable, FileSystemCapabilities, HttpHeader, ImageContent,
+    Implementation, InitializeRequest, InitializeResponse, KillTerminalRequest,
+    KillTerminalResponse, McpServer, McpServerHttp, McpServerStdio, NewSessionRequest,
+    NewSessionResponse, PromptRequest, ReadTextFileRequest,
     ReadTextFileResponse, ReleaseTerminalRequest, ReleaseTerminalResponse,
     RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
     SelectedPermissionOutcome, SessionConfigKind, SessionConfigOptionValue,
@@ -130,6 +131,30 @@ struct RuntimeConfig {
     preferred_auth_method: Option<String>,
     system_context: Option<String>,
     session_defaults: SessionDefaults,
+    /// The user's own registered MCP servers, resolved (with secret header
+    /// values) by the desktop before launch and forwarded to the adapter in
+    /// session/new alongside the screenpipe server.
+    user_mcp_servers: Vec<UserMcpServer>,
+}
+
+/// A user-configured MCP server forwarded to the adapter. Header values and
+/// stdio env are already resolved desktop-side; this runtime only relays them.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UserMcpServer {
+    name: String,
+    #[serde(default)]
+    transport: String,
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    headers: Vec<(String, String)>,
+    #[serde(default)]
+    command: Option<String>,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default)]
+    env: HashMap<String, String>,
 }
 
 /// Preset-stored defaults applied after every session/new. Options or modes
@@ -176,6 +201,10 @@ impl RuntimeConfig {
             system_context: env_nonempty("SCREENPIPE_ACP_SYSTEM_PROMPT"),
             session_defaults: parse_json_env::<SessionDefaults>(
                 "SCREENPIPE_ACP_SESSION_CONFIG_JSON",
+            )?
+            .unwrap_or_default(),
+            user_mcp_servers: parse_json_env::<Vec<UserMcpServer>>(
+                "SCREENPIPE_ACP_USER_MCP_JSON",
             )?
             .unwrap_or_default(),
         })
@@ -1386,11 +1415,41 @@ fn mcp_servers(config: &RuntimeConfig) -> Vec<McpServer> {
     if let Some(key) = env_nonempty("SCREENPIPE_LOCAL_API_KEY") {
         env.push(EnvVariable::new("SCREENPIPE_LOCAL_API_KEY", key));
     }
-    vec![McpServer::Stdio(
+    let mut servers = vec![McpServer::Stdio(
         McpServerStdio::new("screenpipe", &config.bun_path)
             .args(args)
             .env(env),
-    )]
+    )];
+    // Forward the user's own registered MCP servers so every harness sees
+    // the same tool surface the native Pi mcp-bridge extension gives raw Pi.
+    for server in &config.user_mcp_servers {
+        if server.transport.eq_ignore_ascii_case("stdio") {
+            let Some(command) = server.command.as_deref().filter(|c| !c.trim().is_empty()) else {
+                continue;
+            };
+            let server_env = server
+                .env
+                .iter()
+                .filter(|(name, _)| !is_forbidden_acp_env(name))
+                .map(|(name, value)| EnvVariable::new(name.clone(), value.clone()))
+                .collect::<Vec<_>>();
+            servers.push(McpServer::Stdio(
+                McpServerStdio::new(&server.name, command)
+                    .args(server.args.clone())
+                    .env(server_env),
+            ));
+        } else if !server.url.trim().is_empty() {
+            let headers = server
+                .headers
+                .iter()
+                .map(|(name, value)| HttpHeader::new(name.clone(), value.clone()))
+                .collect::<Vec<_>>();
+            servers.push(McpServer::Http(
+                McpServerHttp::new(&server.name, &server.url).headers(headers),
+            ));
+        }
+    }
+    servers
 }
 
 async fn create_session(
@@ -2269,6 +2328,10 @@ pub async fn run_from_env() -> Result<(), String> {
         .current_dir(&config.project_dir)
         .envs(&config.env)
         .env_remove(CLOUD_API_KEY_ENV)
+        // The resolved user-MCP blob carries secret header values; it reaches
+        // the adapter only through the structured session/new declaration,
+        // never as a raw inherited env var.
+        .env_remove("SCREENPIPE_ACP_USER_MCP_JSON")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -2432,6 +2495,7 @@ mod tests {
             preferred_auth_method: None,
             system_context: None,
             session_defaults: SessionDefaults::default(),
+            user_mcp_servers: Vec::new(),
         }
     }
 
@@ -2567,6 +2631,60 @@ mod tests {
         // Invalid boolean strings and unknown options are skipped, never sent.
         assert_eq!(default_option_value(&session, "fast", "yes"), None);
         assert_eq!(default_option_value(&session, "gone", "a"), None);
+    }
+
+    #[test]
+    fn user_mcp_servers_are_forwarded_alongside_screenpipe() {
+        let mut config = runtime_config("claude-acp");
+        config.user_mcp_servers = vec![
+            UserMcpServer {
+                name: "linear".into(),
+                transport: "http".into(),
+                url: "https://mcp.linear.app/sse".into(),
+                headers: vec![("Authorization".into(), "Bearer secret".into())],
+                command: None,
+                args: vec![],
+                env: HashMap::new(),
+            },
+            UserMcpServer {
+                name: "local-fs".into(),
+                transport: "stdio".into(),
+                url: String::new(),
+                headers: vec![],
+                command: Some("uvx".into()),
+                args: vec!["mcp-server-fs".into()],
+                env: HashMap::from([
+                    ("FS_ROOT".into(), "/tmp".into()),
+                    // The cloud JWT must never ride along into a user server.
+                    (CLOUD_API_KEY_ENV.to_string(), "jwt".into()),
+                ]),
+            },
+        ];
+
+        let servers = mcp_servers(&config);
+        // screenpipe is always first, then the two user servers.
+        assert_eq!(servers.len(), 3);
+        assert!(matches!(&servers[0], McpServer::Stdio(s) if s.name == "screenpipe"));
+        match &servers[1] {
+            McpServer::Http(http) => {
+                assert_eq!(http.name, "linear");
+                assert_eq!(http.url, "https://mcp.linear.app/sse");
+                assert_eq!(http.headers[0].name, "Authorization");
+            }
+            other => panic!("expected http server, got {other:?}"),
+        }
+        match &servers[2] {
+            McpServer::Stdio(stdio) => {
+                assert_eq!(stdio.name, "local-fs");
+                assert_eq!(stdio.command.to_str(), Some("uvx"));
+                assert!(stdio.env.iter().any(|e| e.name == "FS_ROOT"));
+                assert!(
+                    !stdio.env.iter().any(|e| e.name.eq_ignore_ascii_case(CLOUD_API_KEY_ENV)),
+                    "cloud JWT must be scrubbed from forwarded stdio env"
+                );
+            }
+            other => panic!("expected stdio server, got {other:?}"),
+        }
     }
 
     #[test]
