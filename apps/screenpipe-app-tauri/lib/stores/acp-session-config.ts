@@ -43,6 +43,9 @@ interface AcpSessionConfigState {
    *  defaults without a live session. */
   byAgent: Record<string, AcpSessionConfig>;
   setFromEvent: (sessionId: string, event: unknown) => void;
+  /** Seed a chat's prior ACP session id from persisted history so a cold
+   *  reopen can resume it. No-op if a live id is already tracked. */
+  seedSessionId: (sessionId: string, acpSessionId: string) => void;
   /** Cache an advertisement that has no live session (adapter probe). */
   cacheAdvertisement: (event: unknown) => void;
   applyUpdate: (sessionId: string, update: unknown) => void;
@@ -163,6 +166,23 @@ export const useAcpSessionConfig = create<AcpSessionConfigState>()((set) => ({
           : state.byAgent;
       if (byAgent !== state.byAgent) saveByAgent(byAgent);
       return { sessions: { ...state.sessions, [sessionId]: next }, byAgent };
+    });
+  },
+  seedSessionId: (sessionId, acpSessionId) => {
+    if (!acpSessionId) return;
+    set((state) => {
+      const prior = state.sessions[sessionId];
+      if (prior?.sessionId) return state; // a live id always wins
+      return {
+        sessions: {
+          ...state.sessions,
+          [sessionId]: {
+            options: prior?.options ?? [],
+            modes: prior?.modes ?? null,
+            sessionId: acpSessionId,
+          },
+        },
+      };
     });
   },
   cacheAdvertisement: (event) => {

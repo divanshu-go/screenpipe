@@ -1249,6 +1249,14 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     if (needsPersistedSync) {
       const { loadConversationFile } = await import("@/lib/chat-storage");
       persisted = await loadConversationFile(conv.id);
+      // Seed the prior ACP session id so the first cold-start spawn for this
+      // reopened chat reattaches (session/resume) instead of starting fresh.
+      const priorAcpSessionId =
+        persisted?.acpSessionId ?? (conv as ChatConversation).acpSessionId;
+      if (priorAcpSessionId) {
+        const { useAcpSessionConfig } = await import("@/lib/stores/acp-session-config");
+        useAcpSessionConfig.getState().seedSessionId(conv.id, priorAcpSessionId);
+      }
       if (persisted) {
         if (!store.sessions[conv.id]) {
           store.actions.upsert({
