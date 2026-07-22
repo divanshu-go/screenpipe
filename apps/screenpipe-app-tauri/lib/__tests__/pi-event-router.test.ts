@@ -896,3 +896,31 @@ describe("pi-event-router: acp session id capture and persistence", () => {
     expect(saved.acpSessionId).toBe("claude-session-xyz");
   });
 });
+
+describe("pi-event-router: acp background first-turn user bubble", () => {
+  beforeEach(reset);
+
+  it("materializes the user bubble from the runtime's user message_start", async () => {
+    seed("A");
+    useChatStore.setState({ currentId: "B" });
+    // The ACP runtime now emits a user message_start (display text) before
+    // the assistant turn, so a backgrounded first turn keeps the user bubble.
+    await handlePiEvent(
+      piEvt("A", {
+        type: "message_start",
+        message: { role: "user", content: [{ type: "text", text: "hello agent" }] },
+      }),
+    );
+    await handlePiEvent(
+      piEvt("A", {
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "hi!" },
+      }),
+    );
+    await handlePiEvent(piEvt("A", { type: "agent_end" }));
+
+    const msgs = (useChatStore.getState().sessions.A.messages ?? []) as any[];
+    expect(msgs.some((m) => m.role === "user" && m.content === "hello agent")).toBe(true);
+    expect(msgs.some((m) => m.role === "assistant")).toBe(true);
+  });
+});

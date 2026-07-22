@@ -714,9 +714,27 @@ impl RuntimeState {
         }
     }
 
-    fn begin_prompt(&self) {
+    fn begin_prompt(&self, user_display: Option<&str>) {
         if let Ok(mut turn) = self.turn.lock() {
             turn.prompt_in_flight = true;
+            // Emit the user bubble before opening the assistant turn, mirroring
+            // raw Pi. Without it a turn that runs entirely while the chat is
+            // backgrounded persists an assistant-only transcript (the desktop
+            // never optimistically appended the user message). The desktop
+            // dedupes this against its optimistic copy in the foreground, so
+            // it only materializes a bubble for the background case. Guarded on
+            // turn_open so it fires once per turn, never from handle_update.
+            if !turn.turn_open {
+                if let Some(text) = user_display.map(str::trim).filter(|t| !t.is_empty()) {
+                    self.output.send(json!({
+                        "type": "message_start",
+                        "message": {
+                            "role": "user",
+                            "content": [{ "type": "text", "text": text }]
+                        }
+                    }));
+                }
+            }
             self.ensure_turn_locked(&mut turn);
         }
     }
@@ -1794,7 +1812,7 @@ fn start_prompt(
             }
         }
     }
-    state.begin_prompt();
+    state.begin_prompt(command.get("displayPreview").and_then(Value::as_str));
     let connection = connection.clone();
     let session_id = session_id.clone();
     connection

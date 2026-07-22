@@ -3262,10 +3262,15 @@ pub struct PiImageContent {
 fn build_prompt_command(
     message: String,
     images: Option<Vec<PiImageContent>>,
+    display_preview: &str,
 ) -> Result<Value, String> {
     let mut cmd = json!({
         "type": "prompt",
         "message": message,
+        // The user's display text (before system-context injection). The ACP
+        // runtime echoes it back as a user message_start so a backgrounded
+        // first turn still persists the user's bubble; raw Pi ignores it.
+        "displayPreview": display_preview,
     });
     if let Some(imgs) = images {
         if !imgs.is_empty() {
@@ -3476,7 +3481,7 @@ pub async fn pi_prompt(
     let message = attach_foreground_connections_context(&app, &sid, message).await;
     #[cfg(feature = "e2e")]
     emit_e2e_pi_wire_prompt(&app, &sid, "prompt", &message);
-    let cmd = build_prompt_command(message, images)?;
+    let cmd = build_prompt_command(message, images, &preview)?;
     let (queue_id, rx) = conversation
         .queue
         .send_prompt(
@@ -3512,7 +3517,7 @@ pub async fn pi_queue_prompt(
     let message = attach_foreground_connections_context(&app, &sid, message).await;
     #[cfg(feature = "e2e")]
     emit_e2e_pi_wire_prompt(&app, &sid, "queue", &message);
-    let cmd = build_prompt_command(message, images)?;
+    let cmd = build_prompt_command(message, images, &preview)?;
     let (queue_id, rx) = conversation
         .queue
         .send_prompt(
@@ -3883,11 +3888,9 @@ pub async fn pi_acp_set_config_option(
         "value": value_json,
     });
 
-    let rx = queue
-        .send(cmd, crate::pi_command_queue::WaitMode::WaitDone)
-        .await?;
-    rx.await
-        .map_err(|_| "Pi command queue dropped".to_string())?
+    // Delivered immediately (not behind the drain loop) so a mid-stream model
+    // or mode change from the composer applies without waiting for the turn.
+    queue.send_immediate_awaited("set_config_option", cmd).await
 }
 
 /// Probe an ACP adapter for its advertised model/mode selectors without a
@@ -4011,11 +4014,9 @@ pub async fn pi_acp_set_mode(
         "modeId": mode_id,
     });
 
-    let rx = queue
-        .send(cmd, crate::pi_command_queue::WaitMode::WaitDone)
-        .await?;
-    rx.await
-        .map_err(|_| "Pi command queue dropped".to_string())?
+    // Permission-mode switches apply at any point in a session; deliver
+    // immediately so the composer selector works while a reply streams.
+    queue.send_immediate_awaited("set_mode", cmd).await
 }
 
 fn write_pi_settings(settings: &serde_json::Value) -> Result<(), String> {
