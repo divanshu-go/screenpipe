@@ -1607,6 +1607,12 @@ export function MessageContent({
     const stoppedSummary = message.stoppedByUser && hasToolWorkGroup
       ? formatStoppedWorkDuration(message.workDurationMs)
       : undefined;
+    // A turn cut off by app quit / crash: tell the truth on the work
+    // summary instead of showing a normal "Worked for X" completion.
+    const interruptedSummary = message.interruptedByQuit && hasToolWorkGroup
+      ? "interrupted — app closed mid-task"
+      : undefined;
+    const workSummaryOverride = stoppedSummary || interruptedSummary;
     return (
       <div className="space-y-2 min-w-0 w-full overflow-hidden">
         {displayGroups.map((group) => {
@@ -1671,8 +1677,8 @@ export function MessageContent({
                 toolCalls={group.toolCalls}
                 defaultExpanded={false}
                 isGenerating={isGenerating && !message.workDurationMs}
-                preferSummaryOverride={Boolean(stoppedSummary)}
-                summaryOverride={stoppedSummary || (message.workDurationMs ? formatWorkDuration(message.workDurationMs) : undefined)}
+                preferSummaryOverride={Boolean(workSummaryOverride)}
+                summaryOverride={workSummaryOverride || (message.workDurationMs ? formatWorkDuration(message.workDurationMs) : undefined)}
                 workStartedAtMs={message.timestamp}
                 hideSummary={hideToolSummary}
                 forceCollapsed={forceCollapseTools}
@@ -1692,8 +1698,8 @@ export function MessageContent({
                 toolCalls={group.toolCalls}
                 defaultExpanded={false}
                 isGenerating={isGenerating && !message.workDurationMs}
-                preferSummaryOverride={Boolean(stoppedSummary)}
-                summaryOverride={stoppedSummary || formatWorkDuration(durationMs)}
+                preferSummaryOverride={Boolean(workSummaryOverride)}
+                summaryOverride={workSummaryOverride || formatWorkDuration(durationMs)}
                 workStartedAtMs={message.timestamp}
                 hideSummary={hideToolSummary}
                 forceCollapsed={forceCollapseTools}

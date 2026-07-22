@@ -937,15 +937,26 @@ async function persistBackgroundSession(sid: string): Promise<void> {
                 .map((b: any) => b.text)
                 .join("\n") || "(tool result)";
           }
+          // A tool still marked running at persist time never reported
+          // completion: the turn was cut off (crash or app quit), since a
+          // normal finish flips isRunning false via tool_execution_end
+          // before agent_end. Record it honestly instead of persisting it
+          // as silently done, and flag the message so the UI can say so.
+          let wasInterrupted = false;
           const blocks = m.contentBlocks?.map((b: any) => {
             if (b.type === "tool") {
-              const { isRunning: _isRunning, ...rest } = b.toolCall ?? {};
+              const { isRunning, ...rest } = b.toolCall ?? {};
+              const interrupted = isRunning === true;
+              if (interrupted) wasInterrupted = true;
               return {
                 type: "tool",
                 toolCall: {
                   ...rest,
                   isRunning: false,
-                  result: rest.result?.slice?.(0, 4000),
+                  isError: interrupted ? true : rest.isError,
+                  result: interrupted
+                    ? "interrupted — the app closed before this finished"
+                    : rest.result?.slice?.(0, 4000),
                 },
               };
             }
@@ -954,6 +965,7 @@ async function persistBackgroundSession(sid: string): Promise<void> {
             }
             return b;
           });
+          const interruptedByQuit = m.interruptedByQuit || wasInterrupted;
           return {
             id: m.id,
             role: m.role,
@@ -970,6 +982,7 @@ async function persistBackgroundSession(sid: string): Promise<void> {
             ...(m.steeredResponse ? { steeredResponse: true } : {}),
             ...(m.workDurationMs ? { workDurationMs: m.workDurationMs } : {}),
             ...(m.stoppedByUser ? { stoppedByUser: true } : {}),
+            ...(interruptedByQuit ? { interruptedByQuit: true } : {}),
           };
         }),
         createdAt: existing?.createdAt ?? Date.now(),
