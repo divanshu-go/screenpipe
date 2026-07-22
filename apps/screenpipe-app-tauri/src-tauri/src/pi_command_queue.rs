@@ -612,6 +612,44 @@ impl PiQueueHandle {
             .map_err(|e| format!("stdin write failed: {}", e))
     }
 
+    /// Write a lifecycle command straight to stdin, bypassing the drain loop,
+    /// and await its correlated response. Used for session config/mode changes
+    /// that the ACP runtime accepts at any point in a session: routing them
+    /// through the normal FIFO queue would stall them behind the active
+    /// prompt's WaitDone (the whole streaming turn), so the composer's model /
+    /// mode selectors could not take effect until the reply finished. Like
+    /// abort/steer, these are delivered immediately and correlated by request
+    /// id, so they never wait on the turn.
+    pub async fn send_immediate_awaited(&self, cmd_type_label: &str, mut payload: Value) -> Result<(), String> {
+        let stdin = self
+            .stdin
+            .as_ref()
+            .ok_or("Pi stdin is not available".to_string())?;
+        let mut alive_rx = self.state.alive.subscribe();
+        let req_id = format!("req_{}", uuid::Uuid::new_v4().simple());
+        if let Some(obj) = payload.as_object_mut() {
+            obj.insert("id".to_string(), json!(&req_id));
+        }
+        let cmd_str = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
+        // Register before the write so an immediate response can't be lost.
+        let response_rx = self.state.register_response(&req_id);
+        let write_result = {
+            let mut stdin_guard = stdin.lock().await;
+            info!("pi_command_queue: writing immediate {} ({})", cmd_type_label, req_id);
+            writeln!(*stdin_guard, "{}", cmd_str)
+                .and_then(|_| stdin_guard.flush())
+                .map_err(|e| format!("{cmd_type_label} write failed: {e}"))
+        };
+        if let Err(error) = write_result {
+            self.state.cancel_response(&req_id);
+            return Err(error);
+        }
+        let result =
+            wait_for_response_or_terminated(response_rx, &mut alive_rx, cmd_type_label).await;
+        self.state.cancel_response(&req_id);
+        result
+    }
+
     /// Abort only the active Pi turn. Unlike `abort`, this does not drain or
     /// clear queued follow-ups, so the queue can continue after the active
     /// reply stops.
