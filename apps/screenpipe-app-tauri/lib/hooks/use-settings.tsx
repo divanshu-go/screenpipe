@@ -241,6 +241,10 @@ export interface ChatConversation {
 	 *  the model selection when switching between chats. Persisted to disk
 	 *  so the selection survives app restart. */
 	presetId?: string;
+	/** The last live ACP session id for this conversation. Persisted so a
+	 *  reopen after the agent process is gone can reattach to that session
+	 *  (session/resume) instead of starting fresh. */
+	acpSessionId?: string;
 }
 
 export interface ChatHistoryStore {

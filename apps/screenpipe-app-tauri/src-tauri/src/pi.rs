@@ -1588,6 +1588,11 @@ pub struct PiProviderConfig {
     /// Optional system prompt from AI preset (appended to Pi's built-in system prompt)
     #[serde(default)]
     pub system_prompt: Option<String>,
+    /// A prior ACP session id to reattach to instead of creating a fresh
+    /// session, set only when reopening a conversation whose agent process
+    /// is gone. Ignored by the native Pi backend.
+    #[serde(default)]
+    pub resume_session_id: Option<String>,
 }
 
 fn uses_acp_backend(config: Option<&PiProviderConfig>) -> bool {
@@ -2465,6 +2470,17 @@ pub async fn pi_start_inner(
         cmd.env_remove("SCREENPIPE_ACP_USER_MCP_JSON");
         if let Some(user_mcp) = resolve_user_mcp_servers_json().await {
             cmd.env("SCREENPIPE_ACP_USER_MCP_JSON", user_mcp);
+        }
+        // Reopen after the process was gone: reattach to the prior ACP
+        // session instead of starting fresh with a glued transcript.
+        cmd.env_remove("SCREENPIPE_ACP_RESUME_SESSION_ID");
+        if let Some(resume_id) = provider_config
+            .as_ref()
+            .and_then(|config| config.resume_session_id.as_deref())
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+        {
+            cmd.env("SCREENPIPE_ACP_RESUME_SESSION_ID", resume_id);
         }
     }
 
@@ -6113,6 +6129,7 @@ error: InstallFailed extracting tarball"#;
             api_key: None,
             max_tokens: 4096,
             system_prompt: None,
+            resume_session_id: None,
         }
     }
 

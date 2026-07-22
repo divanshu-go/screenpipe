@@ -867,3 +867,32 @@ describe("pi-event-router: honest interruption on quit/crash", () => {
     expect(tool.toolCall.isError).not.toBe(true);
   });
 });
+
+describe("pi-event-router: acp session id capture and persistence", () => {
+  beforeEach(reset);
+
+  it("captures the acp session id and persists it on the conversation", async () => {
+    const { useAcpSessionConfig } = await import("../stores/acp-session-config");
+    seed("A");
+    useChatStore.setState({ currentId: "B" });
+    await handlePiEvent(
+      piEvt("A", { type: "message_start", message: { role: "assistant" } }),
+    );
+    await handlePiEvent(
+      piEvt("A", {
+        type: "acp_session_config",
+        agentId: "claude-acp",
+        sessionId: "claude-session-xyz",
+        configOptions: [],
+      } as unknown as AgentInnerEvent),
+    );
+    expect(useAcpSessionConfig.getState().sessions["A"].sessionId).toBe("claude-session-xyz");
+    // The per-adapter cache must not leak the session id.
+    expect((useAcpSessionConfig.getState().byAgent["claude-acp"] as any)?.sessionId).toBeUndefined();
+
+    await handlePiEvent(piEvt("A", { type: "agent_end" }));
+    await flushPendingSaves();
+    const saved = (saveConversationFile as any).mock.calls.at(-1)[0];
+    expect(saved.acpSessionId).toBe("claude-session-xyz");
+  });
+});

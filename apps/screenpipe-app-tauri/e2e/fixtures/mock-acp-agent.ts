@@ -17,7 +17,7 @@ type JsonRpcMessage = {
   error?: unknown;
 };
 
-type Scenario = "normal" | "malformed" | "exit" | "auth" | "mcp" | "tree" | "terminal" | "subagent";
+type Scenario = "normal" | "malformed" | "exit" | "auth" | "mcp" | "tree" | "terminal" | "subagent" | "resume";
 
 const scenarioArg = process.argv.find((arg) => arg.startsWith("--scenario="));
 const scenario = (scenarioArg?.slice("--scenario=".length) ?? "normal") as Scenario;
@@ -423,7 +423,10 @@ async function handleRequest(message: JsonRpcMessage): Promise<void> {
         protocolVersion: 1,
         agentCapabilities: {
           loadSession: false,
-          sessionCapabilities: { close: {} },
+          // The resume scenario advertises session/resume so the runtime
+          // reattaches instead of creating a fresh session.
+          sessionCapabilities:
+            scenario === "resume" ? { close: {}, resume: {} } : { close: {} },
           promptCapabilities: { image: true, audio: false, embeddedContext: true },
           mcpCapabilities: { http: true, sse: true },
         },
@@ -526,6 +529,24 @@ async function handleRequest(message: JsonRpcMessage): Promise<void> {
       sessionCwd = cwd;
       sessionOpen = true;
       respond(message.id, { sessionId });
+      return;
+    }
+    case "session/resume": {
+      // The runtime reattaches to a prior session id without a history
+      // replay. Echo back the same modes/config the client expects.
+      const resumeCwd = message.params?.cwd;
+      if (message.params?.sessionId !== sessionId || typeof resumeCwd !== "string") {
+        fail(message.id, -32602, "session/resume requires the known session id and cwd");
+        return;
+      }
+      sessionCwd = resumeCwd;
+      sessionOpen = true;
+      update({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Mock ACP resumed session" },
+        messageId: "mock-resume-banner",
+      });
+      respond(message.id, {});
       return;
     }
     case "session/close": {

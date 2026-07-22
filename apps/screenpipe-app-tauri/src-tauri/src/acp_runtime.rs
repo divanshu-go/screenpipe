@@ -18,7 +18,7 @@ use agent_client_protocol::schema::v1::{
     NewSessionResponse, PromptRequest, ReadTextFileRequest,
     ReadTextFileResponse, ReleaseTerminalRequest, ReleaseTerminalResponse,
     RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    SelectedPermissionOutcome, SessionConfigKind, SessionConfigOptionValue,
+    ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigKind, SessionConfigOptionValue,
     SessionConfigOptionsCapabilities, SessionId, SessionNotification,
     SetSessionConfigOptionRequest, SetSessionModeRequest, StopReason, TerminalExitStatus,
     TerminalOutputRequest, TerminalOutputResponse, TextContent, WaitForTerminalExitRequest,
@@ -135,6 +135,9 @@ struct RuntimeConfig {
     /// values) by the desktop before launch and forwarded to the adapter in
     /// session/new alongside the screenpipe server.
     user_mcp_servers: Vec<UserMcpServer>,
+    /// A prior ACP session id to resume on startup instead of creating a
+    /// fresh one, when the chat is reopened after the process was gone.
+    resume_session_id: Option<String>,
 }
 
 /// A user-configured MCP server forwarded to the adapter. Header values and
@@ -207,6 +210,7 @@ impl RuntimeConfig {
                 "SCREENPIPE_ACP_USER_MCP_JSON",
             )?
             .unwrap_or_default(),
+            resume_session_id: env_nonempty("SCREENPIPE_ACP_RESUME_SESSION_ID"),
         })
     }
 }
@@ -1157,6 +1161,7 @@ fn send_session_config(output: &ParentOutput, agent_id: &str, session: &NewSessi
     output.send(json!({
         "type": "acp_session_config",
         "agentId": agent_id,
+        "sessionId": session.session_id,
         "modes": session.modes,
         "configOptions": session.config_options,
     }));
@@ -1699,6 +1704,52 @@ async fn create_session_with_auth(
     }
 }
 
+/// Reattach to a prior ACP session when the chat is reopened after the
+/// process was gone, else create a fresh one. Uses session/resume (no
+/// history replay, since the desktop already has the transcript) when the
+/// agent advertises it; a stale id or any resume failure falls back to a
+/// fresh session so a reopened chat can never dead-end. Returns whether the
+/// prior session was actually resumed so the desktop can skip re-sending
+/// the conversation-history preamble.
+async fn open_or_resume_session(
+    connection: &ConnectionTo<Agent>,
+    state: &RuntimeState,
+    init: &InitializeResponse,
+    config: &RuntimeConfig,
+) -> Result<(NewSessionResponse, bool), Error> {
+    if let Some(resume_id) = config
+        .resume_session_id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+    {
+        if init.agent_capabilities.session_capabilities.resume.is_some() {
+            match connection
+                .send_request(
+                    ResumeSessionRequest::new(resume_id.to_owned(), &config.project_dir)
+                        .mcp_servers(mcp_servers(config)),
+                )
+                .block_task()
+                .await
+            {
+                Ok(resumed) => {
+                    let mut session = NewSessionResponse::new(resume_id.to_owned());
+                    session.modes = resumed.modes;
+                    session.config_options = resumed.config_options;
+                    return Ok((session, true));
+                }
+                Err(error) => {
+                    eprintln!(
+                        "[acp-runtime] resume of session '{resume_id}' failed, starting fresh: {error}"
+                    );
+                }
+            }
+        }
+    }
+    create_session_with_auth(connection, state, init, config)
+        .await
+        .map(|session| (session, false))
+}
+
 fn start_prompt(
     connection: &ConnectionTo<Agent>,
     state: &Arc<RuntimeState>,
@@ -2036,13 +2087,17 @@ async fn run_protocol(
                     init.protocol_version
                 )));
             }
-            let mut session =
-                create_session_with_auth(&connection, &state, &init, &config).await?;
+            let (mut session, resumed) =
+                open_or_resume_session(&connection, &state, &init, &config).await?;
             state.output.send(json!({
                 "type": "acp_ready",
                 "agentId": config.agent_id,
                 "agentInfo": init.agent_info,
-                "capabilities": init.agent_capabilities
+                "capabilities": init.agent_capabilities,
+                // Persisted per chat so a later reopen can resume this exact
+                // session; `resumed` tells the desktop whether it just did.
+                "sessionId": session.session_id,
+                "resumed": resumed,
             }));
             apply_session_defaults(&connection, &config, &mut session).await;
             send_session_config(&state.output, &config.agent_id, &session);
@@ -2496,6 +2551,7 @@ mod tests {
             system_context: None,
             session_defaults: SessionDefaults::default(),
             user_mcp_servers: Vec::new(),
+            resume_session_id: None,
         }
     }
 

@@ -880,6 +880,8 @@ async function persistBackgroundSession(sid: string): Promise<void> {
       }
 
       const existing = await loadConversationFile(sid);
+      const acpSessionId =
+        useAcpSessionConfig.getState().sessions[sid]?.sessionId ?? existing?.acpSessionId;
       const browserState = resolveNewestBrowserState(
         existing?.browserState,
         getCachedBrowserStateEntry(sid),
@@ -998,6 +1000,8 @@ async function persistBackgroundSession(sid: string): Promise<void> {
         ...(existing?.sidebarGroup ? { sidebarGroup: existing.sidebarGroup } : {}),
         ...(session.branchedFrom ? { branchedFrom: session.branchedFrom } : existing?.branchedFrom ? { branchedFrom: existing.branchedFrom } : {}),
         ...(browserState ? { browserState } : {}),
+        // Keep the live ACP session id (if any) so a reopen can resume it.
+        ...(acpSessionId ? { acpSessionId } : existing?.acpSessionId ? { acpSessionId: existing.acpSessionId } : {}),
       };
 
       try {

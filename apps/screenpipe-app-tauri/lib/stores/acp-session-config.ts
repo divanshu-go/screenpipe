@@ -32,6 +32,8 @@ export interface AcpSessionModes {
 export interface AcpSessionConfig {
   options: AcpConfigOption[];
   modes: AcpSessionModes | null;
+  /** The live ACP session id for this chat, for reopen-time resume. */
+  sessionId?: string;
 }
 
 interface AcpSessionConfigState {
@@ -150,11 +152,14 @@ export const useAcpSessionConfig = create<AcpSessionConfigState>()((set) => ({
           ? parseOptions(raw.configOptions)
           : (prior?.options ?? []),
         modes: raw?.modes !== undefined ? parseModes(raw.modes) : (prior?.modes ?? null),
+        sessionId:
+          typeof raw?.sessionId === "string" ? raw.sessionId : prior?.sessionId,
       };
       const agentId = typeof raw?.agentId === "string" ? raw.agentId : null;
+      // The per-adapter cache is session-agnostic; never persist a session id.
       const byAgent =
         agentId && (next.options.length > 0 || next.modes)
-          ? { ...state.byAgent, [agentId]: next }
+          ? { ...state.byAgent, [agentId]: { options: next.options, modes: next.modes } }
           : state.byAgent;
       if (byAgent !== state.byAgent) saveByAgent(byAgent);
       return { sessions: { ...state.sessions, [sessionId]: next }, byAgent };

@@ -42,7 +42,7 @@ type ProcessMarker = {
   descendantPid?: number;
 };
 
-type AcpScenario = "normal" | "malformed" | "exit" | "auth" | "mcp" | "tree" | "terminal" | "subagent";
+type AcpScenario = "normal" | "malformed" | "exit" | "auth" | "mcp" | "tree" | "terminal" | "subagent" | "resume";
 
 const fixturePath = fileURLToPath(new URL("../fixtures/mock-acp-agent.ts", import.meta.url));
 let normalSession = "";
@@ -55,6 +55,7 @@ let treeSession = "";
 let mcpSession = "";
 let terminalSession = "";
 let subagentSession = "";
+let resumeSession = "";
 let treeMarkerPrefix = "";
 let treeMarkerToken = "";
 
@@ -69,6 +70,7 @@ function resetRunIdentifiers(): void {
   mcpSession = randomUUID();
   terminalSession = randomUUID();
   subagentSession = randomUUID();
+  resumeSession = randomUUID();
   treeMarkerPrefix = path.join(os.tmpdir(), `screenpipe-acp-process-${treeSession}`);
   treeMarkerToken = randomUUID();
 }
@@ -76,6 +78,7 @@ function resetRunIdentifiers(): void {
 function acpProviderConfig(
   scenario: AcpScenario,
   env: Record<string, string> = {},
+  resumeSessionId: string | null = null,
 ): Record<string, unknown> {
   return {
     backend: "acp",
@@ -90,6 +93,7 @@ function acpProviderConfig(
     model: "mock-acp",
     apiKey: null,
     systemPrompt: "ACP E2E system context",
+    ...(resumeSessionId ? { resumeSessionId } : {}),
   };
 }
 
@@ -280,9 +284,10 @@ async function answerAgentAction(
 
 async function startAcp(
   sessionId: string,
-  scenario: "normal" | "malformed" | "mcp" | "tree" | "terminal" | "subagent",
+  scenario: "normal" | "malformed" | "mcp" | "tree" | "terminal" | "subagent" | "resume",
   env: Record<string, string> = {},
   userToken: string | null = null,
+  resumeSessionId: string | null = null,
 ): Promise<void> {
   const projectDir = path.join(os.tmpdir(), `screenpipe-acp-e2e-${sessionId}`);
   rmSync(projectDir, { recursive: true, force: true });
@@ -290,7 +295,7 @@ async function startAcp(
     sessionId,
     projectDir,
     userToken,
-    providerConfig: acpProviderConfig(scenario, env),
+    providerConfig: acpProviderConfig(scenario, env, resumeSessionId),
   });
   expect(info.running).toBe(true);
   expect(info.sessionId).toBe(sessionId);
@@ -856,6 +861,24 @@ describe("ACP backend", function () {
       "mock-task-1",
     ]);
     await stopAndAssertGone(subagentSession);
+  });
+
+  it("reattaches to a prior session via session/resume when one is provided", async () => {
+    await startAcp(resumeSession, "resume", {}, null, "mock-acp-session");
+    const events = await capturedEvents(resumeSession);
+    const ready = events.find((envelope) => envelope.event?.type === "acp_ready");
+    // The runtime resumed the supplied id rather than minting a fresh one.
+    expect(ready?.event?.sessionId).toBe("mock-acp-session");
+    expect(ready?.event?.resumed).toBe(true);
+    await browser.waitUntil(
+      async () => (await capturedEvents(resumeSession)).some(
+        (envelope) =>
+          envelope.event?.type === "acp_update" &&
+          envelope.event?.update?.content?.text === "Mock ACP resumed session",
+      ),
+      { timeout: t(10_000), interval: 100, timeoutMsg: "resume banner not observed" },
+    );
+    await stopAndAssertGone(resumeSession);
   });
 
   it("fails startup promptly and reaps the runtime when the adapter exits", async () => {

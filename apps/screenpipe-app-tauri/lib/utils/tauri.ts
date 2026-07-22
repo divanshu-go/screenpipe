@@ -3045,7 +3045,13 @@ maxTokens?: number;
 /**
  * Optional system prompt from AI preset (appended to Pi's built-in system prompt)
  */
-systemPrompt?: string | null }
+systemPrompt?: string | null;
+/**
+ * A prior ACP session id to reattach to instead of creating a fresh
+ * session, set only when reopening a conversation whose agent process
+ * is gone. Ignored by the native Pi backend.
+ */
+resumeSessionId?: string | null }
 /**
  * A user prompt that's been enqueued but not yet written to Pi's stdin.
  * Surfaced to the UI so the chat can render "queued" cards while a prior
