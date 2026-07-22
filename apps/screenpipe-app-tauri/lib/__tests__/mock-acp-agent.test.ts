@@ -258,6 +258,48 @@ describe("mock ACP agent protocol fixture", () => {
     }
   }, 15_000);
 
+  it("emits the subagent wire contract: parent task, stamped child, heartbeats, deltas", async () => {
+    const client = new MockAcpClient("subagent");
+    try {
+      await initialize(client);
+      const sessionId = await newSession(client);
+      await client.waitForUpdate("agent_message_chunk");
+
+      const prompt = client.request("session/prompt", {
+        sessionId,
+        prompt: [{ type: "text", text: "spawn subagents" }],
+      });
+
+      const parent = await client.waitForUpdate("tool_call");
+      expect(parent.params?.update.toolCallId).toBe("mock-task-1");
+      expect(parent.params?.update.kind).toBe("think");
+
+      const child = await client.waitForUpdate("tool_call");
+      expect(child.params?.update.toolCallId).toBe("mock-child-grep");
+      expect(child.params?.update._meta?.claudeCode?.parentToolUseId).toBe("mock-task-1");
+
+      const heartbeat = await client.waitForUpdate("tool_call_update");
+      expect(heartbeat.params?.update._meta?.claudeCode?.toolResponse).toEqual({
+        elapsedTimeSeconds: 42.5,
+        subagentType: "researcher",
+      });
+
+      const delta = await client.waitForUpdate("tool_call_update");
+      expect(delta.params?.update._meta?.terminal_output_delta?.data).toBe("src/a.rs\n");
+
+      const childDone = await client.waitForUpdate("tool_call_update");
+      expect(childDone.params?.update.toolCallId).toBe("mock-child-grep");
+      expect(childDone.params?.update.status).toBe("completed");
+      const parentDone = await client.waitForUpdate("tool_call_update");
+      expect(parentDone.params?.update.toolCallId).toBe("mock-task-1");
+      expect(parentDone.params?.update.status).toBe("completed");
+
+      expect(await prompt).toEqual({ stopReason: "end_turn" });
+    } finally {
+      await client.stop();
+    }
+  }, 15_000);
+
   it("survives malformed stdout and continues the JSON-RPC handshake", async () => {
     const client = new MockAcpClient("malformed");
     try {

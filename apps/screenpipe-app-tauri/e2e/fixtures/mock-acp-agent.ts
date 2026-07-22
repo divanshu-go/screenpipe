@@ -17,7 +17,7 @@ type JsonRpcMessage = {
   error?: unknown;
 };
 
-type Scenario = "normal" | "malformed" | "exit" | "auth" | "mcp" | "tree" | "terminal";
+type Scenario = "normal" | "malformed" | "exit" | "auth" | "mcp" | "tree" | "terminal" | "subagent";
 
 const scenarioArg = process.argv.find((arg) => arg.startsWith("--scenario="));
 const scenario = (scenarioArg?.slice("--scenario=".length) ?? "normal") as Scenario;
@@ -295,6 +295,65 @@ function emitPromptPrelude(): void {
   });
 }
 
+/** Deterministic subagent turn matching the claude-agent-acp and codex-acp
+ *  wire formats: a parent Task tool call, a flat child stamped with
+ *  _meta.claudeCode.parentToolUseId, heartbeat and streamed-output
+ *  tool_call_update traffic, then completions. */
+function emitSubagentFlow(requestId: JsonRpcId): void {
+  update({
+    sessionUpdate: "tool_call",
+    toolCallId: "mock-task-1",
+    title: "research the workspace",
+    kind: "think",
+    status: "in_progress",
+    content: [{ type: "content", content: { type: "text", text: "subagent prompt" } }],
+  });
+  update({
+    sessionUpdate: "tool_call",
+    toolCallId: "mock-child-grep",
+    title: "Grep",
+    kind: "search",
+    status: "in_progress",
+    rawInput: { pattern: "mock" },
+    _meta: { claudeCode: { parentToolUseId: "mock-task-1" } },
+  });
+  update({
+    sessionUpdate: "tool_call_update",
+    toolCallId: "mock-task-1",
+    status: "in_progress",
+    _meta: {
+      claudeCode: {
+        toolResponse: { elapsedTimeSeconds: 42.5, subagentType: "researcher" },
+      },
+    },
+  });
+  update({
+    sessionUpdate: "tool_call_update",
+    toolCallId: "mock-child-grep",
+    status: "in_progress",
+    _meta: { terminal_output_delta: { data: "src/a.rs\n", terminal_id: "mock-terminal" } },
+  });
+  update({
+    sessionUpdate: "tool_call_update",
+    toolCallId: "mock-child-grep",
+    status: "completed",
+    content: [{ type: "content", content: { type: "text", text: "2 matches" } }],
+  });
+  update({
+    sessionUpdate: "tool_call_update",
+    toolCallId: "mock-task-1",
+    status: "completed",
+    content: [{ type: "content", content: { type: "text", text: "Research finished" } }],
+  });
+  update({
+    sessionUpdate: "agent_message_chunk",
+    content: { type: "text", text: "Subagent turn complete." },
+    messageId: "mock-subagent-final",
+  });
+  respond(requestId, { stopReason: "end_turn" });
+  activePromptRequestId = undefined;
+}
+
 function beginPermissionFlow(): void {
   update({
     sessionUpdate: "tool_call",
@@ -503,6 +562,10 @@ async function handleRequest(message: JsonRpcMessage): Promise<void> {
           fail(message.id, -32603, error instanceof Error ? error.message : String(error));
         }
         activePromptRequestId = undefined;
+        return;
+      }
+      if (scenario === "subagent") {
+        emitSubagentFlow(message.id);
         return;
       }
       if (!activePromptIsCancellation) beginPermissionFlow();

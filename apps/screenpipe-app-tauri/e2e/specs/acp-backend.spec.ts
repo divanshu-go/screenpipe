@@ -42,7 +42,7 @@ type ProcessMarker = {
   descendantPid?: number;
 };
 
-type AcpScenario = "normal" | "malformed" | "exit" | "auth" | "mcp" | "tree" | "terminal";
+type AcpScenario = "normal" | "malformed" | "exit" | "auth" | "mcp" | "tree" | "terminal" | "subagent";
 
 const fixturePath = fileURLToPath(new URL("../fixtures/mock-acp-agent.ts", import.meta.url));
 let normalSession = "";
@@ -54,6 +54,7 @@ let uiParkingSession = "";
 let treeSession = "";
 let mcpSession = "";
 let terminalSession = "";
+let subagentSession = "";
 let treeMarkerPrefix = "";
 let treeMarkerToken = "";
 
@@ -67,6 +68,7 @@ function resetRunIdentifiers(): void {
   treeSession = randomUUID();
   mcpSession = randomUUID();
   terminalSession = randomUUID();
+  subagentSession = randomUUID();
   treeMarkerPrefix = path.join(os.tmpdir(), `screenpipe-acp-process-${treeSession}`);
   treeMarkerToken = randomUUID();
 }
@@ -278,7 +280,7 @@ async function answerAgentAction(
 
 async function startAcp(
   sessionId: string,
-  scenario: "normal" | "malformed" | "mcp" | "tree" | "terminal",
+  scenario: "normal" | "malformed" | "mcp" | "tree" | "terminal" | "subagent",
   env: Record<string, string> = {},
   userToken: string | null = null,
 ): Promise<void> {
@@ -809,6 +811,51 @@ describe("ACP backend", function () {
       },
     );
     await stopAndAssertGone(terminalSession);
+  });
+
+  it("streams subagent grouping, heartbeats, and output deltas to the chat", async () => {
+    await startAcp(subagentSession, "subagent");
+    await beginPrompt(subagentSession, "spawn subagents");
+    const prompt = await waitForPromptDone();
+    expect(prompt.error).toBeUndefined();
+    await browser.waitUntil(
+      async () => (await capturedEvents(subagentSession)).some(
+        (envelope) => envelope.event?.type === "agent_end",
+      ),
+      {
+        timeout: t(10_000),
+        interval: 100,
+        timeoutMsg: "subagent turn did not complete",
+      },
+    );
+
+    const events = await capturedEvents(subagentSession);
+    const starts = events.filter((envelope) => envelope.event?.type === "tool_execution_start");
+    const childStart = starts.find((envelope) => envelope.event?.toolCallId === "mock-child-grep");
+    // Child tool calls arrive flat but keep their parent Task linkage.
+    expect(childStart?.event?.parentToolCallId).toBe("mock-task-1");
+    const parentStart = starts.find((envelope) => envelope.event?.toolCallId === "mock-task-1");
+    expect(parentStart?.event?.parentToolCallId).toBeUndefined();
+
+    const progress = events.filter(
+      (envelope) => envelope.event?.type === "tool_execution_progress",
+    );
+    const heartbeat = progress.find(
+      (envelope) => envelope.event?.toolCallId === "mock-task-1",
+    );
+    expect(heartbeat?.event?.elapsedSeconds).toBe(42.5);
+    expect(heartbeat?.event?.subagentType).toBe("researcher");
+    const outputDelta = progress.find(
+      (envelope) => envelope.event?.toolCallId === "mock-child-grep",
+    );
+    expect(String(outputDelta?.event?.outputDelta)).toContain("src/a.rs");
+
+    const ends = events.filter((envelope) => envelope.event?.type === "tool_execution_end");
+    expect(ends.map((envelope) => envelope.event?.toolCallId).sort()).toEqual([
+      "mock-child-grep",
+      "mock-task-1",
+    ]);
+    await stopAndAssertGone(subagentSession);
   });
 
   it("fails startup promptly and reaps the runtime when the adapter exits", async () => {
