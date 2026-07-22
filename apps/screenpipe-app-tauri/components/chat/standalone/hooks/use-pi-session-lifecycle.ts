@@ -10,6 +10,7 @@ import { toast } from "@/components/ui/use-toast";
 import { buildAppAwarenessContext, buildConnectionsContext, buildSystemPrompt } from "@/lib/chat/system-prompt";
 import { commands, type AIPreset, type PiInfo, type PiProviderConfig } from "@/lib/utils/tauri";
 import type { ActivityAppItem, ConnectedIntegration, ConnectionListItem } from "@/lib/chat/connection-suggestions";
+import { useAcpSessionConfig } from "@/lib/stores/acp-session-config";
 
 type PiRunningConfig = {
   backend?: "acp" | null;
@@ -181,13 +182,28 @@ export function usePiSessionLifecycle({
     const p = preset || activePreset;
     if (!p) return null;
     const presetPrompt = p.prompt || "";
-    const connectionsCtx = buildConnectionsContext(connections);
-    const appAwarenessCtx = buildAppAwarenessContext({
-      apps: appItems,
-      connections: allConnectionItems,
-    });
-    const systemPrompt = `${buildSystemPrompt()}\n\n${presetPrompt}${connectionsCtx}${appAwarenessCtx}`.trim() || null;
     const isAcp = p.provider === "acp";
+    const connectionsCtx = buildConnectionsContext(connections);
+    // App-awareness ("currently looking at app X") drifts continuously as the
+    // screen is used. Baking it into an ACP adapter's spawn-time system
+    // prompt would make the prompt churn and trigger adapter respawns; ACP
+    // agents read live screen context through the screenpipe MCP server
+    // instead, so only raw Pi folds it into the prompt.
+    const appAwarenessCtx = isAcp
+      ? ""
+      : buildAppAwarenessContext({
+          apps: appItems,
+          connections: allConnectionItems,
+        });
+    const systemPrompt = `${buildSystemPrompt()}\n\n${presetPrompt}${connectionsCtx}${appAwarenessCtx}`.trim() || null;
+    // Reopen-time resume: only on a cold start (no agent running for this
+    // chat) do we ask the runtime to reattach to the chat's prior ACP
+    // session. Mid-session respawns (model switches via new_session) must
+    // never resume a stale id, so the id is gated on piRunningConfigRef.
+    const resumeSessionId =
+      isAcp && piRunningConfigRef.current === null
+        ? useAcpSessionConfig.getState().sessions[piSessionIdRef.current]?.sessionId ?? null
+        : null;
     return {
       backend: isAcp ? "acp" : undefined,
       acpAgent: isAcp ? p.acpAgent : undefined,
@@ -197,12 +213,15 @@ export function usePiSessionLifecycle({
       apiKey: p.apiKey || null,
       maxTokens: p.maxTokens ?? 4096,
       systemPrompt,
+      resumeSessionId,
     };
   }, [
     activePreset,
     allConnectionItems,
     appItems,
     connections,
+    piRunningConfigRef,
+    piSessionIdRef,
   ]);
 
   const setRunningConfigFromProviderConfig = useCallback((providerConfig: ResolvedPiProviderConfig) => {
@@ -304,6 +323,13 @@ export function usePiSessionLifecycle({
     const running = piRunningConfigRef.current;
     if (!running || running.systemPrompt === config.systemPrompt) return;
     if (piMessageIdRef.current) return;
+    // ACP adapters are heavyweight external processes: respawning one just to
+    // refresh the system prompt tears down the live session, which shows as
+    // the agent reloading and "switching agent" and can race a follow-up
+    // prompt into an initialize failure. ACP sessions get screenpipe context
+    // live through the MCP server and per-prompt injection, so a drifting
+    // app-awareness prompt never justifies a restart here. Raw Pi only.
+    if (running.backend === "acp") return;
     restartCurrentPiSession(config)
       .then(() => {
         if (piRunningConfigRef.current) {
