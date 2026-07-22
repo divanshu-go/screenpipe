@@ -23,7 +23,7 @@ use specta::Type;
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::process::ChildStdin;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, watch, Mutex, Notify};
 use tracing::{debug, error, info, warn};
@@ -167,6 +167,13 @@ pub struct PiQueueState {
     /// can arrive before a waiter is armed, and a late response from an older
     /// command can otherwise release unrelated work.
     response_waiters: std::sync::Mutex<HashMap<String, oneshot::Sender<Result<(), String>>>>,
+    /// Epoch for `last_activity_ms`.
+    created_at: tokio::time::Instant,
+    /// Milliseconds since `created_at` of the last observed turn activity
+    /// (agent start, tool starts/progress/ends, streamed updates). The drain
+    /// loop's force-proceed deadline measures silence against this, so a
+    /// 30-minute turn that keeps emitting events is never force-preempted.
+    last_activity_ms: AtomicU64,
 }
 
 impl PiQueueState {
@@ -185,7 +192,26 @@ impl PiQueueState {
             active_tool_calls: std::sync::Mutex::new(HashSet::new()),
             abort_requests: AtomicUsize::new(0),
             response_waiters: std::sync::Mutex::new(HashMap::new()),
+            created_at: tokio::time::Instant::now(),
+            last_activity_ms: AtomicU64::new(0),
         })
+    }
+
+    fn stamp_activity(&self) {
+        let elapsed = self.created_at.elapsed().as_millis() as u64;
+        self.last_activity_ms.store(elapsed, Ordering::SeqCst);
+    }
+
+    /// Called by the stdout reader for events that prove the turn is alive
+    /// but do not change queue flags (streamed tool progress).
+    pub fn record_activity(&self) {
+        self.stamp_activity();
+        self.done_notify.notify_waiters();
+    }
+
+    fn last_activity_instant(&self) -> tokio::time::Instant {
+        self.created_at
+            + std::time::Duration::from_millis(self.last_activity_ms.load(Ordering::SeqCst))
     }
 
     /// Called by the stdout reader when a `done` event is received.
@@ -195,6 +221,7 @@ impl PiQueueState {
 
     /// Called by the stdout reader on `agent_start` (a prompt has begun streaming).
     pub fn mark_agent_active(&self) {
+        self.stamp_activity();
         self.prompt_pending.store(false, Ordering::SeqCst);
         self.agent_active.store(true, Ordering::SeqCst);
         self.done_notify.notify_waiters();
@@ -262,6 +289,7 @@ impl PiQueueState {
     }
 
     pub fn mark_tool_active(&self, tool_call_id: impl Into<String>) {
+        self.stamp_activity();
         if let Ok(mut active) = self.active_tool_calls.lock() {
             active.insert(tool_call_id.into());
         }
@@ -269,6 +297,7 @@ impl PiQueueState {
     }
 
     pub fn mark_tool_idle(&self, tool_call_id: &str) {
+        self.stamp_activity();
         if let Ok(mut active) = self.active_tool_calls.lock() {
             active.remove(tool_call_id);
         }
@@ -1147,7 +1176,13 @@ async fn wait_until_idle_or_terminated(
     cmd_type: &str,
     timeout: std::time::Duration,
 ) -> IdleWait {
-    let deadline = tokio::time::Instant::now() + timeout;
+    // The timeout measures SILENCE, not total wall time: every observed turn
+    // event (agent start, tool starts/progress/ends, streamed updates)
+    // pushes the deadline out. A 30-minute turn that keeps emitting events
+    // is waited on indefinitely; only a truly quiet, wedged turn times out.
+    // Wait entry counts as activity so a command queued during an already
+    // quiet stretch still gets one full window instead of firing instantly.
+    let entered_at = tokio::time::Instant::now();
     loop {
         if !*alive_rx.borrow() {
             warn!(
@@ -1165,6 +1200,11 @@ async fn wait_until_idle_or_terminated(
         if !state.has_active_turn_work() {
             debug!("pi_command_queue: {} is idle", cmd_type);
             return IdleWait::Idle;
+        }
+
+        let deadline = state.last_activity_instant().max(entered_at) + timeout;
+        if tokio::time::Instant::now() >= deadline {
+            return IdleWait::TimedOut;
         }
 
         tokio::select! {
@@ -1252,6 +1292,56 @@ mod tests {
         .await;
         assert_eq!(result, IdleWait::Idle, "should become idle on done signal");
         handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_idle_wait_deadline_resets_on_turn_activity() {
+        let state = PiQueueState::new();
+        state.mark_tool_active("tool-1");
+
+        let state_activity = state.clone();
+        let activity = tokio::spawn(async move {
+            // Keep the turn visibly alive well past the silence window,
+            // then finish it for real.
+            for _ in 0..3 {
+                tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+                state_activity.record_activity();
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+            state_activity.mark_tool_idle("tool-1");
+            state_activity.signal_done_if_idle();
+        });
+
+        let mut alive_rx = state.alive.subscribe();
+        let started = tokio::time::Instant::now();
+        let result = wait_until_idle_or_terminated(
+            &state,
+            &mut alive_rx,
+            "test",
+            std::time::Duration::from_millis(200),
+        )
+        .await;
+        activity.await.expect("activity task");
+        // Total turn time (~480ms) far exceeds the 200ms silence window;
+        // without per-activity deadline resets this would be TimedOut.
+        assert!(matches!(result, IdleWait::Idle));
+        assert!(started.elapsed() >= std::time::Duration::from_millis(400));
+    }
+
+    #[tokio::test]
+    async fn test_idle_wait_times_out_after_true_silence() {
+        let state = PiQueueState::new();
+        state.mark_tool_active("tool-1");
+
+        let mut alive_rx = state.alive.subscribe();
+        let result = wait_until_idle_or_terminated(
+            &state,
+            &mut alive_rx,
+            "test",
+            std::time::Duration::from_millis(150),
+        )
+        .await;
+        assert!(matches!(result, IdleWait::TimedOut));
     }
 
     #[tokio::test]

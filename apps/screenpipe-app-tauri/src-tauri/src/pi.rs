@@ -2906,6 +2906,9 @@ pub async fn pi_start_inner(
                         }
                     }
                     Some("message_update") => {
+                        // Streamed text/thinking deltas carry no tool ids but
+                        // still prove the turn is alive.
+                        qs.record_activity();
                         if let Some(event) = parsed.as_ref() {
                             for id in event_tool_call_ids(event) {
                                 qs.mark_tool_active(id);
@@ -2918,6 +2921,12 @@ pub async fn pi_start_inner(
                                 qs.mark_tool_active(id);
                             }
                         }
+                    }
+                    Some("tool_execution_progress") => {
+                        // Streamed tool output and subagent heartbeats prove
+                        // the turn is alive; keep the drain loop's silence
+                        // deadline from force-preempting a long turn.
+                        qs.record_activity();
                     }
                     Some("tool_execution_end") => {
                         if let Some(event) = parsed.as_ref() {
