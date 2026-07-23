@@ -20,10 +20,8 @@ const SELECT_CLASS =
  *  native webview on Windows. */
 export function AcpConfigSelector({
   sessionId,
-  streaming,
 }: {
   sessionId: string | null | undefined;
-  streaming: boolean;
 }) {
   const config = useAcpSessionConfig((state) =>
     sessionId ? state.sessions[sessionId] : undefined,
@@ -32,8 +30,11 @@ export function AcpConfigSelector({
   const selects = (config?.options ?? []).filter(
     (option) => option.type === "select" && option.values.length > 0,
   );
+  // Boolean options (e.g. Codex "fast mode") advertise no value list; render
+  // them as toggles rather than dropping them.
+  const toggles = (config?.options ?? []).filter((option) => option.type === "boolean");
   const modes = dedupedModes(config);
-  if (!sessionId || (selects.length === 0 && !modes)) return null;
+  if (!sessionId || (selects.length === 0 && toggles.length === 0 && !modes)) return null;
 
   const run = async (key: string, action: () => Promise<void>, label: string) => {
     setPendingId(key);
@@ -53,7 +54,7 @@ export function AcpConfigSelector({
       {modes && (
         <select
           value={modes.currentModeId}
-          disabled={streaming || pendingId === "__mode"}
+          disabled={pendingId === "__mode"}
           title="Agent mode"
           aria-label="Agent mode"
           onChange={(event) => {
@@ -67,7 +68,7 @@ export function AcpConfigSelector({
               "mode",
             );
           }}
-          className={cn(SELECT_CLASS, (streaming || pendingId === "__mode") && "opacity-50")}
+          className={cn(SELECT_CLASS, pendingId === "__mode" && "opacity-50")}
         >
           {modes.availableModes.map((mode) => (
             <option key={mode.value} value={mode.value} title={mode.description ?? undefined}>
@@ -80,7 +81,7 @@ export function AcpConfigSelector({
         <select
           key={option.id}
           value={String(option.currentValue ?? "")}
-          disabled={streaming || pendingId === option.id}
+          disabled={pendingId === option.id}
           title={option.description || option.name}
           aria-label={option.name}
           onChange={(event) => {
@@ -99,7 +100,7 @@ export function AcpConfigSelector({
               option.name,
             );
           }}
-          className={cn(SELECT_CLASS, (streaming || pendingId === option.id) && "opacity-50")}
+          className={cn(SELECT_CLASS, pendingId === option.id && "opacity-50")}
         >
           {option.values.map((value) => (
             <option key={value.value} value={value.value} title={value.description ?? undefined}>
@@ -107,6 +108,39 @@ export function AcpConfigSelector({
             </option>
           ))}
         </select>
+      ))}
+      {toggles.map((option) => (
+        <label
+          key={option.id}
+          title={option.description || option.name}
+          className={cn(
+            "flex items-center gap-1 px-1.5 text-xs text-muted-foreground",
+            pendingId === option.id && "opacity-50",
+          )}
+        >
+          <input
+            type="checkbox"
+            checked={option.currentValue === true}
+            disabled={pendingId === option.id}
+            onChange={(event) => {
+              const next = event.target.checked;
+              void run(
+                option.id,
+                async () => {
+                  const result = await commands.piAcpSetConfigOption(
+                    sessionId,
+                    option.id,
+                    next ? "true" : "false",
+                    true,
+                  );
+                  if (result.status === "error") throw new Error(result.error);
+                },
+                option.name,
+              );
+            }}
+          />
+          <span className="truncate">{option.name.toLowerCase()}</span>
+        </label>
       ))}
     </>
   );

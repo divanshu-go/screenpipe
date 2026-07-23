@@ -137,10 +137,7 @@ export function ComposerControlsRow({
           }
         }}
       />
-      <AcpConfigSelector
-        sessionId={modelControls.currentQueueSessionId}
-        streaming={isStreaming}
-      />
+      <AcpConfigSelector sessionId={modelControls.currentQueueSessionId} />
       <ThinkingLevelSelector
         streaming={isStreaming}
         sessionId={modelControls.currentQueueSessionId}

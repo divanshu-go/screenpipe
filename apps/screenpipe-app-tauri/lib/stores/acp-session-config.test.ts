@@ -139,3 +139,26 @@ describe("dedupedModes", () => {
     expect(dedupedModes(null)).toBeNull();
   });
 });
+
+describe("acp-session-config boolean options", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    useAcpSessionConfig.setState({ sessions: {}, byAgent: {} });
+  });
+
+  it("parses a boolean option with its current value and no value list", () => {
+    useAcpSessionConfig.getState().setFromEvent("chat", {
+      type: "acp_session_config",
+      agentId: "codex-acp",
+      configOptions: [
+        { id: "fast", name: "Fast mode", type: "boolean", currentValue: true },
+        MODEL_OPTION,
+      ],
+    });
+    const opts = useAcpSessionConfig.getState().sessions["chat"].options;
+    const fast = opts.find((o) => o.id === "fast");
+    expect(fast?.type).toBe("boolean");
+    expect(fast?.currentValue).toBe(true);
+    expect(fast?.values).toEqual([]);
+  });
+});
