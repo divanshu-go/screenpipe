@@ -22,6 +22,7 @@ pub mod retranscribe;
 pub mod search;
 pub mod speakers;
 pub mod streaming;
+pub mod structured_outputs;
 pub mod time;
 pub mod timezone;
 pub mod transcribe;

@@ -757,6 +757,21 @@ impl PiExecutor {
         Ok(())
     }
 
+    /// Install the renderer-agnostic structured-output extension so a pipe can
+    /// fill typed targets assigned by any local consumer.
+    pub fn ensure_structured_output_extension(project_dir: &Path) -> Result<()> {
+        let ext_dir = project_dir.join(".pi").join("extensions");
+        std::fs::create_dir_all(&ext_dir)?;
+        let ext_content = include_str!("../../assets/extensions/structured-output.ts");
+        let ext_path = ext_dir.join("structured-output.ts");
+        std::fs::write(&ext_path, ext_content)?;
+        // Remove the superseded PR prototype if it was installed by an older
+        // app build. Pi loads every extension in this directory.
+        let _ = std::fs::remove_file(ext_dir.join("view-data.ts"));
+        debug!("structured-output extension installed at {:?}", ext_path);
+        Ok(())
+    }
+
     pub fn ensure_context_pruning_extension(project_dir: &Path) -> Result<()> {
         let ext_dir = project_dir.join(".pi").join("extensions");
         std::fs::create_dir_all(&ext_dir)?;
@@ -1688,6 +1703,7 @@ impl AgentExecutor for PiExecutor {
         Self::ensure_orphan_guard_extension(working_dir)?;
         Self::ensure_mcp_bridge_extension(working_dir)?;
         Self::ensure_register_artifact_extension(working_dir)?;
+        Self::ensure_structured_output_extension(working_dir)?;
 
         let pi_path = find_pi_executable().ok_or_else(|| {
             anyhow!(
@@ -1802,6 +1818,7 @@ impl AgentExecutor for PiExecutor {
         Self::ensure_orphan_guard_extension(working_dir)?;
         Self::ensure_mcp_bridge_extension(working_dir)?;
         Self::ensure_register_artifact_extension(working_dir)?;
+        Self::ensure_structured_output_extension(working_dir)?;
 
         let pi_path = find_pi_executable().ok_or_else(|| {
             anyhow!(

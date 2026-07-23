@@ -314,6 +314,14 @@ async copyTextToClipboard(text: string) : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async deleteBrainView(id: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("delete_brain_view", { id }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async deleteCacheFiles(paths: string[]) : Promise<Result<number, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("delete_cache_files", { paths }) };
@@ -968,6 +976,14 @@ async isOverlayClickThrough() : Promise<boolean> {
 async isServerRunning() : Promise<Result<boolean, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("is_server_running") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async listBrainViews() : Promise<Result<BrainViewDefinition[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("list_brain_views") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1968,6 +1984,14 @@ async rollbackToVersion(version: string) : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async saveBrainView(request: SaveBrainViewRequest) : Promise<Result<BrainViewDefinition, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("save_brain_view", { request }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Save the enterprise license key to `~/.screenpipe/enterprise.json`.
  * Used by the in-app prompt when enterprise.json is not deployed via MDM.
@@ -2568,6 +2592,13 @@ error: string | null;
  * show "X minutes" on slow migrations.
  */
 sinceEpochSecs: number }
+export type BrainViewBinding = { pipeName: string }
+export type BrainViewComponent = "metric.v1" | "list.v1" | "bar-chart.v1" | "timeline.v1" | "markdown.v1"
+export type BrainViewDefinition = { id: string; title: string; revision: number; slots: BrainViewSlot[]; createdAt: string; updatedAt: string }
+export type BrainViewEvidenceRef = { eventId: number | null; frameId: number | null; transcriptionId: number | null; ts: string | null; deviceId: string | null }
+export type BrainViewSlot = { id: string; title: string; component: BrainViewComponent; width: number; order: number; binding: BrainViewBinding | null; value: BrainViewValue | null }
+export type BrainViewSlotInput = { id: string; title: string; component: BrainViewComponent; width: number; order: number; binding: BrainViewBinding | null }
+export type BrainViewValue = { payload: JsonValue; evidence: BrainViewEvidenceRef[]; sourcePipe: string; artifactOutputId: number; artifactVersion: number; updatedAt: string }
 /**
  * Per-browser automation status: "granted", "denied", or "not_asked".
  * Also includes whether the browser is currently running.
@@ -2821,6 +2852,7 @@ export type RemoteSyncConfig = { host: string; port: number; user: string; key_p
  * Result of a sync operation.
  */
 export type RemoteSyncResult = { ok: boolean; files_transferred: number; bytes_transferred: number; error: string | null }
+export type SaveBrainViewRequest = { id: string; title: string; expectedRevision: number | null; slots: BrainViewSlotInput[] }
 /**
  * A single schedule rule: a day-of-week + time range + what to record.
  */
