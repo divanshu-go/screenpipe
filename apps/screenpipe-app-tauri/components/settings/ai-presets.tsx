@@ -2259,7 +2259,7 @@ function SortablePresetCard({
               </Tooltip>
             </TooltipProvider>
           )}
-          {!isDefault && !readOnly && onDelete && (
+          {!readOnly && onDelete && (
             <Button variant="ghost" size="sm" className="text-[11px] h-6 px-2 text-destructive hover:text-destructive ml-auto" onClick={(e) => { e.stopPropagation(); onDelete(); }} disabled={isLoading}>
               <Trash2 className="w-3 h-3" />
             </Button>
@@ -2406,18 +2406,9 @@ useEffect(() => {
         }
       }
 
-      const checkIfDefault = settings.aiPresets.find(
+      const wasDefault = settings.aiPresets.find(
         (preset) => preset.id === id
       )?.defaultPreset;
-
-      if (checkIfDefault) {
-        toast({
-          title: "Cannot delete default preset",
-          description: "Please set another preset as default first",
-          variant: "destructive",
-        });
-        return;
-      }
 
       const checkIfIDPresent = settings.aiPresets.find(
         (preset) => preset.id === id
@@ -2432,9 +2423,19 @@ useEffect(() => {
         return;
       }
 
-      const filteredPresets = settings.aiPresets.filter(
+      let filteredPresets = settings.aiPresets.filter(
         (preset) => preset.id !== id
       );
+
+      // Deleting the default is allowed; keep the "exactly one default"
+      // invariant by promoting the first remaining preset so the user is
+      // never left without a default (or stuck unable to delete it).
+      if (wasDefault && filteredPresets.length > 0 && !filteredPresets.some((p) => p.defaultPreset)) {
+        filteredPresets = filteredPresets.map((preset, index) => ({
+          ...preset,
+          defaultPreset: index === 0,
+        }));
+      }
 
       await updateSettings({
         aiPresets: filteredPresets,

@@ -1600,14 +1600,12 @@ export const AIPresetsSelector = ({
       }
     }
 
-    if (preset.defaultPreset) {
-      toast.error("Cannot delete default preset", {
-        description: "Please set another preset as default first",
-      });
-      return;
+    let updatedPresets = settings.aiPresets.filter((p) => p.id !== preset.id);
+    // Deleting the default is allowed; promote the first remaining preset so
+    // there is always exactly one default and the user is never stuck.
+    if (preset.defaultPreset && updatedPresets.length > 0 && !updatedPresets.some((p) => p.defaultPreset)) {
+      updatedPresets = updatedPresets.map((p, index) => ({ ...p, defaultPreset: index === 0 }));
     }
-
-    const updatedPresets = settings.aiPresets.filter((p) => p.id !== preset.id);
     updateSettings({
       aiPresets: updatedPresets,
     });
@@ -1947,7 +1945,7 @@ export const AIPresetsSelector = ({
                                 <Star className="h-3.5 w-3.5" />
                               </Button>
                             )}
-                            {!preset.defaultPreset && canManageEmployeePresets && !isEnterpriseManagedPreset(preset) && !isLastCloudPreset(preset) && (
+                            {canManageEmployeePresets && !isEnterpriseManagedPreset(preset) && !isLastCloudPreset(preset) && (
                               <Button
                                 variant="ghost"
                                 size="icon"
