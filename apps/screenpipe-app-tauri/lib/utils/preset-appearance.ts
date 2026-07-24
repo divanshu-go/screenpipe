@@ -6,6 +6,8 @@
  *  catalog, provider/adapter icons, and auto-generated preset names, used by
  *  both the settings preset editor and the quick ai-provider dialog. */
 
+import acpAgentCatalog from "@/lib/acp/agents.json";
+
 export interface AcpAdapterInfo {
   id: string;
   name: string;
@@ -19,58 +21,39 @@ export interface AcpAdapterInfo {
   description: string;
 }
 
+// The whole agent catalog — name, icon, copy, and launch — lives in one static
+// file (lib/acp/agents.json). Edit that to add or change an agent; both the
+// picker (here) and the Rust runtime read it. `launch` is ignored here.
+const CATALOG_ACP_ADAPTERS: readonly AcpAdapterInfo[] = (
+  acpAgentCatalog as Array<{
+    id: string;
+    name: string;
+    imageSrc: string;
+    presetName: string;
+    description: string;
+    invertInDark?: boolean;
+  }>
+).map((agent) => ({
+  id: agent.id,
+  name: agent.name,
+  imageSrc: agent.imageSrc,
+  invertInDark: agent.invertInDark === true,
+  presetName: agent.presetName,
+  description: agent.description,
+}));
+
+const CUSTOM_ACP_ADAPTER: AcpAdapterInfo = {
+  id: "custom",
+  name: "Another ACP agent",
+  imageSrc: "/images/custom.png",
+  presetName: "acp agent",
+  description: "Connect any ACP-compatible command installed on this computer.",
+};
+
+// custom stays last: acpAdapterInfo() falls back to the final entry.
 export const ACP_ADAPTERS: readonly AcpAdapterInfo[] = [
-  {
-    id: "pi-acp",
-    name: "Pi",
-    imageSrc: "/images/pi.svg",
-    presetName: "pi",
-    description: "Screenpipe's current agent through the shared ACP interface.",
-  },
-  {
-    id: "codex-acp",
-    name: "Codex",
-    imageSrc: "/images/codex.svg",
-    presetName: "codex",
-    description: "Use your existing Codex account and configuration.",
-  },
-  {
-    id: "claude-acp",
-    name: "Claude Code",
-    imageSrc: "/images/claude-ai.svg",
-    presetName: "claude code",
-    description: "Use your existing Claude Code account and configuration.",
-  },
-  {
-    id: "gemini",
-    name: "Gemini CLI",
-    imageSrc: "/images/gemini.svg",
-    presetName: "gemini",
-    description: "Use your existing Gemini CLI account and configuration.",
-  },
-  {
-    id: "opencode",
-    name: "OpenCode",
-    imageSrc: "/images/opencode.svg",
-    invertInDark: true,
-    presetName: "opencode",
-    description:
-      "Use your installed OpenCode agent. First-time login currently requires `opencode auth login` in a terminal.",
-  },
-  {
-    id: "cursor",
-    name: "Cursor",
-    imageSrc: "/images/cursor.png",
-    presetName: "cursor",
-    description: "Use Cursor's ACP agent installed on this computer.",
-  },
-  {
-    id: "custom",
-    name: "Another ACP agent",
-    imageSrc: "/images/custom.png",
-    presetName: "acp agent",
-    description: "Connect any ACP-compatible command installed on this computer.",
-  },
+  ...CATALOG_ACP_ADAPTERS,
+  CUSTOM_ACP_ADAPTER,
 ];
 
 /** Unknown or missing ids resolve to the generic custom adapter. */

@@ -566,13 +566,19 @@ describe("ACP backend", function () {
       value: string;
       label?: string;
     }>;
-    expect(options.map((option) => option.value)).toEqual([
+    const values = options.map((option) => option.value);
+    // The whole picker comes from the static catalog (lib/acp/agents.json) in
+    // file order, with the custom entry appended last (acpAdapterInfo falls
+    // back to it).
+    expect(values).toEqual([
       "pi-acp",
       "codex-acp",
       "claude-acp",
       "gemini",
       "opencode",
       "cursor",
+      "github-copilot-cli",
+      "kimi",
       "custom",
     ]);
     expect(options.map((option) => option.label)).toContain("Another ACP agent");

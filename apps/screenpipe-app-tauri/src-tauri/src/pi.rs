@@ -1602,16 +1602,6 @@ fn uses_acp_backend(config: Option<&PiProviderConfig>) -> bool {
     )
 }
 
-const BUILTIN_ACP_AGENT_IDS: &[&str] = &[
-    "pi-acp",
-    "codex-acp",
-    "claude-acp",
-    "gemini",
-    "gemini-acp",
-    "opencode",
-    "cursor",
-];
-
 fn default_max_tokens() -> i32 {
     4096
 }
@@ -2158,7 +2148,7 @@ pub async fn pi_start_inner(
             return Err("Custom ACP agents require a command".to_string());
         }
         if acp.id != "custom"
-            && !BUILTIN_ACP_AGENT_IDS.contains(&acp.id.as_str())
+            && !crate::acp_runtime::is_known_agent(&acp.id)
             && !has_custom_command
         {
             return Err(format!(

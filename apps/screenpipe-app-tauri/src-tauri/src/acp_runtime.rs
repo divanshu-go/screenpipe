@@ -276,20 +276,55 @@ fn parse_json_env<T: serde::de::DeserializeOwned>(name: &str) -> Result<Option<T
         .map_err(|error| format!("invalid {name}: {error}"))
 }
 
+/// How to launch a catalog agent, from our static catalog (lib/acp/agents.json).
+#[derive(serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+enum AgentLaunch {
+    /// Run via the bundled bun: `bun x <package> <args>`.
+    Npx {
+        package: String,
+        #[serde(default)]
+        args: Vec<String>,
+    },
+    /// Run the platform CLI by name on PATH (the user must have it installed,
+    /// like OpenCode). We don't download release archives.
+    Binary {
+        command: String,
+        #[serde(default)]
+        args: Vec<String>,
+    },
+}
+
+#[derive(serde::Deserialize)]
+struct CatalogAgent {
+    id: String,
+    launch: AgentLaunch,
+}
+
+fn agent_catalog() -> Vec<CatalogAgent> {
+    serde_json::from_str(include_str!("../../lib/acp/agents.json")).unwrap_or_default()
+}
+
+/// Whether `id` names an agent screenpipe can launch (any agent in the static
+/// catalog, lib/acp/agents.json). Used to validate presets without a custom
+/// command.
+pub fn is_known_agent(id: &str) -> bool {
+    builtin_agent(id, "bun").is_some()
+}
+
 fn builtin_agent(id: &str, bun: &str) -> Option<(String, Vec<String>)> {
-    let (command, args): (&str, &[&str]) = match id {
-        "pi-acp" => (bun, &["x", "pi-acp@0.0.31"]),
-        "codex-acp" => (bun, &["x", "@agentclientprotocol/codex-acp@1.1.4"]),
-        "claude-acp" => (bun, &["x", "@agentclientprotocol/claude-agent-acp@0.59.0"]),
-        "gemini" | "gemini-acp" => (bun, &["x", "@google/gemini-cli@0.51.0", "--acp"]),
-        "opencode" => ("opencode", &["acp"]),
-        "cursor" => ("cursor-agent", &["acp"]),
-        _ => return None,
-    };
-    Some((
-        command.to_owned(),
-        args.iter().map(|arg| (*arg).into()).collect(),
-    ))
+    // Every agent — pins and launch — comes from our static catalog
+    // (lib/acp/agents.json). Edit that file to add or update an agent;
+    // nothing is hardcoded here.
+    let agent = agent_catalog().into_iter().find(|agent| agent.id == id)?;
+    Some(match agent.launch {
+        AgentLaunch::Npx { package, args } => {
+            let mut argv = vec!["x".to_string(), package];
+            argv.extend(args);
+            (bun.to_owned(), argv)
+        }
+        AgentLaunch::Binary { command, args } => (command, args),
+    })
 }
 
 fn supervised_command(program: &str, args: &[String]) -> Result<Command, String> {
@@ -2642,11 +2677,21 @@ mod tests {
     }
 
     #[test]
-    fn builtin_agents_are_pinned() {
-        let (_, codex) = builtin_agent("codex-acp", "/bun").expect("codex");
-        assert!(codex.iter().any(|arg| arg.contains("@1.1.4")));
-        let (_, claude) = builtin_agent("claude-acp", "/bun").expect("claude");
-        assert!(claude.iter().any(|arg| arg.contains("@0.59.0")));
+    fn agents_resolve_from_the_catalog() {
+        // npx agents run via the bundled bun with a pinned package from the
+        // static catalog (version lives in agents.json, not hardcoded here).
+        let (cmd, codex) = builtin_agent("codex-acp", "/bun").expect("codex");
+        assert_eq!(cmd, "/bun");
+        assert_eq!(codex.first().map(String::as_str), Some("x"));
+        assert!(codex.iter().any(|arg| arg.starts_with("@agentclientprotocol/codex-acp@")));
+
+        // Binary agents launch their CLI by name on PATH.
+        let (cmd, opencode) = builtin_agent("opencode", "/bun").expect("opencode");
+        assert_eq!(cmd, "opencode");
+        assert_eq!(opencode, vec!["acp".to_string()]);
+
+        // Unknown ids don't resolve.
+        assert!(builtin_agent("not-a-real-agent", "/bun").is_none());
     }
 
     #[test]

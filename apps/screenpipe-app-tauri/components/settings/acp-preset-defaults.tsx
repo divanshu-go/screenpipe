@@ -8,7 +8,15 @@ import { Loader2, RefreshCw } from "lucide-react";
 import { Label } from "@/components/ui/label";
 import { commands } from "@/lib/utils/tauri";
 import { dedupedModes, useAcpSessionConfig } from "@/lib/stores/acp-session-config";
+import { acpAdapterInfo } from "@/lib/utils/preset-appearance";
 import { cn } from "@/lib/utils";
+
+/** A probe failure that means the agent's CLI simply isn't installed (binary
+ *  agents like OpenCode, Cursor, Kimi are installed by the user, unlike npx
+ *  agents which the bundled bun fetches on demand). */
+function isAgentNotInstalled(error: string): boolean {
+  return /no such file or directory|os error 2|\benoent\b|not found|failed to start/i.test(error);
+}
 
 export interface AcpPresetDefaultsChange {
   config?: Record<string, string>;
@@ -126,14 +134,21 @@ export function AcpPresetDefaults({
         </p>
       );
     }
+    // A "not installed" probe error isn't really an error: binary agents
+    // (OpenCode, Cursor, Kimi) are installed by the user. Ask them to install
+    // its CLI rather than showing a raw spawn failure.
+    const notInstalled = Boolean(probeError && isAgentNotInstalled(probeError));
+    const agentName = acpAdapterInfo(agentId).name;
     return (
       <div className={cn(hintClass, "flex items-center gap-2")}>
         <span>
-          {probeError
-            ? `could not load choices: ${probeError}`
-            : compact
-              ? "model and mode choices unavailable"
-              : "Model and mode choices are unavailable for this agent."}
+          {notInstalled
+            ? `install the ${agentName} CLI on this computer, then retry.`
+            : probeError
+              ? `could not load choices: ${probeError}`
+              : compact
+                ? "model and mode choices unavailable"
+                : "Model and mode choices are unavailable for this agent."}
         </span>
         <button
           type="button"
