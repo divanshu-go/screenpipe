@@ -399,20 +399,32 @@ export function usePiForegroundEvents({
               }
             }
             // If a connect tool asked for a connection (async fallback path),
-            // surface the connect card inline right after its tool block.
+            // surface the connect card inline right after its tool block —
+            // unless a card for this app is already showing anywhere in the
+            // conversation (e.g. the blocking broker raised one in its own
+            // message). Dedup against all messages, not just this tool's blocks.
             const connectCard = connectionActionFromToolResult(resultText);
-            if (
-              connectCard &&
-              !piContentBlocksRef.current.some(
-                (b) => b.type === "connection_action" && b.connectionId === connectCard.connectionId,
-              )
-            ) {
-              piContentBlocksRef.current.push(connectCard);
-            }
-            const contentBlocks = [...piContentBlocksRef.current];
-            setMessages((prev) =>
-              prev.map((m) => m.id === msgId ? { ...m, contentBlocks } : m)
-            );
+            setMessages((prev) => {
+              const cardAlreadyShown =
+                !connectCard ||
+                prev.some((m) =>
+                  m.contentBlocks?.some(
+                    (b) =>
+                      b.type === "connection_action" &&
+                      b.connectionId === connectCard.connectionId,
+                  ),
+                ) ||
+                piContentBlocksRef.current.some(
+                  (b) =>
+                    b.type === "connection_action" &&
+                    b.connectionId === connectCard.connectionId,
+                );
+              if (connectCard && !cardAlreadyShown) {
+                piContentBlocksRef.current.push(connectCard);
+              }
+              const contentBlocks = [...piContentBlocksRef.current];
+              return prev.map((m) => (m.id === msgId ? { ...m, contentBlocks } : m));
+            });
           }
         } else if (data.type === "auto_retry_end" && data.success === false) {
           // Pi exhausted retries on a transient error (rate limit, overloaded, etc.)
