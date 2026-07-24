@@ -8,15 +8,20 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 const mocks = vi.hoisted(() => ({
   listBrainViews: vi.fn(),
+  listBrainViewTemplateKits: vi.fn(),
+  installBrainViewTemplateKit: vi.fn(),
   saveBrainView: vi.fn(),
   generateLiveViewWithPi: vi.fn(),
   localFetch: vi.fn(),
   toast: vi.fn(),
+  refetchPipes: vi.fn(),
 }));
 
 vi.mock("@/lib/utils/tauri", () => ({
   commands: {
     listBrainViews: mocks.listBrainViews,
+    listBrainViewTemplateKits: mocks.listBrainViewTemplateKits,
+    installBrainViewTemplateKit: mocks.installBrainViewTemplateKit,
     saveBrainView: mocks.saveBrainView,
   },
 }));
@@ -40,6 +45,7 @@ vi.mock("@/lib/hooks/use-pipes", () => ({
         is_running: false,
       },
     ],
+    refetch: mocks.refetchPipes,
   }),
 }));
 vi.mock("@/lib/hooks/use-settings", () => ({
@@ -112,8 +118,42 @@ const populatedView: ViewDefinition = {
   ],
 };
 
+const workdayTemplate = {
+  id: "workday-overview",
+  title: "Workday overview",
+  description: "Time, accomplishments, key moments, and unfinished work.",
+  version: 1,
+  pipes: [
+    { name: "time-breakdown", distribution: "bundled" },
+    { name: "day-recap", distribution: "bundled" },
+  ],
+  slots: [
+    {
+      id: "active-time",
+      title: "Active time today",
+      component: "metric.v1" as const,
+      width: 3,
+      order: 0,
+      binding: { pipeName: "time-breakdown" },
+    },
+    {
+      id: "unfinished-work",
+      title: "Unfinished work",
+      component: "list.v1" as const,
+      width: 12,
+      order: 1,
+      binding: { pipeName: "day-recap" },
+    },
+  ],
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.listBrainViewTemplateKits.mockResolvedValue({
+    status: "ok",
+    data: [],
+  });
+  mocks.refetchPipes.mockResolvedValue(undefined);
   mocks.localFetch.mockResolvedValue({
     ok: true,
     status: 200,
@@ -233,6 +273,82 @@ describe("BrainOverview", () => {
         component: "list.v1",
         width: 12,
         binding: { pipeName: "daily-summary" },
+      }),
+    );
+  });
+
+  it("previews a template with its paired Pipes, replaces only after confirmation, and supports undo", async () => {
+    const installedTemplateView: ViewDefinition = {
+      ...populatedView,
+      title: workdayTemplate.title,
+      revision: 4,
+      slots: workdayTemplate.slots.map((slot) => ({
+        ...slot,
+        value: null,
+        feedback: { upCount: 0, downCount: 0, current: null },
+      })),
+    };
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [populatedView],
+    });
+    mocks.listBrainViewTemplateKits.mockResolvedValue({
+      status: "ok",
+      data: [workdayTemplate],
+    });
+    mocks.installBrainViewTemplateKit.mockResolvedValue({
+      status: "ok",
+      data: installedTemplateView,
+    });
+    mocks.saveBrainView.mockImplementation(async (request) => ({
+      status: "ok",
+      data: {
+        ...populatedView,
+        title: request.title,
+        revision: 5,
+        slots: request.slots.map((slot: object) => ({
+          ...slot,
+          value: null,
+          feedback: { upCount: 0, downCount: 0, current: null },
+        })),
+      },
+    }));
+    render(<BrainOverview />);
+
+    fireEvent.click(await screen.findByTestId("overview-templates"));
+    expect(await screen.findByText("Starter templates")).toBeTruthy();
+    expect(screen.getByText("2 bundled Pipes will be installed")).toBeTruthy();
+    fireEvent.click(
+      screen.getByTestId("preview-live-view-template-workday-overview"),
+    );
+
+    expect(await screen.findByText("Template preview")).toBeTruthy();
+    expect(
+      screen.getByTestId("overview-replacement-warning").textContent,
+    ).toContain("replace your 1 current sections with 2 new sections");
+    expect(screen.getByTestId("overview-apply-template").textContent).toContain(
+      "install & replace dashboard",
+    );
+    expect(mocks.installBrainViewTemplateKit).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("overview-apply-template"));
+    await waitFor(() =>
+      expect(mocks.installBrainViewTemplateKit).toHaveBeenCalledWith({
+        kitId: "workday-overview",
+        targetViewId: "my-overview",
+        expectedRevision: 3,
+      }),
+    );
+    expect(await screen.findByTestId("overview-undo-banner")).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("overview-undo"));
+    await waitFor(() => expect(mocks.saveBrainView).toHaveBeenCalledTimes(1));
+    expect(mocks.saveBrainView.mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        id: "my-overview",
+        title: "How I worked today",
+        expectedRevision: 4,
+        slots: [expect.objectContaining({ id: "focus-time" })],
       }),
     );
   });
@@ -357,6 +473,58 @@ describe("BrainOverview", () => {
         currentView: expect.objectContaining({ title: "How I worked today" }),
       }),
     );
+  });
+
+  it("makes a whole-dashboard AI replacement explicit before saving it", async () => {
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [populatedView],
+    });
+    mocks.generateLiveViewWithPi.mockResolvedValue({
+      title: "A different dashboard",
+      note: "Rebuilt around projects.",
+      blocks: [
+        {
+          title: "Time by project",
+          component: "bar-chart.v1",
+          width: 12,
+          pipeName: "daily-summary",
+        },
+      ],
+    });
+    mocks.saveBrainView.mockImplementation(async (request) => ({
+      status: "ok",
+      data: {
+        ...populatedView,
+        ...request,
+        revision: 4,
+        slots: request.slots.map((slot: object) => ({
+          ...slot,
+          value: null,
+          feedback: { upCount: 0, downCount: 0, current: null },
+        })),
+      },
+    }));
+    render(<BrainOverview />);
+
+    fireEvent.change(
+      await screen.findByPlaceholderText(/Ask AI to change this view/),
+      { target: { value: "rebuild this around projects" } },
+    );
+    const generateButton = screen.getByTestId("live-view-ai-generate");
+    await waitFor(() => expect(generateButton).not.toBeDisabled());
+    fireEvent.click(generateButton);
+
+    expect(
+      await screen.findByTestId("overview-replacement-warning"),
+    ).toBeTruthy();
+    expect(
+      screen.getByTestId("overview-replacement-warning").textContent,
+    ).toContain("previous layout will remain available through Undo");
+    expect(screen.getByTestId("overview-apply-ai").textContent).toContain(
+      "replace dashboard & load data",
+    );
+    expect(mocks.saveBrainView).not.toHaveBeenCalled();
   });
 
   it("offers per-card feedback and regenerates only that card", async () => {

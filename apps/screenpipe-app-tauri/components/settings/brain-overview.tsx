@@ -9,16 +9,20 @@ import {
   ArrowDown,
   ArrowUp,
   CheckCircle2,
+  LayoutTemplate,
   Loader2,
   Pencil,
   Plus,
   RefreshCw,
   Trash2,
+  Undo2,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { LiveViewAiComposer } from "@/components/settings/live-view-ai-composer";
 import { LiveViewCard as OverviewCard } from "@/components/settings/live-view-card";
+import { LiveViewTemplateGallery } from "@/components/settings/live-view-template-gallery";
 import { usePipes } from "@/lib/hooks/use-pipes";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useToast } from "@/components/ui/use-toast";
@@ -34,6 +38,7 @@ import {
   type BrainViewComponent,
   type BrainViewDefinition,
   type BrainViewSlot,
+  type BrainViewTemplateKit,
 } from "@/lib/utils/tauri";
 
 export type ViewComponent = BrainViewComponent;
@@ -50,6 +55,10 @@ type DataRefreshState = {
   total: number;
   message?: string;
 };
+
+type PreviewSource =
+  | { kind: "ai"; scope: LiveViewGenerationScope }
+  | { kind: "template"; kit: BrainViewTemplateKit };
 
 const COMPONENTS: Array<{
   value: ViewComponent;
@@ -144,9 +153,35 @@ function generatedSlots(
   });
 }
 
+function copyViewDefinition(view: ViewDefinition): ViewDefinition {
+  return {
+    ...view,
+    slots: view.slots.map((slot) => ({
+      ...slot,
+      binding: slot.binding ? { ...slot.binding } : null,
+      feedback: slot.feedback
+        ? {
+            ...slot.feedback,
+            current: slot.feedback.current
+              ? { ...slot.feedback.current }
+              : null,
+          }
+        : slot.feedback,
+    })),
+  };
+}
+
+function kitSlots(kit: BrainViewTemplateKit): ViewSlot[] {
+  return kit.slots.map((slot) => ({
+    ...slot,
+    value: null,
+    feedback: { upCount: 0, downCount: 0, current: null },
+  }));
+}
+
 export function BrainOverview() {
   const { toast } = useToast();
-  const { pipes } = usePipes();
+  const { pipes, refetch: refetchPipes } = usePipes();
   const { settings } = useSettings();
   const [view, setView] = useState<ViewDefinition | null>(null);
   const [draft, setDraft] = useState<ViewDefinition | null>(null);
@@ -155,14 +190,25 @@ export function BrainOverview() {
   const [generating, setGenerating] = useState(false);
   const [editing, setEditing] = useState(false);
   const [aiPreview, setAiPreview] = useState(false);
+  const [previewSource, setPreviewSource] = useState<PreviewSource | null>(
+    null,
+  );
   const [aiNote, setAiNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dataRefresh, setDataRefresh] = useState<DataRefreshState | null>(null);
   const [aiEditingSlotId, setAiEditingSlotId] = useState<string | null>(null);
+  const [templateKits, setTemplateKits] = useState<BrainViewTemplateKit[]>([]);
+  const [templateGalleryOpen, setTemplateGalleryOpen] = useState(false);
+  const [undoView, setUndoView] = useState<ViewDefinition | null>(null);
+  const [undoRevision, setUndoRevision] = useState<number | null>(null);
 
   const installedPipes = useMemo(
     () => [...pipes].sort((a, b) => a.config.name.localeCompare(b.config.name)),
     [pipes],
+  );
+  const installedPipeNames = useMemo(
+    () => new Set(installedPipes.map((pipe) => pipe.config.name)),
+    [installedPipes],
   );
   const defaultAiPreset = useMemo(() => {
     const presets = (settings.aiPresets ?? []) as AIPreset[];
@@ -194,6 +240,19 @@ export function BrainOverview() {
     const interval = setInterval(() => void load(true), 30_000);
     return () => clearInterval(interval);
   }, [load]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void commands.listBrainViewTemplateKits().then((result) => {
+      if (cancelled) return;
+      if (result.status === "ok") {
+        setTemplateKits(result.data);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const refreshConnectedPipes = useCallback(
     async (targetView: ViewDefinition, requestedSlots?: ViewSlot[]) => {
@@ -351,22 +410,35 @@ export function BrainOverview() {
       updatedAt: now,
     });
     setAiPreview(false);
+    setPreviewSource(null);
     setAiNote(null);
     setEditing(true);
   };
 
   const beginEdit = () => {
     if (!view) return;
-    setDraft({
-      ...view,
-      slots: view.slots.map((slot) => ({
-        ...slot,
-        binding: slot.binding ? { ...slot.binding } : null,
-      })),
-    });
+    setDraft(copyViewDefinition(view));
     setAiPreview(false);
+    setPreviewSource(null);
     setAiNote(null);
     setEditing(true);
+  };
+
+  const previewTemplate = (kit: BrainViewTemplateKit) => {
+    const now = new Date().toISOString();
+    setDraft({
+      id: view?.id ?? "my-overview",
+      title: kit.title,
+      revision: view?.revision ?? 0,
+      slots: kitSlots(kit),
+      createdAt: view?.createdAt ?? now,
+      updatedAt: now,
+    });
+    setPreviewSource({ kind: "template", kit });
+    setAiNote(kit.description);
+    setEditing(false);
+    setTemplateGalleryOpen(false);
+    setAiPreview(true);
   };
 
   const generate = async (
@@ -401,13 +473,7 @@ export function BrainOverview() {
       });
       const now = new Date().toISOString();
       const base: ViewDefinition = view
-        ? {
-            ...view,
-            slots: view.slots.map((slot) => ({
-              ...slot,
-              binding: slot.binding ? { ...slot.binding } : null,
-            })),
-          }
+        ? copyViewDefinition(view)
         : {
             id: "my-overview",
             title: generated.title,
@@ -430,6 +496,7 @@ export function BrainOverview() {
         updatedAt: now,
       });
       setAiNote(generated.note);
+      setPreviewSource({ kind: "ai", scope });
       setEditing(false);
       setAiPreview(true);
     } catch (generateError) {
@@ -548,6 +615,7 @@ export function BrainOverview() {
 
     setAiEditingSlotId(slot.id);
     try {
+      const previousView = copyViewDefinition(view);
       const generated = await generateLiveViewWithPi({
         prompt: `Replace only the existing section "${slot.title}". Do not add another section. User request: ${prompt}`,
         scope: "block",
@@ -600,6 +668,8 @@ export function BrainOverview() {
       });
       if (result.status === "error") throw new Error(result.error);
       setView(result.data);
+      setUndoView(previousView);
+      setUndoRevision(previousView ? result.data.revision : null);
       const refreshedSlot = result.data.slots.find(
         (candidate) => candidate.id === slot.id,
       );
@@ -625,6 +695,7 @@ export function BrainOverview() {
     if (!draft || !draft.title.trim()) return;
     setSaving(true);
     try {
+      const previousView = view ? copyViewDefinition(view) : null;
       const result = await commands.saveBrainView({
         id: draft.id,
         title: draft.title.trim(),
@@ -640,9 +711,12 @@ export function BrainOverview() {
       });
       if (result.status === "error") throw new Error(result.error);
       setView(result.data);
+      setUndoView(previousView);
+      setUndoRevision(previousView ? result.data.revision : null);
       setDraft(null);
       setEditing(false);
       setAiPreview(false);
+      setPreviewSource(null);
       setAiNote(null);
       toast({ title: "Live View saved" });
       if (refreshData) void refreshConnectedPipes(result.data);
@@ -653,6 +727,79 @@ export function BrainOverview() {
           saveError instanceof Error ? saveError.message : String(saveError),
         variant: "destructive",
       });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const applyTemplate = async (kit: BrainViewTemplateKit) => {
+    const previousView = view ? copyViewDefinition(view) : null;
+    setSaving(true);
+    try {
+      const result = await commands.installBrainViewTemplateKit({
+        kitId: kit.id,
+        targetViewId: view?.id ?? "my-overview",
+        expectedRevision: view?.revision ?? null,
+      });
+      if (result.status === "error") throw new Error(result.error);
+      setView(result.data);
+      setUndoView(previousView);
+      setUndoRevision(previousView ? result.data.revision : null);
+      setDraft(null);
+      setEditing(false);
+      setAiPreview(false);
+      setPreviewSource(null);
+      setAiNote(null);
+      await refetchPipes();
+      toast({ title: `${kit.title} installed` });
+      void refreshConnectedPipes(result.data);
+    } catch (installError) {
+      toast({
+        title: "template was not installed",
+        description:
+          installError instanceof Error
+            ? installError.message
+            : String(installError),
+        variant: "destructive",
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const restorePreviousView = async () => {
+    if (!view || !undoView) return;
+    setSaving(true);
+    try {
+      const result = await commands.saveBrainView({
+        id: view.id,
+        title: undoView.title,
+        expectedRevision: undoRevision ?? view.revision,
+        slots: normalizedSlots(undoView.slots).map((slot) => ({
+          id: slot.id,
+          title: slot.title,
+          component: slot.component,
+          width: slot.width,
+          order: slot.order,
+          binding: slot.binding,
+        })),
+      });
+      if (result.status === "error") throw new Error(result.error);
+      setView(result.data);
+      setUndoView(null);
+      setUndoRevision(null);
+      toast({ title: "previous dashboard restored" });
+      void refreshConnectedPipes(result.data);
+    } catch (restoreError) {
+      toast({
+        title: "could not restore the previous dashboard",
+        description:
+          restoreError instanceof Error
+            ? restoreError.message
+            : String(restoreError),
+        variant: "destructive",
+      });
+      void load(true);
     } finally {
       setSaving(false);
     }
@@ -738,9 +885,18 @@ export function BrainOverview() {
     return (
       <div
         data-testid="brain-overview-empty"
-        className="flex min-h-80 flex-col items-center justify-center px-6 text-center"
+        className="mx-auto flex min-h-80 w-full max-w-5xl flex-col items-center justify-center px-6 py-8 text-center"
       >
         <LiveViewAiComposer busy={generating} onGenerate={generate} />
+        {templateKits.length > 0 && (
+          <div className="mt-8 w-full border-t border-border pt-6 text-left">
+            <LiveViewTemplateGallery
+              kits={templateKits}
+              installedPipeNames={installedPipeNames}
+              onPreview={previewTemplate}
+            />
+          </div>
+        )}
         <button
           data-testid="overview-create"
           type="button"
@@ -755,6 +911,17 @@ export function BrainOverview() {
 
   if (aiPreview && draft) {
     const previewSlots = normalizedSlots(draft.slots);
+    const templatePreview =
+      previewSource?.kind === "template" ? previewSource.kit : null;
+    const replacingDashboard = Boolean(
+      view &&
+      (templatePreview ||
+        (previewSource?.kind === "ai" && previewSource.scope === "dashboard")),
+    );
+    const missingTemplatePipes =
+      templatePreview?.pipes.filter(
+        (pipe) => !installedPipeNames.has(pipe.name),
+      ) ?? [];
     return (
       <div
         data-testid="brain-overview-ai-preview"
@@ -763,7 +930,7 @@ export function BrainOverview() {
         <div className="mb-5 flex flex-wrap items-start justify-between gap-4 border-b border-border pb-4">
           <div>
             <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
-              AI draft
+              {templatePreview ? "Template preview" : "AI draft"}
             </p>
             <h2 className="text-lg font-semibold tracking-tight">
               {draft.title}
@@ -781,37 +948,87 @@ export function BrainOverview() {
               onClick={() => {
                 setDraft(null);
                 setAiPreview(false);
+                setPreviewSource(null);
                 setAiNote(null);
               }}
             >
               discard
             </Button>
+            {!templatePreview && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="rounded-none"
+                disabled={saving}
+                onClick={() => {
+                  setAiPreview(false);
+                  setPreviewSource(null);
+                  setEditing(true);
+                }}
+              >
+                edit manually
+              </Button>
+            )}
             <Button
-              variant="outline"
+              data-testid={
+                templatePreview
+                  ? "overview-apply-template"
+                  : "overview-apply-ai"
+              }
               size="sm"
               className="rounded-none"
               disabled={saving}
-              onClick={() => {
-                setAiPreview(false);
-                setEditing(true);
-              }}
-            >
-              edit manually
-            </Button>
-            <Button
-              data-testid="overview-apply-ai"
-              size="sm"
-              className="rounded-none"
-              disabled={saving}
-              onClick={() => void save(true)}
+              onClick={() =>
+                templatePreview
+                  ? void applyTemplate(templatePreview)
+                  : void save(true)
+              }
             >
               {saving && (
                 <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
               )}
-              apply & load data
+              {templatePreview
+                ? replacingDashboard
+                  ? "install & replace dashboard"
+                  : "install template"
+                : replacingDashboard
+                  ? "replace dashboard & load data"
+                  : previewSource?.kind === "ai" &&
+                      previewSource.scope === "block" &&
+                      view
+                    ? "add sections & load data"
+                    : "create dashboard & load data"}
             </Button>
           </div>
         </div>
+        {(replacingDashboard || templatePreview) && (
+          <div
+            data-testid="overview-replacement-warning"
+            className="mb-5 border border-border bg-muted/30 px-4 py-3 text-xs"
+          >
+            {replacingDashboard ? (
+              <p>
+                This will replace your {view?.slots.length ?? 0} current
+                sections with {previewSlots.length} new sections. The previous
+                layout will remain available through Undo after you apply it.
+              </p>
+            ) : (
+              <p>
+                This creates a new dashboard with {previewSlots.length}{" "}
+                sections.
+              </p>
+            )}
+            {templatePreview && (
+              <p className="mt-1 text-muted-foreground">
+                Paired Pipes:{" "}
+                {templatePreview.pipes.map((pipe) => pipe.name).join(", ")}.
+                {missingTemplatePipes.length > 0
+                  ? ` ${missingTemplatePipes.length} missing ${missingTemplatePipes.length === 1 ? "Pipe" : "Pipes"} will be installed locally first.`
+                  : " They are already installed."}
+              </p>
+            )}
+          </div>
+        )}
         <div className="grid grid-cols-12 gap-4">
           {previewSlots.map((slot) => (
             <OverviewCard key={slot.id} slot={slot} preview />
@@ -1045,7 +1262,18 @@ export function BrainOverview() {
             artifacts.
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap justify-end gap-2">
+          {templateKits.length > 0 && (
+            <Button
+              data-testid="overview-templates"
+              variant="outline"
+              size="sm"
+              className="rounded-none"
+              onClick={() => setTemplateGalleryOpen((open) => !open)}
+            >
+              <LayoutTemplate className="mr-1.5 h-3.5 w-3.5" /> templates
+            </Button>
+          )}
           {boundSlotCount > 0 && (
             <Button
               data-testid="overview-refresh-data"
@@ -1075,9 +1303,46 @@ export function BrainOverview() {
           </Button>
         </div>
       </div>
+      {templateGalleryOpen && (
+        <div className="relative mb-5 border border-border p-4 pr-12">
+          <Button
+            aria-label="close templates"
+            variant="ghost"
+            size="icon"
+            className="absolute right-2 top-2 h-8 w-8 rounded-none"
+            onClick={() => setTemplateGalleryOpen(false)}
+          >
+            <X className="h-3.5 w-3.5" />
+          </Button>
+          <LiveViewTemplateGallery
+            kits={templateKits}
+            installedPipeNames={installedPipeNames}
+            onPreview={previewTemplate}
+          />
+        </div>
+      )}
       <div className="mb-5">
         <LiveViewAiComposer busy={generating} compact onGenerate={generate} />
       </div>
+      {undoView && (
+        <div
+          data-testid="overview-undo-banner"
+          className="mb-4 flex items-center gap-3 border border-border bg-muted/30 px-3 py-2 text-xs"
+        >
+          <Undo2 className="h-3.5 w-3.5 shrink-0" />
+          <span>Your previous dashboard layout is available.</span>
+          <Button
+            data-testid="overview-undo"
+            variant="ghost"
+            size="sm"
+            className="ml-auto h-7 rounded-none px-2"
+            disabled={saving}
+            onClick={() => void restorePreviousView()}
+          >
+            undo
+          </Button>
+        </div>
+      )}
       {dataRefresh?.viewId === view.id && (
         <DataRefreshBanner state={dataRefresh} />
       )}

@@ -22,6 +22,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 pub const LIVE_VIEW_TEMPLATE_SCHEMA: &str = "live-view-template.v1";
+pub const LIVE_VIEW_KIT_SCHEMA: &str = "live-view-kit.v1";
 pub const LIVE_VIEW_SCHEMA: &str = "live-view.v1";
 pub const LIVE_VIEW_CONSUMER_ID: &str = "live-views.v1";
 
@@ -205,6 +206,25 @@ pub struct LiveViewTemplate {
     pub blocks: Vec<LiveViewTemplateBlock>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveViewKitPipe {
+    pub name: String,
+    pub distribution: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveViewKit {
+    pub schema: String,
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub version: u64,
+    pub pipes: Vec<LiveViewKitPipe>,
+    pub template: LiveViewTemplate,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -430,6 +450,73 @@ pub fn validate_live_view_template(template: &LiveViewTemplate) -> Result<(), Li
         ));
     }
     validate_blocks(&template.blocks)
+}
+
+pub fn validate_live_view_kit(kit: &LiveViewKit) -> Result<(), LiveViewError> {
+    if kit.schema != LIVE_VIEW_KIT_SCHEMA {
+        return Err(LiveViewError::invalid(format!(
+            "unsupported Live View kit schema '{}'; expected '{LIVE_VIEW_KIT_SCHEMA}'",
+            kit.schema
+        )));
+    }
+    validate_slug(&kit.id, "Live View kit id")?;
+    validate_title(&kit.title, "Live View kit title")?;
+    validate_title(&kit.description, "Live View kit description")?;
+    if kit.version == 0 {
+        return Err(LiveViewError::invalid(
+            "Live View kit version must be greater than zero",
+        ));
+    }
+    validate_live_view_template(&kit.template)?;
+
+    let mut pipe_names = HashSet::new();
+    for pipe in &kit.pipes {
+        validate_slug(&pipe.name, "Live View kit Pipe name")?;
+        if pipe.distribution != "bundled" {
+            return Err(LiveViewError::invalid(format!(
+                "unsupported Pipe distribution '{}' in Live View kit '{}'",
+                pipe.distribution, kit.id
+            )));
+        }
+        if !pipe_names.insert(pipe.name.clone()) {
+            return Err(LiveViewError::invalid(format!(
+                "duplicate Pipe '{}' in Live View kit '{}'",
+                pipe.name, kit.id
+            )));
+        }
+    }
+
+    for block in &kit.template.blocks {
+        if let Some(source) = &block.source {
+            if !pipe_names.contains(source.pipe_name()) {
+                return Err(LiveViewError::invalid(format!(
+                    "Block '{}' references Pipe '{}' that is not declared by Live View kit '{}'",
+                    block.id,
+                    source.pipe_name(),
+                    kit.id
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn list_bundled_live_view_kits() -> Result<Vec<LiveViewKit>, LiveViewError> {
+    const BUNDLED_KITS: &[&str] = &[
+        include_str!("../schemas/kits/time-and-focus.live-view-kit.v1.json"),
+        include_str!("../schemas/kits/workday-overview.live-view-kit.v1.json"),
+    ];
+
+    BUNDLED_KITS
+        .iter()
+        .map(|contents| {
+            let kit: LiveViewKit = serde_json::from_str(contents).map_err(|error| {
+                LiveViewError::invalid(format!("failed to parse bundled Live View kit: {error}"))
+            })?;
+            validate_live_view_kit(&kit)?;
+            Ok(kit)
+        })
+        .collect()
 }
 
 fn read_store(path: &Path) -> Result<LiveViewStore, LiveViewError> {
@@ -759,6 +846,11 @@ pub fn live_view_template_json_schema() -> Value {
         .expect("bundled Live View JSON Schema must be valid")
 }
 
+pub fn live_view_kit_json_schema() -> Value {
+    serde_json::from_str(include_str!("../schemas/live-view-kit.v1.schema.json"))
+        .expect("bundled Live View kit JSON Schema must be valid")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -844,6 +936,27 @@ mod tests {
         let schema = live_view_template_json_schema();
         assert_eq!(schema["$id"], LIVE_VIEW_TEMPLATE_SCHEMA);
         assert_eq!(fixture.blocks.len(), 2);
+    }
+
+    #[test]
+    fn bundled_kits_declare_every_pipe_used_by_their_templates() {
+        let kits = list_bundled_live_view_kits().unwrap();
+        assert_eq!(kits.len(), 2);
+        assert_eq!(live_view_kit_json_schema()["$id"], LIVE_VIEW_KIT_SCHEMA);
+        for kit in kits {
+            validate_live_view_kit(&kit).unwrap();
+            assert!(!kit.pipes.is_empty());
+            assert!(!kit.template.blocks.is_empty());
+        }
+    }
+
+    #[test]
+    fn kit_rejects_an_undeclared_pipe_source() {
+        let mut kit = list_bundled_live_view_kits().unwrap().remove(0);
+        kit.template.blocks[0].source = Some(LiveViewSource::pipe("not-declared"));
+        let error = validate_live_view_kit(&kit).unwrap_err();
+        assert_eq!(error.kind, LiveViewErrorKind::Invalid);
+        assert!(error.message.contains("not declared"));
     }
 
     #[test]

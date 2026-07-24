@@ -9,9 +9,11 @@
 //! command names and Specta types while translating to that shared protocol.
 
 use crate::store::SettingsStore;
+use screenpipe_core::pipes::install_bundled_pipe;
 use screenpipe_engine::live_views::{
-    delete_live_view, list_live_views, save_live_view, LiveView, LiveViewBlock, LiveViewBlockKind,
-    LiveViewSource, LiveViewTemplateBlock, SaveLiveViewRequest,
+    delete_live_view, list_bundled_live_view_kits, list_live_views, save_live_view, LiveView,
+    LiveViewBlock, LiveViewBlockKind, LiveViewKit, LiveViewSource, LiveViewTemplateBlock,
+    SaveLiveViewRequest,
 };
 use screenpipe_engine::structured_outputs::{
     OutputFeedbackRating, OutputFeedbackSummary, StructuredOutputValue,
@@ -235,6 +237,56 @@ pub struct BrainViewSlotInput {
     pub binding: Option<BrainViewBinding>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BrainViewTemplatePipe {
+    pub name: String,
+    pub distribution: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct BrainViewTemplateKit {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub version: u64,
+    pub pipes: Vec<BrainViewTemplatePipe>,
+    pub slots: Vec<BrainViewSlotInput>,
+}
+
+impl From<LiveViewKit> for BrainViewTemplateKit {
+    fn from(kit: LiveViewKit) -> Self {
+        Self {
+            id: kit.id,
+            title: kit.title,
+            description: kit.description,
+            version: kit.version,
+            pipes: kit
+                .pipes
+                .into_iter()
+                .map(|pipe| BrainViewTemplatePipe {
+                    name: pipe.name,
+                    distribution: pipe.distribution,
+                })
+                .collect(),
+            slots: kit
+                .template
+                .blocks
+                .into_iter()
+                .map(|block| BrainViewSlotInput {
+                    id: block.id,
+                    title: block.title,
+                    component: block.kind.into(),
+                    width: block.width,
+                    order: block.order,
+                    binding: block.source.map(Into::into),
+                })
+                .collect(),
+        }
+    }
+}
+
 impl From<BrainViewSlotInput> for LiveViewTemplateBlock {
     fn from(slot: BrainViewSlotInput) -> Self {
         Self {
@@ -255,6 +307,14 @@ pub struct SaveBrainViewRequest {
     pub title: String,
     pub expected_revision: Option<u64>,
     pub slots: Vec<BrainViewSlotInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallBrainViewTemplateKitRequest {
+    pub kit_id: String,
+    pub target_view_id: String,
+    pub expected_revision: Option<u64>,
 }
 
 impl From<SaveBrainViewRequest> for SaveLiveViewRequest {
@@ -279,6 +339,49 @@ pub async fn list_brain_views(app: tauri::AppHandle) -> Result<Vec<BrainViewDefi
     list_live_views(&active_screenpipe_dir(&app))
         .map(|views| views.into_iter().map(Into::into).collect())
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn list_brain_view_template_kits() -> Result<Vec<BrainViewTemplateKit>, String> {
+    list_bundled_live_view_kits()
+        .map(|kits| kits.into_iter().map(Into::into).collect())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn install_brain_view_template_kit(
+    app: tauri::AppHandle,
+    request: InstallBrainViewTemplateKitRequest,
+) -> Result<BrainViewDefinition, String> {
+    let kit = list_bundled_live_view_kits()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|kit| kit.id == request.kit_id)
+        .ok_or_else(|| format!("Live View template '{}' was not found", request.kit_id))?;
+    let screenpipe_dir = active_screenpipe_dir(&app);
+    let pipes_dir = screenpipe_dir.join("pipes");
+    for pipe in &kit.pipes {
+        install_bundled_pipe(&pipes_dir, &pipe.name).map_err(|error| {
+            format!(
+                "failed to install Pipe '{}' for template '{}': {error}",
+                pipe.name, kit.title
+            )
+        })?;
+    }
+
+    save_live_view(
+        &screenpipe_dir,
+        SaveLiveViewRequest {
+            id: request.target_view_id,
+            title: kit.template.title,
+            expected_revision: request.expected_revision,
+            blocks: kit.template.blocks,
+        },
+    )
+    .map(Into::into)
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -317,5 +420,16 @@ mod tests {
         let block: LiveViewTemplateBlock = input.into();
         assert_eq!(block.kind, LiveViewBlockKind::MetricV1);
         assert_eq!(block.source.unwrap().pipe_name(), "daily-summary");
+    }
+
+    #[test]
+    fn every_template_kit_uses_installable_bundled_pipes() {
+        let dir = tempfile::tempdir().unwrap();
+        let kits = list_bundled_live_view_kits().unwrap();
+        for kit in kits {
+            for pipe in kit.pipes {
+                install_bundled_pipe(dir.path(), &pipe.name).unwrap();
+            }
+        }
     }
 }

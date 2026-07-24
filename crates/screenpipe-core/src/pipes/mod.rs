@@ -86,6 +86,35 @@ const BUNDLED_BUILTIN_PIPES: &[(&str, &str)] = &[
         include_str!("../../assets/pipes/meeting-summary/pipe.md"),
     ),
 ];
+
+/// Explicitly install one trusted Pipe bundled with the app.
+///
+/// Unlike startup installation, this clears a deletion tombstone because the
+/// user has chosen a Live View kit that requires the Pipe. Existing local
+/// customization is preserved and never overwritten.
+pub fn install_bundled_pipe(pipes_dir: &Path, name: &str) -> Result<bool> {
+    let content = BUNDLED_BUILTIN_PIPES
+        .iter()
+        .find_map(|(builtin_name, content)| (*builtin_name == name).then_some(*content))
+        .ok_or_else(|| anyhow!("unknown bundled Pipe '{name}'"))?;
+    let pipe_dir = pipes_dir.join(name);
+    let pipe_md = pipe_dir.join("pipe.md");
+
+    std::fs::create_dir_all(&pipe_dir)?;
+    remove_tombstone(pipes_dir, name)?;
+    if pipe_md.exists() {
+        if let Ok(local) = std::fs::read_to_string(&pipe_md) {
+            if let Some(migrated) = migrate_builtin_pipe_text(name, &local) {
+                atomic_write(&pipe_md, &migrated)?;
+            }
+        }
+        return Ok(false);
+    }
+
+    atomic_write(&pipe_md, content)?;
+    info!("explicitly installed bundled Pipe: {}", name);
+    Ok(true)
+}
 /// Max event-triggered pipe runs allowed to execute concurrently.
 ///
 /// Scheduled runs are already serialized (one at a time). Event-triggered runs
@@ -7082,6 +7111,31 @@ mod tests {
             "---\nschedule: manual\nenabled: true\ntemplate: {}\n---\n\n{}\n",
             template, body
         )
+    }
+
+    #[test]
+    fn explicitly_installs_only_known_bundled_pipes() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(install_bundled_pipe(dir.path(), "time-breakdown").unwrap());
+        assert!(dir.path().join("time-breakdown/pipe.md").exists());
+        assert!(!install_bundled_pipe(dir.path(), "time-breakdown").unwrap());
+        assert!(install_bundled_pipe(dir.path(), "not-a-builtin").is_err());
+    }
+
+    #[test]
+    fn explicit_install_preserves_custom_pipe_and_clears_tombstone() {
+        let dir = tempfile::tempdir().unwrap();
+        let pipe_dir = dir.path().join("time-breakdown");
+        std::fs::create_dir_all(&pipe_dir).unwrap();
+        std::fs::write(pipe_dir.join("pipe.md"), "custom prompt").unwrap();
+        add_tombstone(dir.path(), "time-breakdown", Some("old".into())).unwrap();
+
+        assert!(!install_bundled_pipe(dir.path(), "time-breakdown").unwrap());
+        assert_eq!(
+            std::fs::read_to_string(pipe_dir.join("pipe.md")).unwrap(),
+            "custom prompt"
+        );
+        assert!(!read_tombstones(dir.path()).contains_key("time-breakdown"));
     }
 
     fn write_pipe_source(dir: &Path, name: &str, template: bool) -> PathBuf {

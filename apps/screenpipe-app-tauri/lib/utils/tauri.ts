@@ -930,6 +930,14 @@ async initSync(password: string) : Promise<Result<boolean, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async installBrainViewTemplateKit(request: InstallBrainViewTemplateKitRequest) : Promise<Result<BrainViewDefinition, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("install_brain_view_template_kit", { request }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Install the two built-in screenpipe skills into a supported external agent.
  * MCP registration stays in the frontend because that path uses the app's
@@ -976,6 +984,14 @@ async isOverlayClickThrough() : Promise<boolean> {
 async isServerRunning() : Promise<Result<boolean, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("is_server_running") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async listBrainViewTemplateKits() : Promise<Result<BrainViewTemplateKit[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("list_brain_view_template_kits") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -2601,6 +2617,8 @@ export type BrainViewFeedbackRating = "up" | "down"
 export type BrainViewFeedbackSummary = { upCount: number; downCount: number; current: BrainViewFeedback | null }
 export type BrainViewSlot = { id: string; title: string; component: BrainViewComponent; width: number; order: number; binding: BrainViewBinding | null; value: BrainViewValue | null; feedback: BrainViewFeedbackSummary }
 export type BrainViewSlotInput = { id: string; title: string; component: BrainViewComponent; width: number; order: number; binding: BrainViewBinding | null }
+export type BrainViewTemplateKit = { id: string; title: string; description: string; version: number; pipes: BrainViewTemplatePipe[]; slots: BrainViewSlotInput[] }
+export type BrainViewTemplatePipe = { name: string; distribution: string }
 export type BrainViewValue = { payload: JsonValue; evidence: BrainViewEvidenceRef[]; sourcePipe: string; artifactOutputId: number; artifactVersion: number; updatedAt: string }
 /**
  * Per-browser automation status: "granted", "denied", or "not_asked".
@@ -2696,6 +2714,7 @@ export type ImportedSkill = { name: string; description: string;
  * Absolute path inside `<data_dir>/skills/`.
  */
 path: string }
+export type InstallBrainViewTemplateKitRequest = { kitId: string; targetViewId: string; expectedRevision: number | null }
 export type JobEvent = { kind: "started"; jobId: string; label: string; message: string | null } | { kind: "progress"; jobId: string; label: string; progress: number; message: string | null } | { kind: "completed"; jobId: string; label: string; outputPath: string | null; message: string | null } | { kind: "failed"; jobId: string; label: string; error: string }
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue }
 export type KeychainStatus = { state: string }

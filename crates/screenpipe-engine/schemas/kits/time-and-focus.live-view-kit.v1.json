@@ -1,0 +1,78 @@
+{
+  "schema": "live-view-kit.v1",
+  "id": "time-and-focus",
+  "title": "Time & focus",
+  "description": "See active time, focus, app usage, and the shape of your day.",
+  "version": 1,
+  "pipes": [
+    {
+      "name": "time-breakdown",
+      "distribution": "bundled"
+    }
+  ],
+  "template": {
+    "schema": "live-view-template.v1",
+    "id": "time-and-focus",
+    "title": "Time & focus",
+    "revision": 1,
+    "blocks": [
+      {
+        "id": "active-time",
+        "title": "Active time today",
+        "kind": "metric.v1",
+        "width": 3,
+        "order": 0,
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "time-breakdown"
+        }
+      },
+      {
+        "id": "focus-score",
+        "title": "Focus score",
+        "kind": "metric.v1",
+        "width": 3,
+        "order": 1,
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "time-breakdown"
+        }
+      },
+      {
+        "id": "time-by-application",
+        "title": "Time by application",
+        "kind": "bar-chart.v1",
+        "width": 6,
+        "order": 2,
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "time-breakdown"
+        }
+      },
+      {
+        "id": "time-by-project",
+        "title": "Time by project",
+        "kind": "bar-chart.v1",
+        "width": 6,
+        "order": 3,
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "time-breakdown"
+        }
+      },
+      {
+        "id": "workday-timeline",
+        "title": "Today's activity",
+        "kind": "timeline.v1",
+        "width": 6,
+        "order": 4,
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "time-breakdown"
+        }
+      }
+    ],
+    "createdAt": "2026-07-24T00:00:00Z",
+    "updatedAt": "2026-07-24T00:00:00Z"
+  }
+}
