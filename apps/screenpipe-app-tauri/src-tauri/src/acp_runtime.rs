@@ -201,7 +201,9 @@ impl RuntimeConfig {
             project_dir,
             bun_path,
             preferred_auth_method: env_nonempty("SCREENPIPE_ACP_AUTH_METHOD"),
-            system_context: env_nonempty("SCREENPIPE_ACP_SYSTEM_PROMPT"),
+            system_context: Some(build_first_turn_context(env_nonempty(
+                "SCREENPIPE_ACP_SYSTEM_PROMPT",
+            ))),
             session_defaults: parse_json_env::<SessionDefaults>(
                 "SCREENPIPE_ACP_SESSION_CONFIG_JSON",
             )?
@@ -212,6 +214,29 @@ impl RuntimeConfig {
             .unwrap_or_default(),
             resume_session_id: env_nonempty("SCREENPIPE_ACP_RESUME_SESSION_ID"),
         })
+    }
+}
+
+/// A short, harness-agnostic note about the screenpipe tools every ACP session
+/// gets over MCP, injected once into the first turn. Without it a harness that
+/// doesn't proactively list its MCP tools tends to fall back to curl recipes
+/// against localhost:3030 instead of calling the real tools. Names the tools
+/// the bundled server registers (see assets/mcp/screenpipe-tools.mjs) plus the
+/// core screenpipe search server.
+const SCREENPIPE_TOOLS_HINT: &str = "\
+You are running inside screenpipe. Prefer its MCP tools over shell/curl:
+- the `screenpipe` server has search/query tools over the user's screen, audio, and UI history.
+- `list_connections` shows the user's connected apps; `screenpipe_connect_app` connects one and waits for the user when a task needs it.
+- `sp_web_search` searches the public web; `save_artifact` saves a finished, user-facing deliverable (text or, with encoding=base64, an image) to the Artifacts library.
+Do not curl localhost for these; call the tools.";
+
+/// Combine the always-on tools hint with the user's configured system prompt
+/// (if any) into the first-turn context. Kept as one string so it is delivered
+/// exactly once, on the first prompt of the session.
+fn build_first_turn_context(user_prompt: Option<String>) -> String {
+    match user_prompt {
+        Some(prompt) => format!("{SCREENPIPE_TOOLS_HINT}\n\n{prompt}"),
+        None => SCREENPIPE_TOOLS_HINT.to_string(),
     }
 }
 
@@ -2775,6 +2800,19 @@ mod tests {
             .join(".screenpipe")
             .join("screenpipe-tools.mjs")
             .exists());
+    }
+
+    #[test]
+    fn first_turn_context_always_includes_the_tools_hint() {
+        // With no user system prompt, the first-turn context is just the hint.
+        let none = build_first_turn_context(None);
+        assert!(none.contains("screenpipe_connect_app"));
+        assert!(none.contains("save_artifact"));
+
+        // With a user prompt, the hint is prepended and the prompt preserved.
+        let combined = build_first_turn_context(Some("Be terse.".to_string()));
+        assert!(combined.contains("sp_web_search"));
+        assert!(combined.trim_end().ends_with("Be terse."));
     }
 
     #[test]

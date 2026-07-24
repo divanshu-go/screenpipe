@@ -81,6 +81,7 @@ import {
   usePipeGenerationCompletion,
 } from "@/components/chat/standalone/hooks/use-chat-window-events";
 import type { ChatSendOptions, ContentBlock, Message } from "@/lib/chat/types";
+import { connectRequestBlock } from "@/lib/chat/connect-card";
 import { useChatStore } from "@/lib/stores/chat-store";
 import { AGENT_TOPICS, type AgentEventEnvelope } from "@/lib/events/types";
 import { listenTyped, TAURI_EVENTS } from "@/lib/events/tauri-events";
@@ -1114,7 +1115,7 @@ export function StandaloneChat({
   // raised (raw Pi cards answer via answerPiExtensionUiRequest instead).
   const postConnectResponse = useCallback(async (
     connectRequestId: string | undefined,
-    status: "connected" | "declined",
+    status: "connected" | "declined" | "shown",
   ) => {
     if (!connectRequestId) return;
     try {
@@ -1246,33 +1247,17 @@ export function StandaloneChat({
       if (disposed) return;
       if (engineEvent.name !== "acp_connect_request") return;
       const data = (engineEvent.data ?? {}) as Record<string, unknown>;
-      const sessionId = typeof data.sessionId === "string" ? data.sessionId : "";
-      // If the broker tagged a session, only the originating chat renders the
-      // card; otherwise fall back to showing it in the active chat.
-      if (sessionId && conversationId && sessionId !== conversationId) return;
-      const requestId = typeof data.request_id === "string" ? data.request_id : "";
-      const connectionId = typeof data.connectionId === "string" ? data.connectionId : "";
-      if (!requestId || !connectionId) return;
-      const connection = allConnectionItems.find((item) => item.id === connectionId);
-      const connectionName =
-        (typeof data.name === "string" && data.name) || connection?.name || connectionId;
-      const messageText = typeof data.message === "string" ? data.message : undefined;
+      const built = connectRequestBlock(data, conversationId, (id) =>
+        allConnectionItems.find((item) => item.id === id),
+      );
+      if (!built) return;
+      const { requestId, block } = built;
       const message: Message = {
         id: `connection-action-${requestId}`,
         role: "assistant",
         content: "",
         timestamp: Date.now(),
-        contentBlocks: [
-          {
-            type: "connection_action",
-            connectionId,
-            connectionName,
-            icon: connection?.icon || connectionId,
-            description: connection?.description,
-            connectRequestId: requestId,
-            extensionReason: messageText,
-          },
-        ],
+        contentBlocks: [block],
       };
       setMessages((prev) => {
         const alreadyVisible = prev.some((row) =>
@@ -1284,12 +1269,15 @@ export function StandaloneChat({
         );
         return alreadyVisible ? prev : [...prev, message];
       });
+      // Tell the broker the card is up so it stops the fast fallback timer and
+      // waits for the user's real answer (see connect_broker.rs phase 1).
+      void postConnectResponse(requestId, "shown");
     });
     return () => {
       disposed = true;
       void unlisten.then((release) => release());
     };
-  }, [allConnectionItems, conversationId, setMessages]);
+  }, [allConnectionItems, conversationId, setMessages, postConnectResponse]);
 
   const handleAgentActionEvent = useCallback((value: unknown, sessionId: string): boolean => {
     const trace = (stage: string, details?: Record<string, unknown>) => {

@@ -4,15 +4,18 @@
 
 // Minimal, dependency-free MCP stdio server that gives ACP coding-agent
 // harnesses the screenpipe capabilities that were previously locked inside
-// Pi-only extensions: save_artifact and list_connections. It speaks
-// newline-delimited JSON-RPC on stdin/stdout (the MCP stdio transport) using
-// only runtime built-ins, so it needs no npm install and runs from the
-// bundled bun. It talks to the local screenpipe engine over REST; it never
-// sees the cloud credential (that stays out of ACP process trees).
+// Pi-only extensions: save_artifact, list_connections, sp_web_search and
+// screenpipe_connect_app. It speaks newline-delimited JSON-RPC on stdin/stdout
+// (the MCP stdio transport) using only runtime built-ins, so it needs no npm
+// install and runs from the bundled bun. It talks to the local screenpipe
+// engine over REST; it never sees the cloud credential (that stays out of ACP
+// process trees — web search goes through a local engine proxy that injects
+// the cloud JWT server-side).
 
 import { writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, extname, basename } from "node:path";
+import { Buffer } from "node:buffer";
 
 const PROTOCOL_VERSION = "2025-06-18";
 const SERVER_INFO = { name: "screenpipe-tools", version: "0.1.0" };
@@ -46,37 +49,224 @@ function chatSessionId() {
   return process.env.SCREENPIPE_CHAT_SESSION_ID || "chat";
 }
 
+// ---------------------------------------------------------------------------
+// Connection enrichment — a faithful port of the Pi connection-gate extension,
+// so ACP harnesses see the same connected status, MCP-OAuth resolution, and
+// Composio-managed connections (Gmail, Zoom, Google Drive/Docs/Sheets) that
+// raw Pi sees, instead of a plain /connections dump.
+// ---------------------------------------------------------------------------
+
+const MCP_OAUTH_PROVIDERS = {
+  linear: "https://mcp.linear.app/mcp",
+  stripe: "https://mcp.stripe.com",
+  sentry: "https://mcp.sentry.dev/mcp",
+  intercom: "https://mcp.intercom.com/mcp",
+  asana: "https://mcp.asana.com/mcp",
+  monday: "https://mcp.monday.com/mcp",
+  clickup: "https://mcp.clickup.com/mcp",
+  airtable: "https://mcp.airtable.com/mcp",
+  confluence: "https://mcp.atlassian.com/v1/mcp",
+  jira: "https://mcp.atlassian.com/v1/mcp",
+  notion: "https://mcp.notion.com/mcp",
+};
+
+const COMPOSIO_CONNECTIONS = {
+  gmail: { name: "Gmail", category: "Communication" },
+  zoom: { name: "Zoom", category: "Meetings" },
+  "google-drive": { name: "Google Drive", category: "Documents" },
+  "google-docs": { name: "Google Docs", category: "Documents" },
+  "google-sheets": { name: "Google Sheets", category: "Documents" },
+};
+const COMPOSIO_TOOLKIT_IDS = new Set(Object.keys(COMPOSIO_CONNECTIONS));
+const COMPOSIO_URL_RE = /^https:\/\/(www\.)?(screenpipe\.com|screenpi\.pe)\/api\/composio\/mcp\/?$/;
+
+function normalizeUrl(url) {
+  return String(url || "").replace(/\/+$/, "");
+}
+
+async function fetchConnections() {
+  const res = await fetch(`${apiBase()}/connections`, { method: "GET", headers: authHeaders() });
+  if (!res.ok) throw new Error(`GET /connections returned ${res.status}`);
+  const body = await res.json();
+  return Array.isArray(body?.data) ? body.data : [];
+}
+
+async function fetchMcpServers() {
+  try {
+    const res = await fetch(`${apiBase()}/mcp-servers`, { method: "GET", headers: authHeaders() });
+    if (!res.ok) return [];
+    const body = await res.json();
+    return Array.isArray(body?.data) ? body.data : [];
+  } catch {
+    return [];
+  }
+}
+
+async function isMcpOAuthConnected(serverId) {
+  try {
+    const res = await fetch(
+      `${apiBase()}/mcp-servers/${encodeURIComponent(serverId)}/oauth/status`,
+      { method: "GET", headers: authHeaders() },
+    );
+    if (!res.ok) return false;
+    const body = await res.json();
+    return body?.data?.connected === true;
+  } catch {
+    return false;
+  }
+}
+
+async function findMcpProviderServer(connectionId) {
+  const providerUrl = MCP_OAUTH_PROVIDERS[connectionId];
+  if (!providerUrl) return null;
+  const servers = await fetchMcpServers();
+  const server = servers.find(
+    (item) => item.enabled !== false && normalizeUrl(item.url) === normalizeUrl(providerUrl),
+  );
+  if (!server) return null;
+  return (await isMcpOAuthConnected(server.id)) ? server : null;
+}
+
+async function findComposioServer() {
+  const servers = await fetchMcpServers();
+  return (
+    servers.find((item) => item.enabled !== false && COMPOSIO_URL_RE.test(normalizeUrl(item.url))) ??
+    null
+  );
+}
+
+async function composioEnrichment(connectionId) {
+  if (!COMPOSIO_TOOLKIT_IDS.has(connectionId)) return null;
+  const server = await findComposioServer();
+  if (!server) return null;
+  return { connected: true, mcp: true, mcp_server_id: server.id };
+}
+
+// Keep an already-connected native proxy authoritative rather than rewriting it
+// to the Composio variant the user may never have connected.
+function shouldSkipComposioEnrichment(connection) {
+  return connection.connected === true && !connection.mcp;
+}
+
+function composioSyntheticConnection(id, serverId) {
+  const meta = COMPOSIO_CONNECTIONS[id] ?? { name: id, category: "Productivity" };
+  return {
+    id,
+    name: meta.name,
+    connected: true,
+    mcp: true,
+    mcp_server_id: serverId,
+    category: meta.category,
+    description: `${meta.name} via Composio managed auth. Discover tools with sp_mcp_list_tools (server_id "${serverId}"), then call them with sp_mcp_call.`,
+  };
+}
+
+async function enrichConnection(connection) {
+  if (!shouldSkipComposioEnrichment(connection)) {
+    const composio = await composioEnrichment(connection.id);
+    if (composio) return { ...connection, ...composio };
+  }
+  const server = await findMcpProviderServer(connection.id);
+  if (!server) return connection;
+  return { ...connection, connected: true, mcp: true, mcp_server_id: server.id };
+}
+
+function connectionLabel(connection, id) {
+  return connection?.name || id;
+}
+
+function connectionPayload(connection, id) {
+  const name = connectionLabel(connection, id);
+  const viaMcp = connection.mcp === true;
+  return {
+    id,
+    name,
+    connected: connection.connected === true,
+    connected_via: viaMcp ? "mcp" : "connection_proxy",
+    mcp: viaMcp,
+    mcp_server_id: connection.mcp_server_id,
+    category: connection.category,
+    description: connection.description,
+    action_hint: viaMcp
+      ? `Use sp_mcp_list_tools with server_id "${connection.mcp_server_id}" then sp_mcp_call. Do not use /connections/${id}/proxy; this connection is authenticated through MCP OAuth.`
+      : `Use /connections/${id}/proxy only when you need this connection's API.`,
+  };
+}
+
+/** Resolve one connection id to an enriched connection (with Composio synthetic
+ * fallback for tiles that have no /connections row, e.g. Gmail), or null. */
+async function resolveConnection(connectionId) {
+  const connections = await fetchConnections().catch(() => []);
+  const raw = connections.find((item) => item.id === connectionId);
+  let connection = raw ? await enrichConnection(raw) : undefined;
+  if (!connection && COMPOSIO_TOOLKIT_IDS.has(connectionId)) {
+    const composioServer = await findComposioServer();
+    if (composioServer) connection = composioSyntheticConnection(connectionId, composioServer.id);
+  }
+  return connection ?? null;
+}
+
+const IMAGE_EXT_KIND = {
+  ".png": "image",
+  ".jpg": "image",
+  ".jpeg": "image",
+  ".gif": "image",
+  ".webp": "image",
+  ".bmp": "image",
+  ".ico": "image",
+  ".svg": "image",
+};
+const TEXT_EXT_KIND = {
+  ".md": "markdown",
+  ".markdown": "markdown",
+  ".json": "json",
+  ".txt": "text",
+  ".csv": "text",
+  ".tsv": "text",
+};
+
 const TOOLS = [
   {
     name: "list_connections",
     description:
-      "List the user's Screenpipe app connections (Gmail, Notion, Slack, calendars, and other integrations) and whether each is currently connected. Use this before an action that depends on a connected app.",
+      "List the user's Screenpipe app connections (Gmail, Notion, Slack, Linear, calendars, and other integrations), whether each is connected, and how to use it (native proxy vs MCP OAuth). Use this before an action that depends on a connected app.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     async run() {
-      const res = await fetch(`${apiBase()}/connections`, {
-        method: "GET",
-        headers: authHeaders(),
-      });
-      if (!res.ok) throw new Error(`GET /connections returned ${res.status}`);
-      const body = await res.json();
-      const items = (body?.data ?? []).map((c) => ({
-        id: c.id,
-        name: c.name ?? c.id,
-        connected: c.connected === true,
-        ...(c.description ? { description: c.description } : {}),
-      }));
-      return JSON.stringify({ connections: items });
+      const connections = await fetchConnections();
+      const enriched = await Promise.all(connections.map((c) => enrichConnection(c)));
+      // Composio-backed tiles (Gmail etc.) have no /connections row; synthesize
+      // them so the agent learns they are reachable through the Composio server.
+      const composioServer = await findComposioServer();
+      if (composioServer) {
+        for (const id of COMPOSIO_TOOLKIT_IDS) {
+          if (!enriched.some((c) => c.id === id)) {
+            enriched.push(composioSyntheticConnection(id, composioServer.id));
+          }
+        }
+      }
+      const visible = enriched
+        .filter((c) => c.id !== "owned-default")
+        .map((c) => connectionPayload(c, c.id));
+      return JSON.stringify({ connections: visible });
     },
   },
   {
     name: "save_artifact",
     description:
-      "Save or update a user-facing deliverable (note, report, summary, todo list, export, or document) so it appears in the user's Artifacts library. Use for finished text products the user will want to find later, not for scratch or intermediate work. Supports markdown, JSON, text, CSV, and code.",
+      "Save or update a user-facing deliverable (note, report, summary, todo list, export, document, or image) so it appears in the user's Artifacts library. Use for finished products the user will want to find later, not for scratch or intermediate work. Text kinds (markdown, JSON, text, CSV, code) take plain content; images and other binaries take base64 content with encoding set to base64.",
     inputSchema: {
       type: "object",
       properties: {
-        filename: { type: "string", description: "Filename with extension, e.g. weekly-summary.md" },
-        content: { type: "string", description: "The full file content" },
+        filename: { type: "string", description: "Filename with extension, e.g. weekly-summary.md or chart.png" },
+        content: {
+          type: "string",
+          description: "The full file content. Base64-encoded bytes when encoding is base64.",
+        },
+        encoding: {
+          type: "string",
+          enum: ["utf8", "base64"],
+          description: "Content encoding. Use base64 for images and other binary files. Defaults to utf8.",
+        },
         title: { type: "string", description: "Human-readable title. Defaults to the filename." },
       },
       required: ["filename", "content"],
@@ -85,23 +275,25 @@ const TOOLS = [
     async run(args) {
       const filename = sanitizeFilename(args?.filename);
       const content = String(args?.content ?? "");
+      const encoding = args?.encoding === "base64" ? "base64" : "utf8";
       const ext = extname(filename).toLowerCase();
-      const kindMap = {
-        ".md": "markdown",
-        ".markdown": "markdown",
-        ".json": "json",
-        ".txt": "text",
-        ".csv": "text",
-        ".tsv": "text",
-      };
-      const kind = kindMap[ext] || "text";
+      // Binary payloads (base64) are images or generic binaries; text payloads
+      // map by extension. This matches which kinds the engine can preview/index.
+      const kind =
+        encoding === "base64"
+          ? IMAGE_EXT_KIND[ext] || "binary"
+          : IMAGE_EXT_KIND[ext] || TEXT_EXT_KIND[ext] || "text";
       // Session-scoped temp path so repeated saves of one filename upsert
       // instead of duplicating, matching the Pi save-artifact extension.
-      const sessionId = process.env.SCREENPIPE_CHAT_SESSION_ID || "chat";
+      const sessionId = chatSessionId();
       const tmpDir = join(tmpdir(), "screenpipe-artifacts", sessionId);
       mkdirSync(tmpDir, { recursive: true });
       const tmpPath = join(tmpDir, filename);
-      writeFileSync(tmpPath, content, "utf-8");
+      if (encoding === "base64") {
+        writeFileSync(tmpPath, Buffer.from(content, "base64"));
+      } else {
+        writeFileSync(tmpPath, content, "utf-8");
+      }
       const res = await fetch(`${apiBase()}/artifacts/register`, {
         method: "POST",
         headers: authHeaders(),
@@ -178,11 +370,12 @@ const TOOLS = [
       const connectionId = String(args?.connectionId ?? "").trim();
       if (!connectionId) throw new Error("connectionId is required");
 
-      // Already connected? Return straight away.
-      const known = await fetchConnection(connectionId);
-      const name = known?.name || connectionId;
-      if (known?.connected === true) {
-        return JSON.stringify({ status: "connected", connectionId, name });
+      // Already connected? Return straight away, with the same enriched payload
+      // (connected_via / mcp_server_id / action_hint) raw Pi returns.
+      const connection = await resolveConnection(connectionId);
+      const name = connectionLabel(connection, connectionId);
+      if (connection?.connected === true) {
+        return JSON.stringify({ status: "connected", connectionId, ...connectionPayload(connection, connectionId) });
       }
 
       // Ask the desktop to raise the connect card and block until the user
@@ -231,22 +424,6 @@ const TOOLS = [
     },
   },
 ];
-
-/** Fetch a single connection by id from the local engine, or null. */
-async function fetchConnection(connectionId) {
-  try {
-    const res = await fetch(`${apiBase()}/connections`, {
-      method: "GET",
-      headers: authHeaders(),
-    });
-    if (!res.ok) return null;
-    const body = await res.json();
-    const items = Array.isArray(body?.data) ? body.data : [];
-    return items.find((c) => c?.id === connectionId) || null;
-  } catch {
-    return null;
-  }
-}
 
 function send(message) {
   process.stdout.write(`${JSON.stringify(message)}\n`);

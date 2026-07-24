@@ -67,12 +67,16 @@ describe("screenpipe-tools MCP server", () => {
     });
 
     const list = await server.request(2, "tools/list");
-    const tools = ((list.result as { tools?: Array<{ name: string }> })?.tools ?? []).map(
-      (t) => t.name,
-    );
-    expect(tools.sort()).toEqual(
+    const tools = ((list.result as { tools?: Array<{ name: string; inputSchema?: unknown }> })
+      ?.tools ?? []);
+    expect(tools.map((t) => t.name).sort()).toEqual(
       ["list_connections", "save_artifact", "screenpipe_connect_app", "sp_web_search"].sort(),
     );
+    // save_artifact advertises the base64 encoding option (image/binary support).
+    const saveArtifact = tools.find((t) => t.name === "save_artifact");
+    const props = (saveArtifact?.inputSchema as { properties?: Record<string, { enum?: string[] }> })
+      ?.properties;
+    expect(props?.encoding?.enum).toEqual(["utf8", "base64"]);
   });
 
   it("errors clearly on an unknown tool", async () => {
