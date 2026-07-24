@@ -6,7 +6,7 @@
 import * as React from "react";
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, Calendar, ChevronDown, ChevronRight, ChevronUp, KeyRound, Plug, RefreshCw, ShieldCheck } from "lucide-react";
+import { Check, Calendar, ChevronDown, ChevronRight, ChevronUp, KeyRound, Loader2, Plug, RefreshCw, ShieldCheck } from "lucide-react";
 import { SourceCitationFooter } from "@/components/chat/source-citation-footer";
 import { MarkdownBlock } from "@/components/chat/markdown-block";
 import { AskUserToolCard, isAskUserToolCall } from "@/components/chat/standalone/ask-user-tool-card";
@@ -1077,12 +1077,29 @@ export function InlineAgentActionCard({
     }
   };
 
-  // The click is the UI completion boundary. Some ACP adapters start sending
-  // authenticated/tool updates before the desktop invoke resolves, and a
-  // background-restored card can otherwise sit disabled even though the agent
-  // already continued. A real failure flips the state to `error` and brings
+  // While the choice is in flight, show a pending state (Zed-style) rather
+  // than vanishing. Completion removes the card entirely: the desktop clears
+  // agent actions on acp_authenticated / acp_fatal / acp_auth_cancelled, so
+  // this spinner can't get stuck. A real failure flips to `error` and brings
   // the same card back with retry enabled.
-  if (responseState === "waiting") return null;
+  if (responseState === "waiting") {
+    return (
+      <div
+        className="w-full max-w-xl border border-border bg-background p-3 font-mono"
+        data-testid="agent-action-card"
+        data-agent-action-kind={block.actionKind}
+        role="group"
+        aria-live="polite"
+      >
+        <div className="flex items-center gap-3">
+          <Loader2 className="h-4 w-4 shrink-0 animate-spin text-foreground" aria-hidden />
+          <div className="text-sm leading-5 text-foreground">
+            {isAuth ? "signing you in…" : "waiting for the agent…"}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
