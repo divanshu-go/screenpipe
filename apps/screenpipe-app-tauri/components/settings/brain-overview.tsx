@@ -6,22 +6,18 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
-  ArrowDown,
-  ArrowUp,
   CheckCircle2,
   LayoutTemplate,
   Loader2,
-  Pencil,
-  Plus,
   RefreshCw,
-  Trash2,
+  SlidersHorizontal,
   Undo2,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { LiveViewAiComposer } from "@/components/settings/live-view-ai-composer";
 import { LiveViewCard as OverviewCard } from "@/components/settings/live-view-card";
+import { LiveViewLayoutEditor } from "@/components/settings/live-view-layout-editor";
 import { LiveViewTemplateGallery } from "@/components/settings/live-view-template-gallery";
 import { usePipes } from "@/lib/hooks/use-pipes";
 import { useSettings } from "@/lib/hooks/use-settings";
@@ -775,7 +771,26 @@ export function BrainOverview() {
       setPreviewSource(null);
       setAiNote(null);
       toast({ title: "Live View saved" });
-      if (refreshData) void refreshConnectedPipes(result.data);
+      if (refreshData) {
+        const previousSlots = new Map(
+          previousView?.slots.map((slot) => [slot.id, slot]) ?? [],
+        );
+        const changedSlots = result.data.slots.filter((slot) => {
+          if (!slot.binding) return false;
+          const previous = previousSlots.get(slot.id);
+          return (
+            !previous ||
+            previousView?.timeRange !== result.data.timeRange ||
+            previous.title !== slot.title ||
+            previous.component !== slot.component ||
+            previous.binding?.pipeName !== slot.binding.pipeName ||
+            !slot.value
+          );
+        });
+        if (changedSlots.length > 0) {
+          void refreshConnectedPipes(result.data, changedSlots);
+        }
+      }
     } catch (saveError) {
       toast({
         title: "failed to save Live View",
@@ -900,54 +915,6 @@ export function BrainOverview() {
     } finally {
       setSaving(false);
     }
-  };
-
-  const updateSlot = (id: string, update: (slot: ViewSlot) => ViewSlot) => {
-    setDraft((current) =>
-      current
-        ? {
-            ...current,
-            slots: current.slots.map((slot) =>
-              slot.id === id ? update(slot) : slot,
-            ),
-          }
-        : current,
-    );
-  };
-
-  const addSlot = () => {
-    setDraft((current) => {
-      if (!current) return current;
-      const id = `card-${Date.now().toString(36)}`;
-      return {
-        ...current,
-        slots: [
-          ...current.slots,
-          {
-            id,
-            title: "New Block",
-            component: "metric.v1",
-            width: 6,
-            order: current.slots.length,
-            binding: null,
-            value: null,
-            feedback: { upCount: 0, downCount: 0, current: null },
-          },
-        ],
-      };
-    });
-  };
-
-  const moveSlot = (id: string, direction: -1 | 1) => {
-    setDraft((current) => {
-      if (!current) return current;
-      const slots = normalizedSlots(current.slots);
-      const index = slots.findIndex((slot) => slot.id === id);
-      const next = index + direction;
-      if (index < 0 || next < 0 || next >= slots.length) return current;
-      [slots[index], slots[next]] = [slots[next], slots[index]];
-      return { ...current, slots: normalizedSlots(slots) };
-    });
   };
 
   if (loading) {
@@ -1142,230 +1109,20 @@ export function BrainOverview() {
 
   if (editing && draft) {
     return (
-      <div
-        data-testid="brain-overview-editor"
-        className="min-h-0 flex-1 space-y-5 overflow-y-auto pb-8 pr-4 [scrollbar-gutter:stable]"
-      >
-        <div className="flex items-end justify-between gap-4 border-b border-border pb-4">
-          <div className="flex min-w-0 flex-1 flex-wrap items-end gap-3">
-            <label className="min-w-64 flex-1 space-y-1.5">
-              <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                Live View name
-              </span>
-              <Input
-                data-testid="overview-title"
-                value={draft.title}
-                onChange={(event) =>
-                  setDraft({ ...draft, title: event.target.value })
-                }
-                className="h-9 max-w-md rounded-none"
-                maxLength={120}
-              />
-            </label>
-            <label className="space-y-1.5">
-              <span className="block text-[10px] uppercase tracking-wide text-muted-foreground">
-                Time window
-              </span>
-              <select
-                aria-label="template time range"
-                value={draft.timeRange}
-                className="h-9 border border-border bg-background px-2 text-xs outline-none focus:border-foreground"
-                onChange={(event) =>
-                  setDraft({
-                    ...draft,
-                    timeRange: event.target.value as BrainViewTimeRange,
-                  })
-                }
-              >
-                {TIME_RANGES.map((range) => (
-                  <option key={range.value} value={range.value}>
-                    {range.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-          <div className="flex gap-2">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="rounded-none"
-              disabled={saving}
-              onClick={() => {
-                setDraft(null);
-                setEditing(false);
-                setAiNote(null);
-              }}
-            >
-              cancel
-            </Button>
-            <Button
-              data-testid="overview-save"
-              size="sm"
-              className="rounded-none"
-              disabled={saving || !draft.title.trim()}
-              onClick={() => void save()}
-            >
-              {saving && (
-                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-              )}
-              save template
-            </Button>
-          </div>
-        </div>
-
-        <div className="space-y-3">
-          {normalizedSlots(draft.slots).map((slot, index) => (
-            <div
-              key={slot.id}
-              data-testid={`overview-editor-card-${slot.id}`}
-              className="border border-border p-4"
-            >
-              <div className="grid gap-3 lg:grid-cols-[minmax(12rem,1.5fr)_minmax(10rem,1fr)_minmax(10rem,1fr)_7rem_auto]">
-                <label className="space-y-1">
-                  <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                    Block title
-                  </span>
-                  <Input
-                    value={slot.title}
-                    maxLength={120}
-                    className="h-8 rounded-none text-xs"
-                    onChange={(event) =>
-                      updateSlot(slot.id, (current) => ({
-                        ...current,
-                        title: event.target.value,
-                      }))
-                    }
-                  />
-                </label>
-                <label className="space-y-1">
-                  <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                    Block type
-                  </span>
-                  <select
-                    value={slot.component}
-                    className="h-8 w-full border border-border bg-background px-2 text-xs outline-none focus:border-foreground"
-                    onChange={(event) =>
-                      updateSlot(slot.id, (current) => ({
-                        ...current,
-                        component: event.target.value as ViewComponent,
-                        value: null,
-                      }))
-                    }
-                  >
-                    {COMPONENTS.map((component) => (
-                      <option key={component.value} value={component.value}>
-                        {component.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="space-y-1">
-                  <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                    Connected Pipe
-                  </span>
-                  <select
-                    data-testid={`overview-pipe-${slot.id}`}
-                    value={slot.binding?.pipeName ?? ""}
-                    className="h-8 w-full border border-border bg-background px-2 text-xs outline-none focus:border-foreground"
-                    onChange={(event) =>
-                      updateSlot(slot.id, (current) => ({
-                        ...current,
-                        binding: event.target.value
-                          ? { pipeName: event.target.value }
-                          : null,
-                        value: null,
-                      }))
-                    }
-                  >
-                    <option value="">No Pipe</option>
-                    {installedPipes.map((pipe) => (
-                      <option key={pipe.config.name} value={pipe.config.name}>
-                        {pipe.config.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="space-y-1">
-                  <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                    Width
-                  </span>
-                  <select
-                    value={slot.width}
-                    className="h-8 w-full border border-border bg-background px-2 text-xs outline-none focus:border-foreground"
-                    onChange={(event) =>
-                      updateSlot(slot.id, (current) => ({
-                        ...current,
-                        width: Number(event.target.value) as ViewSlot["width"],
-                      }))
-                    }
-                  >
-                    <option value={3}>Quarter</option>
-                    <option value={6}>Half</option>
-                    <option value={12}>Full</option>
-                  </select>
-                </label>
-                <div className="flex items-end justify-end gap-1">
-                  <Button
-                    aria-label="move Block up"
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 rounded-none"
-                    disabled={index === 0}
-                    onClick={() => moveSlot(slot.id, -1)}
-                  >
-                    <ArrowUp className="h-3.5 w-3.5" />
-                  </Button>
-                  <Button
-                    aria-label="move Block down"
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 rounded-none"
-                    disabled={index === draft.slots.length - 1}
-                    onClick={() => moveSlot(slot.id, 1)}
-                  >
-                    <ArrowDown className="h-3.5 w-3.5" />
-                  </Button>
-                  <Button
-                    aria-label="delete Block"
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 rounded-none text-muted-foreground hover:text-destructive"
-                    onClick={() =>
-                      setDraft({
-                        ...draft,
-                        slots: normalizedSlots(
-                          draft.slots.filter((item) => item.id !== slot.id),
-                        ),
-                      })
-                    }
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-              </div>
-              <p className="mt-2 text-[10px] text-muted-foreground">
-                {
-                  COMPONENTS.find(
-                    (component) => component.value === slot.component,
-                  )?.schema
-                }
-                . The connected Pipe receives this Block on its next run.
-              </p>
-            </div>
-          ))}
-        </div>
-
-        <Button
-          data-testid="overview-add-card"
-          variant="outline"
-          size="sm"
-          className="rounded-none"
-          onClick={addSlot}
-        >
-          <Plus className="mr-1.5 h-3.5 w-3.5" /> add Block
-        </Button>
-      </div>
+      <LiveViewLayoutEditor
+        draft={draft}
+        saving={saving}
+        componentOptions={COMPONENTS}
+        timeRangeOptions={TIME_RANGES}
+        pipeNames={installedPipes.map((pipe) => pipe.config.name)}
+        onChange={setDraft}
+        onCancel={() => {
+          setDraft(null);
+          setEditing(false);
+          setAiNote(null);
+        }}
+        onSave={() => void save(true)}
+      />
     );
   }
 
@@ -1377,8 +1134,8 @@ export function BrainOverview() {
     (dataRefresh.status === "starting" || dataRefresh.status === "running");
   return (
     <div className="min-h-0 flex-1 overflow-y-auto pb-8 pr-4 [scrollbar-gutter:stable]">
-      <div className="mb-5 flex items-start justify-between gap-4 border-b border-border pb-4">
-        <div>
+      <div className="mb-5 grid gap-4 border-b border-border pb-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-end">
+        <div className="min-w-0">
           <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
             Live View
           </p>
@@ -1388,13 +1145,16 @@ export function BrainOverview() {
             and stored as source-backed artifacts.
           </p>
         </div>
-        <div className="flex flex-wrap justify-end gap-2">
+        <div
+          data-testid="overview-header-controls"
+          className="flex w-full flex-wrap items-center gap-2 xl:w-auto xl:justify-end"
+        >
           <select
             data-testid="overview-time-range"
             aria-label="Live View time range"
             value={view.timeRange}
             disabled={saving || refreshIsActive}
-            className="h-8 border border-border bg-background px-2 text-xs outline-none focus:border-foreground disabled:opacity-50"
+            className="h-9 min-w-36 flex-1 border border-border bg-background px-3 text-xs outline-none focus:border-foreground disabled:opacity-50 sm:flex-none"
             onChange={(event) =>
               void changeTimeRange(event.target.value as BrainViewTimeRange)
             }
@@ -1410,7 +1170,7 @@ export function BrainOverview() {
               data-testid="overview-templates"
               variant="outline"
               size="sm"
-              className="rounded-none"
+              className="h-9 flex-1 rounded-none px-3 sm:flex-none"
               onClick={() => setTemplateGalleryOpen((open) => !open)}
             >
               <LayoutTemplate className="mr-1.5 h-3.5 w-3.5" /> templates
@@ -1421,7 +1181,7 @@ export function BrainOverview() {
               data-testid="overview-refresh-data"
               variant="outline"
               size="sm"
-              className="rounded-none"
+              className="h-9 flex-1 rounded-none px-3 sm:flex-none"
               aria-label={refreshIsActive ? "loading data" : "refresh data"}
               disabled={refreshIsActive}
               onClick={() => void refreshConnectedPipes(view)}
@@ -1438,10 +1198,10 @@ export function BrainOverview() {
             data-testid="overview-edit"
             variant="outline"
             size="sm"
-            className="rounded-none"
+            className="h-9 flex-1 rounded-none px-3 sm:flex-none"
             onClick={beginEdit}
           >
-            <Pencil className="mr-1.5 h-3.5 w-3.5" /> edit manually
+            <SlidersHorizontal className="mr-1.5 h-3.5 w-3.5" /> customize
           </Button>
         </div>
       </div>

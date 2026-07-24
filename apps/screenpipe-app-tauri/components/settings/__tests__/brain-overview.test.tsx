@@ -196,6 +196,29 @@ describe("BrainOverview", () => {
     expect(screen.queryByText("loading data")).toBeNull();
   });
 
+  it("keeps the dashboard controls aligned as one responsive control group", async () => {
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [populatedView],
+    });
+    render(<BrainOverview />);
+
+    const controls = await screen.findByTestId("overview-header-controls");
+    expect(controls.className).toContain("flex-wrap");
+    expect(controls.parentElement?.className).toContain(
+      "xl:grid-cols-[minmax(0,1fr)_auto]",
+    );
+    expect(screen.getByTestId("overview-time-range").className).toContain(
+      "h-9",
+    );
+    expect(screen.getByTestId("overview-refresh-data").className).toContain(
+      "h-9",
+    );
+    expect(screen.getByTestId("overview-edit").textContent).toContain(
+      "customize",
+    );
+  });
+
   it("persists a time window and sends its exact bounds to connected Pipes", async () => {
     mocks.listBrainViews.mockResolvedValue({
       status: "ok",
@@ -356,16 +379,19 @@ describe("BrainOverview", () => {
     expect(screen.getByText("Block title")).toBeTruthy();
     expect(screen.getByText("Block type")).toBeTruthy();
     expect(screen.getByText("Connected Pipe")).toBeTruthy();
-    const editorCard = screen.getByTestId(/^overview-editor-card-/);
-    const cardTitle = editorCard.querySelector("input");
-    expect(cardTitle).toBeTruthy();
-    fireEvent.change(cardTitle!, {
+    const cardTitle = screen.getByTestId(/^overview-block-title-/);
+    fireEvent.change(cardTitle, {
       target: { value: "Automation opportunities" },
     });
-    const selects = editorCard.querySelectorAll("select");
-    fireEvent.change(selects[0], { target: { value: "list.v1" } });
-    fireEvent.change(selects[1], { target: { value: "daily-summary" } });
-    fireEvent.change(selects[2], { target: { value: "12" } });
+    fireEvent.change(screen.getByTestId(/^overview-block-type-/), {
+      target: { value: "list.v1" },
+    });
+    fireEvent.change(screen.getByTestId(/^overview-pipe-/), {
+      target: { value: "daily-summary" },
+    });
+    fireEvent.change(screen.getByTestId(/^overview-block-width-/), {
+      target: { value: "12" },
+    });
     fireEvent.click(screen.getByTestId("overview-save"));
 
     await waitFor(() => {
@@ -380,6 +406,143 @@ describe("BrainOverview", () => {
         binding: { pipeName: "daily-summary" },
       }),
     );
+  });
+
+  it("edits the real dashboard, reorders with the keyboard, and resizes without losing its Pipe", async () => {
+    const secondSlot = {
+      ...populatedView.slots[0],
+      id: "automation-opportunities",
+      title: "Automation opportunities",
+      component: "list.v1" as const,
+      order: 1,
+      value: null,
+    };
+    const twoBlockView = {
+      ...populatedView,
+      slots: [populatedView.slots[0], secondSlot],
+    };
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [twoBlockView],
+    });
+    mocks.saveBrainView.mockImplementation(async (request) => ({
+      status: "ok",
+      data: {
+        ...twoBlockView,
+        ...request,
+        revision: 4,
+        slots: request.slots.map((slot: object) => ({ ...slot, value: null })),
+      },
+    }));
+    render(<BrainOverview />);
+
+    fireEvent.click(await screen.findByTestId("overview-edit"));
+    expect(screen.getByText("4.5")).toBeTruthy();
+    fireEvent.keyDown(screen.getByTestId("overview-drag-focus-time"), {
+      key: "ArrowDown",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Grow Focus time" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit Focus time" }));
+    fireEvent.change(screen.getByTestId("overview-block-title-focus-time"), {
+      target: { value: "Deep work" },
+    });
+    fireEvent.click(screen.getByTestId("overview-save"));
+
+    await waitFor(() => expect(mocks.saveBrainView).toHaveBeenCalledTimes(1));
+    const request = mocks.saveBrainView.mock.calls[0][0];
+    expect(request.slots).toEqual([
+      expect.objectContaining({
+        id: "automation-opportunities",
+        order: 0,
+      }),
+      expect.objectContaining({
+        id: "focus-time",
+        title: "Deep work",
+        width: 12,
+        order: 1,
+        binding: { pipeName: "daily-summary" },
+      }),
+    ]);
+  });
+
+  it("supports pointer drag and drop between dashboard Blocks", async () => {
+    const secondSlot = {
+      ...populatedView.slots[0],
+      id: "second-block",
+      title: "Second Block",
+      order: 1,
+      value: {
+        ...populatedView.slots[0].value!,
+        artifactOutputId: 89,
+      },
+    };
+    const twoBlockView = {
+      ...populatedView,
+      slots: [populatedView.slots[0], secondSlot],
+    };
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [twoBlockView],
+    });
+    mocks.saveBrainView.mockImplementation(async (request) => ({
+      status: "ok",
+      data: {
+        ...twoBlockView,
+        ...request,
+        revision: 4,
+        slots: request.slots.map((slot: { id: string }) => ({
+          ...slot,
+          value: twoBlockView.slots.find((current) => current.id === slot.id)
+            ?.value,
+        })),
+      },
+    }));
+    render(<BrainOverview />);
+
+    fireEvent.click(await screen.findByTestId("overview-edit"));
+    const target = screen.getByTestId("overview-editor-card-second-block");
+    const originalElementFromPoint = document.elementFromPoint;
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => target),
+    });
+    try {
+      const handle = screen.getByTestId("overview-drag-focus-time");
+      fireEvent.pointerDown(handle, {
+        button: 0,
+        pointerId: 7,
+        clientX: 10,
+        clientY: 10,
+      });
+      fireEvent.pointerMove(handle, {
+        pointerId: 7,
+        clientX: 30,
+        clientY: 30,
+      });
+      expect(target.dataset.dropTarget).toBe("true");
+      fireEvent.pointerUp(handle, {
+        pointerId: 7,
+        clientX: 30,
+        clientY: 30,
+      });
+      fireEvent.click(screen.getByTestId("overview-save"));
+    } finally {
+      Object.defineProperty(document, "elementFromPoint", {
+        configurable: true,
+        value: originalElementFromPoint,
+      });
+    }
+
+    await waitFor(() => expect(mocks.saveBrainView).toHaveBeenCalledTimes(1));
+    expect(mocks.saveBrainView.mock.calls[0][0].slots).toEqual([
+      expect.objectContaining({ id: "second-block", order: 0 }),
+      expect.objectContaining({ id: "focus-time", order: 1 }),
+    ]);
+    expect(
+      mocks.localFetch.mock.calls.some(([path]) =>
+        String(path).startsWith("/pipes/"),
+      ),
+    ).toBe(false);
   });
 
   it("previews a template with its paired Pipes, replaces only after confirmation, and supports undo", async () => {

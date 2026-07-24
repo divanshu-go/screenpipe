@@ -173,7 +173,8 @@ describe("Brain Live Views", function () {
     if (await collapseSidebar.isExisting()) {
       await collapseSidebar.click();
     }
-    await $("[data-testid='overview-edit']").moveTo({
+    const customize = await $("[data-testid='overview-edit']");
+    await customize.moveTo({
       xOffset: 10,
       yOffset: 10,
     });
@@ -184,11 +185,25 @@ describe("Brain Live Views", function () {
     )) as string;
     expect(renderedText).toContain("Live Views");
     expect(renderedText).toContain("Live View");
-    expect(renderedText).toContain("CUSTOMIZE TEMPLATE");
+    expect(renderedText).toContain("CUSTOMIZE");
     expect(renderedText).toContain("How I worked today");
     expect(renderedText).toContain("Automation opportunities");
     const screenshot = await saveScreenshot("brain-overview-pipe-filled");
     expect(existsSync(screenshot)).toBe(true);
+
+    await customize.click();
+    await waitForTestId("brain-overview-editor", 10_000);
+    const editorText = (await browser.execute(
+      () => document.body?.innerText || "",
+    )) as string;
+    expect(editorText).toContain("Arrange your Live View");
+    expect(editorText).toContain("Drag Blocks to move them");
+    expect(editorText).toContain("ADD BLOCK");
+    expect(editorText).toContain("DONE");
+    const editorScreenshot = await saveScreenshot(
+      "brain-overview-layout-editor",
+    );
+    expect(existsSync(editorScreenshot)).toBe(true);
 
     for (const artifactId of artifactIds) {
       await fetch(`${base}/artifacts/${artifactId}`, {
