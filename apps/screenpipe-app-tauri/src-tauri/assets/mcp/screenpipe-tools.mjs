@@ -40,6 +40,12 @@ function sanitizeFilename(raw) {
   return name || "artifact";
 }
 
+// The chat/conversation id, forwarded so the desktop can raise a connect card
+// in the originating chat. Equals the frontend conversationId.
+function chatSessionId() {
+  return process.env.SCREENPIPE_CHAT_SESSION_ID || "chat";
+}
+
 const TOOLS = [
   {
     name: "list_connections",
@@ -111,7 +117,136 @@ const TOOLS = [
       return JSON.stringify({ status: "saved", filename, kind });
     },
   },
+  {
+    name: "sp_web_search",
+    description:
+      "Search the public internet via Google Search. Use ONLY for public, external information the user explicitly asks about (current events, news, public people or companies, public product docs). Do NOT use it for the user's own screenpipe data. When unsure, do not search. Returns results with sources.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "The search query" },
+      },
+      required: ["query"],
+      additionalProperties: false,
+    },
+    async run(args) {
+      const query = String(args?.query ?? "").trim();
+      if (!query) throw new Error("query is required");
+      // Hit the LOCAL engine proxy, not the cloud directly: the engine injects
+      // the cloud JWT server-side, so this process never holds that credential.
+      const res = await fetch(`${apiBase()}/v1/web-search`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ query }),
+      });
+      if (!res.ok) {
+        const detail = await res.text().catch(() => "");
+        if (res.status === 503) {
+          throw new Error("web search unavailable: sign in to screenpipe first");
+        }
+        throw new Error(`web search failed (${res.status})${detail ? `: ${detail}` : ""}`);
+      }
+      const body = await res.json();
+      const sources = Array.isArray(body?.sources) ? body.sources : [];
+      return JSON.stringify({ content: body?.content ?? "", sources });
+    },
+  },
+  {
+    name: "screenpipe_connect_app",
+    description:
+      "Connect one of the user's apps (Gmail, Notion, Slack, Linear, GitHub, calendars, and other integrations) when a task needs it. Call this before an action that depends on a connected app. If the app is already connected it returns immediately; otherwise it asks the user to connect and waits for them.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        connectionId: {
+          type: "string",
+          description: "The connection id, e.g. linear, notion, github, gmail, google-docs",
+        },
+        reason: {
+          type: "string",
+          description: "A short, user-facing reason for connecting now",
+        },
+        requiredFor: {
+          type: "string",
+          description: "The action you will continue with once connected",
+        },
+      },
+      required: ["connectionId"],
+      additionalProperties: false,
+    },
+    async run(args) {
+      const connectionId = String(args?.connectionId ?? "").trim();
+      if (!connectionId) throw new Error("connectionId is required");
+
+      // Already connected? Return straight away.
+      const known = await fetchConnection(connectionId);
+      const name = known?.name || connectionId;
+      if (known?.connected === true) {
+        return JSON.stringify({ status: "connected", connectionId, name });
+      }
+
+      // Ask the desktop to raise the connect card and block until the user
+      // answers. If that path is unavailable (older engine, network error) or
+      // times out, fall back to the async sentinel so the desktop can still
+      // surface the card from this tool's result and the agent retries later.
+      try {
+        const res = await fetch(`${apiBase()}/v1/connect-request`, {
+          method: "POST",
+          headers: authHeaders(),
+          body: JSON.stringify({
+            connection_id: connectionId,
+            name,
+            reason: args?.reason,
+            required_for: args?.requiredFor,
+            session_id: chatSessionId(),
+          }),
+        });
+        if (res.ok) {
+          const body = await res.json();
+          if (body?.status === "connected") {
+            return JSON.stringify({ status: "connected", connectionId, name });
+          }
+          if (body?.status === "declined") {
+            return JSON.stringify({
+              status: "declined",
+              connectionId,
+              name,
+              message: `The user chose not to connect ${name}.`,
+            });
+          }
+          // "timeout" or anything else → fall through to the async card.
+        }
+      } catch {
+        // network/route error → fall through to the async card.
+      }
+
+      // Async sentinel: the desktop detects this shape in the tool result and
+      // raises the connect card; the agent should retry once connected.
+      return JSON.stringify({
+        status: "needs_connection",
+        connectionId,
+        name,
+        message: `${name} is not connected yet. I've asked the user to connect it; retry this once they have.`,
+      });
+    },
+  },
 ];
+
+/** Fetch a single connection by id from the local engine, or null. */
+async function fetchConnection(connectionId) {
+  try {
+    const res = await fetch(`${apiBase()}/connections`, {
+      method: "GET",
+      headers: authHeaders(),
+    });
+    if (!res.ok) return null;
+    const body = await res.json();
+    const items = Array.isArray(body?.data) ? body.data : [];
+    return items.find((c) => c?.id === connectionId) || null;
+  } catch {
+    return null;
+  }
+}
 
 function send(message) {
   process.stdout.write(`${JSON.stringify(message)}\n`);

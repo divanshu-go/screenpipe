@@ -83,6 +83,8 @@ import {
 import type { ChatSendOptions, ContentBlock, Message } from "@/lib/chat/types";
 import { useChatStore } from "@/lib/stores/chat-store";
 import { AGENT_TOPICS, type AgentEventEnvelope } from "@/lib/events/types";
+import { listenTyped, TAURI_EVENTS } from "@/lib/events/tauri-events";
+import { localFetch } from "@/lib/api";
 
 // Session ID is per-conversation — set on mount (new conv) and updated on load/new.
 // Stored as a ref so event listeners always see the current value without stale closures.
@@ -1107,6 +1109,25 @@ export function StandaloneChat({
     };
   }, []);
 
+  // Echo a connect-card outcome back to an agent blocked in the ACP connect
+  // broker (POST /v1/connect-request). No-op for cards that weren't broker-
+  // raised (raw Pi cards answer via answerPiExtensionUiRequest instead).
+  const postConnectResponse = useCallback(async (
+    connectRequestId: string | undefined,
+    status: "connected" | "declined",
+  ) => {
+    if (!connectRequestId) return;
+    try {
+      await localFetch("/v1/connect-response", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ request_id: connectRequestId, status }),
+      });
+    } catch {
+      // The agent will time out and fall back to the async card; nothing to do.
+    }
+  }, []);
+
   const connectFromInlineCard = useCallback(async (
     connectionId: string,
     block?: Extract<ContentBlock, { type: "connection_action" }>,
@@ -1115,6 +1136,7 @@ export function StandaloneChat({
     if (!connection) {
       openConnectionSetup(connectionId);
       await answerPiExtensionUiRequest(block?.extensionRequestId, { cancelled: true });
+      await postConnectResponse(block?.connectRequestId, "declined");
       return { status: "unsupported", reason: "opening setup for this connection" };
     }
 
@@ -1130,6 +1152,7 @@ export function StandaloneChat({
     if (result.status === "connected") {
       await refreshConnectionState();
       await answerPiExtensionUiRequest(block?.extensionRequestId, { confirmed: true });
+      await postConnectResponse(block?.connectRequestId, "connected");
       if (block?.extensionRequestId) {
         const timer = setTimeout(() => {
           removeConnectionActionByRequestId(block.extensionRequestId);
@@ -1141,17 +1164,20 @@ export function StandaloneChat({
     if (result.status === "unsupported") {
       openConnectionSetup(connectionId);
       await answerPiExtensionUiRequest(block?.extensionRequestId, { cancelled: true });
+      await postConnectResponse(block?.connectRequestId, "declined");
       return { status: "unsupported", reason: `${result.reason}; opened setup` };
     }
     await answerPiExtensionUiRequest(block?.extensionRequestId, { cancelled: true });
+    await postConnectResponse(block?.connectRequestId, "declined");
     return result;
-  }, [allConnectionItems, answerPiExtensionUiRequest, openConnectionSetup, refreshConnectionState, removeConnectionActionByRequestId]);
+  }, [allConnectionItems, answerPiExtensionUiRequest, openConnectionSetup, refreshConnectionState, removeConnectionActionByRequestId, postConnectResponse]);
 
   const declineConnectionAction = useCallback((
     block: Extract<ContentBlock, { type: "connection_action" }>,
   ) => {
     void answerPiExtensionUiRequest(block.extensionRequestId, { cancelled: true });
-  }, [answerPiExtensionUiRequest]);
+    void postConnectResponse(block.connectRequestId, "declined");
+  }, [answerPiExtensionUiRequest, postConnectResponse]);
 
   useEffect(() => {
     let disposed = false;
@@ -1208,6 +1234,62 @@ export function StandaloneChat({
       void unlisten.then((release) => release());
     };
   }, [allConnectionItems, piSessionIdRef, setMessages]);
+
+  // ACP connect broker: an agent's screenpipe_connect_app tool blocks on
+  // POST /v1/connect-request, the engine emits acp_connect_request, and it
+  // reaches us here as an engine event. We raise the same connect card,
+  // tagged with the broker request id so connect/decline echoes the outcome
+  // back to the waiting agent. Scoped to this chat by session id.
+  useEffect(() => {
+    let disposed = false;
+    const unlisten = listenTyped(TAURI_EVENTS.engine, (engineEvent) => {
+      if (disposed) return;
+      if (engineEvent.name !== "acp_connect_request") return;
+      const data = (engineEvent.data ?? {}) as Record<string, unknown>;
+      const sessionId = typeof data.sessionId === "string" ? data.sessionId : "";
+      // If the broker tagged a session, only the originating chat renders the
+      // card; otherwise fall back to showing it in the active chat.
+      if (sessionId && conversationId && sessionId !== conversationId) return;
+      const requestId = typeof data.request_id === "string" ? data.request_id : "";
+      const connectionId = typeof data.connectionId === "string" ? data.connectionId : "";
+      if (!requestId || !connectionId) return;
+      const connection = allConnectionItems.find((item) => item.id === connectionId);
+      const connectionName =
+        (typeof data.name === "string" && data.name) || connection?.name || connectionId;
+      const messageText = typeof data.message === "string" ? data.message : undefined;
+      const message: Message = {
+        id: `connection-action-${requestId}`,
+        role: "assistant",
+        content: "",
+        timestamp: Date.now(),
+        contentBlocks: [
+          {
+            type: "connection_action",
+            connectionId,
+            connectionName,
+            icon: connection?.icon || connectionId,
+            description: connection?.description,
+            connectRequestId: requestId,
+            extensionReason: messageText,
+          },
+        ],
+      };
+      setMessages((prev) => {
+        const alreadyVisible = prev.some((row) =>
+          row.contentBlocks?.some(
+            (block) =>
+              block.type === "connection_action" &&
+              block.connectRequestId === requestId,
+          ),
+        );
+        return alreadyVisible ? prev : [...prev, message];
+      });
+    });
+    return () => {
+      disposed = true;
+      void unlisten.then((release) => release());
+    };
+  }, [allConnectionItems, conversationId, setMessages]);
 
   const handleAgentActionEvent = useCallback((value: unknown, sessionId: string): boolean => {
     const trace = (stage: string, details?: Record<string, unknown>) => {

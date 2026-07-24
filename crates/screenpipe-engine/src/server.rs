@@ -1062,6 +1062,23 @@ impl SCServer {
                 "/v1/chat/completions",
                 axum::routing::post(crate::routes::cloud_proxy::chat_completions)
                     .layer(axum::extract::DefaultBodyLimit::max(50 * 1024 * 1024)), // 50MB
+            )
+            // Local proxy → api.screenpipe.com/v1/web-search. Lets coding-agent
+            // harnesses web-search through their bundled MCP tool without ever
+            // holding the cloud JWT (scrubbed from third-party adapter trees).
+            .route(
+                "/v1/web-search",
+                axum::routing::post(crate::routes::web_search::web_search),
+            )
+            // Blocking connect broker for the harness MCP `screenpipe_connect_app`
+            // tool: raise the in-chat connect card and wait for the user's answer.
+            .route(
+                "/v1/connect-request",
+                axum::routing::post(crate::routes::connect_broker::connect_request),
+            )
+            .route(
+                "/v1/connect-response",
+                axum::routing::post(crate::routes::connect_broker::connect_response),
             );
 
         // Pipe API routes (if pipe manager is available)

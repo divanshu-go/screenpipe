@@ -20,6 +20,7 @@ import { qualifiedValue } from "@/lib/analytics/qualified-value";
 import { registerPiLogListener } from "@/components/chat/standalone/hooks/pi-log-listener";
 import { registerPiReauthListener } from "@/components/chat/standalone/hooks/pi-reauth-listener";
 import {
+  connectionActionFromToolResult,
   firstAgentEndAssistantError,
   isRecord,
   piEventDataFromUnknown,
@@ -396,6 +397,17 @@ export function usePiForegroundEvents({
                 block.toolCall.isError = data.isError === true;
                 block.toolCall.endedAtMs = Date.now();
               }
+            }
+            // If a connect tool asked for a connection (async fallback path),
+            // surface the connect card inline right after its tool block.
+            const connectCard = connectionActionFromToolResult(resultText);
+            if (
+              connectCard &&
+              !piContentBlocksRef.current.some(
+                (b) => b.type === "connection_action" && b.connectionId === connectCard.connectionId,
+              )
+            ) {
+              piContentBlocksRef.current.push(connectCard);
             }
             const contentBlocks = [...piContentBlocksRef.current];
             setMessages((prev) =>

@@ -79,6 +79,7 @@ import {
   type SessionStatus,
   type SessionRecord,
 } from "@/lib/stores/chat-store";
+import { connectionActionFromToolResult } from "@/components/chat/standalone/hooks/pi-event-handlers";
 
 // Module-level state — the router is a singleton process-wide.
 let mounted = false;
@@ -786,6 +787,17 @@ function applyEventToSessionContent(sid: string, payload: PiInnerEvent) {
           }
         : b
     );
+    // A connect tool that needs a connection (async fallback) raises the
+    // connect card in this background session; the user sees it on return.
+    const connectCard = connectionActionFromToolResult(resultText);
+    if (
+      connectCard &&
+      !blocks.some(
+        (b: any) => b.type === "connection_action" && b.connectionId === connectCard.connectionId,
+      )
+    ) {
+      blocks.push(connectCard);
+    }
     store.actions.setStreaming(sid, { contentBlocks: blocks });
     store.actions.patchMessage(sid, msgId, (m: any) => ({
       ...m,

@@ -80,6 +80,10 @@ export type ContentBlock =
       pendingActionPrompt?: string;
       extensionRequestId?: string;
       extensionReason?: string;
+      // Set when the card was raised by the ACP connect broker
+      // (POST /v1/connect-request). The connect/decline handlers echo the
+      // outcome back to the blocked agent via POST /v1/connect-response.
+      connectRequestId?: string;
     };
 
 export interface Message {
