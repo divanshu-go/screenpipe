@@ -1,0 +1,90 @@
+{
+  "schema": "live-view-kit.v1",
+  "id": "automation-finder",
+  "title": "Automation finder",
+  "description": "Find one repeated workflow worth automating and turn it into a safe, testable first step.",
+  "version": 1,
+  "pipes": [
+    {
+      "name": "automate-my-work",
+      "distribution": "bundled"
+    }
+  ],
+  "template": {
+    "schema": "live-view-template.v1",
+    "id": "automation-finder",
+    "title": "Automation finder",
+    "revision": 1,
+    "timeRange": "7d",
+    "blocks": [
+      {
+        "id": "best-opportunity",
+        "title": "Best automation opportunity",
+        "kind": "markdown.v1",
+        "width": 12,
+        "order": 0,
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "automate-my-work"
+        }
+      },
+      {
+        "id": "workflow-evidence",
+        "title": "When this workflow repeated",
+        "kind": "timeline.v1",
+        "width": 6,
+        "order": 1,
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "automate-my-work"
+        }
+      },
+      {
+        "id": "friction",
+        "title": "Why it is costly",
+        "kind": "list.v1",
+        "width": 6,
+        "order": 2,
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "automate-my-work"
+        }
+      },
+      {
+        "id": "current-coverage",
+        "title": "What is already covered",
+        "kind": "table.v1",
+        "width": 6,
+        "order": 3,
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "automate-my-work"
+        }
+      },
+      {
+        "id": "safe-first-version",
+        "title": "Safe first version",
+        "kind": "markdown.v1",
+        "width": 6,
+        "order": 4,
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "automate-my-work"
+        }
+      },
+      {
+        "id": "success-test",
+        "title": "How to know it worked",
+        "kind": "list.v1",
+        "width": 12,
+        "order": 5,
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "automate-my-work"
+        }
+      }
+    ],
+    "createdAt": "2026-07-24T00:00:00Z",
+    "updatedAt": "2026-07-24T00:00:00Z"
+  }
+}

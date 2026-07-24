@@ -1,0 +1,79 @@
+{
+  "schema": "live-view-kit.v1",
+  "id": "standup-ready",
+  "title": "Standup ready",
+  "description": "Walk into standup with specific progress, today's priorities, blockers, and supporting context.",
+  "version": 1,
+  "pipes": [
+    {
+      "name": "standup-update",
+      "distribution": "bundled"
+    }
+  ],
+  "template": {
+    "schema": "live-view-template.v1",
+    "id": "standup-ready",
+    "title": "Standup ready",
+    "revision": 1,
+    "timeRange": "24h",
+    "blocks": [
+      {
+        "id": "standup-note",
+        "title": "Standup note",
+        "kind": "markdown.v1",
+        "width": 12,
+        "order": 0,
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "standup-update"
+        }
+      },
+      {
+        "id": "progress",
+        "title": "What I worked on",
+        "kind": "list.v1",
+        "width": 6,
+        "order": 1,
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "standup-update"
+        }
+      },
+      {
+        "id": "today",
+        "title": "What is next",
+        "kind": "list.v1",
+        "width": 6,
+        "order": 2,
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "standup-update"
+        }
+      },
+      {
+        "id": "blockers",
+        "title": "Blockers",
+        "kind": "list.v1",
+        "width": 6,
+        "order": 3,
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "standup-update"
+        }
+      },
+      {
+        "id": "supporting-context",
+        "title": "Supporting context",
+        "kind": "timeline.v1",
+        "width": 6,
+        "order": 4,
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "standup-update"
+        }
+      }
+    ],
+    "createdAt": "2026-07-24T00:00:00Z",
+    "updatedAt": "2026-07-24T00:00:00Z"
+  }
+}

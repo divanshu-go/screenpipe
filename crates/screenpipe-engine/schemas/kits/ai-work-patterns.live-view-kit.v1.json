@@ -1,0 +1,79 @@
+{
+  "schema": "live-view-kit.v1",
+  "id": "ai-work-patterns",
+  "title": "AI work patterns",
+  "description": "See which AI tools helped, what you used them for, and where your workflow could improve.",
+  "version": 1,
+  "pipes": [
+    {
+      "name": "ai-habits",
+      "distribution": "bundled"
+    }
+  ],
+  "template": {
+    "schema": "live-view-template.v1",
+    "id": "ai-work-patterns",
+    "title": "AI work patterns",
+    "revision": 1,
+    "timeRange": "24h",
+    "blocks": [
+      {
+        "id": "ai-time-by-tool",
+        "title": "AI time by tool",
+        "kind": "bar-chart.v1",
+        "width": 6,
+        "order": 0,
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "ai-habits"
+        }
+      },
+      {
+        "id": "ai-jobs",
+        "title": "What I used AI for",
+        "kind": "table.v1",
+        "width": 6,
+        "order": 1,
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "ai-habits"
+        }
+      },
+      {
+        "id": "usage-pattern",
+        "title": "My usage pattern",
+        "kind": "markdown.v1",
+        "width": 6,
+        "order": 2,
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "ai-habits"
+        }
+      },
+      {
+        "id": "effective-work",
+        "title": "Where AI helped",
+        "kind": "list.v1",
+        "width": 6,
+        "order": 3,
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "ai-habits"
+        }
+      },
+      {
+        "id": "next-improvement",
+        "title": "One improvement for tomorrow",
+        "kind": "markdown.v1",
+        "width": 12,
+        "order": 4,
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "ai-habits"
+        }
+      }
+    ],
+    "createdAt": "2026-07-24T00:00:00Z",
+    "updatedAt": "2026-07-24T00:00:00Z"
+  }
+}

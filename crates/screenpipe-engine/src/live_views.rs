@@ -569,8 +569,12 @@ pub fn validate_live_view_kit(kit: &LiveViewKit) -> Result<(), LiveViewError> {
 
 pub fn list_bundled_live_view_kits() -> Result<Vec<LiveViewKit>, LiveViewError> {
     const BUNDLED_KITS: &[&str] = &[
+        include_str!("../schemas/kits/daily-memory.live-view-kit.v1.json"),
+        include_str!("../schemas/kits/meeting-follow-through.live-view-kit.v1.json"),
         include_str!("../schemas/kits/time-and-focus.live-view-kit.v1.json"),
-        include_str!("../schemas/kits/workday-overview.live-view-kit.v1.json"),
+        include_str!("../schemas/kits/automation-finder.live-view-kit.v1.json"),
+        include_str!("../schemas/kits/ai-work-patterns.live-view-kit.v1.json"),
+        include_str!("../schemas/kits/standup-ready.live-view-kit.v1.json"),
     ];
 
     BUNDLED_KITS
@@ -1043,13 +1047,32 @@ mod tests {
     #[test]
     fn bundled_kits_declare_every_pipe_used_by_their_templates() {
         let kits = list_bundled_live_view_kits().unwrap();
-        assert_eq!(kits.len(), 2);
+        assert_eq!(kits.len(), 6);
         assert_eq!(live_view_kit_json_schema()["$id"], LIVE_VIEW_KIT_SCHEMA);
         for kit in kits {
             validate_live_view_kit(&kit).unwrap();
             assert!(!kit.pipes.is_empty());
-            assert!(!kit.template.blocks.is_empty());
+            assert!(kit.template.blocks.len() >= 5);
         }
+    }
+
+    #[test]
+    fn daily_memory_is_not_a_second_time_dashboard() {
+        let kits = list_bundled_live_view_kits().unwrap();
+        let daily_memory = kits
+            .iter()
+            .find(|kit| kit.id == "daily-memory")
+            .unwrap();
+
+        assert!(daily_memory
+            .pipes
+            .iter()
+            .all(|pipe| pipe.name != "time-breakdown"));
+        assert!(daily_memory
+            .template
+            .blocks
+            .iter()
+            .any(|block| block.id == "resume-here"));
     }
 
     #[test]

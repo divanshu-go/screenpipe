@@ -91,6 +91,7 @@ vi.mock("@/lib/live-views/generate-live-view-with-pi", () => ({
 }));
 import { BrainOverview, type ViewDefinition } from "../brain-overview";
 import { inferLiveViewGenerationIntent } from "../live-view-ai-composer";
+import { getTemplatePipeReadiness } from "../live-view-template-gallery";
 
 const populatedView: ViewDefinition = {
   id: "my-overview",
@@ -128,24 +129,24 @@ const populatedView: ViewDefinition = {
   ],
 };
 
-const workdayTemplate = {
-  id: "workday-overview",
-  title: "Workday overview",
-  description: "Time, accomplishments, key moments, and unfinished work.",
+const dailyMemoryTemplate = {
+  id: "daily-memory",
+  title: "Daily memory",
+  description: "Remember what changed and where to resume.",
   version: 1,
   timeRange: "today" as const,
   pipes: [
-    { name: "time-breakdown", distribution: "bundled" },
     { name: "day-recap", distribution: "bundled" },
+    { name: "missed-todos", distribution: "bundled" },
   ],
   slots: [
     {
-      id: "active-time",
-      title: "Active time today",
-      component: "metric.v1" as const,
-      width: 3,
+      id: "today-in-brief",
+      title: "Today in brief",
+      component: "markdown.v1" as const,
+      width: 12,
       order: 0,
-      binding: { pipeName: "time-breakdown" },
+      binding: { pipeName: "day-recap" },
     },
     {
       id: "unfinished-work",
@@ -153,7 +154,7 @@ const workdayTemplate = {
       component: "list.v1" as const,
       width: 12,
       order: 1,
-      binding: { pipeName: "day-recap" },
+      binding: { pipeName: "missed-todos" },
     },
   ],
 };
@@ -197,6 +198,35 @@ describe("inferLiveViewGenerationIntent", () => {
       );
     },
   );
+});
+
+describe("getTemplatePipeReadiness", () => {
+  it("distinguishes zero, partial, ready, and many unrelated Pipes", () => {
+    expect(getTemplatePipeReadiness(dailyMemoryTemplate, new Set()).state).toBe(
+      "none",
+    );
+    expect(
+      getTemplatePipeReadiness(dailyMemoryTemplate, new Set(["day-recap"]))
+        .state,
+    ).toBe("partial");
+    expect(
+      getTemplatePipeReadiness(
+        dailyMemoryTemplate,
+        new Set(["day-recap", "missed-todos"]),
+      ).state,
+    ).toBe("ready");
+    expect(
+      getTemplatePipeReadiness(
+        dailyMemoryTemplate,
+        new Set([
+          "unrelated-one",
+          "unrelated-two",
+          "day-recap",
+          "missed-todos",
+        ]),
+      ).state,
+    ).toBe("ready");
+  });
 });
 
 describe("BrainOverview", () => {
@@ -660,9 +690,9 @@ describe("BrainOverview", () => {
   it("previews a template with its paired Pipes, replaces only after confirmation, and supports undo", async () => {
     const installedTemplateView: ViewDefinition = {
       ...populatedView,
-      title: workdayTemplate.title,
+      title: dailyMemoryTemplate.title,
       revision: 4,
-      slots: workdayTemplate.slots.map((slot) => ({
+      slots: dailyMemoryTemplate.slots.map((slot) => ({
         ...slot,
         value: null,
         feedback: { upCount: 0, downCount: 0, current: null },
@@ -674,7 +704,7 @@ describe("BrainOverview", () => {
     });
     mocks.listBrainViewTemplateKits.mockResolvedValue({
       status: "ok",
-      data: [workdayTemplate],
+      data: [dailyMemoryTemplate],
     });
     mocks.installBrainViewTemplateKit.mockResolvedValue({
       status: "ok",
@@ -697,9 +727,9 @@ describe("BrainOverview", () => {
 
     fireEvent.click(await screen.findByTestId("overview-templates"));
     expect(await screen.findByText("Starter templates")).toBeTruthy();
-    expect(screen.getByText("2 bundled Pipes will be installed")).toBeTruthy();
+    expect(screen.getByText("Sets up 2 built-in helpers")).toBeTruthy();
     fireEvent.click(
-      screen.getByTestId("preview-live-view-template-workday-overview"),
+      screen.getByTestId("preview-live-view-template-daily-memory"),
     );
 
     expect(await screen.findByText("Template preview")).toBeTruthy();
@@ -725,7 +755,7 @@ describe("BrainOverview", () => {
     fireEvent.click(screen.getByTestId("overview-confirm-replace"));
     await waitFor(() =>
       expect(mocks.installBrainViewTemplateKit).toHaveBeenCalledWith({
-        kitId: "workday-overview",
+        kitId: "daily-memory",
         targetViewId: "my-overview",
         expectedRevision: 3,
       }),

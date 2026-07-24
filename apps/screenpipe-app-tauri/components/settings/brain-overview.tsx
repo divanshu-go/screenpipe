@@ -22,7 +22,10 @@ import {
 import { LiveViewCard as OverviewCard } from "@/components/settings/live-view-card";
 import { LiveViewDashboardSwitcher } from "@/components/settings/live-view-dashboard-switcher";
 import { LiveViewLayoutEditor } from "@/components/settings/live-view-layout-editor";
-import { LiveViewTemplateGallery } from "@/components/settings/live-view-template-gallery";
+import {
+  getTemplatePipeReadiness,
+  LiveViewTemplateGallery,
+} from "@/components/settings/live-view-template-gallery";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -1298,10 +1301,9 @@ export function BrainOverview() {
       canChooseDestination && previewDestination === "replace",
     );
     const destination = wholeDashboardPreview ? previewDestination : "replace";
-    const missingTemplatePipes =
-      templatePreview?.pipes.filter(
-        (pipe) => !installedPipeNames.has(pipe.name),
-      ) ?? [];
+    const templateReadiness = templatePreview
+      ? getTemplatePipeReadiness(templatePreview, installedPipeNames)
+      : null;
     const applyPreview = () =>
       templatePreview
         ? applyTemplate(templatePreview, destination)
@@ -1413,13 +1415,22 @@ export function BrainOverview() {
                   }
                 />
                 {templatePreview && (
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    Paired Pipes:{" "}
-                    {templatePreview.pipes.map((pipe) => pipe.name).join(", ")}.
-                    {missingTemplatePipes.length > 0
-                      ? ` ${missingTemplatePipes.length} missing ${missingTemplatePipes.length === 1 ? "Pipe" : "Pipes"} will be installed locally first.`
-                      : " They are already installed."}
-                  </p>
+                  <div className="mt-2 text-xs text-muted-foreground">
+                    <p>{templateReadiness?.explanation}</p>
+                    <details className="mt-1 text-[11px]">
+                      <summary className="cursor-pointer select-none hover:text-foreground">
+                        what powers this dashboard
+                      </summary>
+                      <p className="mt-1 font-mono">
+                        {templatePreview.pipes
+                          .map((pipe) => pipe.name)
+                          .join(", ")}
+                      </p>
+                      <p className="mt-1">
+                        Existing custom Pipe instructions are kept.
+                      </p>
+                    </details>
+                  </div>
                 )}
               </div>
               {canChooseDestination ? (
