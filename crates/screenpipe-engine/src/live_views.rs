@@ -1059,10 +1059,7 @@ mod tests {
     #[test]
     fn daily_memory_is_not_a_second_time_dashboard() {
         let kits = list_bundled_live_view_kits().unwrap();
-        let daily_memory = kits
-            .iter()
-            .find(|kit| kit.id == "daily-memory")
-            .unwrap();
+        let daily_memory = kits.iter().find(|kit| kit.id == "daily-memory").unwrap();
 
         assert!(daily_memory
             .pipes
