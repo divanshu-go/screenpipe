@@ -1802,11 +1802,10 @@ export function RecordingSettings() {
     icon: string | null;
   };
 
-  // Per-app exclusions for the CoreAudio Process Tap. The list is owned by
+  // Per-app exclusions for the platform process tap. The list is owned by
   // the audio engine (file at ~/.screenpipe/audio-exclusions.json); we just
-  // read/write it through Tauri commands. Hot-reload happens engine-side
-  // on the existing 500ms tap-rebuild loop, so a write here propagates in
-  // ~1 tick subject to the 60s REBUILD_COOLDOWN.
+  // read/write it through Tauri commands. The capture engine reloads changes
+  // without requiring the UI to pass platform-specific process identifiers.
   const [audioExclusions, setAudioExclusions] = useState<ExcludedApp[]>([]);
   const [pendingAudioExclusions, setPendingAudioExclusions] = useState<ExcludedApp[] | null>(null);
   const [selectedBundleId, setSelectedBundleId] = useState<string | null>(null);
@@ -1831,18 +1830,20 @@ export function RecordingSettings() {
   }, [toast]);
 
   useEffect(() => {
-    if (!isMacOS || !processTapAvailable) return;
+    if ((!isMacOS && !isWindows) || !processTapAvailable) return;
     reloadAudioExclusions();
-  }, [isMacOS, processTapAvailable, reloadAudioExclusions]);
+  }, [isMacOS, isWindows, processTapAvailable, reloadAudioExclusions]);
 
   const addAudioExclusion = useCallback(
     (app: ExcludedApp) => {
       const current = pendingAudioExclusions ?? audioExclusions;
       if (!app.bundleId || current.some((a) => a.bundleId === app.bundleId)) return;
-      setPendingAudioExclusions([...current, app]);
+      // Windows Application Loopback can exclude one process tree. Replacing
+      // the current choice keeps the UI aligned with what the OS can enforce.
+      setPendingAudioExclusions(isWindows ? [app] : [...current, app]);
       setHasUnsavedChanges(true);
     },
-    [pendingAudioExclusions, audioExclusions]
+    [pendingAudioExclusions, audioExclusions, isWindows]
   );
 
   const removeAudioExclusion = useCallback(
@@ -1857,8 +1858,11 @@ export function RecordingSettings() {
 
   const pickAppToExclude = useCallback(async () => {
     const picked = await open({
-      filters: [{ name: "Application", extensions: ["app"] }],
-      defaultPath: "/Applications",
+      filters: [{
+        name: "Application",
+        extensions: isWindows ? ["exe"] : ["app"],
+      }],
+      defaultPath: isWindows ? "C:\\Program Files" : "/Applications",
       multiple: false,
       directory: false,
     });
@@ -1870,12 +1874,12 @@ export function RecordingSettings() {
       addAudioExclusion(meta);
     } catch (e) {
       toast({
-        title: "Couldn't read app bundle",
+        title: "Couldn't read application",
         description: String(e),
         variant: "destructive",
       });
     }
-  }, [addAudioExclusion, toast]);
+  }, [addAudioExclusion, isWindows, toast]);
 
   useEventListener(
     "keydown",
@@ -3590,9 +3594,10 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
         </Card>
         )}
 
-        {/* Per-app exclusion list for the CoreAudio Process Tap. Only
-            meaningful when the tap is the active backend. */}
-        {!settings.disableAudio && isMacOS && processTapAvailable && settings.experimentalCoreaudioSystemAudio && (
+        {/* Per-app exclusion list for the platform process tap. On macOS it
+            follows the experimental global-tap flag; Windows switches to
+            Application Loopback when an exclusion is configured. */}
+        {!settings.disableAudio && processTapAvailable && ((isMacOS && settings.experimentalCoreaudioSystemAudio) || isWindows) && (
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5 space-y-2">
             <div className="flex items-center space-x-2.5">
@@ -3603,6 +3608,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 </h3>
                 <p className="text-xs text-muted-foreground">
                   Audio from these apps will be filtered out of system-audio capture.
+                  {isWindows && " Windows supports one excluded app at a time."}
                 </p>
               </div>
             </div>

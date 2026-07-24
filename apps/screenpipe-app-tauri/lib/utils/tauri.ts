@@ -1608,7 +1608,8 @@ async piUpdateConfig(userToken: string | null, providerConfig: PiProviderConfig 
 }
 },
 /**
- * Read bundle ID, display name, and icon from a `.app` bundle selected in Finder.
+ * Read the platform app identifier, display name, and icon from an app picked
+ * in Finder (macOS) or an executable picked in Explorer (Windows).
  */
 async readAppBundleMetadata(path: string) : Promise<Result<ExcludedApp, string>> {
     try {
