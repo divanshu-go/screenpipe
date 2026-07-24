@@ -6,9 +6,9 @@ and layer declared in the manifest, weighted by confidence and criticality.
 
 - Manifest: `e2e/coverage-map.json`
 - Specs directory: `e2e/specs`
-- Mapped specs: 72
-- Declared test blocks: 221
-- Weighted coverage points: 171.0
+- Mapped specs: 73
+- Declared test blocks: 222
+- Weighted coverage points: 172.0
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -19,9 +19,9 @@ can execute more runtime cases than this number shows.
 
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
-| windows | 61 | 206 | 165.3 | 15 | 66 | 93% |
-| macos | 68 | 185 | 142.3 | 17 | 67 | 89% |
-| linux | 52 | 168 | 135.9 | 13 | 62 | 87% |
+| windows | 62 | 207 | 166.3 | 15 | 67 | 93% |
+| macos | 69 | 186 | 143.3 | 17 | 68 | 89% |
+| linux | 53 | 169 | 136.9 | 13 | 63 | 87% |
 
 ## Runtime Results
 
@@ -39,13 +39,13 @@ pass/fail/skip counts.
 | capture-ocr | 2 specs / 15 tests / 6.0 pts | 4 specs / 6 tests / 2.4 pts | 1 specs / 3 tests / 1.2 pts |
 | chat-ai | 18 specs / 31 tests / 22.4 pts | 21 specs / 35 tests / 23.7 pts | 17 specs / 30 tests / 21.9 pts |
 | entitlement | - | 1 specs / 1 tests / 1.0 pts | - |
-| local-api | 15 specs / 95 tests / 79.0 pts | 14 specs / 69 tests / 59.6 pts | 12 specs / 68 tests / 59.2 pts |
+| local-api | 15 specs / 95 tests / 79.0 pts | 15 specs / 70 tests / 60.0 pts | 12 specs / 68 tests / 59.2 pts |
 | notifications | 2 specs / 11 tests / 10.1 pts | 2 specs / 4 tests / 2.4 pts | 1 specs / 3 tests / 2.1 pts |
 | onboarding | 2 specs / 7 tests / 4.6 pts | 2 specs / 7 tests / 4.6 pts | 2 specs / 7 tests / 4.6 pts |
 | os-integration | 5 specs / 17 tests / 16.1 pts | 5 specs / 4 tests / 1.3 pts | - |
 | performance | 2 specs / 44 tests / 44.0 pts | 4 specs / 34 tests / 30.5 pts | 1 specs / 29 tests / 29.0 pts |
-| pipes | 3 specs / 12 tests / 12.0 pts | 3 specs / 12 tests / 12.0 pts | 3 specs / 12 tests / 12.0 pts |
-| real-ui-e2e | 39 specs / 124 tests / 99.1 pts | 41 specs / 111 tests / 88.6 pts | 36 specs / 104 tests / 86.3 pts |
+| pipes | 4 specs / 13 tests / 13.0 pts | 4 specs / 13 tests / 13.0 pts | 4 specs / 13 tests / 13.0 pts |
+| real-ui-e2e | 40 specs / 125 tests / 100.1 pts | 42 specs / 112 tests / 89.6 pts | 37 specs / 105 tests / 87.3 pts |
 | settings | 13 specs / 33 tests / 30.6 pts | 15 specs / 28 tests / 24.3 pts | 12 specs / 25 tests / 22.6 pts |
 | storage-privacy | 6 specs / 21 tests / 20.1 pts | 5 specs / 13 tests / 12.1 pts | 4 specs / 13 tests / 12.1 pts |
 | tauri-command | 10 specs / 19 tests / 12.3 pts | 10 specs / 20 tests / 11.8 pts | 9 specs / 18 tests / 11.3 pts |

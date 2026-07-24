@@ -8,19 +8,21 @@ import {
   AlertCircle,
   ArrowDown,
   ArrowUp,
+  CheckCircle2,
   Loader2,
   Pencil,
   Plus,
+  RefreshCw,
   Trash2,
 } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { LiveViewAiComposer } from "@/components/settings/live-view-ai-composer";
+import { LiveViewCard as OverviewCard } from "@/components/settings/live-view-card";
 import { usePipes } from "@/lib/hooks/use-pipes";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useToast } from "@/components/ui/use-toast";
+import { localFetch } from "@/lib/api";
 import {
   generateLiveViewWithPi,
   type GeneratedLiveViewBlock,
@@ -32,12 +34,22 @@ import {
   type BrainViewComponent,
   type BrainViewDefinition,
   type BrainViewSlot,
-  type JsonValue,
 } from "@/lib/utils/tauri";
 
 export type ViewComponent = BrainViewComponent;
 export type ViewSlot = BrainViewSlot;
 export type ViewDefinition = BrainViewDefinition;
+
+type DataRefreshState = {
+  status: "starting" | "running" | "complete" | "partial" | "error";
+  viewId: string;
+  pipeNames: string[];
+  slotIds: string[];
+  startedAt: number;
+  filled: number;
+  total: number;
+  message?: string;
+};
 
 const COMPONENTS: Array<{
   value: ViewComponent;
@@ -59,226 +71,38 @@ const COMPONENTS: Array<{
   { value: "markdown.v1", label: "Text", schema: "a short formatted brief" },
 ];
 
-function timeAgo(iso: string): string {
-  const elapsed = Date.now() - new Date(iso).getTime();
-  if (!Number.isFinite(elapsed) || elapsed < 60_000) return "just now";
-  const minutes = Math.floor(elapsed / 60_000);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
-}
-
-function slotClass(width: number): string {
-  if (width === 3) return "col-span-12 md:col-span-6 xl:col-span-3";
-  if (width === 6) return "col-span-12 md:col-span-6";
-  return "col-span-12";
-}
-
-function isRecord(value: unknown): value is Record<string, JsonValue> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function stringValue(value: unknown): string {
-  return typeof value === "string" || typeof value === "number"
-    ? String(value)
-    : "";
-}
-
-function ViewSlotBody({ slot }: { slot: ViewSlot }) {
-  const rawPayload = slot.value?.payload;
-  const payload = isRecord(rawPayload) ? rawPayload : null;
-  if (!payload) {
-    return (
-      <div className="flex min-h-24 items-center justify-center border border-dashed border-border px-4 text-center text-xs text-muted-foreground">
-        {slot.binding
-          ? `waiting for ${slot.binding.pipeName} to publish data`
-          : "connect a Pipe to fill this Block"}
-      </div>
-    );
-  }
-
-  if (slot.component === "metric.v1") {
-    return (
-      <div className="space-y-2 py-2">
-        {typeof payload.label === "string" && (
-          <p className="text-xs text-muted-foreground">{payload.label}</p>
-        )}
-        <div className="flex items-baseline gap-2">
-          <span className="text-4xl font-semibold tracking-tight">
-            {stringValue(payload.value)}
-          </span>
-          {typeof payload.unit === "string" && (
-            <span className="text-sm text-muted-foreground">
-              {payload.unit}
-            </span>
-          )}
-        </div>
-        {typeof payload.delta === "string" && (
-          <p className="text-xs text-muted-foreground">{payload.delta}</p>
-        )}
-      </div>
-    );
-  }
-
-  const items: Record<string, JsonValue>[] = Array.isArray(payload.items)
-    ? payload.items.filter(isRecord)
-    : [];
-  if (slot.component === "list.v1") {
-    return (
-      <div className="divide-y divide-border border-y border-border">
-        {items.map((item, index) => (
-          <div
-            key={`${stringValue(item.title)}-${index}`}
-            className="flex items-start justify-between gap-3 py-2.5"
-          >
-            <div className="min-w-0">
-              <p className="truncate text-sm">{stringValue(item.title)}</p>
-              {typeof item.subtitle === "string" && (
-                <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                  {item.subtitle}
-                </p>
-              )}
-            </div>
-            {typeof item.status === "string" && (
-              <span className="shrink-0 border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-                {item.status}
-              </span>
-            )}
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  if (slot.component === "bar-chart.v1") {
-    const max = Math.max(
-      1,
-      ...items.map((item) => (typeof item.value === "number" ? item.value : 0)),
-    );
-    return (
-      <div className="space-y-3">
-        {items.map((item, index) => {
-          const value = typeof item.value === "number" ? item.value : 0;
-          return (
-            <div
-              key={`${stringValue(item.label)}-${index}`}
-              className="space-y-1"
-            >
-              <div className="flex justify-between gap-3 text-xs">
-                <span className="truncate">{stringValue(item.label)}</span>
-                <span className="tabular-nums text-muted-foreground">
-                  {value}
-                </span>
-              </div>
-              <div className="h-1.5 bg-muted">
-                <div
-                  className="h-full bg-foreground"
-                  style={{ width: `${Math.max(2, (value / max) * 100)}%` }}
-                />
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    );
-  }
-
-  if (slot.component === "timeline.v1") {
-    return (
-      <div className="space-y-0">
-        {items.map((item, index) => (
-          <div
-            key={`${stringValue(item.title)}-${index}`}
-            className="grid grid-cols-[7rem_1px_1fr] gap-3"
-          >
-            <span className="py-2 text-right text-[10px] text-muted-foreground">
-              {stringValue(item.timestamp)}
-            </span>
-            <span className="bg-border" />
-            <div className="py-2">
-              <p className="text-sm">{stringValue(item.title)}</p>
-              {typeof item.subtitle === "string" && (
-                <p className="text-xs text-muted-foreground">{item.subtitle}</p>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
-    );
-  }
+function DataRefreshBanner({ state }: { state: DataRefreshState }) {
+  const active = state.status === "starting" || state.status === "running";
+  const message =
+    state.status === "starting"
+      ? `starting ${state.pipeNames.join(", ")}`
+      : state.status === "running"
+        ? state.filled > 0
+          ? `${state.filled} of ${state.total} sections updated`
+          : `${state.pipeNames.join(", ")} ${state.pipeNames.length === 1 ? "is" : "are"} building your live data`
+        : state.status === "complete"
+          ? `all ${state.total} sections are up to date`
+          : state.message || "some sections could not be updated";
 
   return (
-    <div className="prose-sm max-w-none text-sm dark:prose-invert">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        skipHtml
-        unwrapDisallowed
-        allowedElements={[
-          "p",
-          "strong",
-          "em",
-          "ul",
-          "ol",
-          "li",
-          "h1",
-          "h2",
-          "h3",
-          "blockquote",
-          "code",
-          "pre",
-          "hr",
-          "br",
-          "table",
-          "thead",
-          "tbody",
-          "tr",
-          "th",
-          "td",
-        ]}
-      >
-        {stringValue(payload.content)}
-      </ReactMarkdown>
-    </div>
-  );
-}
-
-function OverviewCard({ slot }: { slot: ViewSlot }) {
-  return (
-    <article
-      data-testid={`overview-card-${slot.id}`}
-      className={`${slotClass(slot.width)} flex min-h-44 flex-col border border-border bg-background p-4`}
+    <div
+      data-testid="live-view-data-status"
+      className="mb-4 flex items-center gap-2 border border-border px-3 py-2 text-xs"
     >
-      <div className="mb-4 flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h3 className="truncate text-sm font-medium">{slot.title}</h3>
-          <p className="mt-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-            {COMPONENTS.find((item) => item.value === slot.component)?.label}
-          </p>
-        </div>
-        {slot.value && (
-          <span className="shrink-0 text-[10px] text-muted-foreground">
-            {timeAgo(slot.value.updatedAt)}
-          </span>
-        )}
-      </div>
-      <div className="flex-1">
-        <ViewSlotBody slot={slot} />
-      </div>
-      <div className="mt-4 flex items-center justify-between gap-3 border-t border-border pt-2 text-[10px] text-muted-foreground">
-        <span className="truncate">
-          {slot.binding
-            ? `Pipe: ${slot.binding.pipeName}`
-            : "No Pipe connected"}
+      {active ? (
+        <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+      ) : state.status === "complete" ? (
+        <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+      ) : (
+        <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+      )}
+      <span>{message}</span>
+      {active && (
+        <span className="ml-auto tabular-nums text-muted-foreground">
+          {state.filled}/{state.total}
         </span>
-        {slot.value && (
-          <span className="shrink-0">
-            artifact #{slot.value.artifactOutputId} · v
-            {slot.value.artifactVersion}
-          </span>
-        )}
-      </div>
-    </article>
+      )}
+    </div>
   );
 }
 
@@ -332,11 +156,20 @@ export function BrainOverview() {
   const [aiPreview, setAiPreview] = useState(false);
   const [aiNote, setAiNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [dataRefresh, setDataRefresh] = useState<DataRefreshState | null>(null);
+  const [cardFeedback, setCardFeedback] = useState<
+    Record<string, "up" | "down" | null>
+  >({});
+  const [aiEditingSlotId, setAiEditingSlotId] = useState<string | null>(null);
 
   const installedPipes = useMemo(
     () => [...pipes].sort((a, b) => a.config.name.localeCompare(b.config.name)),
     [pipes],
   );
+  const defaultAiPreset = useMemo(() => {
+    const presets = (settings.aiPresets ?? []) as AIPreset[];
+    return presets.find((preset) => preset.defaultPreset) ?? presets[0] ?? null;
+  }, [settings.aiPresets]);
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -363,6 +196,151 @@ export function BrainOverview() {
     const interval = setInterval(() => void load(true), 30_000);
     return () => clearInterval(interval);
   }, [load]);
+
+  const refreshConnectedPipes = useCallback(
+    async (targetView: ViewDefinition, requestedSlots?: ViewSlot[]) => {
+      const boundSlots = (requestedSlots ?? targetView.slots).filter(
+        (slot) => slot.binding,
+      );
+      const pipeNames = Array.from(
+        new Set(
+          boundSlots
+            .map((slot) => slot.binding?.pipeName)
+            .filter((name): name is string => Boolean(name)),
+        ),
+      );
+      if (pipeNames.length === 0) return;
+
+      const startedAt = Date.now();
+      setDataRefresh({
+        status: "starting",
+        viewId: targetView.id,
+        pipeNames,
+        slotIds: boundSlots.map((slot) => slot.id),
+        startedAt,
+        filled: 0,
+        total: boundSlots.length,
+      });
+
+      const failures: string[] = [];
+      await Promise.all(
+        pipeNames.map(async (pipeName) => {
+          try {
+            const response = await localFetch(
+              `/pipes/${encodeURIComponent(pipeName)}/run`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  notification_context: {
+                    source: "live-view",
+                    live_view_id: targetView.id,
+                    target_ids: boundSlots
+                      .filter((slot) => slot.binding?.pipeName === pipeName)
+                      .map((slot) => `live-view:${targetView.id}:${slot.id}`),
+                    instruction: requestedSlots
+                      ? "Refresh only the listed structured output targets. Call structured_output get_targets first, query only source-backed Screenpipe APIs, and submit an evidence-backed value for each listed target before completing."
+                      : "Refresh every structured output target assigned to this pipe. Call structured_output get_targets first, query only source-backed Screenpipe APIs, and submit every valid target before completing.",
+                  },
+                }),
+              },
+            );
+            const body = (await response.json().catch(() => ({}))) as {
+              error?: string;
+            };
+            if (
+              !response.ok ||
+              (body.error && !body.error.includes("already running"))
+            ) {
+              throw new Error(body.error || `HTTP ${response.status}`);
+            }
+          } catch (runError) {
+            failures.push(
+              `${pipeName}: ${
+                runError instanceof Error ? runError.message : String(runError)
+              }`,
+            );
+          }
+        }),
+      );
+
+      setDataRefresh((current) =>
+        current && current.startedAt === startedAt
+          ? {
+              ...current,
+              status:
+                failures.length === pipeNames.length ? "error" : "running",
+              message:
+                failures.length > 0
+                  ? `Could not start ${failures.join(", ")}`
+                  : undefined,
+            }
+          : current,
+      );
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!dataRefresh || dataRefresh.status !== "running") return;
+    let cancelled = false;
+
+    const poll = async () => {
+      try {
+        const result = await commands.listBrainViews();
+        if (cancelled || result.status === "error") return;
+        const refreshedView = result.data.find(
+          (candidate) => candidate.id === dataRefresh.viewId,
+        );
+        if (!refreshedView) return;
+        setView(refreshedView);
+        const filled = refreshedView.slots.filter((slot) => {
+          if (
+            !dataRefresh.slotIds.includes(slot.id) ||
+            !slot.binding ||
+            !slot.value
+          ) {
+            return false;
+          }
+          return (
+            new Date(slot.value.updatedAt).getTime() >=
+            dataRefresh.startedAt - 2_000
+          );
+        }).length;
+        const timedOut = Date.now() - dataRefresh.startedAt > 120_000;
+        setDataRefresh((current) => {
+          if (!current || current.startedAt !== dataRefresh.startedAt) {
+            return current;
+          }
+          if (filled >= current.total) {
+            return { ...current, status: "complete", filled };
+          }
+          if (timedOut) {
+            return {
+              ...current,
+              status: "partial",
+              filled,
+              message:
+                filled > 0
+                  ? `${filled} of ${current.total} sections updated. The Pipes are still working on the rest.`
+                  : "The Pipes are still working. This view will update when they publish data.",
+            };
+          }
+          if (current.filled === filled) return current;
+          return { ...current, filled };
+        });
+      } catch {
+        // The normal 30-second refresh remains a fallback if one poll fails.
+      }
+    };
+
+    void poll();
+    const interval = window.setInterval(() => void poll(), 2_500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [dataRefresh]);
 
   const beginCreate = () => {
     const now = new Date().toISOString();
@@ -417,8 +395,7 @@ export function BrainOverview() {
               blocks: normalizedSlots(view.slots).map((slot) => ({
                 title: slot.title,
                 component: slot.component,
-                width:
-                  slot.width === 3 || slot.width === 12 ? slot.width : 6,
+                width: slot.width === 3 || slot.width === 12 ? slot.width : 6,
                 pipeName: slot.binding?.pipeName ?? null,
               })),
             }
@@ -450,8 +427,7 @@ export function BrainOverview() {
           : generatedSlots(generated.blocks);
       setDraft({
         ...base,
-        title:
-          scope === "dashboard" || !view ? generated.title : base.title,
+        title: scope === "dashboard" || !view ? generated.title : base.title,
         slots,
         updatedAt: now,
       });
@@ -472,7 +448,109 @@ export function BrainOverview() {
     }
   };
 
-  const save = async () => {
+  const recordCardFeedback = (slot: ViewSlot, rating: "up" | "down") => {
+    const next = cardFeedback[slot.id] === rating ? null : rating;
+    setCardFeedback((current) => ({ ...current, [slot.id]: next }));
+    void import("posthog-js")
+      .then(({ default: posthog }) =>
+        posthog.capture("live_view_card_feedback", {
+          action: next ?? "clear",
+          component: slot.component,
+          pipe: slot.binding?.pipeName ?? null,
+        }),
+      )
+      .catch(() => undefined);
+  };
+
+  const editSlotWithAi = async (
+    slot: ViewSlot,
+    prompt: string,
+  ): Promise<boolean> => {
+    if (!view || !defaultAiPreset) {
+      toast({
+        title: "choose an AI model first",
+        description: "Add an AI preset in Settings, then try again.",
+        variant: "destructive",
+      });
+      return false;
+    }
+
+    setAiEditingSlotId(slot.id);
+    try {
+      const generated = await generateLiveViewWithPi({
+        prompt: `Replace only the existing section "${slot.title}". Do not add another section. User request: ${prompt}`,
+        scope: "block",
+        preset: defaultAiPreset,
+        userToken: settings.user?.token ?? null,
+        pipes: installedPipes.map((pipe) => ({
+          name: pipe.config.name,
+          description:
+            pipe.prompt_body?.trim().slice(0, 500) ||
+            `${pipe.config.name} Screenpipe Pipe`,
+        })),
+        currentView: {
+          title: view.title,
+          blocks: [
+            {
+              title: slot.title,
+              component: slot.component,
+              width: slot.width === 3 || slot.width === 12 ? slot.width : 6,
+              pipeName: slot.binding?.pipeName ?? null,
+            },
+          ],
+        },
+      });
+      const replacement = generated.blocks[0];
+      const result = await commands.saveBrainView({
+        id: view.id,
+        title: view.title,
+        expectedRevision: view.revision,
+        slots: normalizedSlots(view.slots).map((current) =>
+          current.id === slot.id
+            ? {
+                id: current.id,
+                title: replacement.title,
+                component: replacement.component,
+                width: replacement.width,
+                order: current.order,
+                binding: replacement.pipeName
+                  ? { pipeName: replacement.pipeName }
+                  : null,
+              }
+            : {
+                id: current.id,
+                title: current.title,
+                component: current.component,
+                width: current.width,
+                order: current.order,
+                binding: current.binding,
+              },
+        ),
+      });
+      if (result.status === "error") throw new Error(result.error);
+      setView(result.data);
+      const refreshedSlot = result.data.slots.find(
+        (candidate) => candidate.id === slot.id,
+      );
+      if (refreshedSlot?.binding) {
+        void refreshConnectedPipes(result.data, [refreshedSlot]);
+      }
+      toast({ title: `${replacement.title} updated` });
+      return true;
+    } catch (editError) {
+      toast({
+        title: "failed to edit this section",
+        description:
+          editError instanceof Error ? editError.message : String(editError),
+        variant: "destructive",
+      });
+      return false;
+    } finally {
+      setAiEditingSlotId(null);
+    }
+  };
+
+  const save = async (refreshData = false) => {
     if (!draft || !draft.title.trim()) return;
     setSaving(true);
     try {
@@ -496,6 +574,7 @@ export function BrainOverview() {
       setAiPreview(false);
       setAiNote(null);
       toast({ title: "Live View saved" });
+      if (refreshData) void refreshConnectedPipes(result.data);
     } catch (saveError) {
       toast({
         title: "failed to save Live View",
@@ -607,7 +686,7 @@ export function BrainOverview() {
     return (
       <div
         data-testid="brain-overview-ai-preview"
-        className="min-h-0 flex-1 overflow-y-auto pb-8"
+        className="min-h-0 flex-1 overflow-y-auto pb-8 pr-4 [scrollbar-gutter:stable]"
       >
         <div className="mb-5 flex flex-wrap items-start justify-between gap-4 border-b border-border pb-4">
           <div>
@@ -652,18 +731,18 @@ export function BrainOverview() {
               size="sm"
               className="rounded-none"
               disabled={saving}
-              onClick={() => void save()}
+              onClick={() => void save(true)}
             >
               {saving && (
                 <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
               )}
-              apply
+              apply & load data
             </Button>
           </div>
         </div>
         <div className="grid grid-cols-12 gap-4">
           {previewSlots.map((slot) => (
-            <OverviewCard key={slot.id} slot={slot} />
+            <OverviewCard key={slot.id} slot={slot} preview />
           ))}
         </div>
       </div>
@@ -674,7 +753,7 @@ export function BrainOverview() {
     return (
       <div
         data-testid="brain-overview-editor"
-        className="min-h-0 flex-1 space-y-5 overflow-y-auto pb-8"
+        className="min-h-0 flex-1 space-y-5 overflow-y-auto pb-8 pr-4 [scrollbar-gutter:stable]"
       >
         <div className="flex items-end justify-between gap-4 border-b border-border pb-4">
           <label className="min-w-0 flex-1 space-y-1.5">
@@ -877,8 +956,12 @@ export function BrainOverview() {
 
   if (!view) return null;
   const slots = normalizedSlots(view.slots);
+  const boundSlotCount = slots.filter((slot) => slot.binding).length;
+  const refreshIsActive =
+    dataRefresh?.viewId === view.id &&
+    (dataRefresh.status === "starting" || dataRefresh.status === "running");
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto pb-8">
+    <div className="min-h-0 flex-1 overflow-y-auto pb-8 pr-4 [scrollbar-gutter:stable]">
       <div className="mb-5 flex items-start justify-between gap-4 border-b border-border pb-4">
         <div>
           <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
@@ -890,23 +973,41 @@ export function BrainOverview() {
             artifacts.
           </p>
         </div>
-        <Button
-          data-testid="overview-edit"
-          variant="outline"
-          size="sm"
-          className="rounded-none"
-          onClick={beginEdit}
-        >
-          <Pencil className="mr-1.5 h-3.5 w-3.5" /> edit manually
-        </Button>
+        <div className="flex gap-2">
+          {boundSlotCount > 0 && (
+            <Button
+              data-testid="overview-refresh-data"
+              variant="outline"
+              size="sm"
+              className="rounded-none"
+              disabled={refreshIsActive}
+              onClick={() => void refreshConnectedPipes(view)}
+            >
+              <RefreshCw
+                className={`mr-1.5 h-3.5 w-3.5 ${
+                  refreshIsActive ? "animate-spin" : ""
+                }`}
+              />
+              {refreshIsActive ? "loading data" : "refresh data"}
+            </Button>
+          )}
+          <Button
+            data-testid="overview-edit"
+            variant="outline"
+            size="sm"
+            className="rounded-none"
+            onClick={beginEdit}
+          >
+            <Pencil className="mr-1.5 h-3.5 w-3.5" /> edit manually
+          </Button>
+        </div>
       </div>
       <div className="mb-5">
-        <LiveViewAiComposer
-          busy={generating}
-          compact
-          onGenerate={generate}
-        />
+        <LiveViewAiComposer busy={generating} compact onGenerate={generate} />
       </div>
+      {dataRefresh?.viewId === view.id && (
+        <DataRefreshBanner state={dataRefresh} />
+      )}
       {slots.length === 0 ? (
         <button
           type="button"
@@ -921,7 +1022,19 @@ export function BrainOverview() {
           className="grid grid-cols-12 gap-4"
         >
           {slots.map((slot) => (
-            <OverviewCard key={slot.id} slot={slot} />
+            <OverviewCard
+              key={slot.id}
+              slot={slot}
+              refreshing={
+                refreshIsActive &&
+                Boolean(dataRefresh?.slotIds.includes(slot.id))
+              }
+              feedback={cardFeedback[slot.id] ?? null}
+              aiEditing={aiEditingSlotId === slot.id}
+              onFeedback={(rating) => recordCardFeedback(slot, rating)}
+              onRegenerate={() => void refreshConnectedPipes(view, [slot])}
+              onAiEdit={(prompt) => editSlotWithAi(slot, prompt)}
+            />
           ))}
         </div>
       )}

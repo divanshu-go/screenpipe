@@ -15,6 +15,7 @@ import { INTERNAL_TITLE_PREFIX } from "@/lib/utils/internal-session";
 
 const GENERATION_TIMEOUT_MS = 90_000;
 const PROJECT_DIR = "pi-live-views";
+const MAX_PIPE_CANDIDATES = 16;
 const COMPONENTS = new Set<BrainViewComponent>([
   "metric.v1",
   "list.v1",
@@ -174,6 +175,8 @@ Allowed components:
 
 Allowed widths are 3, 6, or 12. Prefer 6 for most sections, 12 for timelines or detailed briefs, and 3 only for compact metrics.
 Only use a pipeName from the installed pipes supplied by the user. Use null when none fits. Do not invent pipes.
+For a whole dashboard, create 4 to 7 distinct sections. Prefer a useful mix with at least one metric, one bar chart, and one list or timeline when the request supports them. Never return placeholder titles such as "test", duplicate sections, or multiple metrics that show the same number.
+For one section, return exactly one focused section.
 
 Required JSON shape:
 {"title":"View title","blocks":[{"title":"Section title","component":"metric.v1","width":6,"pipeName":"exact-installed-pipe-name-or-null"}],"note":"One short sentence explaining what you created"}`;
@@ -183,8 +186,8 @@ function generationPrompt(options: GenerateLiveViewOptions): string {
   const scopeInstruction =
     options.scope === "block"
       ? "Create exactly one new section to add to the existing Live View."
-      : "Create a complete Live View with 2 to 6 useful sections. Return the full replacement dashboard.";
-  const pipes = options.pipes.map((pipe) => ({
+      : "Create a complete Live View with 4 to 7 useful, visually varied sections. Return the full replacement dashboard.";
+  const pipes = relevantPipes(options.prompt, options.pipes).map((pipe) => ({
     name: pipe.name,
     description: pipe.description.slice(0, 500),
   }));
@@ -201,6 +204,36 @@ Current Live View:
 ${options.currentView ? JSON.stringify(options.currentView) : "null"}
 
 Choose the simplest useful layout. Reply with only the required JSON object.`;
+}
+
+function searchableWords(value: string): Set<string> {
+  return new Set(
+    value
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((word) => word.length >= 3),
+  );
+}
+
+export function relevantPipes(
+  prompt: string,
+  pipes: LiveViewPipeSummary[],
+): LiveViewPipeSummary[] {
+  const promptWords = searchableWords(prompt);
+  return pipes
+    .map((pipe, index) => {
+      const nameWords = searchableWords(pipe.name);
+      const descriptionWords = searchableWords(pipe.description);
+      let score = 0;
+      for (const word of promptWords) {
+        if (nameWords.has(word)) score += 8;
+        if (descriptionWords.has(word)) score += 2;
+      }
+      return { pipe, index, score };
+    })
+    .sort((left, right) => right.score - left.score || left.index - right.index)
+    .slice(0, MAX_PIPE_CANDIDATES)
+    .map(({ pipe }) => pipe);
 }
 
 function providerConfig(preset: AIPreset): PiProviderConfig {
@@ -235,7 +268,9 @@ function textFromAgentEnd(envelope: AgentEventEnvelope): string {
     .join("\n");
 }
 
-async function rawGeneration(options: GenerateLiveViewOptions): Promise<string> {
+async function rawGeneration(
+  options: GenerateLiveViewOptions,
+): Promise<string> {
   const sessionId = `${INTERNAL_TITLE_PREFIX}live-view-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   await mountAgentEventBus();
   const home = await homeDir();

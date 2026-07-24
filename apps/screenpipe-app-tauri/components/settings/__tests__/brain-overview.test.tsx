@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   listBrainViews: vi.fn(),
   saveBrainView: vi.fn(),
   generateLiveViewWithPi: vi.fn(),
+  localFetch: vi.fn(),
   toast: vi.fn(),
 }));
 
@@ -21,6 +22,9 @@ vi.mock("@/lib/utils/tauri", () => ({
 }));
 vi.mock("@/components/ui/use-toast", () => ({
   useToast: () => ({ toast: mocks.toast }),
+}));
+vi.mock("@/lib/api", () => ({
+  localFetch: mocks.localFetch,
 }));
 vi.mock("@/lib/hooks/use-pipes", () => ({
   usePipes: () => ({
@@ -58,7 +62,11 @@ vi.mock("@/lib/hooks/use-settings", () => ({
   }),
 }));
 vi.mock("@/components/rewind/ai-presets-selector", () => ({
-  AIPresetsSelector: ({ controlledPresetId }: { controlledPresetId: string }) => (
+  AIPresetsSelector: ({
+    controlledPresetId,
+  }: {
+    controlledPresetId: string;
+  }) => (
     <button type="button" data-testid="model-selector">
       {controlledPresetId ?? "model"}
     </button>
@@ -105,6 +113,11 @@ const populatedView: ViewDefinition = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.localFetch.mockResolvedValue({
+    ok: true,
+    status: 200,
+    json: async () => ({ success: true }),
+  });
 });
 
 describe("BrainOverview", () => {
@@ -171,7 +184,9 @@ describe("BrainOverview", () => {
     expect(
       await screen.findByText("What should this Live View show?"),
     ).toBeTruthy();
-    expect(screen.getByPlaceholderText(/show how I spend my time/)).toBeTruthy();
+    expect(
+      screen.getByPlaceholderText(/show how I spend my time/),
+    ).toBeTruthy();
     fireEvent.click(await screen.findByTestId("overview-create"));
     fireEvent.click(screen.getByTestId("overview-add-card"));
     expect(screen.getByText("Live View name")).toBeTruthy();
@@ -271,6 +286,12 @@ describe("BrainOverview", () => {
         binding: { pipeName: "daily-summary" },
       }),
     ]);
+    await waitFor(() =>
+      expect(mocks.localFetch).toHaveBeenCalledWith(
+        "/pipes/daily-summary/run",
+        expect.objectContaining({ method: "POST" }),
+      ),
+    );
   });
 
   it("adds one AI-generated section without replacing the existing view", async () => {
@@ -295,6 +316,12 @@ describe("BrainOverview", () => {
     const prompt = await screen.findByPlaceholderText(
       /Ask AI to change this view/,
     );
+    expect(
+      (screen.getByLabelText("generation scope") as HTMLSelectElement).value,
+    ).toBe("dashboard");
+    fireEvent.change(screen.getByLabelText("generation scope"), {
+      target: { value: "block" },
+    });
     fireEvent.change(prompt, {
       target: { value: "add work I could automate" },
     });
@@ -312,5 +339,91 @@ describe("BrainOverview", () => {
         currentView: expect.objectContaining({ title: "How I worked today" }),
       }),
     );
+  });
+
+  it("offers per-card feedback and regenerates only that card", async () => {
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [populatedView],
+    });
+    render(<BrainOverview />);
+
+    const useful = await screen.findByRole("button", {
+      name: "mark Focus time useful",
+    });
+    fireEvent.click(useful);
+    expect(useful.getAttribute("aria-pressed")).toBe("true");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "regenerate Focus time" }),
+    );
+    await waitFor(() => expect(mocks.localFetch).toHaveBeenCalledTimes(1));
+    const [, request] = mocks.localFetch.mock.calls[0];
+    expect(JSON.parse(request.body).notification_context).toEqual(
+      expect.objectContaining({
+        target_ids: ["live-view:my-overview:focus-time"],
+      }),
+    );
+  });
+
+  it("edits one card from its AI popover without replacing the dashboard", async () => {
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [populatedView],
+    });
+    mocks.generateLiveViewWithPi.mockResolvedValue({
+      title: "Time by project",
+      note: "Changed the breakdown.",
+      blocks: [
+        {
+          title: "Time by project",
+          component: "bar-chart.v1",
+          width: 12,
+          pipeName: "daily-summary",
+        },
+      ],
+    });
+    mocks.saveBrainView.mockImplementation(async (request) => ({
+      status: "ok",
+      data: {
+        ...populatedView,
+        revision: 4,
+        slots: request.slots.map((slot: object) => ({
+          ...slot,
+          value: null,
+        })),
+      },
+    }));
+    render(<BrainOverview />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "edit Focus time with AI",
+      }),
+    );
+    fireEvent.change(
+      await screen.findByPlaceholderText("e.g. group by project instead"),
+      { target: { value: "group this by project" } },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "update" }));
+
+    await waitFor(() => expect(mocks.saveBrainView).toHaveBeenCalledTimes(1));
+    expect(mocks.generateLiveViewWithPi).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: "block",
+        prompt: expect.stringContaining("group this by project"),
+        currentView: expect.objectContaining({
+          blocks: [expect.objectContaining({ title: "Focus time" })],
+        }),
+      }),
+    );
+    expect(mocks.saveBrainView.mock.calls[0][0].slots).toEqual([
+      expect.objectContaining({
+        id: "focus-time",
+        title: "Time by project",
+        component: "bar-chart.v1",
+        width: 12,
+      }),
+    ]);
   });
 });

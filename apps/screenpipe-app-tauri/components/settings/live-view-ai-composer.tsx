@@ -13,9 +13,16 @@ import type { AIPreset } from "@/lib/utils/tauri";
 import type { LiveViewGenerationScope } from "@/lib/live-views/generate-live-view-with-pi";
 
 const SUGGESTIONS = [
-  "show how I spend my time",
+  "show how I spend my time today",
   "track meetings and follow-ups",
   "find work I could automate",
+];
+
+const GENERATION_STEPS = [
+  "understanding what you want",
+  "choosing the best data sources",
+  "designing the dashboard",
+  "checking every section",
 ];
 
 type LiveViewAiComposerProps = {
@@ -39,10 +46,9 @@ export function LiveViewAiComposer({
     [settings.aiPresets],
   );
   const [prompt, setPrompt] = useState("");
-  const [scope, setScope] = useState<LiveViewGenerationScope>(
-    compact ? "block" : "dashboard",
-  );
+  const [scope, setScope] = useState<LiveViewGenerationScope>("dashboard");
   const [presetId, setPresetId] = useState<string | null>(null);
+  const [generationStep, setGenerationStep] = useState(0);
 
   useEffect(() => {
     if (presetId && presets.some((preset) => preset.id === presetId)) return;
@@ -53,11 +59,22 @@ export function LiveViewAiComposer({
     setPresetId(next);
   }, [presetId, presets]);
 
+  useEffect(() => {
+    if (!busy) return;
+    const interval = window.setInterval(() => {
+      setGenerationStep((current) =>
+        Math.min(current + 1, GENERATION_STEPS.length - 1),
+      );
+    }, 2_200);
+    return () => window.clearInterval(interval);
+  }, [busy]);
+
   const selectedPreset = presets.find((preset) => preset.id === presetId);
   const canSubmit = Boolean(prompt.trim() && selectedPreset && !busy);
 
   const submit = () => {
     if (!canSubmit || !selectedPreset) return;
+    setGenerationStep(0);
     void onGenerate(prompt.trim(), scope, selectedPreset);
   };
 
@@ -73,7 +90,9 @@ export function LiveViewAiComposer({
       {!compact && (
         <div className="flex items-center gap-2 border-b border-border px-4 py-3">
           <Sparkles className="h-3.5 w-3.5" />
-          <p className="text-xs font-medium">What should this Live View show?</p>
+          <p className="text-xs font-medium">
+            What should this Live View show?
+          </p>
         </div>
       )}
       <Textarea
@@ -129,7 +148,10 @@ export function LiveViewAiComposer({
           onClick={submit}
         >
           {busy ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            <>
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              <span>creating</span>
+            </>
           ) : (
             <>
               <span className="mr-1.5">generate</span>
@@ -138,6 +160,40 @@ export function LiveViewAiComposer({
           )}
         </Button>
       </div>
+      {busy && (
+        <div
+          data-testid="live-view-generation-progress"
+          className="border-t border-border px-4 py-3"
+        >
+          <div className="flex items-center gap-2 text-xs">
+            <span className="relative flex h-2 w-2">
+              <span className="absolute inline-flex h-full w-full animate-ping bg-foreground opacity-30" />
+              <span className="relative inline-flex h-2 w-2 bg-foreground" />
+            </span>
+            <span>{GENERATION_STEPS[generationStep]}</span>
+          </div>
+          <div className="mt-2 grid grid-cols-4 gap-1">
+            {GENERATION_STEPS.map((step, index) => (
+              <span
+                key={step}
+                className={`h-0.5 transition-colors duration-500 ${
+                  index <= generationStep ? "bg-foreground" : "bg-muted"
+                }`}
+              />
+            ))}
+          </div>
+          {!compact && (
+            <div className="mt-4 grid grid-cols-2 gap-2" aria-hidden="true">
+              {[0, 1, 2, 3].map((item) => (
+                <div
+                  key={item}
+                  className="h-16 animate-pulse border border-border bg-muted/40"
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
       {!compact && (
         <div className="flex flex-wrap gap-1.5 border-t border-border px-3 py-2.5">
           {SUGGESTIONS.map((suggestion) => (
