@@ -10,7 +10,8 @@
       "kind": "metric.v1",
       "width": 3,
       "order": 0,
-      "binding": {
+      "source": {
+        "type": "pipe.v1",
         "pipeName": "daily-summary"
       }
     },
@@ -20,7 +21,8 @@
       "kind": "list.v1",
       "width": 6,
       "order": 1,
-      "binding": {
+      "source": {
+        "type": "pipe.v1",
         "pipeName": "workflow-opportunities"
       }
     }

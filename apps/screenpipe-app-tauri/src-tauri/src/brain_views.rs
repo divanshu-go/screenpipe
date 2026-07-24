@@ -10,8 +10,8 @@
 
 use crate::store::SettingsStore;
 use screenpipe_engine::live_views::{
-    delete_live_view, list_live_views, save_live_view, LiveView, LiveViewBinding,
-    LiveViewBlock, LiveViewBlockKind, LiveViewTemplateBlock, SaveLiveViewRequest,
+    delete_live_view, list_live_views, save_live_view, LiveView, LiveViewBlock, LiveViewBlockKind,
+    LiveViewSource, LiveViewTemplateBlock, SaveLiveViewRequest,
 };
 use screenpipe_engine::structured_outputs::StructuredOutputValue;
 use serde::{Deserialize, Serialize};
@@ -24,18 +24,16 @@ pub struct BrainViewBinding {
     pub pipe_name: String,
 }
 
-impl From<BrainViewBinding> for LiveViewBinding {
+impl From<BrainViewBinding> for LiveViewSource {
     fn from(binding: BrainViewBinding) -> Self {
-        Self {
-            pipe_name: binding.pipe_name,
-        }
+        Self::pipe(binding.pipe_name)
     }
 }
 
-impl From<LiveViewBinding> for BrainViewBinding {
-    fn from(binding: LiveViewBinding) -> Self {
+impl From<LiveViewSource> for BrainViewBinding {
+    fn from(source: LiveViewSource) -> Self {
         Self {
-            pipe_name: binding.pipe_name,
+            pipe_name: source.pipe_name().to_string(),
         }
     }
 }
@@ -142,7 +140,7 @@ impl From<LiveViewBlock> for BrainViewSlot {
             component: block.kind.into(),
             width: block.width,
             order: block.order,
-            binding: block.binding.map(Into::into),
+            binding: block.source.map(Into::into),
             value: block.value.map(Into::into),
         }
     }
@@ -191,7 +189,7 @@ impl From<BrainViewSlotInput> for LiveViewTemplateBlock {
             kind: slot.component.into(),
             width: slot.width,
             order: slot.order,
-            binding: slot.binding.map(Into::into),
+            source: slot.binding.map(Into::into),
         }
     }
 }
@@ -264,6 +262,6 @@ mod tests {
         };
         let block: LiveViewTemplateBlock = input.into();
         assert_eq!(block.kind, LiveViewBlockKind::MetricV1);
-        assert_eq!(block.binding.unwrap().pipe_name, "daily-summary");
+        assert_eq!(block.source.unwrap().pipe_name(), "daily-summary");
     }
 }

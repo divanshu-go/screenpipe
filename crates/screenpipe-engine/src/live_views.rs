@@ -13,7 +13,7 @@ use crate::structured_outputs::{
     list_output_targets, replace_consumer_targets, OutputTargetInput, StructuredOutputValue,
 };
 use chrono::Utc;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -36,9 +36,52 @@ fn store_lock() -> &'static Mutex<()> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type")]
+pub enum LiveViewSource {
+    #[serde(rename = "pipe.v1")]
+    PipeV1 {
+        #[serde(rename = "pipeName")]
+        pipe_name: String,
+    },
+}
+
+impl LiveViewSource {
+    pub fn pipe(pipe_name: impl Into<String>) -> Self {
+        Self::PipeV1 {
+            pipe_name: pipe_name.into(),
+        }
+    }
+
+    pub fn pipe_name(&self) -> &str {
+        match self {
+            Self::PipeV1 { pipe_name } => pipe_name,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct LiveViewBinding {
-    pub pipe_name: String,
+struct LegacyLiveViewBinding {
+    pipe_name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum LiveViewSourceInput {
+    Source(LiveViewSource),
+    LegacyBinding(LegacyLiveViewBinding),
+}
+
+fn deserialize_live_view_source<'de, D>(deserializer: D) -> Result<Option<LiveViewSource>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<LiveViewSourceInput>::deserialize(deserializer).map(|source| {
+        source.map(|source| match source {
+            LiveViewSourceInput::Source(source) => source,
+            LiveViewSourceInput::LegacyBinding(binding) => LiveViewSource::pipe(binding.pipe_name),
+        })
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -142,8 +185,13 @@ pub struct LiveViewTemplateBlock {
     pub kind: LiveViewBlockKind,
     pub width: u8,
     pub order: u16,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub binding: Option<LiveViewBinding>,
+    #[serde(
+        default,
+        alias = "binding",
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_live_view_source"
+    )]
+    pub source: Option<LiveViewSource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -166,8 +214,13 @@ pub struct LiveViewBlock {
     pub kind: LiveViewBlockKind,
     pub width: u8,
     pub order: u16,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub binding: Option<LiveViewBinding>,
+    #[serde(
+        default,
+        alias = "binding",
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_live_view_source"
+    )]
+    pub source: Option<LiveViewSource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<StructuredOutputValue>,
 }
@@ -216,7 +269,7 @@ struct LegacyBlock {
     component: LiveViewBlockKind,
     width: u8,
     order: u16,
-    binding: Option<LiveViewBinding>,
+    binding: Option<LegacyLiveViewBinding>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -352,8 +405,8 @@ fn validate_blocks(blocks: &[LiveViewTemplateBlock]) -> Result<(), LiveViewError
                 block.order
             )));
         }
-        if let Some(binding) = &block.binding {
-            validate_title(&binding.pipe_name, "binding pipe name")?;
+        if let Some(source) = &block.source {
+            validate_title(source.pipe_name(), "Pipe source name")?;
         }
     }
     Ok(())
@@ -427,7 +480,9 @@ fn read_legacy_store(path: &Path) -> Result<LiveViewStore, LiveViewError> {
                         kind: block.component,
                         width: block.width,
                         order: block.order,
-                        binding: block.binding,
+                        source: block
+                            .binding
+                            .map(|binding| LiveViewSource::pipe(binding.pipe_name)),
                     })
                     .collect(),
                 created_at: view.created_at,
@@ -506,11 +561,11 @@ pub fn compile_live_view_targets(templates: &[LiveViewTemplate]) -> Vec<OutputTa
         .iter()
         .flat_map(|template| {
             template.blocks.iter().filter_map(move |block| {
-                let binding = block.binding.as_ref()?;
+                let source = block.source.as_ref()?;
                 Some(OutputTargetInput {
                     id: live_view_target_id(&template.id, &block.id),
                     title: block.title.clone(),
-                    bound_pipe: binding.pipe_name.clone(),
+                    bound_pipe: source.pipe_name().to_string(),
                     schema_name: block.kind.schema_name().to_string(),
                     schema: block.kind.output_schema(),
                 })
@@ -566,7 +621,7 @@ fn hydrate(
                     kind: block.kind,
                     width: block.width,
                     order: block.order,
-                    binding: block.binding,
+                    source: block.source,
                 })
                 .collect(),
             created_at: template.created_at,
@@ -703,16 +758,14 @@ pub fn live_view_template_json_schema() -> Value {
 mod tests {
     use super::*;
 
-    fn block(binding: Option<&str>) -> LiveViewTemplateBlock {
+    fn block(pipe_name: Option<&str>) -> LiveViewTemplateBlock {
         LiveViewTemplateBlock {
             id: "focus-time".to_string(),
             title: "Focus time".to_string(),
             kind: LiveViewBlockKind::MetricV1,
             width: 6,
             order: 0,
-            binding: binding.map(|pipe_name| LiveViewBinding {
-                pipe_name: pipe_name.to_string(),
-            }),
+            source: pipe_name.map(LiveViewSource::pipe),
         }
     }
 
@@ -819,7 +872,43 @@ mod tests {
         assert_eq!(views[0].schema, LIVE_VIEW_SCHEMA);
         let templates = list_live_view_templates(dir.path()).unwrap();
         assert_eq!(templates[0].schema, LIVE_VIEW_TEMPLATE_SCHEMA);
+        assert_eq!(
+            templates[0].blocks[0].source.as_ref().unwrap().pipe_name(),
+            "daily-summary"
+        );
         assert!(path.exists());
         assert!(store_path(dir.path()).exists());
+        let migrated = std::fs::read_to_string(store_path(dir.path())).unwrap();
+        assert!(migrated.contains(r#""source""#));
+        assert!(migrated.contains(r#""type": "pipe.v1""#));
+        assert!(!migrated.contains(r#""binding""#));
+    }
+
+    #[test]
+    fn upgrades_the_unreleased_portable_binding_to_a_tagged_source() {
+        let legacy: LiveViewTemplate = serde_json::from_str(
+            r#"{
+              "schema": "live-view-template.v1",
+              "id": "daily",
+              "title": "Daily",
+              "revision": 1,
+              "blocks": [{
+                "id": "focus",
+                "title": "Focus",
+                "kind": "metric.v1",
+                "width": 6,
+                "order": 0,
+                "binding": {"pipeName": "daily-summary"}
+              }],
+              "createdAt": "2026-07-24T00:00:00Z",
+              "updatedAt": "2026-07-24T00:00:00Z"
+            }"#,
+        )
+        .unwrap();
+
+        let encoded = serde_json::to_value(legacy).unwrap();
+        assert_eq!(encoded["blocks"][0]["source"]["type"], "pipe.v1");
+        assert_eq!(encoded["blocks"][0]["source"]["pipeName"], "daily-summary");
+        assert!(encoded["blocks"][0].get("binding").is_none());
     }
 }

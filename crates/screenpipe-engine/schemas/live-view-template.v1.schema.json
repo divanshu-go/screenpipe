@@ -76,16 +76,19 @@
           "minimum": 0,
           "maximum": 65535
         },
-        "binding": {
-          "$ref": "#/$defs/binding"
+        "source": {
+          "$ref": "#/$defs/source"
         }
       }
     },
-    "binding": {
+    "source": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["pipeName"],
+      "required": ["type", "pipeName"],
       "properties": {
+        "type": {
+          "const": "pipe.v1"
+        },
         "pipeName": {
           "type": "string",
           "minLength": 1,
