@@ -186,6 +186,34 @@ export function usePiForegroundEvents({
         return;
       }
 
+      if (data.type === "acp_external_auth_required") {
+        // The agent (Kimi, OpenCode) can't sign in over ACP — its login is a
+        // CLI step. Treat this like an intentional stop so the crash-recovery
+        // loop does NOT silently restart into the default provider (that was
+        // the "fell back to pi" bug); instead tell the user how to sign in.
+        piStoppedIntentionallyRef.current = true;
+        setPiInfo(null);
+        setIsLoading(false);
+        setIsStreaming(false);
+        window.setTimeout(() => {
+          piStoppedIntentionallyRef.current = false;
+        }, 15_000);
+        const agentName = stringValue(data.agentName, "This agent");
+        const agentId = stringValue(data.agentId);
+        const command = stringValue(data.command);
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `acp-auth-${agentId || Date.now()}`,
+            role: "assistant",
+            content: "",
+            timestamp: Date.now(),
+            contentBlocks: [{ type: "acp_auth_cli", agentId, agentName, command }],
+          },
+        ]);
+        return;
+      }
+
         const emitSessionActivity = (
           partial: {
             status?: ReturnType<typeof statusForEvent>;

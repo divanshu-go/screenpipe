@@ -1509,6 +1509,28 @@ export function StandaloneChat({
     onConnectConnectionAction: connectFromInlineCard,
     onDeclineConnectionAction: declineConnectionAction,
     onAnswerAgentAction: answerAgentAction,
+    // The "sign in via CLI" card (Kimi/OpenCode) offers two actions:
+    // "recheck" (kept the agent — retry after logging in) and "switch"
+    // (fall back to the default preset). Both dismiss the card and, if the
+    // user had a message queued, resend it; with no pending message it just
+    // returns to the (now empty) chat.
+    defaultProviderLabel:
+      settings?.aiPresets?.find((preset) => preset.defaultPreset)?.id ?? "screenpipe-cloud",
+    onAcpAuthAction: (messageId: string, action: "recheck" | "switch") => {
+      setMessages((prev) => prev.filter((message) => message.id !== messageId));
+      if (action === "switch") {
+        const fallback =
+          settings?.aiPresets?.find((preset) => preset.defaultPreset) ?? settings?.aiPresets?.[0];
+        // handleSetActivePreset updates activePresetRef synchronously, so the
+        // resend below goes to the default provider, not the failed agent.
+        if (fallback) handleSetActivePreset(fallback);
+      }
+      const pending = lastUserMessageRef.current?.trim();
+      if (pending) {
+        piMessageIdRef.current = null;
+        void sendMessage(pending);
+      }
+    },
     scheduleMessage: (message, displayLabel) => {
       piMessageIdRef.current = null;
       sendMessage(message, displayLabel);

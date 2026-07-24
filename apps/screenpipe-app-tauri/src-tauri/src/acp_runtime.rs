@@ -1807,10 +1807,15 @@ fn auth_method_has_required_env(
 }
 
 fn external_auth_command(agent_id: &str) -> Option<&'static str> {
-    // OpenCode 1.1.x advertises an ACP auth method but returns
-    // "Authentication not implemented" when the client calls it. Its CLI
-    // login persists credentials that the ACP server can reuse afterward.
-    (agent_id == "opencode").then_some("opencode auth login")
+    // These agents advertise an ACP auth method but their `authenticate` just
+    // re-errors "Authentication required" — login can't complete over ACP. It
+    // must be done via their own CLI, which persists credentials the ACP server
+    // then reuses. We show the command instead of a card that would loop.
+    match agent_id {
+        "opencode" => Some("opencode auth login"),
+        "kimi" => Some("kimi login"),
+        _ => None,
+    }
 }
 
 fn available_auth_methods<'a>(
@@ -1834,8 +1839,22 @@ async fn authenticate(
     config: &RuntimeConfig,
 ) -> Result<(), String> {
     if let Some(command) = external_auth_command(&config.agent_id) {
+        let agent_name = init
+            .agent_info
+            .as_ref()
+            .map(|info| info.title.as_deref().unwrap_or(&info.name))
+            .unwrap_or(&config.agent_id);
+        // Surface a sign-in card telling the user how to log in via the CLI.
+        // The desktop treats this like a clean stop (no crash-restart into the
+        // default provider) — see the acp_external_auth_required handler.
+        state.output.send(json!({
+            "type": "acp_external_auth_required",
+            "agentId": config.agent_id,
+            "agentName": agent_name,
+            "command": command,
+        }));
         return Err(format!(
-            "OpenCode cannot complete login through ACP yet. Run `{command}` in a terminal, then retry this chat."
+            "{agent_name} needs a one-time CLI login: run `{command}`, then retry."
         ));
     }
     let methods = available_auth_methods(init, config);
@@ -2854,12 +2873,16 @@ mod tests {
     }
 
     #[test]
-    fn opencode_auth_uses_its_supported_cli_login() {
+    fn external_auth_agents_use_their_cli_login() {
+        // Agents whose ACP authenticate doesn't work log in via their own CLI.
         assert_eq!(
             external_auth_command("opencode"),
             Some("opencode auth login")
         );
+        assert_eq!(external_auth_command("kimi"), Some("kimi login"));
+        // Agents that authenticate over ACP have no external command.
         assert_eq!(external_auth_command("codex-acp"), None);
+        assert_eq!(external_auth_command("gemini"), None);
     }
 
     #[tokio::test]

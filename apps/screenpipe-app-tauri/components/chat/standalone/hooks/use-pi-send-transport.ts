@@ -8,7 +8,7 @@ import { toast } from "@/components/ui/use-toast";
 import { commands, type PiInfo, type Result } from "@/lib/utils/tauri";
 import { isPlaceholderConversationTitle } from "@/lib/chat/message-rendering";
 import { buildProviderErrorMessage, preflightChatProvider } from "@/lib/chat/provider-errors";
-import { isAcpAuthenticationCancelledError } from "@/lib/chat/auth-errors";
+import { isAcpAuthenticationCancelledError, isAcpExternalAuthError } from "@/lib/chat/auth-errors";
 import { queuedPreviewForText } from "@/lib/chat/queued-display";
 import { useChatStore } from "@/lib/stores/chat-store";
 import { createPiMessageQueueTransport } from "@/components/chat/standalone/hooks/use-pi-message-queue-transport";
@@ -211,6 +211,9 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     sendOptions?: ChatSendOptions,
   ) {
     clearPendingSteerTransportState();
+    // Capture the attempt up front so it survives a failed ACP start — the
+    // "switch to default" sign-in card resends this message on the new preset.
+    lastUserMessageRef.current = userMessage;
 
     // A selector change may be in the narrow gap before React disables the
     // composer. Wait for it here as the authoritative boundary. Rejections
@@ -220,7 +223,7 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
       await awaitPendingPiPresetSwitch(piPresetSwitchPromiseRef);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (!isAcpAuthenticationCancelledError(message)) {
+      if (!isAcpAuthenticationCancelledError(message) && !isAcpExternalAuthError(message)) {
         toast({
           title: "could not switch AI assistant",
           description: message,
@@ -339,7 +342,12 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
                 ) {
                   // An ACP selection is an explicit harness boundary. Never
                   // fall through and send its prompt through another provider.
-                  if (!isAcpAuthenticationCancelledError(lastError)) {
+                  // Auth-cancel and CLI-login-required both render their own
+                  // in-chat card — don't also fire a destructive toast.
+                  if (
+                    !isAcpAuthenticationCancelledError(lastError) &&
+                    !isAcpExternalAuthError(lastError)
+                  ) {
                     toast({
                       title: `failed to start AI assistant (${preset.id})`,
                       description: lastError,
@@ -355,7 +363,12 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
                 if (
                   providerConfig.backend === "acp"
                 ) {
-                  if (!isAcpAuthenticationCancelledError(lastError)) {
+                  // Auth-cancel and CLI-login-required both render their own
+                  // in-chat card — don't also fire a destructive toast.
+                  if (
+                    !isAcpAuthenticationCancelledError(lastError) &&
+                    !isAcpExternalAuthError(lastError)
+                  ) {
                     toast({
                       title: `failed to start AI assistant (${preset.id})`,
                       description: lastError,

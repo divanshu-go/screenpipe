@@ -784,6 +784,7 @@ type GroupedBlock =
   | { type: "thinking"; text: string; isThinking: boolean; durationMs?: number; key: number }
   | { type: "connection-action"; block: Extract<ContentBlock, { type: "connection_action" }>; key: number }
   | { type: "agent-action"; block: Extract<ContentBlock, { type: "agent_action" }>; key: number }
+  | { type: "acp-auth-cli"; block: Extract<ContentBlock, { type: "acp_auth_cli" }>; key: number }
   | { type: "tool-group"; toolCalls: ToolCall[]; key: number }
   | { type: "work-group"; toolCalls: ToolCall[]; durationMs: number; key: number };
 
@@ -808,6 +809,8 @@ function groupContentBlocks(blocks: ContentBlock[]): GroupedBlock[] {
         result.push({ type: "connection-action", block, key: result.length });
       } else if (block.type === "agent_action") {
         result.push({ type: "agent-action", block, key: result.length });
+      } else if (block.type === "acp_auth_cli") {
+        result.push({ type: "acp-auth-cli", block, key: result.length });
       }
     }
   }
@@ -913,7 +916,7 @@ function mergeWorkAndIntermediateText(groups: GroupedBlock[]): GroupedBlock[] {
     } else if (g.type === "tool-group") {
       firstKey ??= g.key;
       allToolCalls.push(...g.toolCalls);
-    } else if (g.type === "connection-action" || g.type === "agent-action") {
+    } else if (g.type === "connection-action" || g.type === "agent-action" || g.type === "acp-auth-cli") {
       finalBlocks.push(g);
     }
     // text and thinking blocks before the boundary are dropped
@@ -1157,6 +1160,69 @@ export function InlineAgentActionCard({
             >
               not now
             </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Sign-in card for agents (Kimi, OpenCode) whose login can't complete over
+ *  ACP: shows the CLI login command and a switch-to-default-provider escape. */
+export function InlineAcpAuthCard({
+  block,
+  defaultProviderLabel,
+  onRecheck,
+  onSwitchToDefault,
+}: {
+  block: Extract<ContentBlock, { type: "acp_auth_cli" }>;
+  defaultProviderLabel?: string;
+  onRecheck?: () => void;
+  onSwitchToDefault?: () => void;
+}) {
+  const titleId = React.useId();
+  return (
+    <div
+      className="w-full max-w-xl border border-border bg-background p-3 font-mono"
+      data-testid="acp-auth-cli-card"
+      role="group"
+      aria-labelledby={titleId}
+    >
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center text-foreground">
+          <KeyRound className="h-4 w-4" strokeWidth={1.8} aria-hidden />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div id={titleId} className="text-sm font-semibold leading-5 text-foreground">
+            sign in to {block.agentName} to use it here
+          </div>
+          <div className="mt-1 max-w-md text-xs leading-5 text-muted-foreground">
+            {block.agentName} signs in through its own CLI, not the chat. Run this in a terminal, then retry:
+          </div>
+          {block.command && (
+            <pre className="mt-2 overflow-x-auto rounded bg-muted px-2 py-1.5 text-xs text-foreground">
+              <code>{block.command}</code>
+            </pre>
+          )}
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            {onRecheck && (
+              <button
+                type="button"
+                onClick={() => onRecheck()}
+                className="inline-flex items-center gap-1.5 border border-foreground bg-foreground px-2.5 py-1.5 text-xs uppercase tracking-wide text-background transition-opacity duration-150 hover:opacity-90"
+              >
+                <RefreshCw className="h-3 w-3" /> i&apos;ve signed in, retry
+              </button>
+            )}
+            {onSwitchToDefault && (
+              <button
+                type="button"
+                onClick={() => onSwitchToDefault()}
+                className="border border-border px-2.5 py-1.5 text-xs uppercase tracking-wide text-foreground transition-colors duration-150 hover:bg-muted/50"
+              >
+                switch to {defaultProviderLabel || "default"}
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -1466,6 +1532,8 @@ export function MessageContent({
   onDismissConnectionAction,
   onAnswerAgentAction,
   onAskUserReply,
+  onAcpAuthAction,
+  defaultProviderLabel,
 }: {
   message: Message;
   isGenerating?: boolean;
@@ -1482,6 +1550,8 @@ export function MessageContent({
   onDismissConnectionAction?: (messageId: string, connectionId: string) => void;
   onAnswerAgentAction?: (block: Extract<ContentBlock, { type: "agent_action" }>, selectedOptionId?: string) => Promise<boolean> | boolean;
   onAskUserReply?: (reply: string, displayLabel: string) => void | Promise<void>;
+  onAcpAuthAction?: (messageId: string, action: "recheck" | "switch") => void;
+  defaultProviderLabel?: string;
 }) {
   const isUser = message.role === "user";
   const sourceCitations = isUser ? [] : sourceCitationsFromMessage(message);
@@ -1683,6 +1753,19 @@ export function MessageContent({
                 block={group.block}
                 onRespond={(selectedOptionId) =>
                   onAnswerAgentAction?.(group.block, selectedOptionId) ?? false
+                }
+              />
+            );
+          }
+          if (group.type === "acp-auth-cli") {
+            return (
+              <InlineAcpAuthCard
+                key={`acp-auth-${group.block.agentId}`}
+                block={group.block}
+                defaultProviderLabel={defaultProviderLabel}
+                onRecheck={onAcpAuthAction ? () => onAcpAuthAction(message.id, "recheck") : undefined}
+                onSwitchToDefault={
+                  onAcpAuthAction ? () => onAcpAuthAction(message.id, "switch") : undefined
                 }
               />
             );

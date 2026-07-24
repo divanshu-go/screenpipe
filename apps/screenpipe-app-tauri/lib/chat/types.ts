@@ -84,6 +84,15 @@ export type ContentBlock =
       // (POST /v1/connect-request). The connect/decline handlers echo the
       // outcome back to the blocked agent via POST /v1/connect-response.
       connectRequestId?: string;
+    }
+  | {
+      // An ACP agent (Kimi, OpenCode) whose login can't complete over ACP —
+      // the user must run its CLI login command, then retry. Rendered as a
+      // sign-in card with the command and a switch-to-default escape.
+      type: "acp_auth_cli";
+      agentId: string;
+      agentName: string;
+      command: string;
     };
 
 export interface Message {

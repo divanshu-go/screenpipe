@@ -29,6 +29,8 @@ interface UseChatMessageActionsOptions {
   onConnectConnectionAction?: (connectionId: string, block?: Extract<ContentBlock, { type: "connection_action" }>) => Promise<InlineConnectStatus | void> | InlineConnectStatus | void;
   onDeclineConnectionAction?: (block: Extract<ContentBlock, { type: "connection_action" }>) => void | Promise<void>;
   onAnswerAgentAction?: (block: Extract<ContentBlock, { type: "agent_action" }>, selectedOptionId?: string) => Promise<boolean> | boolean;
+  onAcpAuthAction?: (messageId: string, action: "recheck" | "switch") => void;
+  defaultProviderLabel?: string;
 }
 
 export function useChatMessageActions({
@@ -48,6 +50,8 @@ export function useChatMessageActions({
   onConnectConnectionAction,
   onDeclineConnectionAction,
   onAnswerAgentAction,
+  onAcpAuthAction,
+  defaultProviderLabel,
 }: UseChatMessageActionsOptions) {
   const [expandedSteerWorkIds, setExpandedSteerWorkIds] = useState<Set<string>>(() => new Set());
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
@@ -240,6 +244,8 @@ export function useChatMessageActions({
     onContinueConnectionAction: (prompt, label) => sendMessage(prompt, label),
     onDismissConnectionAction: dismissConnectionAction,
     onAnswerAgentAction,
+    onAcpAuthAction,
+    defaultProviderLabel,
     onAskUserReply: (reply, label) => sendMessage(reply, label),
     suppressSourceFooters: true,
   };
