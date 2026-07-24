@@ -141,7 +141,7 @@ describe("Brain Live Views", function () {
 
     const artifactIds: number[] = [];
     for (const slot of slots) {
-      const targetId = `desktop.brain-overview:my-overview:${slot.id}`;
+      const targetId = `live-view:my-overview:${slot.id}`;
       const target = targets.find((candidate) => candidate.id === targetId);
       expect(target).toBeTruthy();
       const submit = await fetch(

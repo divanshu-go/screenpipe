@@ -1,0 +1,30 @@
+{
+  "schema": "live-view-template.v1",
+  "id": "daily-work",
+  "title": "Daily work",
+  "revision": 1,
+  "blocks": [
+    {
+      "id": "focus-time",
+      "title": "Focus time",
+      "kind": "metric.v1",
+      "width": 3,
+      "order": 0,
+      "binding": {
+        "pipeName": "daily-summary"
+      }
+    },
+    {
+      "id": "automation-opportunities",
+      "title": "Automation opportunities",
+      "kind": "list.v1",
+      "width": 6,
+      "order": 1,
+      "binding": {
+        "pipeName": "workflow-opportunities"
+      }
+    }
+  ],
+  "createdAt": "2026-07-24T00:00:00Z",
+  "updatedAt": "2026-07-24T00:00:00Z"
+}

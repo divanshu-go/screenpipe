@@ -917,6 +917,22 @@ impl SCServer {
                     crate::routes::structured_outputs::submit_structured_output_handler,
                 ),
             )
+            // Live View Templates are a versioned cross-surface protocol.
+            // Local app/API clients can edit them; pipe tokens can only fill
+            // their assigned structured output targets above.
+            .route(
+                "/live-views",
+                get(crate::routes::live_views::list_live_views_handler),
+            )
+            .route(
+                "/live-views/schema",
+                get(crate::routes::live_views::live_view_schema_handler),
+            )
+            .route(
+                "/live-views/:id",
+                axum::routing::put(crate::routes::live_views::save_live_view_handler)
+                    .delete(crate::routes::live_views::delete_live_view_handler),
+            )
             .route(
                 "/speakers/sample/:audio_chunk_id",
                 get(get_speaker_sample_handler),
