@@ -217,7 +217,7 @@ function generationPrompt(options: GenerateLiveViewOptions): string {
   const scopeInstruction =
     options.scope === "block"
       ? "Create exactly one new section to add to the existing Live View."
-      : "Create a complete Live View with 4 to 7 useful, visually varied sections. Return the full replacement dashboard.";
+      : "Create a complete Live View with 4 to 7 useful, visually varied sections. Return the full dashboard.";
   const pipes = relevantPipes(options.prompt, options.pipes).map((pipe) => ({
     name: pipe.name,
     description: pipe.description.slice(0, 500),

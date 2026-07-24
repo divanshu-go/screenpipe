@@ -84,6 +84,7 @@ vi.mock("@/lib/live-views/generate-live-view-with-pi", () => ({
   generateLiveViewWithPi: mocks.generateLiveViewWithPi,
 }));
 import { BrainOverview, type ViewDefinition } from "../brain-overview";
+import { inferLiveViewGenerationIntent } from "../live-view-ai-composer";
 
 const populatedView: ViewDefinition = {
   id: "my-overview",
@@ -169,6 +170,27 @@ beforeEach(() => {
     status: 200,
     json: async () => ({ success: true }),
   });
+});
+
+describe("inferLiveViewGenerationIntent", () => {
+  it.each([
+    ["track my time", true, "new-dashboard"],
+    ["add time by app", true, "add-section"],
+    ["also show my meetings", true, "add-section"],
+    ["show me one chart for project time", true, "add-section"],
+    ["add a sales dashboard", true, "new-dashboard"],
+    ["make a sales dashboard", true, "new-dashboard"],
+    ["rebuild this around projects", true, "replace-dashboard"],
+    ["remove the focus chart", true, "replace-dashboard"],
+    ["add time by app", false, "new-dashboard"],
+  ] as const)(
+    "maps %s with current view=%s",
+    (prompt, hasCurrentView, expected) => {
+      expect(inferLiveViewGenerationIntent(prompt, hasCurrentView)).toBe(
+        expected,
+      );
+    },
+  );
 });
 
 describe("BrainOverview", () => {
@@ -813,17 +835,15 @@ describe("BrainOverview", () => {
     render(<BrainOverview />);
 
     const prompt = await screen.findByPlaceholderText(
-      /Ask AI to change this view/,
+      /Ask AI to create a dashboard/,
     );
-    expect(
-      (screen.getByLabelText("generation scope") as HTMLSelectElement).value,
-    ).toBe("dashboard");
-    fireEvent.change(screen.getByLabelText("generation scope"), {
-      target: { value: "block" },
-    });
+    expect(screen.queryByLabelText("generation scope")).toBeNull();
     fireEvent.change(prompt, {
       target: { value: "add work I could automate" },
     });
+    expect(screen.getByTestId("live-view-generation-intent").textContent).toBe(
+      "will add one section to “How I worked today”",
+    );
     const generateButton = screen.getByTestId("live-view-ai-generate");
     await waitFor(() => expect(generateButton).not.toBeDisabled());
     fireEvent.click(generateButton);
@@ -841,9 +861,15 @@ describe("BrainOverview", () => {
   });
 
   it("creates whole-dashboard AI drafts as a new named dashboard by default", async () => {
+    const existingProjectPulse: ViewDefinition = {
+      ...populatedView,
+      id: "project-pulse",
+      title: "Project pulse",
+      revision: 1,
+    };
     mocks.listBrainViews.mockResolvedValue({
       status: "ok",
-      data: [populatedView],
+      data: [populatedView, existingProjectPulse],
     });
     mocks.generateLiveViewWithPi.mockResolvedValue({
       title: "Project pulse",
@@ -875,12 +901,19 @@ describe("BrainOverview", () => {
     render(<BrainOverview />);
 
     fireEvent.change(
-      await screen.findByPlaceholderText(/Ask AI to change this view/),
+      await screen.findByPlaceholderText(/Ask AI to create a dashboard/),
       { target: { value: "build a separate project dashboard" } },
     );
     const generateButton = screen.getByTestId("live-view-ai-generate");
     await waitFor(() => expect(generateButton).not.toBeDisabled());
     fireEvent.click(generateButton);
+
+    expect(mocks.generateLiveViewWithPi).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: "dashboard",
+        currentView: null,
+      }),
+    );
 
     expect(
       (await screen.findByTestId("overview-destination-new")).getAttribute(
@@ -892,8 +925,8 @@ describe("BrainOverview", () => {
     await waitFor(() => expect(mocks.saveBrainView).toHaveBeenCalledTimes(1));
     expect(mocks.saveBrainView.mock.calls[0][0]).toEqual(
       expect.objectContaining({
-        id: "project-pulse",
-        title: "Project pulse",
+        id: "project-pulse-2",
+        title: "Project pulse 2",
         expectedRevision: null,
       }),
     );
@@ -938,8 +971,11 @@ describe("BrainOverview", () => {
     render(<BrainOverview />);
 
     fireEvent.change(
-      await screen.findByPlaceholderText(/Ask AI to change this view/),
+      await screen.findByPlaceholderText(/Ask AI to create a dashboard/),
       { target: { value: "rebuild this around projects" } },
+    );
+    expect(screen.getByTestId("live-view-generation-intent").textContent).toBe(
+      "will preview changes to “How I worked today”",
     );
     const generateButton = screen.getByTestId("live-view-ai-generate");
     await waitFor(() => expect(generateButton).not.toBeDisabled());
@@ -950,10 +986,9 @@ describe("BrainOverview", () => {
     ).toBeTruthy();
     expect(
       screen
-        .getByTestId("overview-destination-new")
+        .getByTestId("overview-destination-replace")
         .getAttribute("aria-pressed"),
     ).toBe("true");
-    fireEvent.click(screen.getByTestId("overview-destination-replace"));
     expect(
       screen.getByTestId("overview-replacement-warning").textContent,
     ).toContain("previous layout remains available through Undo");
@@ -966,6 +1001,54 @@ describe("BrainOverview", () => {
       await screen.findByText("Replace “How I worked today”?"),
     ).toBeTruthy();
     expect(mocks.saveBrainView).not.toHaveBeenCalled();
+  });
+
+  it("requires replace or delete when the dashboard limit is reached", async () => {
+    const dashboardViews = Array.from({ length: 12 }, (_, index) => ({
+      ...populatedView,
+      id: `dashboard-${index + 1}`,
+      title: `Dashboard ${index + 1}`,
+      revision: 1,
+    }));
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: dashboardViews,
+    });
+    mocks.generateLiveViewWithPi.mockResolvedValue({
+      title: "One more dashboard",
+      timeRange: "today",
+      note: "A new dashboard request.",
+      blocks: [
+        {
+          title: "Active time",
+          component: "metric.v1",
+          width: 6,
+          pipeName: "daily-summary",
+        },
+      ],
+    });
+    render(<BrainOverview />);
+
+    fireEvent.change(
+      await screen.findByPlaceholderText(/Ask AI to create a dashboard/),
+      { target: { value: "track my time in a new way" } },
+    );
+    const generateButton = screen.getByTestId("live-view-ai-generate");
+    await waitFor(() => expect(generateButton).not.toBeDisabled());
+    fireEvent.click(generateButton);
+
+    expect(
+      (await screen.findByTestId("overview-destination-replace")).getAttribute(
+        "aria-pressed",
+      ),
+    ).toBe("true");
+    expect(screen.getByTestId("overview-destination-new")).toBeDisabled();
+    expect(
+      screen.getByTestId("overview-dashboard-limit-warning").textContent,
+    ).toContain("Replace the current dashboard, or delete one");
+    expect(screen.getByTestId("overview-apply-ai").textContent).toContain(
+      "replace current dashboard",
+    );
   });
 
   it("offers per-card feedback and regenerates only that card", async () => {

@@ -15,7 +15,10 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { LiveViewAiComposer } from "@/components/settings/live-view-ai-composer";
+import {
+  LiveViewAiComposer,
+  type LiveViewGenerationIntent,
+} from "@/components/settings/live-view-ai-composer";
 import { LiveViewCard as OverviewCard } from "@/components/settings/live-view-card";
 import { LiveViewDashboardSwitcher } from "@/components/settings/live-view-dashboard-switcher";
 import { LiveViewLayoutEditor } from "@/components/settings/live-view-layout-editor";
@@ -599,7 +602,9 @@ export function BrainOverview() {
       updatedAt: now,
     });
     setPreviewSource({ kind: "template", kit });
-    setPreviewDestination("new");
+    setPreviewDestination(
+      view && views.length >= MAX_DASHBOARDS ? "replace" : "new",
+    );
     setAiNote(kit.description);
     setEditing(false);
     setTemplateGalleryOpen(false);
@@ -610,6 +615,7 @@ export function BrainOverview() {
     prompt: string,
     scope: LiveViewGenerationScope,
     preset: AIPreset,
+    intent: LiveViewGenerationIntent,
   ) => {
     setGenerating(true);
     try {
@@ -624,18 +630,19 @@ export function BrainOverview() {
             pipe.prompt_body?.trim().slice(0, 500) ||
             `${pipe.config.name} Screenpipe Pipe`,
         })),
-        currentView: view
-          ? {
-              title: view.title,
-              timeRange: view.timeRange,
-              blocks: normalizedSlots(view.slots).map((slot) => ({
-                title: slot.title,
-                component: slot.component,
-                width: slot.width === 3 || slot.width === 12 ? slot.width : 6,
-                pipeName: slot.binding?.pipeName ?? null,
-              })),
-            }
-          : null,
+        currentView:
+          view && intent !== "new-dashboard"
+            ? {
+                title: view.title,
+                timeRange: view.timeRange,
+                blocks: normalizedSlots(view.slots).map((slot) => ({
+                  title: slot.title,
+                  component: slot.component,
+                  width: slot.width === 3 || slot.width === 12 ? slot.width : 6,
+                  pipeName: slot.binding?.pipeName ?? null,
+                })),
+              }
+            : null,
       });
       const now = new Date().toISOString();
       const base: ViewDefinition = view
@@ -666,7 +673,15 @@ export function BrainOverview() {
       });
       setAiNote(generated.note);
       setPreviewSource({ kind: "ai", scope });
-      setPreviewDestination(scope === "dashboard" ? "new" : "replace");
+      setPreviewDestination(
+        scope === "block"
+          ? "replace"
+          : view && views.length >= MAX_DASHBOARDS
+            ? "replace"
+            : intent === "replace-dashboard"
+              ? "replace"
+              : "new",
+      );
       setEditing(false);
       setAiPreview(true);
     } catch (generateError) {
@@ -878,12 +893,15 @@ export function BrainOverview() {
       }
       const previousView =
         !creatingNew && view ? copyViewDefinition(view) : null;
+      const targetTitle = creatingNew
+        ? uniqueDashboardTitle(draft.title.trim(), views)
+        : draft.title.trim();
       const targetId = creatingNew
-        ? uniqueDashboardId(draft.title, views)
+        ? uniqueDashboardId(targetTitle, views)
         : draft.id;
       const result = await commands.saveBrainView({
         id: targetId,
-        title: draft.title.trim(),
+        title: targetTitle,
         expectedRevision: creatingNew ? null : draft.revision,
         timeRange: draft.timeRange,
         slots: normalizedSlots(draft.slots).map((slot) => ({
@@ -953,8 +971,11 @@ export function BrainOverview() {
           `You can keep up to ${MAX_DASHBOARDS} dashboards. Delete one before creating another.`,
         );
       }
+      const requestedTitle = creatingNew
+        ? uniqueDashboardTitle(draft?.title.trim() || kit.title, views)
+        : draft?.title.trim() || kit.title;
       const targetViewId = creatingNew
-        ? uniqueDashboardId(draft?.title || kit.title, views)
+        ? uniqueDashboardId(requestedTitle, views)
         : view!.id;
       const result = await commands.installBrainViewTemplateKit({
         kitId: kit.id,
@@ -963,7 +984,6 @@ export function BrainOverview() {
       });
       if (result.status === "error") throw new Error(result.error);
       let installedView = result.data;
-      const requestedTitle = draft?.title.trim();
       if (requestedTitle && requestedTitle !== installedView.title) {
         const renameResult = await commands.saveBrainView({
           id: installedView.id,
@@ -1017,9 +1037,13 @@ export function BrainOverview() {
     if (!view || !title.trim() || title.trim() === view.title) return;
     setSaving(true);
     try {
+      const uniqueTitle = uniqueDashboardTitle(
+        title.trim(),
+        views.filter((candidate) => candidate.id !== view.id),
+      );
       const result = await commands.saveBrainView({
         id: view.id,
-        title: title.trim(),
+        title: uniqueTitle,
         expectedRevision: view.revision,
         timeRange: view.timeRange,
         slots: normalizedSlots(view.slots).map((slot) => ({
@@ -1268,6 +1292,7 @@ export function BrainOverview() {
       (previewSource?.kind === "ai" && previewSource.scope === "dashboard"),
     );
     const canChooseDestination = Boolean(view && wholeDashboardPreview);
+    const dashboardLimitReached = views.length >= MAX_DASHBOARDS;
     const replacingDashboard = Boolean(
       canChooseDestination && previewDestination === "replace",
     );
@@ -1344,7 +1369,13 @@ export function BrainOverview() {
                 size="sm"
                 variant={replacingDashboard ? "destructive" : "default"}
                 className="rounded-none"
-                disabled={saving || !draft.title.trim()}
+                disabled={
+                  saving ||
+                  !draft.title.trim() ||
+                  (wholeDashboardPreview &&
+                    destination === "new" &&
+                    dashboardLimitReached)
+                }
                 onClick={requestApply}
               >
                 {saving && (
@@ -1399,18 +1430,21 @@ export function BrainOverview() {
                     data-testid="overview-destination-new"
                     type="button"
                     aria-pressed={previewDestination === "new"}
+                    disabled={dashboardLimitReached}
                     className={`border p-3 text-left transition-colors ${
                       previewDestination === "new"
                         ? "border-foreground bg-muted/40"
                         : "border-border hover:border-foreground"
-                    }`}
+                    } disabled:cursor-not-allowed disabled:opacity-50`}
                     onClick={() => setPreviewDestination("new")}
                   >
                     <span className="block text-xs font-medium">
                       create new
                     </span>
                     <span className="mt-1 block text-[11px] text-muted-foreground">
-                      keep “{view?.title}” unchanged
+                      {dashboardLimitReached
+                        ? `${MAX_DASHBOARDS} dashboard limit reached`
+                        : `keep “${view?.title}” unchanged`}
                     </span>
                   </button>
                   <button
@@ -1449,6 +1483,16 @@ export function BrainOverview() {
               This will replace {view?.slots.length ?? 0} sections in “
               {view?.title}” with {previewSlots.length}. The previous layout
               remains available through Undo.
+            </div>
+          )}
+
+          {wholeDashboardPreview && dashboardLimitReached && (
+            <div
+              data-testid="overview-dashboard-limit-warning"
+              className="mb-5 border border-border bg-muted/30 px-4 py-3 text-xs text-muted-foreground"
+            >
+              You already have {MAX_DASHBOARDS} dashboards. Replace the current
+              dashboard, or delete one before creating another.
             </div>
           )}
 
@@ -1617,7 +1661,12 @@ export function BrainOverview() {
         </div>
       )}
       <div className="mb-5">
-        <LiveViewAiComposer busy={generating} compact onGenerate={generate} />
+        <LiveViewAiComposer
+          busy={generating}
+          compact
+          currentViewTitle={view.title}
+          onGenerate={generate}
+        />
       </div>
       {undoView && (
         <div

@@ -28,16 +28,55 @@ const GENERATION_STEPS = [
 type LiveViewAiComposerProps = {
   busy: boolean;
   compact?: boolean;
+  currentViewTitle?: string | null;
   onGenerate: (
     prompt: string,
     scope: LiveViewGenerationScope,
     preset: AIPreset,
+    intent: LiveViewGenerationIntent,
   ) => void | Promise<void>;
 };
+
+export type LiveViewGenerationIntent =
+  "new-dashboard" | "add-section" | "replace-dashboard";
+
+const REPLACE_DASHBOARD_PATTERNS = [
+  /\b(replace|rebuild|redo|reset)\b/i,
+  /\bstart\s+over\b/i,
+  /^\s*(remove|delete|drop)\b/i,
+  /\b(change|update|edit|simplify|reorganize|reorder|remove|delete|drop)\b.*\b(this|current|my|dashboard|view|overview|section|block|card|chart|metric)\b/i,
+  /\bmake\b.*\b(this|current|my)\b.*\b(dashboard|view|overview)?\b/i,
+];
+
+const NEW_DASHBOARD_PATTERN =
+  /\b(add|create|build|make|generate|new|another)\b.{0,32}\b(dashboard|overview|view)\b/i;
+
+const ADD_SECTION_PATTERNS = [
+  /^\s*(add|include)\b/i,
+  /\b(also\s+(show|include|track)|show\s+.+\s+too|include\s+.+\s+too)\b/i,
+  /\b(a|one|another|new)\s+(section|block|card|chart|metric|table|timeline)\b/i,
+];
+
+export function inferLiveViewGenerationIntent(
+  prompt: string,
+  hasCurrentView: boolean,
+): LiveViewGenerationIntent {
+  if (!hasCurrentView) return "new-dashboard";
+  const request = prompt.trim();
+  if (REPLACE_DASHBOARD_PATTERNS.some((pattern) => pattern.test(request))) {
+    return "replace-dashboard";
+  }
+  if (NEW_DASHBOARD_PATTERN.test(request)) return "new-dashboard";
+  if (ADD_SECTION_PATTERNS.some((pattern) => pattern.test(request))) {
+    return "add-section";
+  }
+  return "new-dashboard";
+}
 
 export function LiveViewAiComposer({
   busy,
   compact = false,
+  currentViewTitle = null,
   onGenerate,
 }: LiveViewAiComposerProps) {
   const { settings } = useSettings();
@@ -46,7 +85,6 @@ export function LiveViewAiComposer({
     [settings.aiPresets],
   );
   const [prompt, setPrompt] = useState("");
-  const [scope, setScope] = useState<LiveViewGenerationScope>("dashboard");
   const [presetId, setPresetId] = useState<string | null>(null);
   const [generationStep, setGenerationStep] = useState(0);
 
@@ -71,11 +109,23 @@ export function LiveViewAiComposer({
 
   const selectedPreset = presets.find((preset) => preset.id === presetId);
   const canSubmit = Boolean(prompt.trim() && selectedPreset && !busy);
+  const intent = inferLiveViewGenerationIntent(
+    prompt,
+    Boolean(currentViewTitle),
+  );
+  const scope: LiveViewGenerationScope =
+    intent === "add-section" ? "block" : "dashboard";
+  const intentLabel =
+    intent === "add-section"
+      ? `will add one section to “${currentViewTitle}”`
+      : intent === "replace-dashboard"
+        ? `will preview changes to “${currentViewTitle}”`
+        : "will create a new dashboard";
 
   const submit = () => {
     if (!canSubmit || !selectedPreset) return;
     setGenerationStep(0);
-    void onGenerate(prompt.trim(), scope, selectedPreset);
+    void onGenerate(prompt.trim(), scope, selectedPreset, intent);
   };
 
   return (
@@ -104,7 +154,7 @@ export function LiveViewAiComposer({
         className="min-h-16 resize-none rounded-none border-0 px-4 py-3 text-sm shadow-none focus-visible:ring-0"
         placeholder={
           compact
-            ? "Ask AI to change this view or add a chart..."
+            ? "Ask AI to create a dashboard or add something to this one..."
             : "For example: show how I spend my time and what changed this week"
         }
         onChange={(event) => setPrompt(event.target.value)}
@@ -117,18 +167,6 @@ export function LiveViewAiComposer({
       />
       <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-2 py-2">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <select
-            aria-label="generation scope"
-            value={scope}
-            disabled={busy}
-            className="h-8 border border-border bg-background px-2 text-xs outline-none focus:border-foreground"
-            onChange={(event) =>
-              setScope(event.target.value as LiveViewGenerationScope)
-            }
-          >
-            <option value="dashboard">whole dashboard</option>
-            <option value="block">one section</option>
-          </select>
           <AIPresetsSelector
             controlledPresetId={presetId}
             onControlledSelect={setPresetId}
@@ -138,6 +176,14 @@ export function LiveViewAiComposer({
             containerClassName="w-auto min-w-36"
             triggerClassName="h-8 rounded-none"
           />
+          {prompt.trim() && (
+            <span
+              data-testid="live-view-generation-intent"
+              className="max-w-72 truncate text-[11px] text-muted-foreground"
+            >
+              {intentLabel}
+            </span>
+          )}
         </div>
         <Button
           data-testid="live-view-ai-generate"
