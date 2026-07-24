@@ -115,6 +115,11 @@ done
 # pulled in through the build-time BLAS shim, so bundle the SONAME explicitly.
 bundle_named_lib "libopenblas.so.0"
 
+# Generic Wayland capture connects to the desktop portal's PipeWire remote.
+# linuxdeploy can miss this dependency because the capture path is lazy, but
+# the ELF loader still requires the client library before the app can start.
+bundle_named_lib "libpipewire-0.3.so.0"
+
 # Copy transitive deps for libs we just staged (for example libgfortran for
 # OpenBLAS, or libx264/libmp3lame if a dynamic ffmpeg slips in via cache).
 for _ in 1 2; do

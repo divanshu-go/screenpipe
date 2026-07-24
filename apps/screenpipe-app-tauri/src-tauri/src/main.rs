@@ -107,6 +107,8 @@ mod windows_ca_bundle;
 mod windows_overlay;
 #[cfg(target_os = "windows")]
 mod windows_webview_env;
+#[cfg(target_os = "linux")]
+mod linux_webkit_env;
 
 pub use server::*;
 
@@ -290,6 +292,9 @@ macro_rules! define_specta_builder {
 
 #[tokio::main]
 async fn main() {
+    #[cfg(target_os = "linux")]
+    linux_webkit_env::configure();
+
     // Raise the file-descriptor soft limit BEFORE any DB/socket work. The app
     // embeds the engine in-process, so it never ran the engine binary's main()
     // and kept macOS's default soft RLIMIT_NOFILE of 256 — too low for the
