@@ -67,7 +67,7 @@ async function waitForServer(maxWaitMs = 30000): Promise<void> {
   throw new Error("server not ready");
 }
 
-// Best-effort immediate run after install/enable so `pipe_scheduled_run`
+// Best-effort immediate run after install/enable so Pipe execution telemetry
 // fires within seconds of the user finishing onboarding, instead of waiting
 // for the next cron tick (hours/days). Silent on failure.
 async function triggerImmediateRun(slug: string): Promise<void> {
@@ -75,7 +75,7 @@ async function triggerImmediateRun(slug: string): Promise<void> {
     await localFetch(`/pipes/${slug}/run`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ trigger_type: "onboarding" }),
     });
   } catch {}
 }

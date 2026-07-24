@@ -2575,6 +2575,11 @@ pub(crate) async fn show_shortcut_reminder_impl(
             }
             let native_payload = serde_json::Value::Object(map).to_string();
             if native_shortcut_reminder::show(Some(&native_payload)) {
+                native_actions::track_native_overlay_event(
+                    &app_handle,
+                    "shortcut_reminder_shown",
+                    serde_json::json!({}),
+                );
                 // A recording incident may already be active (e.g. this show IS
                 // the incident reveal) — sync the panel's health state. Same
                 // for the bell's unread dot, which is otherwise only pushed on

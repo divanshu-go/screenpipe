@@ -206,6 +206,17 @@ pub struct RunPipeBody {
     /// Context from a notification action — injected into the pipe prompt.
     #[serde(default)]
     pub notification_context: Option<Value>,
+    /// Low-cardinality product surface that initiated the run.
+    /// Only the onboarding surface is accepted; all other API calls are manual.
+    #[serde(default)]
+    pub trigger_type: Option<String>,
+}
+
+fn run_trigger_type(body: Option<&RunPipeBody>) -> &'static str {
+    match body.and_then(|b| b.trigger_type.as_deref()) {
+        Some("onboarding") => "onboarding",
+        _ => "manual",
+    }
 }
 
 /// POST /pipes/:id/run — trigger a manual pipe run.
@@ -291,7 +302,10 @@ pub async fn run_pipe_now(
     ]);
     mgr.set_connections_context(conn_ctx);
 
-    let result = mgr.start_pipe_background(&id).await;
+    let trigger_type = run_trigger_type(body.as_ref().map(|Json(b)| b));
+    let result = mgr
+        .start_pipe_background_with_trigger(&id, trigger_type)
+        .await;
 
     // Restore previous extra context
     match prev_context {
@@ -522,6 +536,22 @@ mod tests {
     use tempfile::TempDir;
     use tokio::sync::Notify;
     use tower::ServiceExt;
+
+    #[test]
+    fn only_accepts_onboarding_as_a_non_manual_api_trigger() {
+        let onboarding = RunPipeBody {
+            notification_context: None,
+            trigger_type: Some("onboarding".to_string()),
+        };
+        let untrusted = RunPipeBody {
+            notification_context: None,
+            trigger_type: Some("scheduled".to_string()),
+        };
+
+        assert_eq!(run_trigger_type(Some(&onboarding)), "onboarding");
+        assert_eq!(run_trigger_type(Some(&untrusted)), "manual");
+        assert_eq!(run_trigger_type(None), "manual");
+    }
 
     #[test]
     fn joins_non_empty_connection_context_blocks() {
