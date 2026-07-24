@@ -137,6 +137,23 @@ describe("BrainOverview", () => {
     expect(screen.getByText("artifact #88 · v2")).toBeTruthy();
   });
 
+  it("keeps one stable visible refresh label while data is loading", async () => {
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [populatedView],
+    });
+    render(<BrainOverview />);
+
+    fireEvent.click(await screen.findByTestId("overview-refresh-data"));
+
+    const loadingButton = await screen.findByRole("button", {
+      name: "loading data",
+    });
+    expect(loadingButton).toBeDisabled();
+    expect(loadingButton.textContent).toBe("refresh data");
+    expect(screen.queryByText("loading data")).toBeNull();
+  });
+
   it("does not render raw HTML from a markdown card", async () => {
     const markdownView: ViewDefinition = {
       ...populatedView,

@@ -1052,6 +1052,7 @@ export function BrainOverview() {
               variant="outline"
               size="sm"
               className="rounded-none"
+              aria-label={refreshIsActive ? "loading data" : "refresh data"}
               disabled={refreshIsActive}
               onClick={() => void refreshConnectedPipes(view)}
             >
@@ -1060,7 +1061,7 @@ export function BrainOverview() {
                   refreshIsActive ? "animate-spin" : ""
                 }`}
               />
-              {refreshIsActive ? "loading data" : "refresh data"}
+              <span aria-hidden="true">refresh data</span>
             </Button>
           )}
           <Button
