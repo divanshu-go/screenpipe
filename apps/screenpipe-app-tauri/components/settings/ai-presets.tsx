@@ -42,6 +42,7 @@ import {
   presetImageSrc,
 } from "@/lib/utils/preset-appearance";
 import { AcpPresetDefaults } from "@/components/settings/acp-preset-defaults";
+import { AcpInstallGate } from "@/components/settings/acp-install-gate";
 import { ValidatedInput } from "../ui/validated-input";
 import { ValidatedTextarea } from "../ui/validated-textarea";
 import {
@@ -400,17 +401,24 @@ const AISection = ({
   }, [settingsPreset?.provider]);
 
 
+  // Set by AcpInstallGate: true when the selected binary agent's CLI is missing.
+  const [acpInstallBlocked, setAcpInstallBlocked] = useState(false);
+
   const isFormValid = useMemo(() => {
     const hasAgent =
       settingsPreset?.provider !== "acp" ||
       (Boolean(settingsPreset.acpAgent?.id) &&
         (settingsPreset.acpAgent?.id !== "custom" || Boolean(settingsPreset.acpAgent?.command?.trim())));
+    // A binary agent whose CLI isn't installed can't run — block saving until
+    // it's installed (or the user switches away from ACP).
+    const agentInstalled = settingsPreset?.provider !== "acp" || !acpInstallBlocked;
     // Name is not required: an empty name gets auto-generated at save time.
     return Object.keys(validationErrors).length === 0 &&
            settingsPreset?.provider &&
            hasAgent &&
+           agentInstalled &&
            (settingsPreset.provider === "acp" || settingsPreset?.model);
-  }, [validationErrors, settingsPreset]);
+  }, [validationErrors, settingsPreset, acpInstallBlocked]);
 
   const updateStoreSettings = async () => {
     if (!employeePresetsAllowed) {
@@ -1465,17 +1473,25 @@ const AISection = ({
             {acpAdapterInfo(settingsPreset.acpAgent?.id || "pi-acp").description}
           </p>
 
-          <AcpPresetDefaults
-            agent={{
-              id: settingsPreset.acpAgent?.id || "pi-acp",
-              command: settingsPreset.acpAgent?.command,
-              args: settingsPreset.acpAgent?.args,
-              env: settingsPreset.acpAgent?.env,
-            }}
-            config={settingsPreset.acpAgent?.config}
-            modeId={settingsPreset.acpAgent?.modeId}
-            onChange={(change) => updateAcpAgent(change)}
+          <AcpInstallGate
+            agentId={settingsPreset.acpAgent?.id || "pi-acp"}
+            agentName={acpAdapterInfo(settingsPreset.acpAgent?.id || "pi-acp").name}
+            onBlockedChange={setAcpInstallBlocked}
           />
+
+          {!acpInstallBlocked && (
+            <AcpPresetDefaults
+              agent={{
+                id: settingsPreset.acpAgent?.id || "pi-acp",
+                command: settingsPreset.acpAgent?.command,
+                args: settingsPreset.acpAgent?.args,
+                env: settingsPreset.acpAgent?.env,
+              }}
+              config={settingsPreset.acpAgent?.config}
+              modeId={settingsPreset.acpAgent?.modeId}
+              onChange={(change) => updateAcpAgent(change)}
+            />
+          )}
 
           <p className="text-xs text-muted-foreground">
             Sign-in happens in the chat when the agent asks for it. Browser login is recommended;

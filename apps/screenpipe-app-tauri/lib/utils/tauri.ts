@@ -1511,6 +1511,9 @@ async piAbortActive(sessionId: string | null) : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async piAcpAgentInstallStatus(agentId: string) : Promise<AcpAgentInstallStatus> {
+    return await TAURI_INVOKE("pi_acp_agent_install_status", { agentId });
+},
 /**
  * Probe an ACP adapter for its advertised model/mode selectors without a
  * chat: spawn the hidden runtime, let it initialize and create a session,
@@ -2779,6 +2782,13 @@ config?: { [key in string]: string };
  * Default session mode id, applied after every session/new.
  */
 modeId?: string | null }
+/**
+ * Whether a built-in agent's CLI is installed on this computer. Binary agents
+ * (OpenCode, Cursor, Kimi) require the user to install the CLI; npx agents run
+ * via the bundled bun and are always available. The preset editor uses this to
+ * gate saving and to show an install prompt instead of a cryptic spawn error.
+ */
+export type AcpAgentInstallStatus = { requiresInstall: boolean; installed: boolean; command: string | null; installUrl: string | null }
 export type AcpAgentPresetConfig = { id: string; command?: string | null; args?: string[];
 /**
  * Keys with empty values inherit from the desktop process environment.
@@ -3768,8 +3778,9 @@ showOverlayInScreenRecording?: boolean;
  */
 chatAlwaysOnTop?: boolean;
 /**
- * Show restart notifications when audio/vision capture stalls.
- * Disabled by default for now until the stall detector is more reliable.
+ * Show recording-health overlay alerts and restart notifications when
+ * audio/vision capture stalls. Disabled by default for now until the
+ * detector is more reliable.
  */
 showRestartNotifications?: boolean;
 /**

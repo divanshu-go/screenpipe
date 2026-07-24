@@ -3976,6 +3976,32 @@ pub async fn pi_acp_probe_agent(agent: AcpAgentConfig) -> Result<String, String>
     result
 }
 
+/// Whether a built-in agent's CLI is installed on this computer. Binary agents
+/// (OpenCode, Cursor, Kimi) require the user to install the CLI; npx agents run
+/// via the bundled bun and are always available. The preset editor uses this to
+/// gate saving and to show an install prompt instead of a cryptic spawn error.
+#[derive(Debug, serde::Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpAgentInstallStatus {
+    pub requires_install: bool,
+    pub installed: bool,
+    pub command: Option<String>,
+    pub install_url: Option<String>,
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn pi_acp_agent_install_status(agent_id: String) -> AcpAgentInstallStatus {
+    let (requires_install, installed, command, install_url) =
+        crate::acp_runtime::agent_install_status(&agent_id);
+    AcpAgentInstallStatus {
+        requires_install,
+        installed,
+        command,
+        install_url,
+    }
+}
+
 /// Switch the ACP session mode (e.g. a permission mode) advertised through
 /// `acp_session_config`. Allowed while a prompt is streaming.
 #[tauri::command]

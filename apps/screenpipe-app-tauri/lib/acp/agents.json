@@ -38,7 +38,8 @@
     "invertInDark": true,
     "presetName": "opencode",
     "description": "Use your installed OpenCode agent. First-time login currently requires `opencode auth login` in a terminal.",
-    "launch": { "kind": "binary", "command": "opencode", "args": ["acp"] }
+    "launch": { "kind": "binary", "command": "opencode", "args": ["acp"] },
+    "installUrl": "https://opencode.ai"
   },
   {
     "id": "cursor",
@@ -46,7 +47,8 @@
     "imageSrc": "/images/cursor.png",
     "presetName": "cursor",
     "description": "Use Cursor's ACP agent installed on this computer.",
-    "launch": { "kind": "binary", "command": "cursor-agent", "args": ["acp"] }
+    "launch": { "kind": "binary", "command": "cursor-agent", "args": ["acp"] },
+    "installUrl": "https://cursor.com/cli"
   },
   {
     "id": "github-copilot-cli",
@@ -63,6 +65,7 @@
     "imageSrc": "/images/acp/kimi.svg",
     "presetName": "kimi",
     "description": "Use Moonshot's Kimi CLI agent installed on this computer.",
-    "launch": { "kind": "binary", "command": "kimi", "args": ["acp"] }
+    "launch": { "kind": "binary", "command": "kimi", "args": ["acp"] },
+    "installUrl": "https://github.com/MoonshotAI/kimi-cli"
   }
 ]

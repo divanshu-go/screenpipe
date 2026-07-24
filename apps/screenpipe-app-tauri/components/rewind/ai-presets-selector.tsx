@@ -15,6 +15,7 @@ import {
   presetImageSrc,
 } from "@/lib/utils/preset-appearance";
 import { AcpPresetDefaults } from "@/components/settings/acp-preset-defaults";
+import { AcpInstallGate } from "@/components/settings/acp-install-gate";
 import {
   Command,
   CommandEmpty,
@@ -238,6 +239,8 @@ export function AIProviderConfig({
     id: defaultPreset?.id || "",
     defaultPreset: defaultPreset?.defaultPreset || false,
   });
+  // Set by AcpInstallGate: true when the selected binary agent's CLI is missing.
+  const [acpInstallBlocked, setAcpInstallBlocked] = useState(false);
 
   // Last name this dialog generated itself. While the field still holds it
   // (or is empty) selection changes keep regenerating it; a name the user
@@ -717,26 +720,34 @@ export function AIProviderConfig({
               {acpAdapterInfo(formData.acpAgent?.id || "pi-acp").description}{" "}
               sign-in happens in the chat when the agent asks for it.
             </p>
-            <AcpPresetDefaults
+            <AcpInstallGate
               compact
-              agent={{
-                id: formData.acpAgent?.id || "pi-acp",
-                command: formData.acpAgent?.command,
-                args: formData.acpAgent?.args,
-                env: formData.acpAgent?.env,
-              }}
-              config={formData.acpAgent?.config}
-              modeId={formData.acpAgent?.modeId}
-              onChange={(change) =>
-                setFormData({
-                  ...formData,
-                  acpAgent: {
-                    ...(formData.acpAgent || { id: "pi-acp" }),
-                    ...change,
-                  },
-                })
-              }
+              agentId={formData.acpAgent?.id || "pi-acp"}
+              agentName={acpAdapterInfo(formData.acpAgent?.id || "pi-acp").name}
+              onBlockedChange={setAcpInstallBlocked}
             />
+            {!acpInstallBlocked && (
+              <AcpPresetDefaults
+                compact
+                agent={{
+                  id: formData.acpAgent?.id || "pi-acp",
+                  command: formData.acpAgent?.command,
+                  args: formData.acpAgent?.args,
+                  env: formData.acpAgent?.env,
+                }}
+                config={formData.acpAgent?.config}
+                modeId={formData.acpAgent?.modeId}
+                onChange={(change) =>
+                  setFormData({
+                    ...formData,
+                    acpAgent: {
+                      ...(formData.acpAgent || { id: "pi-acp" }),
+                      ...change,
+                    },
+                  })
+                }
+              />
+            )}
             {(formData.acpAgent?.id || "pi-acp") === "custom" && (
               <div className="space-y-1">
                 <Label htmlFor="acpCommandQuick" className="text-xs">
@@ -1145,7 +1156,8 @@ export function AIProviderConfig({
             !formData.model?.length ||
             (formData.provider === "acp" &&
               formData.acpAgent?.id === "custom" &&
-              !formData.acpAgent?.command?.trim())
+              !formData.acpAgent?.command?.trim()) ||
+            (formData.provider === "acp" && acpInstallBlocked)
           }
         >
           {isLoading ? (

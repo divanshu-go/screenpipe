@@ -296,13 +296,104 @@ enum AgentLaunch {
 }
 
 #[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct CatalogAgent {
     id: String,
     launch: AgentLaunch,
+    /// Where to install a binary agent's CLI (shown when it's missing).
+    /// JSON key is `installUrl`.
+    #[serde(default)]
+    install_url: Option<String>,
 }
 
 fn agent_catalog() -> Vec<CatalogAgent> {
     serde_json::from_str(include_str!("../../lib/acp/agents.json")).unwrap_or_default()
+}
+
+/// Whether a binary agent's CLI is resolvable on PATH. npx agents (run via the
+/// bundled bun) always report installed; binary agents (OpenCode, Cursor, Kimi)
+/// require the user to install the CLI. Returns
+/// `(requires_install, installed, command, install_url)`.
+pub fn agent_install_status(id: &str) -> (bool, bool, Option<String>, Option<String>) {
+    let Some(agent) = agent_catalog().into_iter().find(|agent| agent.id == id) else {
+        return (false, true, None, None);
+    };
+    match agent.launch {
+        AgentLaunch::Npx { .. } => (false, true, None, agent.install_url),
+        AgentLaunch::Binary { command, .. } => {
+            let installed = command_on_path(&command);
+            (true, installed, Some(command), agent.install_url)
+        }
+    }
+}
+
+/// Best-effort check that `command` resolves to an executable on PATH.
+///
+/// GUI apps capture PATH at launch (fix_path_env in main), so a CLI the user
+/// installs *after* the app started may not be found — until they restart. To
+/// avoid that, a miss re-reads PATH from the user's login shell and checks
+/// again. The refreshed PATH is set on our process env, so a later adapter
+/// spawn (which inherits it) also finds the newly-installed CLI without a
+/// restart. This is why "retry" works right after installing.
+fn command_on_path(command: &str) -> bool {
+    if command.is_empty() {
+        return false;
+    }
+    if path_has_command(command) {
+        return true;
+    }
+    refresh_login_shell_path();
+    path_has_command(command)
+}
+
+fn path_has_command(command: &str) -> bool {
+    let direct = std::path::Path::new(command);
+    if direct.is_absolute() || command.contains('/') {
+        return direct.is_file();
+    }
+    let Some(paths) = std::env::var_os("PATH") else {
+        return false;
+    };
+    let exts: &[&str] = if cfg!(windows) {
+        &["", ".exe", ".cmd", ".bat"]
+    } else {
+        &[""]
+    };
+    for dir in std::env::split_paths(&paths) {
+        for ext in exts {
+            if dir.join(format!("{command}{ext}")).is_file() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Re-read PATH from the user's login shell and apply it to this process, so a
+/// CLI installed after launch becomes visible (and inheritable by children)
+/// without an app restart. Markers fence the value off from any profile output.
+fn refresh_login_shell_path() {
+    #[cfg(not(windows))]
+    {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+        let script = "printf '<<SPPATH>>%s<<SPPATH>>' \"$PATH\"";
+        let Ok(output) = std::process::Command::new(&shell)
+            .args(["-lc", script])
+            .output()
+        else {
+            return;
+        };
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if let Some(start) = stdout.find("<<SPPATH>>") {
+            let rest = &stdout[start + "<<SPPATH>>".len()..];
+            if let Some(end) = rest.find("<<SPPATH>>") {
+                let path = &rest[..end];
+                if !path.is_empty() {
+                    std::env::set_var("PATH", path);
+                }
+            }
+        }
+    }
 }
 
 /// Whether `id` names an agent screenpipe can launch (any agent in the static
@@ -2692,6 +2783,26 @@ mod tests {
 
         // Unknown ids don't resolve.
         assert!(builtin_agent("not-a-real-agent", "/bun").is_none());
+    }
+
+    #[test]
+    fn install_status_only_gates_binary_agents() {
+        // npx agents run via the bundled bun — never gated on a user install.
+        let (requires, installed, _, _) = agent_install_status("codex-acp");
+        assert!(!requires);
+        assert!(installed);
+
+        // Binary agents require the CLI on PATH (installed value is env-specific)
+        // and surface their install URL (installUrl in agents.json).
+        let (requires, _, command, install_url) = agent_install_status("opencode");
+        assert!(requires);
+        assert_eq!(command.as_deref(), Some("opencode"));
+        assert_eq!(install_url.as_deref(), Some("https://opencode.ai"));
+
+        // Unknown ids don't gate.
+        let (requires, installed, _, _) = agent_install_status("not-a-real-agent");
+        assert!(!requires);
+        assert!(installed);
     }
 
     #[test]
