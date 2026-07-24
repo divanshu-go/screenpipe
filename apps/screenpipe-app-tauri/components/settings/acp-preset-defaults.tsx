@@ -94,6 +94,10 @@ export function AcpPresetDefaults({
   const selects = (advertised?.options ?? []).filter(
     (option) => option.type === "select" && option.values.length > 0,
   );
+  // Boolean options (e.g. Codex "fast mode") advertise no value list, so the
+  // select filter above drops them. Render them too, as a tri-state (keep the
+  // agent default, or force on/off) — a plain toggle couldn't say "no override".
+  const toggles = (advertised?.options ?? []).filter((option) => option.type === "boolean");
   const modes = dedupedModes(advertised);
 
   const labelClass = compact ? "text-xs" : undefined;
@@ -104,7 +108,7 @@ export function AcpPresetDefaults({
   );
   const hintClass = cn("text-muted-foreground", compact ? "text-[10px]" : "text-xs");
 
-  if (selects.length === 0 && !modes) {
+  if (selects.length === 0 && toggles.length === 0 && !modes) {
     if (!probeable) {
       return (
         <p className={hintClass}>
@@ -174,6 +178,32 @@ export function AcpPresetDefaults({
                 {value.name}
               </option>
             ))}
+          </select>
+        </div>
+      ))}
+      {toggles.map((option) => (
+        <div key={option.id} className="space-y-1">
+          <Label htmlFor={`acpDefault-${option.id}`} className={labelClass}>
+            {compact ? option.name.toLowerCase() : option.name}
+          </Label>
+          <select
+            id={`acpDefault-${option.id}`}
+            data-acp-default-option={option.id}
+            value={config?.[option.id] ?? ""}
+            onChange={(event) => {
+              const value = event.target.value;
+              const next = { ...(config ?? {}) };
+              if (value) next[option.id] = value;
+              else delete next[option.id];
+              onChange({ config: next });
+            }}
+            className={selectClass}
+          >
+            <option value="">
+              {defaultChoiceLabel(option.currentValue === true ? "on" : "off")}
+            </option>
+            <option value="true">{compact ? "on" : "On"}</option>
+            <option value="false">{compact ? "off" : "Off"}</option>
           </select>
         </div>
       ))}
