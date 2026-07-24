@@ -17,12 +17,24 @@ import {
 import { Button } from "@/components/ui/button";
 import { LiveViewAiComposer } from "@/components/settings/live-view-ai-composer";
 import { LiveViewCard as OverviewCard } from "@/components/settings/live-view-card";
+import { LiveViewDashboardSwitcher } from "@/components/settings/live-view-dashboard-switcher";
 import { LiveViewLayoutEditor } from "@/components/settings/live-view-layout-editor";
 import { LiveViewTemplateGallery } from "@/components/settings/live-view-template-gallery";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { usePipes } from "@/lib/hooks/use-pipes";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useToast } from "@/components/ui/use-toast";
 import { localFetch } from "@/lib/api";
+import { Input } from "@/components/ui/input";
 import {
   generateLiveViewWithPi,
   type GeneratedLiveViewBlock,
@@ -56,6 +68,11 @@ type DataRefreshState = {
 type PreviewSource =
   | { kind: "ai"; scope: LiveViewGenerationScope }
   | { kind: "template"; kit: BrainViewTemplateKit };
+
+type PreviewDestination = "new" | "replace";
+
+const SELECTED_DASHBOARD_KEY = "screenpipe.live-view.selected-dashboard";
+const MAX_DASHBOARDS = 12;
 
 const COMPONENTS: Array<{
   value: ViewComponent;
@@ -221,10 +238,60 @@ function kitSlots(kit: BrainViewTemplateKit): ViewSlot[] {
   }));
 }
 
+function dashboardIdStem(title: string): string {
+  return (
+    title
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 52) || "dashboard"
+  );
+}
+
+function uniqueDashboardId(title: string, views: ViewDefinition[]): string {
+  const used = new Set(views.map((view) => view.id));
+  const stem = dashboardIdStem(title);
+  let id = stem;
+  let suffix = 2;
+  while (used.has(id)) {
+    id = `${stem.slice(0, 60 - String(suffix).length)}-${suffix}`;
+    suffix += 1;
+  }
+  return id;
+}
+
+function uniqueDashboardTitle(title: string, views: ViewDefinition[]): string {
+  const used = new Set(views.map((view) => view.title.toLowerCase()));
+  if (!used.has(title.toLowerCase())) return title;
+  let suffix = 2;
+  while (used.has(`${title} ${suffix}`.toLowerCase())) suffix += 1;
+  return `${title} ${suffix}`;
+}
+
+function rememberSelectedDashboard(id: string | null) {
+  if (typeof window === "undefined") return;
+  try {
+    if (id) window.localStorage.setItem(SELECTED_DASHBOARD_KEY, id);
+    else window.localStorage.removeItem(SELECTED_DASHBOARD_KEY);
+  } catch {
+    // Selection persistence is a convenience. Storage failures are harmless.
+  }
+}
+
+function savedDashboardId(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage.getItem(SELECTED_DASHBOARD_KEY);
+  } catch {
+    return null;
+  }
+}
+
 export function BrainOverview() {
   const { toast } = useToast();
   const { pipes, refetch: refetchPipes } = usePipes();
   const { settings } = useSettings();
+  const [views, setViews] = useState<ViewDefinition[]>([]);
   const [view, setView] = useState<ViewDefinition | null>(null);
   const [draft, setDraft] = useState<ViewDefinition | null>(null);
   const [loading, setLoading] = useState(true);
@@ -243,6 +310,9 @@ export function BrainOverview() {
   const [templateGalleryOpen, setTemplateGalleryOpen] = useState(false);
   const [undoView, setUndoView] = useState<ViewDefinition | null>(null);
   const [undoRevision, setUndoRevision] = useState<number | null>(null);
+  const [previewDestination, setPreviewDestination] =
+    useState<PreviewDestination>("new");
+  const [replaceConfirmationOpen, setReplaceConfirmationOpen] = useState(false);
 
   const installedPipes = useMemo(
     () => [...pipes].sort((a, b) => a.config.name.localeCompare(b.config.name)),
@@ -263,7 +333,16 @@ export function BrainOverview() {
     try {
       const result = await commands.listBrainViews();
       if (result.status === "error") throw new Error(result.error);
-      setView(result.data[0] ?? null);
+      setViews(result.data);
+      setView((current) => {
+        const preferredId = current?.id ?? savedDashboardId();
+        const selected =
+          result.data.find((candidate) => candidate.id === preferredId) ??
+          result.data[0] ??
+          null;
+        rememberSelectedDashboard(selected?.id ?? null);
+        return selected;
+      });
     } catch (loadError) {
       if (!silent) {
         setError(
@@ -276,6 +355,18 @@ export function BrainOverview() {
       if (!silent) setLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (!view) return;
+    rememberSelectedDashboard(view.id);
+    setViews((current) => {
+      const index = current.findIndex((candidate) => candidate.id === view.id);
+      if (index < 0) return [...current, view];
+      const next = [...current];
+      next[index] = view;
+      return next;
+    });
+  }, [view]);
 
   useEffect(() => {
     void load();
@@ -442,11 +533,38 @@ export function BrainOverview() {
     };
   }, [dataRefresh]);
 
+  const clearTransientState = () => {
+    setDraft(null);
+    setEditing(false);
+    setAiPreview(false);
+    setPreviewSource(null);
+    setAiNote(null);
+    setUndoView(null);
+    setUndoRevision(null);
+    setReplaceConfirmationOpen(false);
+  };
+
+  const selectDashboard = (id: string) => {
+    const selected = views.find((candidate) => candidate.id === id);
+    if (!selected || selected.id === view?.id) return;
+    clearTransientState();
+    setDataRefresh(null);
+    setView(selected);
+  };
+
   const beginCreate = () => {
+    if (views.length >= MAX_DASHBOARDS) {
+      toast({
+        title: "dashboard limit reached",
+        description: `Delete a dashboard before creating another. You can keep up to ${MAX_DASHBOARDS}.`,
+        variant: "destructive",
+      });
+      return;
+    }
     const now = new Date().toISOString();
     setDraft({
-      id: "my-overview",
-      title: "My Live View",
+      id: uniqueDashboardId("untitled-dashboard", views),
+      title: "Untitled dashboard",
       revision: 0,
       timeRange: "today",
       slots: [],
@@ -456,6 +574,7 @@ export function BrainOverview() {
     setAiPreview(false);
     setPreviewSource(null);
     setAiNote(null);
+    setPreviewDestination("new");
     setEditing(true);
   };
 
@@ -480,6 +599,7 @@ export function BrainOverview() {
       updatedAt: now,
     });
     setPreviewSource({ kind: "template", kit });
+    setPreviewDestination("new");
     setAiNote(kit.description);
     setEditing(false);
     setTemplateGalleryOpen(false);
@@ -546,6 +666,7 @@ export function BrainOverview() {
       });
       setAiNote(generated.note);
       setPreviewSource({ kind: "ai", scope });
+      setPreviewDestination(scope === "dashboard" ? "new" : "replace");
       setEditing(false);
       setAiPreview(true);
     } catch (generateError) {
@@ -742,15 +863,28 @@ export function BrainOverview() {
     }
   };
 
-  const save = async (refreshData = false) => {
+  const save = async (
+    refreshData = false,
+    destination: PreviewDestination = draft?.revision === 0 ? "new" : "replace",
+  ) => {
     if (!draft || !draft.title.trim()) return;
     setSaving(true);
     try {
-      const previousView = view ? copyViewDefinition(view) : null;
+      const creatingNew = destination === "new" || draft.revision === 0;
+      if (creatingNew && views.length >= MAX_DASHBOARDS) {
+        throw new Error(
+          `You can keep up to ${MAX_DASHBOARDS} dashboards. Delete one before creating another.`,
+        );
+      }
+      const previousView =
+        !creatingNew && view ? copyViewDefinition(view) : null;
+      const targetId = creatingNew
+        ? uniqueDashboardId(draft.title, views)
+        : draft.id;
       const result = await commands.saveBrainView({
-        id: draft.id,
+        id: targetId,
         title: draft.title.trim(),
-        expectedRevision: draft.revision > 0 ? draft.revision : null,
+        expectedRevision: creatingNew ? null : draft.revision,
         timeRange: draft.timeRange,
         slots: normalizedSlots(draft.slots).map((slot) => ({
           id: slot.id,
@@ -770,7 +904,10 @@ export function BrainOverview() {
       setAiPreview(false);
       setPreviewSource(null);
       setAiNote(null);
-      toast({ title: "Live View saved" });
+      setReplaceConfirmationOpen(false);
+      toast({
+        title: creatingNew ? `${result.data.title} created` : "dashboard saved",
+      });
       if (refreshData) {
         const previousSlots = new Map(
           previousView?.slots.map((slot) => [slot.id, slot]) ?? [],
@@ -803,27 +940,65 @@ export function BrainOverview() {
     }
   };
 
-  const applyTemplate = async (kit: BrainViewTemplateKit) => {
-    const previousView = view ? copyViewDefinition(view) : null;
+  const applyTemplate = async (
+    kit: BrainViewTemplateKit,
+    destination: PreviewDestination,
+  ) => {
+    const creatingNew = destination === "new" || !view;
+    const previousView = !creatingNew && view ? copyViewDefinition(view) : null;
     setSaving(true);
     try {
+      if (creatingNew && views.length >= MAX_DASHBOARDS) {
+        throw new Error(
+          `You can keep up to ${MAX_DASHBOARDS} dashboards. Delete one before creating another.`,
+        );
+      }
+      const targetViewId = creatingNew
+        ? uniqueDashboardId(draft?.title || kit.title, views)
+        : view!.id;
       const result = await commands.installBrainViewTemplateKit({
         kitId: kit.id,
-        targetViewId: view?.id ?? "my-overview",
-        expectedRevision: view?.revision ?? null,
+        targetViewId,
+        expectedRevision: creatingNew ? null : view!.revision,
       });
       if (result.status === "error") throw new Error(result.error);
-      setView(result.data);
+      let installedView = result.data;
+      const requestedTitle = draft?.title.trim();
+      if (requestedTitle && requestedTitle !== installedView.title) {
+        const renameResult = await commands.saveBrainView({
+          id: installedView.id,
+          title: requestedTitle,
+          expectedRevision: installedView.revision,
+          timeRange: installedView.timeRange,
+          slots: normalizedSlots(installedView.slots).map((slot) => ({
+            id: slot.id,
+            title: slot.title,
+            component: slot.component,
+            width: slot.width,
+            order: slot.order,
+            binding: slot.binding,
+          })),
+        });
+        if (renameResult.status === "error")
+          throw new Error(renameResult.error);
+        installedView = renameResult.data;
+      }
+      setView(installedView);
       setUndoView(previousView);
-      setUndoRevision(previousView ? result.data.revision : null);
+      setUndoRevision(previousView ? installedView.revision : null);
       setDraft(null);
       setEditing(false);
       setAiPreview(false);
       setPreviewSource(null);
       setAiNote(null);
+      setReplaceConfirmationOpen(false);
       await refetchPipes();
-      toast({ title: `${kit.title} installed` });
-      void refreshConnectedPipes(result.data);
+      toast({
+        title: creatingNew
+          ? `${installedView.title} created`
+          : `${installedView.title} replaced`,
+      });
+      void refreshConnectedPipes(installedView);
     } catch (installError) {
       toast({
         title: "template was not installed",
@@ -833,6 +1008,117 @@ export function BrainOverview() {
             : String(installError),
         variant: "destructive",
       });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const renameDashboard = async (title: string) => {
+    if (!view || !title.trim() || title.trim() === view.title) return;
+    setSaving(true);
+    try {
+      const result = await commands.saveBrainView({
+        id: view.id,
+        title: title.trim(),
+        expectedRevision: view.revision,
+        timeRange: view.timeRange,
+        slots: normalizedSlots(view.slots).map((slot) => ({
+          id: slot.id,
+          title: slot.title,
+          component: slot.component,
+          width: slot.width,
+          order: slot.order,
+          binding: slot.binding,
+        })),
+      });
+      if (result.status === "error") throw new Error(result.error);
+      setView(result.data);
+      toast({ title: `renamed to ${result.data.title}` });
+    } catch (renameError) {
+      toast({
+        title: "could not rename dashboard",
+        description:
+          renameError instanceof Error
+            ? renameError.message
+            : String(renameError),
+        variant: "destructive",
+      });
+      void load(true);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const duplicateDashboard = async () => {
+    if (!view) return;
+    if (views.length >= MAX_DASHBOARDS) {
+      toast({
+        title: "dashboard limit reached",
+        description: `Delete a dashboard before duplicating another. You can keep up to ${MAX_DASHBOARDS}.`,
+        variant: "destructive",
+      });
+      return;
+    }
+    setSaving(true);
+    try {
+      const title = uniqueDashboardTitle(`${view.title} copy`, views);
+      const result = await commands.saveBrainView({
+        id: uniqueDashboardId(title, views),
+        title,
+        expectedRevision: null,
+        timeRange: view.timeRange,
+        slots: normalizedSlots(view.slots).map((slot) => ({
+          id: slot.id,
+          title: slot.title,
+          component: slot.component,
+          width: slot.width,
+          order: slot.order,
+          binding: slot.binding,
+        })),
+      });
+      if (result.status === "error") throw new Error(result.error);
+      clearTransientState();
+      setView(result.data);
+      toast({ title: `${result.data.title} created` });
+      void refreshConnectedPipes(result.data);
+    } catch (duplicateError) {
+      toast({
+        title: "could not duplicate dashboard",
+        description:
+          duplicateError instanceof Error
+            ? duplicateError.message
+            : String(duplicateError),
+        variant: "destructive",
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const deleteDashboard = async () => {
+    if (!view) return;
+    const deletingId = view.id;
+    const nextViews = views.filter((candidate) => candidate.id !== deletingId);
+    setSaving(true);
+    try {
+      const result = await commands.deleteBrainView(deletingId);
+      if (result.status === "error") throw new Error(result.error);
+      clearTransientState();
+      setViews(nextViews);
+      const next = nextViews[0] ?? null;
+      setView(next);
+      rememberSelectedDashboard(next?.id ?? null);
+      toast({ title: "dashboard deleted" });
+    } catch (deleteError) {
+      toast({
+        title: "could not delete dashboard",
+        description:
+          deleteError instanceof Error
+            ? deleteError.message
+            : String(deleteError),
+        variant: "destructive",
+      });
+      void load(true);
     } finally {
       setSaving(false);
     }
@@ -977,133 +1263,234 @@ export function BrainOverview() {
     const previewSlots = normalizedSlots(draft.slots);
     const templatePreview =
       previewSource?.kind === "template" ? previewSource.kit : null;
-    const replacingDashboard = Boolean(
-      view &&
-      (templatePreview ||
-        (previewSource?.kind === "ai" && previewSource.scope === "dashboard")),
+    const wholeDashboardPreview = Boolean(
+      templatePreview ||
+      (previewSource?.kind === "ai" && previewSource.scope === "dashboard"),
     );
+    const canChooseDestination = Boolean(view && wholeDashboardPreview);
+    const replacingDashboard = Boolean(
+      canChooseDestination && previewDestination === "replace",
+    );
+    const destination = wholeDashboardPreview ? previewDestination : "replace";
     const missingTemplatePipes =
       templatePreview?.pipes.filter(
         (pipe) => !installedPipeNames.has(pipe.name),
       ) ?? [];
+    const applyPreview = () =>
+      templatePreview
+        ? applyTemplate(templatePreview, destination)
+        : save(true, destination);
+    const requestApply = () => {
+      if (replacingDashboard) {
+        setReplaceConfirmationOpen(true);
+        return;
+      }
+      void applyPreview();
+    };
     return (
-      <div
-        data-testid="brain-overview-ai-preview"
-        className="min-h-0 flex-1 overflow-y-auto pb-8 pr-4 [scrollbar-gutter:stable]"
-      >
-        <div className="mb-5 flex flex-wrap items-start justify-between gap-4 border-b border-border pb-4">
-          <div>
-            <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
-              {templatePreview ? "Template preview" : "AI draft"}
-            </p>
-            <h2 className="text-lg font-semibold tracking-tight">
-              {draft.title}
-            </h2>
-            {aiNote && (
-              <p className="mt-1 text-xs text-muted-foreground">{aiNote}</p>
-            )}
-          </div>
-          <div className="flex gap-2">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="rounded-none"
-              disabled={saving}
-              onClick={() => {
-                setDraft(null);
-                setAiPreview(false);
-                setPreviewSource(null);
-                setAiNote(null);
-              }}
-            >
-              discard
-            </Button>
-            {!templatePreview && (
+      <>
+        <div
+          data-testid="brain-overview-ai-preview"
+          className="min-h-0 flex-1 overflow-y-auto pb-8 pr-4 [scrollbar-gutter:stable]"
+        >
+          <div className="mb-5 flex flex-wrap items-start justify-between gap-4 border-b border-border pb-4">
+            <div>
+              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                {templatePreview ? "Template preview" : "AI draft"}
+              </p>
+              <h2 className="text-lg font-semibold tracking-tight">
+                {draft.title}
+              </h2>
+              {aiNote && (
+                <p className="mt-1 text-xs text-muted-foreground">{aiNote}</p>
+              )}
+            </div>
+            <div className="flex gap-2">
               <Button
-                variant="outline"
+                variant="ghost"
                 size="sm"
                 className="rounded-none"
                 disabled={saving}
                 onClick={() => {
+                  setDraft(null);
                   setAiPreview(false);
                   setPreviewSource(null);
-                  setEditing(true);
+                  setAiNote(null);
                 }}
               >
-                edit manually
+                discard
               </Button>
-            )}
-            <Button
-              data-testid={
-                templatePreview
-                  ? "overview-apply-template"
-                  : "overview-apply-ai"
-              }
-              size="sm"
-              className="rounded-none"
-              disabled={saving}
-              onClick={() =>
-                templatePreview
-                  ? void applyTemplate(templatePreview)
-                  : void save(true)
-              }
-            >
-              {saving && (
-                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              {!templatePreview && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="rounded-none"
+                  disabled={saving}
+                  onClick={() => {
+                    setAiPreview(false);
+                    setPreviewSource(null);
+                    setEditing(true);
+                  }}
+                >
+                  edit manually
+                </Button>
               )}
-              {templatePreview
-                ? replacingDashboard
-                  ? "install & replace dashboard"
-                  : "install template"
-                : replacingDashboard
-                  ? "replace dashboard & load data"
+              <Button
+                data-testid={
+                  templatePreview
+                    ? "overview-apply-template"
+                    : "overview-apply-ai"
+                }
+                size="sm"
+                variant={replacingDashboard ? "destructive" : "default"}
+                className="rounded-none"
+                disabled={saving || !draft.title.trim()}
+                onClick={requestApply}
+              >
+                {saving && (
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                )}
+                {replacingDashboard
+                  ? "replace current dashboard"
                   : previewSource?.kind === "ai" &&
                       previewSource.scope === "block" &&
                       view
                     ? "add sections & load data"
                     : "create dashboard & load data"}
-            </Button>
+              </Button>
+            </div>
+          </div>
+
+          {wholeDashboardPreview && (
+            <div className="mb-5 grid gap-4 border border-border p-4 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,0.8fr)]">
+              <div>
+                <label
+                  htmlFor="preview-dashboard-name"
+                  className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground"
+                >
+                  Dashboard name
+                </label>
+                <Input
+                  id="preview-dashboard-name"
+                  data-testid="overview-preview-name"
+                  value={draft.title}
+                  maxLength={120}
+                  className="mt-2 h-9 rounded-none"
+                  onChange={(event) =>
+                    setDraft({ ...draft, title: event.target.value })
+                  }
+                />
+                {templatePreview && (
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Paired Pipes:{" "}
+                    {templatePreview.pipes.map((pipe) => pipe.name).join(", ")}.
+                    {missingTemplatePipes.length > 0
+                      ? ` ${missingTemplatePipes.length} missing ${missingTemplatePipes.length === 1 ? "Pipe" : "Pipes"} will be installed locally first.`
+                      : " They are already installed."}
+                  </p>
+                )}
+              </div>
+              {canChooseDestination ? (
+                <div
+                  data-testid="overview-preview-destination"
+                  className="grid grid-cols-2 gap-2"
+                >
+                  <button
+                    data-testid="overview-destination-new"
+                    type="button"
+                    aria-pressed={previewDestination === "new"}
+                    className={`border p-3 text-left transition-colors ${
+                      previewDestination === "new"
+                        ? "border-foreground bg-muted/40"
+                        : "border-border hover:border-foreground"
+                    }`}
+                    onClick={() => setPreviewDestination("new")}
+                  >
+                    <span className="block text-xs font-medium">
+                      create new
+                    </span>
+                    <span className="mt-1 block text-[11px] text-muted-foreground">
+                      keep “{view?.title}” unchanged
+                    </span>
+                  </button>
+                  <button
+                    data-testid="overview-destination-replace"
+                    type="button"
+                    aria-pressed={previewDestination === "replace"}
+                    className={`border p-3 text-left transition-colors ${
+                      previewDestination === "replace"
+                        ? "border-destructive bg-destructive/5"
+                        : "border-border hover:border-foreground"
+                    }`}
+                    onClick={() => setPreviewDestination("replace")}
+                  >
+                    <span className="block text-xs font-medium">
+                      replace current
+                    </span>
+                    <span className="mt-1 block text-[11px] text-muted-foreground">
+                      confirmation required
+                    </span>
+                  </button>
+                </div>
+              ) : (
+                <div className="border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+                  This creates a new dashboard with {previewSlots.length}{" "}
+                  sections.
+                </div>
+              )}
+            </div>
+          )}
+
+          {replacingDashboard && (
+            <div
+              data-testid="overview-replacement-warning"
+              className="mb-5 border border-destructive/60 bg-destructive/5 px-4 py-3 text-xs"
+            >
+              This will replace {view?.slots.length ?? 0} sections in “
+              {view?.title}” with {previewSlots.length}. The previous layout
+              remains available through Undo.
+            </div>
+          )}
+
+          <div className="grid grid-cols-12 gap-4">
+            {previewSlots.map((slot) => (
+              <OverviewCard
+                key={slot.id}
+                slot={slot}
+                timeRange={draft.timeRange}
+                preview
+              />
+            ))}
           </div>
         </div>
-        {(replacingDashboard || templatePreview) && (
-          <div
-            data-testid="overview-replacement-warning"
-            className="mb-5 border border-border bg-muted/30 px-4 py-3 text-xs"
-          >
-            {replacingDashboard ? (
-              <p>
-                This will replace your {view?.slots.length ?? 0} current
-                sections with {previewSlots.length} new sections. The previous
-                layout will remain available through Undo after you apply it.
-              </p>
-            ) : (
-              <p>
-                This creates a new dashboard with {previewSlots.length}{" "}
-                sections.
-              </p>
-            )}
-            {templatePreview && (
-              <p className="mt-1 text-muted-foreground">
-                Paired Pipes:{" "}
-                {templatePreview.pipes.map((pipe) => pipe.name).join(", ")}.
-                {missingTemplatePipes.length > 0
-                  ? ` ${missingTemplatePipes.length} missing ${missingTemplatePipes.length === 1 ? "Pipe" : "Pipes"} will be installed locally first.`
-                  : " They are already installed."}
-              </p>
-            )}
-          </div>
-        )}
-        <div className="grid grid-cols-12 gap-4">
-          {previewSlots.map((slot) => (
-            <OverviewCard
-              key={slot.id}
-              slot={slot}
-              timeRange={draft.timeRange}
-              preview
-            />
-          ))}
-        </div>
-      </div>
+
+        <AlertDialog
+          open={replaceConfirmationOpen}
+          onOpenChange={setReplaceConfirmationOpen}
+        >
+          <AlertDialogContent className="rounded-none">
+            <AlertDialogHeader>
+              <AlertDialogTitle>Replace “{view?.title}”?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This replaces {view?.slots.length ?? 0} current sections with{" "}
+                {previewSlots.length}. Your other dashboards are not affected,
+                and this layout can be restored with Undo.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={saving}>cancel</AlertDialogCancel>
+              <AlertDialogAction
+                data-testid="overview-confirm-replace"
+                variant="destructive"
+                disabled={saving}
+                onClick={() => void applyPreview()}
+              >
+                replace dashboard
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </>
     );
   }
 
@@ -1121,7 +1508,7 @@ export function BrainOverview() {
           setEditing(false);
           setAiNote(null);
         }}
-        onSave={() => void save(true)}
+        onSave={() => void save(true, draft.revision === 0 ? "new" : "replace")}
       />
     );
   }
@@ -1136,11 +1523,17 @@ export function BrainOverview() {
     <div className="min-h-0 flex-1 overflow-y-auto pb-8 pr-4 [scrollbar-gutter:stable]">
       <div className="mb-5 grid gap-4 border-b border-border pb-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-end">
         <div className="min-w-0">
-          <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
-            Live View
-          </p>
-          <h2 className="text-lg font-semibold tracking-tight">{view.title}</h2>
-          <p className="mt-1 text-xs text-muted-foreground">
+          <LiveViewDashboardSwitcher
+            views={views}
+            current={view}
+            busy={saving || refreshIsActive}
+            onSelect={selectDashboard}
+            onCreate={beginCreate}
+            onRename={renameDashboard}
+            onDuplicate={duplicateDashboard}
+            onDelete={deleteDashboard}
+          />
+          <p className="mt-2 text-xs text-muted-foreground">
             Blocks are updated by connected Pipes for the selected time window
             and stored as source-backed artifacts.
           </p>

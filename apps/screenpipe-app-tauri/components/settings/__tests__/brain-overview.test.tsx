@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   listBrainViewTemplateKits: vi.fn(),
   installBrainViewTemplateKit: vi.fn(),
   saveBrainView: vi.fn(),
+  deleteBrainView: vi.fn(),
   generateLiveViewWithPi: vi.fn(),
   localFetch: vi.fn(),
   toast: vi.fn(),
@@ -23,6 +24,7 @@ vi.mock("@/lib/utils/tauri", () => ({
     listBrainViewTemplateKits: mocks.listBrainViewTemplateKits,
     installBrainViewTemplateKit: mocks.installBrainViewTemplateKit,
     saveBrainView: mocks.saveBrainView,
+    deleteBrainView: mocks.deleteBrainView,
   },
 }));
 vi.mock("@/components/ui/use-toast", () => ({
@@ -151,11 +153,17 @@ const workdayTemplate = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  try {
+    window.localStorage.clear();
+  } catch {
+    // The test environment may not provide persistent local storage.
+  }
   mocks.listBrainViewTemplateKits.mockResolvedValue({
     status: "ok",
     data: [],
   });
   mocks.refetchPipes.mockResolvedValue(undefined);
+  mocks.deleteBrainView.mockResolvedValue({ status: "ok", data: null });
   mocks.localFetch.mockResolvedValue({
     ok: true,
     status: 200,
@@ -171,12 +179,88 @@ describe("BrainOverview", () => {
     });
     render(<BrainOverview />);
 
-    expect(await screen.findByText("Live View")).toBeTruthy();
+    expect(await screen.findByText("Dashboards")).toBeTruthy();
     expect(await screen.findByText("How I worked today")).toBeTruthy();
     expect(screen.getByText("4.5")).toBeTruthy();
     expect(screen.getByText("hours")).toBeTruthy();
     expect(screen.getByText("Pipe: daily-summary")).toBeTruthy();
     expect(screen.getByText("artifact #88 · v2")).toBeTruthy();
+  });
+
+  it("switches between named dashboards without changing either one", async () => {
+    const weeklyView: ViewDefinition = {
+      ...populatedView,
+      id: "weekly-review",
+      title: "Weekly review",
+      revision: 1,
+      slots: [
+        {
+          ...populatedView.slots[0],
+          id: "weekly-total",
+          title: "Weekly total",
+          value: {
+            ...populatedView.slots[0].value!,
+            payload: { value: 32, unit: "hours" },
+            artifactOutputId: 99,
+          },
+        },
+      ],
+    };
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [populatedView, weeklyView],
+    });
+    render(<BrainOverview />);
+
+    const selector = (await screen.findByTestId(
+      "overview-dashboard-selector",
+    )) as HTMLSelectElement;
+    expect(selector.value).toBe("my-overview");
+    expect(selector.options).toHaveLength(2);
+
+    fireEvent.change(selector, { target: { value: "weekly-review" } });
+    expect(selector.value).toBe("weekly-review");
+    expect(await screen.findByText("Weekly total")).toBeTruthy();
+    expect(screen.queryByText("Focus time")).toBeNull();
+    expect(mocks.saveBrainView).not.toHaveBeenCalled();
+  });
+
+  it("creates and names a separate dashboard from the dashboard switcher", async () => {
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [populatedView],
+    });
+    mocks.saveBrainView.mockImplementation(async (request) => ({
+      status: "ok",
+      data: {
+        ...request,
+        revision: 1,
+        createdAt: "2026-07-24T20:00:00Z",
+        updatedAt: "2026-07-24T20:00:00Z",
+        slots: [],
+      },
+    }));
+    render(<BrainOverview />);
+
+    fireEvent.click(await screen.findByTestId("overview-new-dashboard"));
+    fireEvent.change(screen.getByTestId("overview-title"), {
+      target: { value: "GTM dashboard" },
+    });
+    fireEvent.click(screen.getByTestId("overview-save"));
+
+    await waitFor(() => expect(mocks.saveBrainView).toHaveBeenCalledTimes(1));
+    expect(mocks.saveBrainView.mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        id: expect.not.stringMatching(/^my-overview$/),
+        title: "GTM dashboard",
+        expectedRevision: null,
+      }),
+    );
+    expect(
+      (await screen.findByTestId(
+        "overview-dashboard-selector",
+      )) as HTMLSelectElement,
+    ).toHaveValue("gtm-dashboard");
   });
 
   it("keeps one stable visible refresh label while data is loading", async () => {
@@ -592,14 +676,25 @@ describe("BrainOverview", () => {
 
     expect(await screen.findByText("Template preview")).toBeTruthy();
     expect(
-      screen.getByTestId("overview-replacement-warning").textContent,
-    ).toContain("replace your 1 current sections with 2 new sections");
+      screen
+        .getByTestId("overview-destination-new")
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
     expect(screen.getByTestId("overview-apply-template").textContent).toContain(
-      "install & replace dashboard",
+      "create dashboard & load data",
     );
     expect(mocks.installBrainViewTemplateKit).not.toHaveBeenCalled();
 
+    fireEvent.click(screen.getByTestId("overview-destination-replace"));
+    expect(
+      screen.getByTestId("overview-replacement-warning").textContent,
+    ).toContain("replace 1 sections in");
     fireEvent.click(screen.getByTestId("overview-apply-template"));
+    expect(mocks.installBrainViewTemplateKit).not.toHaveBeenCalled();
+    expect(
+      await screen.findByText("Replace “How I worked today”?"),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByTestId("overview-confirm-replace"));
     await waitFor(() =>
       expect(mocks.installBrainViewTemplateKit).toHaveBeenCalledWith({
         kitId: "workday-overview",
@@ -745,6 +840,70 @@ describe("BrainOverview", () => {
     );
   });
 
+  it("creates whole-dashboard AI drafts as a new named dashboard by default", async () => {
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [populatedView],
+    });
+    mocks.generateLiveViewWithPi.mockResolvedValue({
+      title: "Project pulse",
+      timeRange: "7d",
+      note: "A separate project dashboard.",
+      blocks: [
+        {
+          title: "Time by project",
+          component: "bar-chart.v1",
+          width: 12,
+          pipeName: "daily-summary",
+        },
+      ],
+    });
+    mocks.saveBrainView.mockImplementation(async (request) => ({
+      status: "ok",
+      data: {
+        ...request,
+        revision: 1,
+        createdAt: "2026-07-24T20:00:00Z",
+        updatedAt: "2026-07-24T20:00:00Z",
+        slots: request.slots.map((slot: object) => ({
+          ...slot,
+          value: null,
+          feedback: { upCount: 0, downCount: 0, current: null },
+        })),
+      },
+    }));
+    render(<BrainOverview />);
+
+    fireEvent.change(
+      await screen.findByPlaceholderText(/Ask AI to change this view/),
+      { target: { value: "build a separate project dashboard" } },
+    );
+    const generateButton = screen.getByTestId("live-view-ai-generate");
+    await waitFor(() => expect(generateButton).not.toBeDisabled());
+    fireEvent.click(generateButton);
+
+    expect(
+      (await screen.findByTestId("overview-destination-new")).getAttribute(
+        "aria-pressed",
+      ),
+    ).toBe("true");
+    fireEvent.click(screen.getByTestId("overview-apply-ai"));
+
+    await waitFor(() => expect(mocks.saveBrainView).toHaveBeenCalledTimes(1));
+    expect(mocks.saveBrainView.mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        id: "project-pulse",
+        title: "Project pulse",
+        expectedRevision: null,
+      }),
+    );
+    expect(
+      mocks.saveBrainView.mock.calls.some(
+        ([request]) => request.id === "my-overview",
+      ),
+    ).toBe(false);
+  });
+
   it("makes a whole-dashboard AI replacement explicit before saving it", async () => {
     mocks.listBrainViews.mockResolvedValue({
       status: "ok",
@@ -787,14 +946,25 @@ describe("BrainOverview", () => {
     fireEvent.click(generateButton);
 
     expect(
-      await screen.findByTestId("overview-replacement-warning"),
+      await screen.findByTestId("overview-preview-destination"),
     ).toBeTruthy();
     expect(
+      screen
+        .getByTestId("overview-destination-new")
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    fireEvent.click(screen.getByTestId("overview-destination-replace"));
+    expect(
       screen.getByTestId("overview-replacement-warning").textContent,
-    ).toContain("previous layout will remain available through Undo");
+    ).toContain("previous layout remains available through Undo");
     expect(screen.getByTestId("overview-apply-ai").textContent).toContain(
-      "replace dashboard & load data",
+      "replace current dashboard",
     );
+    expect(mocks.saveBrainView).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("overview-apply-ai"));
+    expect(
+      await screen.findByText("Replace “How I worked today”?"),
+    ).toBeTruthy();
     expect(mocks.saveBrainView).not.toHaveBeenCalled();
   });
 
