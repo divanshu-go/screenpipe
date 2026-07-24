@@ -85,10 +85,11 @@ describe("BrainOverview", () => {
     });
     render(<BrainOverview />);
 
+    expect(await screen.findByText("Live View")).toBeTruthy();
     expect(await screen.findByText("How I worked today")).toBeTruthy();
     expect(screen.getByText("4.5")).toBeTruthy();
     expect(screen.getByText("hours")).toBeTruthy();
-    expect(screen.getByText("pipe: daily-summary")).toBeTruthy();
+    expect(screen.getByText("Pipe: daily-summary")).toBeTruthy();
     expect(screen.getByText("artifact #88 · v2")).toBeTruthy();
   });
 
@@ -120,7 +121,7 @@ describe("BrainOverview", () => {
     expect(screen.queryByRole("img")).toBeNull();
   });
 
-  it("creates a card and persists its component, width, and pipe binding", async () => {
+  it("creates a Live View template and persists its Block type, width, and Pipe binding", async () => {
     mocks.listBrainViews.mockResolvedValue({ status: "ok", data: [] });
     mocks.saveBrainView.mockImplementation(async (request) => ({
       status: "ok",
@@ -137,8 +138,14 @@ describe("BrainOverview", () => {
     }));
     render(<BrainOverview />);
 
+    expect(await screen.findByText("Create your first Live View")).toBeTruthy();
+    expect(screen.getByText(/Start with a blank template/)).toBeTruthy();
     fireEvent.click(await screen.findByTestId("overview-create"));
     fireEvent.click(screen.getByTestId("overview-add-card"));
+    expect(screen.getByText("Live View name")).toBeTruthy();
+    expect(screen.getByText("Block title")).toBeTruthy();
+    expect(screen.getByText("Block type")).toBeTruthy();
+    expect(screen.getByText("Connected Pipe")).toBeTruthy();
     const editorCard = screen.getByTestId(/^overview-editor-card-/);
     const cardTitle = editorCard.querySelector("input");
     expect(cardTitle).toBeTruthy();

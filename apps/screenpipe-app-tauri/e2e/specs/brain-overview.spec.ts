@@ -22,10 +22,10 @@ interface OutputTarget {
   revision: number;
 }
 
-describe("Brain Overview", function () {
+describe("Brain Live Views", function () {
   this.timeout(120_000);
 
-  it("renders a pipe-filled user-defined overview", async () => {
+  it("renders a Pipe-filled Live View template", async () => {
     await waitForAppReady();
     await openHomeWindow();
     const config = await invokeOrThrow<LocalApiConfig>("get_local_api_config");
@@ -172,15 +172,18 @@ describe("Brain Overview", function () {
     if (await collapseSidebar.isExisting()) {
       await collapseSidebar.click();
     }
-    await $("[data-testid='brain-overview-grid']").moveTo({
-      xOffset: 20,
-      yOffset: 20,
+    await $("[data-testid='overview-edit']").moveTo({
+      xOffset: 10,
+      yOffset: 10,
     });
     await browser.pause(1_000);
 
     const renderedText = (await browser.execute(
       () => document.body?.innerText || "",
     )) as string;
+    expect(renderedText).toContain("Live Views");
+    expect(renderedText).toContain("Live View");
+    expect(renderedText).toContain("CUSTOMIZE TEMPLATE");
     expect(renderedText).toContain("How I worked today");
     expect(renderedText).toContain("Automation opportunities");
     const screenshot = await saveScreenshot("brain-overview-pipe-filled");

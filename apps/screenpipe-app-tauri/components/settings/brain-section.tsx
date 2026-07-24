@@ -1210,7 +1210,7 @@ export function BrainSection() {
         <div className="inline-flex items-center gap-1 border-b border-border">
           {(
             [
-              { value: "overview", label: "Overview" },
+              { value: "overview", label: "Live Views" },
               { value: "memories", label: "Memories", count: total },
               { value: "artifacts", label: "Artifacts", count: artifactsTotal },
             ] as { value: TypeFilter; label: string; count?: number }[]

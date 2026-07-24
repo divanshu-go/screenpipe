@@ -85,7 +85,7 @@ function ViewSlotBody({ slot }: { slot: ViewSlot }) {
       <div className="flex min-h-24 items-center justify-center border border-dashed border-border px-4 text-center text-xs text-muted-foreground">
         {slot.binding
           ? `waiting for ${slot.binding.pipeName} to publish data`
-          : "bind a pipe to fill this card"}
+          : "connect a Pipe to fill this Block"}
       </div>
     );
   }
@@ -259,7 +259,9 @@ function OverviewCard({ slot }: { slot: ViewSlot }) {
       </div>
       <div className="mt-4 flex items-center justify-between gap-3 border-t border-border pt-2 text-[10px] text-muted-foreground">
         <span className="truncate">
-          {slot.binding ? `pipe: ${slot.binding.pipeName}` : "no pipe bound"}
+          {slot.binding
+            ? `Pipe: ${slot.binding.pipeName}`
+            : "No Pipe connected"}
         </span>
         {slot.value && (
           <span className="shrink-0">
@@ -305,7 +307,7 @@ export function BrainOverview() {
         setError(
           loadError instanceof Error
             ? loadError.message
-            : "failed to load overview",
+            : "failed to load Live Views",
         );
       }
     } finally {
@@ -323,7 +325,7 @@ export function BrainOverview() {
     const now = new Date().toISOString();
     setDraft({
       id: "my-overview",
-      title: "My overview",
+      title: "My Live View",
       revision: 0,
       slots: [],
       createdAt: now,
@@ -365,10 +367,10 @@ export function BrainOverview() {
       setView(result.data);
       setDraft(null);
       setEditing(false);
-      toast({ title: "overview saved" });
+      toast({ title: "Live View saved" });
     } catch (saveError) {
       toast({
-        title: "failed to save overview",
+        title: "failed to save Live View",
         description:
           saveError instanceof Error ? saveError.message : String(saveError),
         variant: "destructive",
@@ -401,7 +403,7 @@ export function BrainOverview() {
           ...current.slots,
           {
             id,
-            title: "New card",
+            title: "New Block",
             component: "metric.v1",
             width: 6,
             order: current.slots.length,
@@ -428,7 +430,7 @@ export function BrainOverview() {
   if (loading) {
     return (
       <div className="flex min-h-64 items-center justify-center text-sm text-muted-foreground">
-        <Loader2 className="mr-2 h-4 w-4 animate-spin" /> loading overview
+        <Loader2 className="mr-2 h-4 w-4 animate-spin" /> loading Live Views
       </div>
     );
   }
@@ -438,7 +440,7 @@ export function BrainOverview() {
       <div className="flex min-h-64 flex-col items-center justify-center gap-3 border border-border text-center">
         <AlertCircle className="h-5 w-5 text-muted-foreground" />
         <div>
-          <p className="text-sm">failed to load overview</p>
+          <p className="text-sm">failed to load Live Views</p>
           <p className="mt-1 text-xs text-muted-foreground">{error}</p>
         </div>
         <Button
@@ -459,10 +461,10 @@ export function BrainOverview() {
         data-testid="brain-overview-empty"
         className="flex min-h-72 flex-col items-center justify-center border border-dashed border-border px-6 text-center"
       >
-        <p className="text-sm font-medium">Build your overview</p>
+        <p className="text-sm font-medium">Create your first Live View</p>
         <p className="mt-2 max-w-md text-xs leading-5 text-muted-foreground">
-          Define the cards you want to see, bind each one to a pipe, and let
-          that pipe publish validated data here.
+          Start with a blank template. Add the Blocks you want, connect each
+          Block to a Pipe, and Pipes keep your Live View updated.
         </p>
         <Button
           data-testid="overview-create"
@@ -470,7 +472,7 @@ export function BrainOverview() {
           className="mt-5 rounded-none"
           onClick={beginCreate}
         >
-          <Plus className="mr-1.5 h-3.5 w-3.5" /> create overview
+          <Plus className="mr-1.5 h-3.5 w-3.5" /> create Live View
         </Button>
       </div>
     );
@@ -485,7 +487,7 @@ export function BrainOverview() {
         <div className="flex items-end justify-between gap-4 border-b border-border pb-4">
           <label className="min-w-0 flex-1 space-y-1.5">
             <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-              Overview title
+              Live View name
             </span>
             <Input
               data-testid="overview-title"
@@ -520,7 +522,7 @@ export function BrainOverview() {
               {saving && (
                 <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
               )}
-              save overview
+              save template
             </Button>
           </div>
         </div>
@@ -535,7 +537,7 @@ export function BrainOverview() {
               <div className="grid gap-3 lg:grid-cols-[minmax(12rem,1.5fr)_minmax(10rem,1fr)_minmax(10rem,1fr)_7rem_auto]">
                 <label className="space-y-1">
                   <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                    Card title
+                    Block title
                   </span>
                   <Input
                     value={slot.title}
@@ -551,7 +553,7 @@ export function BrainOverview() {
                 </label>
                 <label className="space-y-1">
                   <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                    Component
+                    Block type
                   </span>
                   <select
                     value={slot.component}
@@ -573,7 +575,7 @@ export function BrainOverview() {
                 </label>
                 <label className="space-y-1">
                   <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                    Pipe
+                    Connected Pipe
                   </span>
                   <select
                     data-testid={`overview-pipe-${slot.id}`}
@@ -589,7 +591,7 @@ export function BrainOverview() {
                       }))
                     }
                   >
-                    <option value="">No pipe</option>
+                    <option value="">No Pipe</option>
                     {installedPipes.map((pipe) => (
                       <option key={pipe.config.name} value={pipe.config.name}>
                         {pipe.config.name}
@@ -618,7 +620,7 @@ export function BrainOverview() {
                 </label>
                 <div className="flex items-end justify-end gap-1">
                   <Button
-                    aria-label="move card up"
+                    aria-label="move Block up"
                     variant="ghost"
                     size="icon"
                     className="h-8 w-8 rounded-none"
@@ -628,7 +630,7 @@ export function BrainOverview() {
                     <ArrowUp className="h-3.5 w-3.5" />
                   </Button>
                   <Button
-                    aria-label="move card down"
+                    aria-label="move Block down"
                     variant="ghost"
                     size="icon"
                     className="h-8 w-8 rounded-none"
@@ -638,7 +640,7 @@ export function BrainOverview() {
                     <ArrowDown className="h-3.5 w-3.5" />
                   </Button>
                   <Button
-                    aria-label="delete card"
+                    aria-label="delete Block"
                     variant="ghost"
                     size="icon"
                     className="h-8 w-8 rounded-none text-muted-foreground hover:text-destructive"
@@ -661,7 +663,7 @@ export function BrainOverview() {
                     (component) => component.value === slot.component,
                   )?.schema
                 }
-                . The pipe receives this target on its next run.
+                . The connected Pipe receives this Block on its next run.
               </p>
             </div>
           ))}
@@ -674,7 +676,7 @@ export function BrainOverview() {
           className="rounded-none"
           onClick={addSlot}
         >
-          <Plus className="mr-1.5 h-3.5 w-3.5" /> add card
+          <Plus className="mr-1.5 h-3.5 w-3.5" /> add Block
         </Button>
       </div>
     );
@@ -686,10 +688,13 @@ export function BrainOverview() {
     <div className="min-h-0 flex-1 overflow-y-auto pb-8">
       <div className="mb-5 flex items-start justify-between gap-4 border-b border-border pb-4">
         <div>
+          <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
+            Live View
+          </p>
           <h2 className="text-lg font-semibold tracking-tight">{view.title}</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            Each card is filled by its bound pipe and stored as a source-backed
-            artifact.
+            Blocks are updated by connected Pipes and stored as source-backed
+            artifacts.
           </p>
         </div>
         <Button
@@ -699,7 +704,7 @@ export function BrainOverview() {
           className="rounded-none"
           onClick={beginEdit}
         >
-          <Pencil className="mr-1.5 h-3.5 w-3.5" /> edit layout
+          <Pencil className="mr-1.5 h-3.5 w-3.5" /> customize template
         </Button>
       </div>
       {slots.length === 0 ? (
@@ -708,7 +713,7 @@ export function BrainOverview() {
           className="flex min-h-48 w-full items-center justify-center border border-dashed border-border text-xs text-muted-foreground hover:text-foreground"
           onClick={beginEdit}
         >
-          add your first card
+          add your first Block
         </button>
       ) : (
         <div

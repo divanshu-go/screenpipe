@@ -782,7 +782,7 @@
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "Creates a typed Brain overview, submits all supported component payloads with evidence, renders them in the real app, and captures the PR screenshot."
+      "notes": "Creates a Live View template, submits all supported Block payloads with evidence, renders them in the real app, and captures the PR screenshot."
     },
     {
       "spec": "html-artifact-render.spec.ts",
