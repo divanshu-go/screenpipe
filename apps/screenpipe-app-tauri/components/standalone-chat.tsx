@@ -4,7 +4,7 @@
 "use client";
 
 import * as React from "react";
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { writeActiveAiPresetId } from "@/lib/active-ai-preset";
 import { useSettings } from "@/lib/hooks/use-settings";
@@ -13,6 +13,7 @@ import { Settings2, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SchedulePromptDialog } from "@/components/chat/schedule-prompt-dialog";
 import { AcpSignInDialog, type AcpSignInRequest } from "@/components/chat/standalone/acp-sign-in-dialog";
+import { acpAdapterInfo } from "@/lib/utils/preset-appearance";
 import { BrowserSidebar } from "@/components/browser-sidebar";
 import { toast } from "@/components/ui/use-toast";
 import type { AIPreset, JsonValue } from "@/lib/utils/tauri";
@@ -1361,6 +1362,9 @@ export function StandaloneChat({
     if (actionKind === "auth") {
       setAcpSignIn({
         kind: "methods",
+        // The prompt is for the currently active ACP agent — carry its id so
+        // the dialog can show that agent's real icon and name.
+        agentId: activePresetRef.current?.acpAgent?.id,
         requestId,
         sessionId,
         title: agentActionTitle(rawTitle, actionKind),
@@ -1583,6 +1587,16 @@ export function StandaloneChat({
   // Sign-in dialog actions.
   const acpDefaultPresetLabel =
     settings?.aiPresets?.find((preset) => preset.defaultPreset)?.id ?? "screenpipe-cloud";
+  // Resolve the agent's real name + icon from the catalog so the dialog shows
+  // its brand mark (Codex, Kimi, …) instead of a generic key. For CLI login
+  // the ACP-reported name is more specific, so prefer it.
+  const acpSignInAgent = useMemo(() => {
+    const agentId = acpSignIn?.agentId;
+    const info = acpAdapterInfo(agentId);
+    const name =
+      acpSignIn?.kind === "cli" ? acpSignIn.agentName : info.name;
+    return { name: name || "this agent", iconSrc: info.imageSrc, iconInvert: info.invertInDark === true };
+  }, [acpSignIn]);
   const clearAcpSignInProbe = useCallback(() => {
     acpSignInBusyRef.current = false;
     if (acpSignInTimeoutRef.current != null) {
@@ -1989,6 +2003,9 @@ export function StandaloneChat({
 
       <AcpSignInDialog
         request={acpSignIn}
+        agentName={acpSignInAgent.name}
+        iconSrc={acpSignInAgent.iconSrc}
+        iconInvert={acpSignInAgent.iconInvert}
         busy={acpSignInBusy}
         error={acpSignInError}
         defaultPresetLabel={acpDefaultPresetLabel}
