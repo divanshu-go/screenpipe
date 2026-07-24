@@ -61,6 +61,39 @@ impl LiveViewSource {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum LiveViewTimeRange {
+    #[default]
+    #[serde(rename = "today")]
+    Today,
+    #[serde(rename = "24h")]
+    Last24Hours,
+    #[serde(rename = "7d")]
+    Last7Days,
+    #[serde(rename = "30d")]
+    Last30Days,
+}
+
+impl LiveViewTimeRange {
+    pub fn schema_name(self) -> &'static str {
+        match self {
+            Self::Today => "today",
+            Self::Last24Hours => "24h",
+            Self::Last7Days => "7d",
+            Self::Last30Days => "30d",
+        }
+    }
+
+    fn instruction(self) -> &'static str {
+        match self {
+            Self::Today => "the current local calendar day",
+            Self::Last24Hours => "the rolling 24 hours ending now",
+            Self::Last7Days => "the rolling 7 days ending now",
+            Self::Last30Days => "the rolling 30 days ending now",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LegacyLiveViewBinding {
@@ -94,6 +127,10 @@ pub enum LiveViewBlockKind {
     ListV1,
     #[serde(rename = "bar-chart.v1")]
     BarChartV1,
+    #[serde(rename = "line-chart.v1")]
+    LineChartV1,
+    #[serde(rename = "table.v1")]
+    TableV1,
     #[serde(rename = "timeline.v1")]
     TimelineV1,
     #[serde(rename = "markdown.v1")]
@@ -106,6 +143,8 @@ impl LiveViewBlockKind {
             Self::MetricV1 => "metric.v1",
             Self::ListV1 => "list.v1",
             Self::BarChartV1 => "bar-chart.v1",
+            Self::LineChartV1 => "line-chart.v1",
+            Self::TableV1 => "table.v1",
             Self::TimelineV1 => "timeline.v1",
             Self::MarkdownV1 => "markdown.v1",
         }
@@ -139,6 +178,25 @@ impl LiveViewBlockKind {
                 }),
                 &["label", "value"],
             ),
+            Self::LineChartV1 => collection_schema(
+                json!({
+                    "timestamp": {"type": "string", "maxLength": 128},
+                    "value": {"type": "number"},
+                    "label": {"type": "string", "maxLength": 200}
+                }),
+                &["timestamp", "value"],
+                60,
+            ),
+            Self::TableV1 => collection_schema(
+                json!({
+                    "label": {"type": "string", "maxLength": 200},
+                    "value": {"type": ["string", "number"], "maxLength": 500},
+                    "detail": {"type": "string", "maxLength": 500},
+                    "status": {"type": "string", "maxLength": 80}
+                }),
+                &["label", "value"],
+                50,
+            ),
             Self::TimelineV1 => item_collection_schema(
                 json!({
                     "title": {"type": "string", "maxLength": 200},
@@ -160,6 +218,10 @@ impl LiveViewBlockKind {
 }
 
 fn item_collection_schema(properties: Value, required: &[&str]) -> Value {
+    collection_schema(properties, required, 20)
+}
+
+fn collection_schema(properties: Value, required: &[&str], max_items: usize) -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
@@ -167,7 +229,7 @@ fn item_collection_schema(properties: Value, required: &[&str]) -> Value {
         "properties": {
             "items": {
                 "type": "array",
-                "maxItems": 20,
+                "maxItems": max_items,
                 "items": {
                     "type": "object",
                     "additionalProperties": false,
@@ -203,6 +265,8 @@ pub struct LiveViewTemplate {
     pub id: String,
     pub title: String,
     pub revision: u64,
+    #[serde(default)]
+    pub time_range: LiveViewTimeRange,
     pub blocks: Vec<LiveViewTemplateBlock>,
     pub created_at: String,
     pub updated_at: String,
@@ -255,6 +319,7 @@ pub struct LiveView {
     pub id: String,
     pub title: String,
     pub revision: u64,
+    pub time_range: LiveViewTimeRange,
     pub blocks: Vec<LiveViewBlock>,
     pub created_at: String,
     pub updated_at: String,
@@ -266,6 +331,7 @@ pub struct SaveLiveViewRequest {
     pub id: String,
     pub title: String,
     pub expected_revision: Option<u64>,
+    pub time_range: LiveViewTimeRange,
     pub blocks: Vec<LiveViewTemplateBlock>,
 }
 
@@ -561,6 +627,7 @@ fn read_legacy_store(path: &Path) -> Result<LiveViewStore, LiveViewError> {
                 id: view.id,
                 title: view.title,
                 revision: view.revision,
+                time_range: LiveViewTimeRange::Today,
                 blocks: view
                     .slots
                     .into_iter()
@@ -652,12 +719,22 @@ pub fn compile_live_view_targets(templates: &[LiveViewTemplate]) -> Vec<OutputTa
         .flat_map(|template| {
             template.blocks.iter().filter_map(move |block| {
                 let source = block.source.as_ref()?;
+                let mut schema = block.kind.output_schema();
+                if let Some(object) = schema.as_object_mut() {
+                    object.insert(
+                        "x-screenpipe-time-range".to_string(),
+                        json!({
+                            "preset": template.time_range.schema_name(),
+                            "instruction": template.time_range.instruction(),
+                        }),
+                    );
+                }
                 Some(OutputTargetInput {
                     id: live_view_target_id(&template.id, &block.id),
                     title: block.title.clone(),
                     bound_pipe: source.pipe_name().to_string(),
                     schema_name: block.kind.schema_name().to_string(),
-                    schema: block.kind.output_schema(),
+                    schema,
                 })
             })
         })
@@ -699,6 +776,7 @@ fn hydrate(
             id: template.id.clone(),
             title: template.title,
             revision: template.revision,
+            time_range: template.time_range,
             blocks: template
                 .blocks
                 .into_iter()
@@ -771,6 +849,7 @@ pub fn save_live_view(
                 id: existing.id.clone(),
                 title: request.title.trim().to_string(),
                 revision: existing.revision + 1,
+                time_range: request.time_range,
                 blocks: request.blocks,
                 created_at: existing.created_at.clone(),
                 updated_at: now,
@@ -791,6 +870,7 @@ pub fn save_live_view(
                 id: request.id,
                 title: request.title.trim().to_string(),
                 revision: 1,
+                time_range: request.time_range,
                 blocks: request.blocks,
                 created_at: now.clone(),
                 updated_at: now,
@@ -821,6 +901,7 @@ pub fn apply_live_view_template(
             id: template.id,
             title: template.title,
             expected_revision,
+            time_range: template.time_range,
             blocks: template.blocks,
         },
     )
@@ -875,6 +956,7 @@ mod tests {
                 id: "my-overview".to_string(),
                 title: "My overview".to_string(),
                 expected_revision: None,
+                time_range: LiveViewTimeRange::Last7Days,
                 blocks: vec![block(Some("daily-summary"))],
             },
         )
@@ -886,6 +968,7 @@ mod tests {
         assert_eq!(targets[0].consumer, LIVE_VIEW_CONSUMER_ID);
         assert_eq!(targets[0].bound_pipe, "daily-summary");
         assert_eq!(targets[0].schema_name, "metric.v1");
+        assert_eq!(targets[0].schema["x-screenpipe-time-range"]["preset"], "7d");
 
         save_live_view(
             dir.path(),
@@ -893,6 +976,7 @@ mod tests {
                 id: "my-overview".to_string(),
                 title: "My overview".to_string(),
                 expected_revision: Some(1),
+                time_range: LiveViewTimeRange::Last7Days,
                 blocks: vec![block(None)],
             },
         )
@@ -909,6 +993,7 @@ mod tests {
                 id: "my-overview".to_string(),
                 title: "My overview".to_string(),
                 expected_revision: None,
+                time_range: LiveViewTimeRange::Today,
                 blocks: vec![],
             },
         )
@@ -919,6 +1004,7 @@ mod tests {
                 id: "my-overview".to_string(),
                 title: "Stale".to_string(),
                 expected_revision: Some(0),
+                time_range: LiveViewTimeRange::Today,
                 blocks: vec![],
             },
         )
@@ -936,6 +1022,22 @@ mod tests {
         let schema = live_view_template_json_schema();
         assert_eq!(schema["$id"], LIVE_VIEW_TEMPLATE_SCHEMA);
         assert_eq!(fixture.blocks.len(), 2);
+    }
+
+    #[test]
+    fn templates_saved_before_time_ranges_default_to_today() {
+        let template: LiveViewTemplate = serde_json::from_value(json!({
+            "schema": LIVE_VIEW_TEMPLATE_SCHEMA,
+            "id": "legacy-view",
+            "title": "Legacy view",
+            "revision": 1,
+            "blocks": [],
+            "createdAt": "2026-07-24T00:00:00Z",
+            "updatedAt": "2026-07-24T00:00:00Z"
+        }))
+        .unwrap();
+
+        assert_eq!(template.time_range, LiveViewTimeRange::Today);
     }
 
     #[test]

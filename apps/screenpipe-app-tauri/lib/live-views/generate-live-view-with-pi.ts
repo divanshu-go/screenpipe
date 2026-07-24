@@ -7,6 +7,7 @@ import {
   commands,
   type AIPreset,
   type BrainViewComponent,
+  type BrainViewTimeRange,
   type PiProviderConfig,
 } from "@/lib/utils/tauri";
 import { mountAgentEventBus, registerForeground } from "@/lib/events/bus";
@@ -20,6 +21,8 @@ const COMPONENTS = new Set<BrainViewComponent>([
   "metric.v1",
   "list.v1",
   "bar-chart.v1",
+  "line-chart.v1",
+  "table.v1",
   "timeline.v1",
   "markdown.v1",
 ]);
@@ -28,6 +31,9 @@ const COMPONENT_ALIASES: Record<string, BrainViewComponent> = {
   list: "list.v1",
   bar: "bar-chart.v1",
   "bar-chart": "bar-chart.v1",
+  line: "line-chart.v1",
+  "line-chart": "line-chart.v1",
+  table: "table.v1",
   timeline: "timeline.v1",
   text: "markdown.v1",
   markdown: "markdown.v1",
@@ -49,6 +55,7 @@ export type GeneratedLiveViewBlock = {
 
 export type GeneratedLiveView = {
   title: string;
+  timeRange: BrainViewTimeRange;
   blocks: GeneratedLiveViewBlock[];
   note: string;
 };
@@ -61,6 +68,7 @@ type GenerateLiveViewOptions = {
   pipes: LiveViewPipeSummary[];
   currentView?: {
     title: string;
+    timeRange: BrainViewTimeRange;
     blocks: GeneratedLiveViewBlock[];
   } | null;
 };
@@ -100,6 +108,21 @@ function widthValue(value: unknown): 3 | 6 | 12 {
   if (value === 3 || value === "3" || value === "quarter") return 3;
   if (value === 12 || value === "12" || value === "full") return 12;
   return 6;
+}
+
+function timeRangeValue(value: unknown): BrainViewTimeRange {
+  if (typeof value !== "string") return "today";
+  const normalized = value.trim().toLowerCase();
+  if (["24h", "24 hours", "last 24 hours"].includes(normalized)) return "24h";
+  if (["7d", "7 days", "last 7 days", "week", "weekly"].includes(normalized)) {
+    return "7d";
+  }
+  if (
+    ["30d", "30 days", "last 30 days", "month", "monthly"].includes(normalized)
+  ) {
+    return "30d";
+  }
+  return "today";
 }
 
 export function parseGeneratedLiveView(
@@ -158,7 +181,12 @@ export function parseGeneratedLiveView(
         ? `Created ${blocks[0].title}.`
         : `Created ${blocks.length} sections.`;
 
-  return { title, blocks, note };
+  return {
+    title,
+    timeRange: timeRangeValue(parsed.timeRange ?? parsed.time_range),
+    blocks,
+    note,
+  };
 }
 
 function generationSystemPrompt(): string {
@@ -170,16 +198,19 @@ Allowed components:
 - metric.v1: one important number
 - list.v1: ranked or actionable items
 - bar-chart.v1: categorical numeric comparison
+- line-chart.v1: one numeric measure changing across timestamps
+- table.v1: dense rows with label, value, optional detail, and optional status
 - timeline.v1: events in time order
 - markdown.v1: a short narrative brief
 
 Allowed widths are 3, 6, or 12. Prefer 6 for most sections, 12 for timelines or detailed briefs, and 3 only for compact metrics.
 Only use a pipeName from the installed pipes supplied by the user. Use null when none fits. Do not invent pipes.
 For a whole dashboard, create 4 to 7 distinct sections. Prefer a useful mix with at least one metric, one bar chart, and one list or timeline when the request supports them. Never return placeholder titles such as "test", duplicate sections, or multiple metrics that show the same number.
+Choose one timeRange for the whole dashboard: "today", "24h", "7d", or "30d". Infer it from the request. Use "today" when the request does not specify a period. Prefer line-chart.v1 over bar-chart.v1 when the user asks how something changed over time.
 For one section, return exactly one focused section.
 
 Required JSON shape:
-{"title":"View title","blocks":[{"title":"Section title","component":"metric.v1","width":6,"pipeName":"exact-installed-pipe-name-or-null"}],"note":"One short sentence explaining what you created"}`;
+{"title":"View title","timeRange":"today","blocks":[{"title":"Section title","component":"metric.v1","width":6,"pipeName":"exact-installed-pipe-name-or-null"}],"note":"One short sentence explaining what you created"}`;
 }
 
 function generationPrompt(options: GenerateLiveViewOptions): string {

@@ -87,6 +87,7 @@ const populatedView: ViewDefinition = {
   id: "my-overview",
   title: "How I worked today",
   revision: 3,
+  timeRange: "today",
   createdAt: "2026-07-23T16:00:00Z",
   updatedAt: "2026-07-23T17:00:00Z",
   slots: [
@@ -123,6 +124,7 @@ const workdayTemplate = {
   title: "Workday overview",
   description: "Time, accomplishments, key moments, and unfinished work.",
   version: 1,
+  timeRange: "today" as const,
   pipes: [
     { name: "time-breakdown", distribution: "bundled" },
     { name: "day-recap", distribution: "bundled" },
@@ -192,6 +194,109 @@ describe("BrainOverview", () => {
     expect(loadingButton).toBeDisabled();
     expect(loadingButton.textContent).toBe("refresh data");
     expect(screen.queryByText("loading data")).toBeNull();
+  });
+
+  it("persists a time window and sends its exact bounds to connected Pipes", async () => {
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [populatedView],
+    });
+    mocks.saveBrainView.mockImplementation(async (request) => ({
+      status: "ok",
+      data: {
+        ...populatedView,
+        ...request,
+        revision: 4,
+        slots: populatedView.slots,
+      },
+    }));
+    render(<BrainOverview />);
+
+    fireEvent.change(await screen.findByTestId("overview-time-range"), {
+      target: { value: "7d" },
+    });
+
+    await waitFor(() =>
+      expect(mocks.saveBrainView).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: "my-overview",
+          expectedRevision: 3,
+          timeRange: "7d",
+        }),
+      ),
+    );
+    await waitFor(() => expect(mocks.localFetch).toHaveBeenCalled());
+    const runCall = mocks.localFetch.mock.calls.find(([path]) =>
+      String(path).endsWith("/run"),
+    );
+    const payload = JSON.parse(String(runCall?.[1]?.body));
+    expect(payload.notification_context.time_range).toEqual(
+      expect.objectContaining({
+        preset: "7d",
+        label: "Last 7 days",
+        timezone: expect.any(String),
+        start: expect.any(String),
+        end: expect.any(String),
+      }),
+    );
+  });
+
+  it("renders time-series and dense data inside reliable card scroll regions", async () => {
+    const advancedView: ViewDefinition = {
+      ...populatedView,
+      timeRange: "7d",
+      slots: [
+        {
+          ...populatedView.slots[0],
+          id: "focus-trend",
+          title: "Focus trend",
+          component: "line-chart.v1",
+          value: {
+            ...populatedView.slots[0].value!,
+            payload: {
+              items: [
+                { timestamp: "Mon", value: 2 },
+                { timestamp: "Tue", value: 5 },
+                { timestamp: "Wed", value: 3 },
+              ],
+            },
+          },
+        },
+        {
+          ...populatedView.slots[0],
+          id: "project-table",
+          title: "Project detail",
+          component: "table.v1",
+          order: 1,
+          value: {
+            ...populatedView.slots[0].value!,
+            payload: {
+              items: Array.from({ length: 30 }, (_, index) => ({
+                label: `Project ${index + 1}`,
+                value: `${index + 1} hours`,
+                detail: "Source-backed detail",
+              })),
+            },
+          },
+        },
+      ],
+    };
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [advancedView],
+    });
+    render(<BrainOverview />);
+
+    expect(
+      await screen.findByRole("img", { name: "Focus trend time series" }),
+    ).toBeTruthy();
+    expect(screen.getByText("Line chart · Last 7 days")).toBeTruthy();
+    expect(screen.getByText("Project 30")).toBeTruthy();
+    expect(
+      screen
+        .getByTestId("overview-card-scroll-project-table")
+        .className.includes("overflow-auto"),
+    ).toBe(true);
   });
 
   it("does not render raw HTML from a markdown card", async () => {
@@ -357,6 +462,7 @@ describe("BrainOverview", () => {
     mocks.listBrainViews.mockResolvedValue({ status: "ok", data: [] });
     mocks.generateLiveViewWithPi.mockResolvedValue({
       title: "My working week",
+      timeRange: "7d",
       note: "A time overview with automation opportunities.",
       blocks: [
         {
@@ -435,6 +541,7 @@ describe("BrainOverview", () => {
     });
     mocks.generateLiveViewWithPi.mockResolvedValue({
       title: "Automation opportunities",
+      timeRange: "today",
       note: "Added one action list.",
       blocks: [
         {
@@ -482,6 +589,7 @@ describe("BrainOverview", () => {
     });
     mocks.generateLiveViewWithPi.mockResolvedValue({
       title: "A different dashboard",
+      timeRange: "7d",
       note: "Rebuilt around projects.",
       blocks: [
         {
@@ -653,6 +761,7 @@ describe("BrainOverview", () => {
     });
     mocks.generateLiveViewWithPi.mockResolvedValue({
       title: "Time by project",
+      timeRange: "today",
       note: "Changed the breakdown.",
       blocks: [
         {

@@ -3,6 +3,7 @@
   "id": "daily-work",
   "title": "Daily work",
   "revision": 1,
+  "timeRange": "today",
   "blocks": [
     {
       "id": "focus-time",

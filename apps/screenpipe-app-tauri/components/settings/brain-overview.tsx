@@ -39,6 +39,7 @@ import {
   type BrainViewDefinition,
   type BrainViewSlot,
   type BrainViewTemplateKit,
+  type BrainViewTimeRange,
 } from "@/lib/utils/tauri";
 
 export type ViewComponent = BrainViewComponent;
@@ -76,9 +77,54 @@ const COMPONENTS: Array<{
     label: "Bar chart",
     schema: "labels and numeric values",
   },
+  {
+    value: "line-chart.v1",
+    label: "Line chart",
+    schema: "numeric values changing over time",
+  },
+  {
+    value: "table.v1",
+    label: "Table",
+    schema: "scrollable rows with values and details",
+  },
   { value: "timeline.v1", label: "Timeline", schema: "timestamped events" },
   { value: "markdown.v1", label: "Text", schema: "a short formatted brief" },
 ];
+
+const TIME_RANGES: Array<{
+  value: BrainViewTimeRange;
+  label: string;
+  milliseconds: number | null;
+}> = [
+  { value: "today", label: "Today", milliseconds: null },
+  { value: "24h", label: "Last 24 hours", milliseconds: 24 * 60 * 60 * 1000 },
+  { value: "7d", label: "Last 7 days", milliseconds: 7 * 24 * 60 * 60 * 1000 },
+  {
+    value: "30d",
+    label: "Last 30 days",
+    milliseconds: 30 * 24 * 60 * 60 * 1000,
+  },
+];
+
+function timeRangeContext(timeRange: BrainViewTimeRange) {
+  const selected =
+    TIME_RANGES.find((candidate) => candidate.value === timeRange) ??
+    TIME_RANGES[0];
+  const end = new Date();
+  const start = new Date(end);
+  if (selected.milliseconds === null) {
+    start.setHours(0, 0, 0, 0);
+  } else {
+    start.setTime(end.getTime() - selected.milliseconds);
+  }
+  return {
+    preset: selected.value,
+    label: selected.label,
+    start: start.toISOString(),
+    end: end.toISOString(),
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+  };
+}
 
 function DataRefreshBanner({ state }: { state: DataRefreshState }) {
   const active = state.status === "starting" || state.status === "running";
@@ -292,12 +338,13 @@ export function BrainOverview() {
                   notification_context: {
                     source: "live-view",
                     live_view_id: targetView.id,
+                    time_range: timeRangeContext(targetView.timeRange),
                     target_ids: boundSlots
                       .filter((slot) => slot.binding?.pipeName === pipeName)
                       .map((slot) => `live-view:${targetView.id}:${slot.id}`),
                     instruction: requestedSlots
-                      ? "Refresh only the listed structured output targets. Call structured_output get_targets first, query only source-backed Screenpipe APIs, and submit an evidence-backed value for each listed target before completing."
-                      : "Refresh every structured output target assigned to this pipe. Call structured_output get_targets first, query only source-backed Screenpipe APIs, and submit every valid target before completing.",
+                      ? "Refresh only the listed structured output targets for the supplied time_range. Call structured_output get_targets first, query only source-backed Screenpipe APIs inside that exact time window, and submit an evidence-backed value for each listed target before completing."
+                      : "Refresh every structured output target assigned to this pipe for the supplied time_range. Call structured_output get_targets first, query only source-backed Screenpipe APIs inside that exact time window, and submit every valid target before completing.",
                   },
                 }),
               },
@@ -405,6 +452,7 @@ export function BrainOverview() {
       id: "my-overview",
       title: "My Live View",
       revision: 0,
+      timeRange: "today",
       slots: [],
       createdAt: now,
       updatedAt: now,
@@ -430,6 +478,7 @@ export function BrainOverview() {
       id: view?.id ?? "my-overview",
       title: kit.title,
       revision: view?.revision ?? 0,
+      timeRange: kit.timeRange,
       slots: kitSlots(kit),
       createdAt: view?.createdAt ?? now,
       updatedAt: now,
@@ -462,6 +511,7 @@ export function BrainOverview() {
         currentView: view
           ? {
               title: view.title,
+              timeRange: view.timeRange,
               blocks: normalizedSlots(view.slots).map((slot) => ({
                 title: slot.title,
                 component: slot.component,
@@ -478,6 +528,7 @@ export function BrainOverview() {
             id: "my-overview",
             title: generated.title,
             revision: 0,
+            timeRange: generated.timeRange,
             slots: [],
             createdAt: now,
             updatedAt: now,
@@ -492,6 +543,8 @@ export function BrainOverview() {
       setDraft({
         ...base,
         title: scope === "dashboard" || !view ? generated.title : base.title,
+        timeRange:
+          scope === "dashboard" || !view ? generated.timeRange : base.timeRange,
         slots,
         updatedAt: now,
       });
@@ -629,6 +682,7 @@ export function BrainOverview() {
         })),
         currentView: {
           title: view.title,
+          timeRange: view.timeRange,
           blocks: [
             {
               title: slot.title,
@@ -644,6 +698,7 @@ export function BrainOverview() {
         id: view.id,
         title: view.title,
         expectedRevision: view.revision,
+        timeRange: view.timeRange,
         slots: normalizedSlots(view.slots).map((current) =>
           current.id === slot.id
             ? {
@@ -700,6 +755,7 @@ export function BrainOverview() {
         id: draft.id,
         title: draft.title.trim(),
         expectedRevision: draft.revision > 0 ? draft.revision : null,
+        timeRange: draft.timeRange,
         slots: normalizedSlots(draft.slots).map((slot) => ({
           id: slot.id,
           title: slot.title.trim(),
@@ -775,6 +831,7 @@ export function BrainOverview() {
         id: view.id,
         title: undoView.title,
         expectedRevision: undoRevision ?? view.revision,
+        timeRange: undoView.timeRange,
         slots: normalizedSlots(undoView.slots).map((slot) => ({
           id: slot.id,
           title: slot.title,
@@ -797,6 +854,46 @@ export function BrainOverview() {
           restoreError instanceof Error
             ? restoreError.message
             : String(restoreError),
+        variant: "destructive",
+      });
+      void load(true);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const changeTimeRange = async (timeRange: BrainViewTimeRange) => {
+    if (!view || timeRange === view.timeRange) return;
+    const previousView = copyViewDefinition(view);
+    setSaving(true);
+    try {
+      const result = await commands.saveBrainView({
+        id: view.id,
+        title: view.title,
+        expectedRevision: view.revision,
+        timeRange,
+        slots: normalizedSlots(view.slots).map((slot) => ({
+          id: slot.id,
+          title: slot.title,
+          component: slot.component,
+          width: slot.width,
+          order: slot.order,
+          binding: slot.binding,
+        })),
+      });
+      if (result.status === "error") throw new Error(result.error);
+      setView(result.data);
+      setUndoView(previousView);
+      setUndoRevision(result.data.revision);
+      toast({
+        title: `showing ${timeRangeContext(timeRange).label.toLowerCase()}`,
+      });
+      void refreshConnectedPipes(result.data);
+    } catch (rangeError) {
+      toast({
+        title: "could not change the time range",
+        description:
+          rangeError instanceof Error ? rangeError.message : String(rangeError),
         variant: "destructive",
       });
       void load(true);
@@ -1031,7 +1128,12 @@ export function BrainOverview() {
         )}
         <div className="grid grid-cols-12 gap-4">
           {previewSlots.map((slot) => (
-            <OverviewCard key={slot.id} slot={slot} preview />
+            <OverviewCard
+              key={slot.id}
+              slot={slot}
+              timeRange={draft.timeRange}
+              preview
+            />
           ))}
         </div>
       </div>
@@ -1045,20 +1147,44 @@ export function BrainOverview() {
         className="min-h-0 flex-1 space-y-5 overflow-y-auto pb-8 pr-4 [scrollbar-gutter:stable]"
       >
         <div className="flex items-end justify-between gap-4 border-b border-border pb-4">
-          <label className="min-w-0 flex-1 space-y-1.5">
-            <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-              Live View name
-            </span>
-            <Input
-              data-testid="overview-title"
-              value={draft.title}
-              onChange={(event) =>
-                setDraft({ ...draft, title: event.target.value })
-              }
-              className="h-9 max-w-md rounded-none"
-              maxLength={120}
-            />
-          </label>
+          <div className="flex min-w-0 flex-1 flex-wrap items-end gap-3">
+            <label className="min-w-64 flex-1 space-y-1.5">
+              <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                Live View name
+              </span>
+              <Input
+                data-testid="overview-title"
+                value={draft.title}
+                onChange={(event) =>
+                  setDraft({ ...draft, title: event.target.value })
+                }
+                className="h-9 max-w-md rounded-none"
+                maxLength={120}
+              />
+            </label>
+            <label className="space-y-1.5">
+              <span className="block text-[10px] uppercase tracking-wide text-muted-foreground">
+                Time window
+              </span>
+              <select
+                aria-label="template time range"
+                value={draft.timeRange}
+                className="h-9 border border-border bg-background px-2 text-xs outline-none focus:border-foreground"
+                onChange={(event) =>
+                  setDraft({
+                    ...draft,
+                    timeRange: event.target.value as BrainViewTimeRange,
+                  })
+                }
+              >
+                {TIME_RANGES.map((range) => (
+                  <option key={range.value} value={range.value}>
+                    {range.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
           <div className="flex gap-2">
             <Button
               variant="ghost"
@@ -1258,11 +1384,27 @@ export function BrainOverview() {
           </p>
           <h2 className="text-lg font-semibold tracking-tight">{view.title}</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            Blocks are updated by connected Pipes and stored as source-backed
-            artifacts.
+            Blocks are updated by connected Pipes for the selected time window
+            and stored as source-backed artifacts.
           </p>
         </div>
         <div className="flex flex-wrap justify-end gap-2">
+          <select
+            data-testid="overview-time-range"
+            aria-label="Live View time range"
+            value={view.timeRange}
+            disabled={saving || refreshIsActive}
+            className="h-8 border border-border bg-background px-2 text-xs outline-none focus:border-foreground disabled:opacity-50"
+            onChange={(event) =>
+              void changeTimeRange(event.target.value as BrainViewTimeRange)
+            }
+          >
+            {TIME_RANGES.map((range) => (
+              <option key={range.value} value={range.value}>
+                {range.label}
+              </option>
+            ))}
+          </select>
           {templateKits.length > 0 && (
             <Button
               data-testid="overview-templates"
@@ -1363,6 +1505,7 @@ export function BrainOverview() {
             <OverviewCard
               key={slot.id}
               slot={slot}
+              timeRange={view.timeRange}
               refreshing={
                 refreshIsActive &&
                 Boolean(dataRefresh?.slotIds.includes(slot.id))

@@ -13,6 +13,7 @@ describe("parseGeneratedLiveView", () => {
     const result = parseGeneratedLiveView(
       JSON.stringify({
         title: "How I worked",
+        timeRange: "7d",
         note: "A useful overview.",
         blocks: [
           {
@@ -27,6 +28,18 @@ describe("parseGeneratedLiveView", () => {
             width: "half",
             pipeName: "time-tracker",
           },
+          {
+            title: "Focus trend",
+            component: "line-chart",
+            width: 12,
+            pipeName: "time-tracker",
+          },
+          {
+            title: "Project detail",
+            component: "table.v1",
+            width: 12,
+            pipeName: "daily-summary",
+          },
         ],
       }),
       ["daily-summary", "time-tracker"],
@@ -35,6 +48,7 @@ describe("parseGeneratedLiveView", () => {
 
     expect(result).toEqual({
       title: "How I worked",
+      timeRange: "7d",
       note: "A useful overview.",
       blocks: [
         {
@@ -48,6 +62,18 @@ describe("parseGeneratedLiveView", () => {
           component: "bar-chart.v1",
           width: 6,
           pipeName: "time-tracker",
+        },
+        {
+          title: "Focus trend",
+          component: "line-chart.v1",
+          width: 12,
+          pipeName: "time-tracker",
+        },
+        {
+          title: "Project detail",
+          component: "table.v1",
+          width: 12,
+          pipeName: "daily-summary",
         },
       ],
     });

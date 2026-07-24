@@ -19,6 +19,7 @@
     "id": "workday-overview",
     "title": "Workday overview",
     "revision": 1,
+    "timeRange": "today",
     "blocks": [
       {
         "id": "active-time",
@@ -54,11 +55,22 @@
         }
       },
       {
+        "id": "focus-over-time",
+        "title": "Focus over time",
+        "kind": "line-chart.v1",
+        "width": 6,
+        "order": 3,
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "time-breakdown"
+        }
+      },
+      {
         "id": "accomplishments",
         "title": "Accomplishments",
         "kind": "list.v1",
         "width": 6,
-        "order": 3,
+        "order": 4,
         "source": {
           "type": "pipe.v1",
           "pipeName": "day-recap"
@@ -69,7 +81,7 @@
         "title": "Key moments",
         "kind": "timeline.v1",
         "width": 6,
-        "order": 4,
+        "order": 5,
         "source": {
           "type": "pipe.v1",
           "pipeName": "day-recap"
@@ -80,7 +92,7 @@
         "title": "Unfinished work",
         "kind": "list.v1",
         "width": 12,
-        "order": 5,
+        "order": 6,
         "source": {
           "type": "pipe.v1",
           "pipeName": "day-recap"

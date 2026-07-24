@@ -15,6 +15,7 @@
     "id": "time-and-focus",
     "title": "Time & focus",
     "revision": 1,
+    "timeRange": "today",
     "blocks": [
       {
         "id": "active-time",
@@ -50,11 +51,22 @@
         }
       },
       {
+        "id": "focus-over-time",
+        "title": "Focus over time",
+        "kind": "line-chart.v1",
+        "width": 6,
+        "order": 3,
+        "source": {
+          "type": "pipe.v1",
+          "pipeName": "time-breakdown"
+        }
+      },
+      {
         "id": "time-by-project",
         "title": "Time by project",
         "kind": "bar-chart.v1",
         "width": 6,
-        "order": 3,
+        "order": 4,
         "source": {
           "type": "pipe.v1",
           "pipeName": "time-breakdown"
@@ -65,7 +77,7 @@
         "title": "Today's activity",
         "kind": "timeline.v1",
         "width": 6,
-        "order": 4,
+        "order": 5,
         "source": {
           "type": "pipe.v1",
           "pipeName": "time-breakdown"

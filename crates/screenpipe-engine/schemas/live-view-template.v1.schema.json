@@ -30,6 +30,10 @@
       "type": "integer",
       "minimum": 1
     },
+    "timeRange": {
+      "enum": ["today", "24h", "7d", "30d"],
+      "default": "today"
+    },
     "blocks": {
       "type": "array",
       "maxItems": 24,
@@ -64,6 +68,8 @@
             "metric.v1",
             "list.v1",
             "bar-chart.v1",
+            "line-chart.v1",
+            "table.v1",
             "timeline.v1",
             "markdown.v1"
           ]

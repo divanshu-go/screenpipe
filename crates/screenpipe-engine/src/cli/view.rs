@@ -113,7 +113,12 @@ fn write_export(path: &Path, content: &str) -> anyhow::Result<()> {
 
 fn print_view_summary(view: &LiveView) {
     println!("{}", view.title);
-    println!("id: {}  revision: {}", view.id, view.revision);
+    println!(
+        "id: {}  revision: {}  time-range: {}",
+        view.id,
+        view.revision,
+        view.time_range.schema_name()
+    );
     if view.blocks.is_empty() {
         println!("no Blocks");
         return;
@@ -183,10 +188,11 @@ fn render_html(view: &LiveView) -> String {
         );
     }
     format!(
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{title}</title><style>{style}</style></head><body><main><header><p>screenpipe Live View</p><h1>{title}</h1><small>updated {updated}</small></header><div class=\"grid\">{blocks}</div></main></body></html>",
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{title}</title><style>{style}</style></head><body><main><header><p>screenpipe Live View</p><h1>{title}</h1><small>{time_range} · updated {updated}</small></header><div class=\"grid\">{blocks}</div></main></body></html>",
         title = escape_html(&view.title),
+        time_range = escape_html(view.time_range.schema_name()),
         updated = escape_html(&view.updated_at),
-        style = "*{box-sizing:border-box}body{margin:0;background:#f5f5f2;color:#111;font:15px/1.5 ui-sans-serif,system-ui,sans-serif}main{max-width:1100px;margin:0 auto;padding:48px 24px}header{margin-bottom:28px}header p{font:12px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.12em}h1{font-size:38px;margin:4px 0}h2{font-size:16px;margin:0 0 16px}.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:14px}.block{background:#fff;border:1px solid #d8d8d3;padding:20px;min-height:150px}.quarter{grid-column:span 3}.half{grid-column:span 6}.full{grid-column:span 12}.metric{font-size:34px;font-weight:650}.muted{color:#686862}.item{padding:10px 0;border-top:1px solid #e8e8e3}.bar{height:8px;background:#e8e8e3;margin:6px 0}.bar span{display:block;height:100%;background:#111}.content{white-space:pre-wrap}.meta{margin-top:18px;font-size:12px;color:#686862}@media(max-width:760px){.quarter,.half,.full{grid-column:span 12}}"
+        style = "*{box-sizing:border-box}body{margin:0;background:#f5f5f2;color:#111;font:15px/1.5 ui-sans-serif,system-ui,sans-serif}main{max-width:1100px;margin:0 auto;padding:48px 24px}header{margin-bottom:28px}header p{font:12px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.12em}h1{font-size:38px;margin:4px 0}h2{font-size:16px;margin:0 0 16px}.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:14px}.block{background:#fff;border:1px solid #d8d8d3;padding:20px;min-height:150px}.quarter{grid-column:span 3}.half{grid-column:span 6}.full{grid-column:span 12}.metric{font-size:34px;font-weight:650}.muted{color:#686862}.item{padding:10px 0;border-top:1px solid #e8e8e3}.bar{height:8px;background:#e8e8e3;margin:6px 0}.bar span{display:block;height:100%;background:#111}.line-chart{width:100%;height:180px}.line-chart polyline{fill:none;stroke:#111;stroke-width:2}.chart-labels{display:flex;justify-content:space-between;font-size:12px;color:#686862}.table{width:100%;border-collapse:collapse}.table th,.table td{padding:9px 8px;border-top:1px solid #e8e8e3;text-align:left;vertical-align:top}.table th{width:32%;font-weight:600}.content{white-space:pre-wrap}.meta{margin-top:18px;font-size:12px;color:#686862}@media(max-width:760px){.quarter,.half,.full{grid-column:span 12}}"
     )
 }
 
@@ -268,6 +274,75 @@ fn render_block_html(block: &LiveViewBlock) -> String {
                 })
                 .collect()
         }
+        LiveViewBlockKind::LineChartV1 => {
+            let items = value
+                .payload
+                .get("items")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let values: Vec<f64> = items
+                .iter()
+                .map(|item| item.get("value").and_then(Value::as_f64).unwrap_or(0.0))
+                .collect();
+            let min = values.iter().copied().fold(f64::INFINITY, f64::min);
+            let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            let spread = if min.is_finite() && max.is_finite() && max > min {
+                max - min
+            } else {
+                1.0
+            };
+            let points = values
+                .iter()
+                .enumerate()
+                .map(|(index, value)| {
+                    let x = if values.len() <= 1 {
+                        50.0
+                    } else {
+                        index as f64 / (values.len() - 1) as f64 * 100.0
+                    };
+                    let y = 92.0 - ((*value - min) / spread * 84.0);
+                    format!("{x:.2},{y:.2}")
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            let first = items
+                .first()
+                .map(|item| scalar(item.get("timestamp")))
+                .unwrap_or_default();
+            let last = items
+                .last()
+                .map(|item| scalar(item.get("timestamp")))
+                .unwrap_or_default();
+            format!(
+                "<svg class=\"line-chart\" viewBox=\"0 0 100 100\" preserveAspectRatio=\"none\" role=\"img\" aria-label=\"time series\"><polyline points=\"{}\"></polyline></svg><div class=\"chart-labels\"><span>{}</span><span>{}</span></div>",
+                escape_html(&points),
+                escape_html(&first),
+                escape_html(&last)
+            )
+        }
+        LiveViewBlockKind::TableV1 => value
+            .payload
+            .get("items")
+            .and_then(Value::as_array)
+            .map(|items| {
+                let rows = items
+                    .iter()
+                    .map(|item| {
+                        let label = scalar(item.get("label"));
+                        let value = scalar(item.get("value"));
+                        let detail = scalar(item.get("detail").or_else(|| item.get("status")));
+                        format!(
+                            "<tr><th>{}</th><td>{}<div class=\"muted\">{}</div></td></tr>",
+                            escape_html(&label),
+                            escape_html(&value),
+                            escape_html(&detail)
+                        )
+                    })
+                    .collect::<String>();
+                format!("<table class=\"table\"><tbody>{rows}</tbody></table>")
+            })
+            .unwrap_or_default(),
     };
     format!(
         "{body}<div class=\"meta\">updated by {} at {}</div>",
@@ -316,6 +391,7 @@ mod tests {
             id: "daily".to_string(),
             title: "Daily <script>alert(1)</script>".to_string(),
             revision: 1,
+            time_range: crate::live_views::LiveViewTimeRange::Today,
             blocks: vec![LiveViewBlock {
                 id: "summary".to_string(),
                 title: "Summary".to_string(),

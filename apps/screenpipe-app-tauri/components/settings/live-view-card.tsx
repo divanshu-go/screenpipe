@@ -23,6 +23,7 @@ import {
 import type {
   BrainViewComponent,
   BrainViewSlot,
+  BrainViewTimeRange,
   JsonValue,
 } from "@/lib/utils/tauri";
 
@@ -30,8 +31,17 @@ const COMPONENT_LABELS: Record<BrainViewComponent, string> = {
   "metric.v1": "Metric",
   "list.v1": "List",
   "bar-chart.v1": "Bar chart",
+  "line-chart.v1": "Line chart",
+  "table.v1": "Table",
   "timeline.v1": "Timeline",
   "markdown.v1": "Text",
+};
+
+const TIME_RANGE_LABELS: Record<BrainViewTimeRange, string> = {
+  today: "Today",
+  "24h": "Last 24 hours",
+  "7d": "Last 7 days",
+  "30d": "Last 30 days",
 };
 
 function timeAgo(iso: string): string {
@@ -176,6 +186,106 @@ function LiveViewCardBody({
     );
   }
 
+  if (slot.component === "line-chart.v1") {
+    const points = items.map((item) => ({
+      timestamp: stringValue(item.timestamp),
+      label: stringValue(item.label),
+      value: typeof item.value === "number" ? item.value : 0,
+    }));
+    const values = points.map((point) => point.value);
+    const minimum = values.length > 0 ? Math.min(...values) : 0;
+    const maximum = values.length > 0 ? Math.max(...values) : 0;
+    const spread = maximum > minimum ? maximum - minimum : 1;
+    const polyline = points
+      .map((point, index) => {
+        const x = points.length <= 1 ? 50 : (index / (points.length - 1)) * 100;
+        const y = 92 - ((point.value - minimum) / spread) * 84;
+        return `${x.toFixed(2)},${y.toFixed(2)}`;
+      })
+      .join(" ");
+    return (
+      <div className="space-y-3">
+        <div className="flex items-baseline justify-between gap-3 text-xs">
+          <span className="text-muted-foreground">
+            {points[0]?.label || points[0]?.timestamp}
+          </span>
+          <span className="tabular-nums">
+            {minimum.toLocaleString()} to {maximum.toLocaleString()}
+          </span>
+        </div>
+        <svg
+          role="img"
+          aria-label={`${slot.title} time series`}
+          viewBox="0 0 100 100"
+          preserveAspectRatio="none"
+          className="h-44 w-full overflow-visible"
+        >
+          {[8, 36, 64, 92].map((y) => (
+            <line
+              key={y}
+              x1="0"
+              x2="100"
+              y1={y}
+              y2={y}
+              className="stroke-border"
+              strokeWidth="0.5"
+              vectorEffect="non-scaling-stroke"
+            />
+          ))}
+          <polyline
+            points={polyline}
+            fill="none"
+            className="stroke-foreground"
+            strokeWidth="2"
+            strokeLinejoin="round"
+            strokeLinecap="round"
+            vectorEffect="non-scaling-stroke"
+          />
+        </svg>
+        <div className="flex justify-between gap-3 text-[10px] text-muted-foreground">
+          <span>{points[0]?.timestamp}</span>
+          <span>{points.at(-1)?.timestamp}</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (slot.component === "table.v1") {
+    return (
+      <div className="min-w-[28rem]">
+        <table className="w-full border-collapse text-left text-xs">
+          <tbody>
+            {items.map((item, index) => (
+              <tr
+                key={`${stringValue(item.label)}-${index}`}
+                className="border-t border-border first:border-t-0"
+              >
+                <th className="w-1/3 py-2.5 pr-4 align-top font-medium">
+                  {stringValue(item.label)}
+                </th>
+                <td className="py-2.5 align-top">
+                  <p>{stringValue(item.value)}</p>
+                  {typeof item.detail === "string" && (
+                    <p className="mt-0.5 text-muted-foreground">
+                      {item.detail}
+                    </p>
+                  )}
+                </td>
+                <td className="py-2.5 pl-4 text-right align-top">
+                  {typeof item.status === "string" && (
+                    <span className="border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                      {item.status}
+                    </span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+
   if (slot.component === "timeline.v1") {
     return (
       <div className="space-y-0">
@@ -237,6 +347,7 @@ function LiveViewCardBody({
 
 export function LiveViewCard({
   slot,
+  timeRange = "today",
   preview = false,
   refreshing = false,
   feedback = null,
@@ -247,6 +358,7 @@ export function LiveViewCard({
   onAiEdit,
 }: {
   slot: BrainViewSlot;
+  timeRange?: BrainViewTimeRange;
   preview?: boolean;
   refreshing?: boolean;
   feedback?: "up" | "down" | null;
@@ -303,7 +415,7 @@ export function LiveViewCard({
         <div className={`min-w-0 ${hasActions ? "pr-32" : ""}`}>
           <h3 className="truncate text-sm font-medium">{slot.title}</h3>
           <p className="mt-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-            {COMPONENT_LABELS[slot.component]}
+            {COMPONENT_LABELS[slot.component]} · {TIME_RANGE_LABELS[timeRange]}
           </p>
         </div>
         {slot.value && !hasActions && (
@@ -489,7 +601,14 @@ export function LiveViewCard({
           </Popover>
         </div>
       )}
-      <div className="flex-1">
+      <div
+        data-testid={`overview-card-scroll-${slot.id}`}
+        className={`min-h-0 flex-1 ${
+          slot.component === "metric.v1"
+            ? ""
+            : "max-h-[min(26rem,55vh)] overflow-auto overscroll-contain pr-2 [scrollbar-gutter:stable]"
+        }`}
+      >
         <LiveViewCardBody
           slot={slot}
           preview={preview}

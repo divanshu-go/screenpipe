@@ -13,7 +13,7 @@ use screenpipe_core::pipes::install_bundled_pipe;
 use screenpipe_engine::live_views::{
     delete_live_view, list_bundled_live_view_kits, list_live_views, save_live_view, LiveView,
     LiveViewBlock, LiveViewBlockKind, LiveViewKit, LiveViewSource, LiveViewTemplateBlock,
-    SaveLiveViewRequest,
+    LiveViewTimeRange, SaveLiveViewRequest,
 };
 use screenpipe_engine::structured_outputs::{
     OutputFeedbackRating, OutputFeedbackSummary, StructuredOutputValue,
@@ -26,6 +26,41 @@ use std::path::PathBuf;
 #[serde(rename_all = "camelCase")]
 pub struct BrainViewBinding {
     pub pipe_name: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, specta::Type, PartialEq, Eq, Default)]
+pub enum BrainViewTimeRange {
+    #[default]
+    #[serde(rename = "today")]
+    Today,
+    #[serde(rename = "24h")]
+    Last24Hours,
+    #[serde(rename = "7d")]
+    Last7Days,
+    #[serde(rename = "30d")]
+    Last30Days,
+}
+
+impl From<BrainViewTimeRange> for LiveViewTimeRange {
+    fn from(range: BrainViewTimeRange) -> Self {
+        match range {
+            BrainViewTimeRange::Today => Self::Today,
+            BrainViewTimeRange::Last24Hours => Self::Last24Hours,
+            BrainViewTimeRange::Last7Days => Self::Last7Days,
+            BrainViewTimeRange::Last30Days => Self::Last30Days,
+        }
+    }
+}
+
+impl From<LiveViewTimeRange> for BrainViewTimeRange {
+    fn from(range: LiveViewTimeRange) -> Self {
+        match range {
+            LiveViewTimeRange::Today => Self::Today,
+            LiveViewTimeRange::Last24Hours => Self::Last24Hours,
+            LiveViewTimeRange::Last7Days => Self::Last7Days,
+            LiveViewTimeRange::Last30Days => Self::Last30Days,
+        }
+    }
 }
 
 impl From<BrainViewBinding> for LiveViewSource {
@@ -50,6 +85,10 @@ pub enum BrainViewComponent {
     ListV1,
     #[serde(rename = "bar-chart.v1")]
     BarChartV1,
+    #[serde(rename = "line-chart.v1")]
+    LineChartV1,
+    #[serde(rename = "table.v1")]
+    TableV1,
     #[serde(rename = "timeline.v1")]
     TimelineV1,
     #[serde(rename = "markdown.v1")]
@@ -62,6 +101,8 @@ impl From<BrainViewComponent> for LiveViewBlockKind {
             BrainViewComponent::MetricV1 => Self::MetricV1,
             BrainViewComponent::ListV1 => Self::ListV1,
             BrainViewComponent::BarChartV1 => Self::BarChartV1,
+            BrainViewComponent::LineChartV1 => Self::LineChartV1,
+            BrainViewComponent::TableV1 => Self::TableV1,
             BrainViewComponent::TimelineV1 => Self::TimelineV1,
             BrainViewComponent::MarkdownV1 => Self::MarkdownV1,
         }
@@ -74,6 +115,8 @@ impl From<LiveViewBlockKind> for BrainViewComponent {
             LiveViewBlockKind::MetricV1 => Self::MetricV1,
             LiveViewBlockKind::ListV1 => Self::ListV1,
             LiveViewBlockKind::BarChartV1 => Self::BarChartV1,
+            LiveViewBlockKind::LineChartV1 => Self::LineChartV1,
+            LiveViewBlockKind::TableV1 => Self::TableV1,
             LiveViewBlockKind::TimelineV1 => Self::TimelineV1,
             LiveViewBlockKind::MarkdownV1 => Self::MarkdownV1,
         }
@@ -208,6 +251,7 @@ pub struct BrainViewDefinition {
     pub id: String,
     pub title: String,
     pub revision: u64,
+    pub time_range: BrainViewTimeRange,
     pub slots: Vec<BrainViewSlot>,
     pub created_at: String,
     pub updated_at: String,
@@ -219,6 +263,7 @@ impl From<LiveView> for BrainViewDefinition {
             id: view.id,
             title: view.title,
             revision: view.revision,
+            time_range: view.time_range.into(),
             slots: view.blocks.into_iter().map(Into::into).collect(),
             created_at: view.created_at,
             updated_at: view.updated_at,
@@ -251,6 +296,7 @@ pub struct BrainViewTemplateKit {
     pub title: String,
     pub description: String,
     pub version: u64,
+    pub time_range: BrainViewTimeRange,
     pub pipes: Vec<BrainViewTemplatePipe>,
     pub slots: Vec<BrainViewSlotInput>,
 }
@@ -262,6 +308,7 @@ impl From<LiveViewKit> for BrainViewTemplateKit {
             title: kit.title,
             description: kit.description,
             version: kit.version,
+            time_range: kit.template.time_range.into(),
             pipes: kit
                 .pipes
                 .into_iter()
@@ -306,6 +353,7 @@ pub struct SaveBrainViewRequest {
     pub id: String,
     pub title: String,
     pub expected_revision: Option<u64>,
+    pub time_range: BrainViewTimeRange,
     pub slots: Vec<BrainViewSlotInput>,
 }
 
@@ -323,6 +371,7 @@ impl From<SaveBrainViewRequest> for SaveLiveViewRequest {
             id: request.id,
             title: request.title,
             expected_revision: request.expected_revision,
+            time_range: request.time_range.into(),
             blocks: request.slots.into_iter().map(Into::into).collect(),
         }
     }
@@ -377,6 +426,7 @@ pub async fn install_brain_view_template_kit(
             id: request.target_view_id,
             title: kit.template.title,
             expected_revision: request.expected_revision,
+            time_range: kit.template.time_range,
             blocks: kit.template.blocks,
         },
     )

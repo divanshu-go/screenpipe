@@ -2609,16 +2609,17 @@ error: string | null;
  */
 sinceEpochSecs: number }
 export type BrainViewBinding = { pipeName: string }
-export type BrainViewComponent = "metric.v1" | "list.v1" | "bar-chart.v1" | "timeline.v1" | "markdown.v1"
-export type BrainViewDefinition = { id: string; title: string; revision: number; slots: BrainViewSlot[]; createdAt: string; updatedAt: string }
+export type BrainViewComponent = "metric.v1" | "list.v1" | "bar-chart.v1" | "line-chart.v1" | "table.v1" | "timeline.v1" | "markdown.v1"
+export type BrainViewDefinition = { id: string; title: string; revision: number; timeRange: BrainViewTimeRange; slots: BrainViewSlot[]; createdAt: string; updatedAt: string }
 export type BrainViewEvidenceRef = { eventId: number | null; frameId: number | null; transcriptionId: number | null; ts: string | null; deviceId: string | null }
 export type BrainViewFeedback = { rating: BrainViewFeedbackRating; artifactOutputId: number; artifactVersion: number; correction: string | null; createdAt: string }
 export type BrainViewFeedbackRating = "up" | "down"
 export type BrainViewFeedbackSummary = { upCount: number; downCount: number; current: BrainViewFeedback | null }
 export type BrainViewSlot = { id: string; title: string; component: BrainViewComponent; width: number; order: number; binding: BrainViewBinding | null; value: BrainViewValue | null; feedback: BrainViewFeedbackSummary }
 export type BrainViewSlotInput = { id: string; title: string; component: BrainViewComponent; width: number; order: number; binding: BrainViewBinding | null }
-export type BrainViewTemplateKit = { id: string; title: string; description: string; version: number; pipes: BrainViewTemplatePipe[]; slots: BrainViewSlotInput[] }
+export type BrainViewTemplateKit = { id: string; title: string; description: string; version: number; timeRange: BrainViewTimeRange; pipes: BrainViewTemplatePipe[]; slots: BrainViewSlotInput[] }
 export type BrainViewTemplatePipe = { name: string; distribution: string }
+export type BrainViewTimeRange = "today" | "24h" | "7d" | "30d"
 export type BrainViewValue = { payload: JsonValue; evidence: BrainViewEvidenceRef[]; sourcePipe: string; artifactOutputId: number; artifactVersion: number; updatedAt: string }
 /**
  * Per-browser automation status: "granted", "denied", or "not_asked".
@@ -2874,7 +2875,7 @@ export type RemoteSyncConfig = { host: string; port: number; user: string; key_p
  * Result of a sync operation.
  */
 export type RemoteSyncResult = { ok: boolean; files_transferred: number; bytes_transferred: number; error: string | null }
-export type SaveBrainViewRequest = { id: string; title: string; expectedRevision: number | null; slots: BrainViewSlotInput[] }
+export type SaveBrainViewRequest = { id: string; title: string; expectedRevision: number | null; timeRange: BrainViewTimeRange; slots: BrainViewSlotInput[] }
 /**
  * A single schedule rule: a day-of-week + time range + what to record.
  */

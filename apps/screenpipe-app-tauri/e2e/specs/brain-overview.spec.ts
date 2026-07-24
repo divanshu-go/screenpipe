@@ -78,6 +78,7 @@ describe("Brain Live Views", function () {
         id: "my-overview",
         title: "How I worked today",
         expectedRevision: null,
+        timeRange: "today",
         slots: slots.map((slot) => ({
           ...slot,
           binding: { pipeName: slot.binding.pipe_name },
