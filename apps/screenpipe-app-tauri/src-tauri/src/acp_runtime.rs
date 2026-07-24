@@ -1425,6 +1425,26 @@ fn spawn_terminal(state: &RuntimeState, request: CreateTerminalRequest) -> Resul
     Ok(terminal_id)
 }
 
+/// Write the bundled companion MCP server to a stable absolute path under the
+/// project dir and return it, so the adapter (which may spawn MCP servers from
+/// its own cwd) can launch it. Idempotent overwrite, mirroring how Pi
+/// extensions are staged. Returns None if it can't be written, so registration
+/// is simply skipped rather than failing the session.
+fn ensure_tools_mcp_server(config: &RuntimeConfig) -> Option<PathBuf> {
+    const SOURCE: &str = include_str!("../assets/mcp/screenpipe-tools.mjs");
+    let dir = config.project_dir.join(".screenpipe");
+    if let Err(error) = std::fs::create_dir_all(&dir) {
+        eprintln!("[acp-runtime] could not create MCP tools dir: {error}");
+        return None;
+    }
+    let path = dir.join("screenpipe-tools.mjs");
+    if let Err(error) = std::fs::write(&path, SOURCE) {
+        eprintln!("[acp-runtime] could not stage MCP tools server: {error}");
+        return None;
+    }
+    Some(path)
+}
+
 fn mcp_servers(config: &RuntimeConfig) -> Vec<McpServer> {
     let api_url = env_nonempty("SCREENPIPE_LOCAL_API_URL").or_else(|| {
         env_nonempty("SCREENPIPE_LOCAL_API_PORT").map(|port| format!("http://localhost:{port}"))
@@ -1443,6 +1463,29 @@ fn mcp_servers(config: &RuntimeConfig) -> Vec<McpServer> {
             .args(args)
             .env(env),
     )];
+    // Bundled companion server: the capabilities that used to live in Pi-only
+    // extensions (save_artifact, list_connections) as MCP tools, so every
+    // harness gets them. Additive next to the core screenpipe server above;
+    // shipped in-app (no npm fetch), talks only to the local engine.
+    if let Some(tools_server) = ensure_tools_mcp_server(config) {
+        let mut tools_env = Vec::new();
+        if let Some(url) = env_nonempty("SCREENPIPE_LOCAL_API_URL").or_else(|| {
+            env_nonempty("SCREENPIPE_LOCAL_API_PORT").map(|port| format!("http://localhost:{port}"))
+        }) {
+            tools_env.push(EnvVariable::new("SCREENPIPE_API_URL", url));
+        }
+        if let Some(key) = env_nonempty("SCREENPIPE_LOCAL_API_KEY") {
+            tools_env.push(EnvVariable::new("SCREENPIPE_LOCAL_API_KEY", key));
+        }
+        if let Some(chat_id) = env_nonempty("SCREENPIPE_CHAT_SESSION_ID") {
+            tools_env.push(EnvVariable::new("SCREENPIPE_CHAT_SESSION_ID", chat_id));
+        }
+        servers.push(McpServer::Stdio(
+            McpServerStdio::new("screenpipe-tools", &config.bun_path)
+                .args(vec![tools_server.to_string_lossy().into_owned()])
+                .env(tools_env),
+        ));
+    }
     // Forward the user's own registered MCP servers so every harness sees
     // the same tool surface the native Pi mcp-bridge extension gives raw Pi.
     for server in &config.user_mcp_servers {
@@ -2708,6 +2751,33 @@ mod tests {
     }
 
     #[test]
+    fn bundled_tools_mcp_server_is_registered_alongside_screenpipe() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut config = runtime_config("claude-acp");
+        config.project_dir = dir.path().to_path_buf();
+
+        let servers = mcp_servers(&config);
+        let names: Vec<String> = servers
+            .iter()
+            .filter_map(|server| match server {
+                McpServer::Stdio(stdio) => Some(stdio.name.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(names.iter().any(|n| n == "screenpipe"));
+        assert!(
+            names.iter().any(|n| n == "screenpipe-tools"),
+            "bundled tools server must be registered, got {names:?}"
+        );
+        // The companion server is staged to disk so the adapter can launch it.
+        assert!(dir
+            .path()
+            .join(".screenpipe")
+            .join("screenpipe-tools.mjs")
+            .exists());
+    }
+
+    #[test]
     fn user_mcp_servers_are_forwarded_alongside_screenpipe() {
         let mut config = runtime_config("claude-acp");
         config.user_mcp_servers = vec![
@@ -2736,29 +2806,30 @@ mod tests {
         ];
 
         let servers = mcp_servers(&config);
-        // screenpipe is always first, then the two user servers.
-        assert_eq!(servers.len(), 3);
-        assert!(matches!(&servers[0], McpServer::Stdio(s) if s.name == "screenpipe"));
-        match &servers[1] {
-            McpServer::Http(http) => {
-                assert_eq!(http.name, "linear");
-                assert_eq!(http.url, "https://mcp.linear.app/sse");
-                assert_eq!(http.headers[0].name, "Authorization");
-            }
-            other => panic!("expected http server, got {other:?}"),
-        }
-        match &servers[2] {
-            McpServer::Stdio(stdio) => {
-                assert_eq!(stdio.name, "local-fs");
-                assert_eq!(stdio.command.to_str(), Some("uvx"));
-                assert!(stdio.env.iter().any(|e| e.name == "FS_ROOT"));
-                assert!(
-                    !stdio.env.iter().any(|e| e.name.eq_ignore_ascii_case(CLOUD_API_KEY_ENV)),
-                    "cloud JWT must be scrubbed from forwarded stdio env"
-                );
-            }
-            other => panic!("expected stdio server, got {other:?}"),
-        }
+        // The built-in screenpipe server is always present; match user
+        // servers by name so the optional bundled tools server (staged only
+        // when the project dir is writable) can't shift positional indexes.
+        assert!(servers
+            .iter()
+            .any(|s| matches!(s, McpServer::Stdio(stdio) if stdio.name == "screenpipe")));
+        let linear = servers.iter().find_map(|s| match s {
+            McpServer::Http(http) if http.name == "linear" => Some(http),
+            _ => None,
+        });
+        let linear = linear.expect("forwarded http server 'linear'");
+        assert_eq!(linear.url, "https://mcp.linear.app/sse");
+        assert_eq!(linear.headers[0].name, "Authorization");
+        let local_fs = servers.iter().find_map(|s| match s {
+            McpServer::Stdio(stdio) if stdio.name == "local-fs" => Some(stdio),
+            _ => None,
+        });
+        let local_fs = local_fs.expect("forwarded stdio server 'local-fs'");
+        assert_eq!(local_fs.command.to_str(), Some("uvx"));
+        assert!(local_fs.env.iter().any(|e| e.name == "FS_ROOT"));
+        assert!(
+            !local_fs.env.iter().any(|e| e.name.eq_ignore_ascii_case(CLOUD_API_KEY_ENV)),
+            "cloud JWT must be scrubbed from forwarded stdio env"
+        );
     }
 
     #[test]

@@ -503,6 +503,18 @@ async function handleRequest(message: JsonRpcMessage): Promise<void> {
           fail(message.id, -32602, "screenpipe MCP URL/key registration mismatch");
           return;
         }
+        // The bundled companion tools server must be registered alongside the
+        // core screenpipe server, launched from a staged local file.
+        const toolsServer = mcpServers.find(
+          (candidate) =>
+            candidate && typeof candidate === "object" &&
+            (candidate as Record<string, unknown>).name === "screenpipe-tools",
+        ) as Record<string, unknown> | undefined;
+        const toolsArgs = Array.isArray(toolsServer?.args) ? toolsServer.args : [];
+        if (!toolsServer || !toolsArgs.some((a) => String(a).endsWith("screenpipe-tools.mjs"))) {
+          fail(message.id, -32602, "bundled screenpipe-tools MCP server was not registered");
+          return;
+        }
         try {
           await verifyScreenpipeMcpRuntime(server ?? {});
         } catch (error) {
