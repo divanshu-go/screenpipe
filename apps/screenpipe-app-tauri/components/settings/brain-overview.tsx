@@ -139,6 +139,7 @@ function generatedSlots(
       order: existingSlots.length + index,
       binding: block.pipeName ? { pipeName: block.pipeName } : null,
       value: null,
+      feedback: { upCount: 0, downCount: 0, current: null },
     };
   });
 }
@@ -157,9 +158,6 @@ export function BrainOverview() {
   const [aiNote, setAiNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dataRefresh, setDataRefresh] = useState<DataRefreshState | null>(null);
-  const [cardFeedback, setCardFeedback] = useState<
-    Record<string, "up" | "down" | null>
-  >({});
   const [aiEditingSlotId, setAiEditingSlotId] = useState<string | null>(null);
 
   const installedPipes = useMemo(
@@ -448,18 +446,91 @@ export function BrainOverview() {
     }
   };
 
-  const recordCardFeedback = (slot: ViewSlot, rating: "up" | "down") => {
-    const next = cardFeedback[slot.id] === rating ? null : rating;
-    setCardFeedback((current) => ({ ...current, [slot.id]: next }));
-    void import("posthog-js")
-      .then(({ default: posthog }) =>
-        posthog.capture("live_view_card_feedback", {
-          action: next ?? "clear",
-          component: slot.component,
-          pipe: slot.binding?.pipeName ?? null,
-        }),
-      )
-      .catch(() => undefined);
+  const recordCardFeedback = async (
+    slot: ViewSlot,
+    rating: "up" | "down" | null,
+    correction?: string,
+  ): Promise<boolean> => {
+    if (!view || !slot.value) return false;
+    try {
+      const targetId = `live-view:${view.id}:${slot.id}`;
+      const response = await localFetch(
+        `/outputs/targets/${encodeURIComponent(targetId)}/feedback`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            artifact_output_id: slot.value.artifactOutputId,
+            artifact_version: slot.value.artifactVersion,
+            rating,
+            correction: correction?.trim() || null,
+          }),
+        },
+      );
+      const body = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        feedback?: {
+          up_count: number;
+          down_count: number;
+          current?: {
+            rating: "up" | "down";
+            artifact_output_id: number;
+            artifact_version: number;
+            correction?: string;
+            created_at: string;
+          };
+        };
+      };
+      if (!response.ok || !body.feedback) {
+        throw new Error(body.error || `HTTP ${response.status}`);
+      }
+      const persistedFeedback: ViewSlot["feedback"] = {
+        upCount: body.feedback.up_count,
+        downCount: body.feedback.down_count,
+        current: body.feedback.current
+          ? {
+              rating: body.feedback.current.rating,
+              artifactOutputId: body.feedback.current.artifact_output_id,
+              artifactVersion: body.feedback.current.artifact_version,
+              correction: body.feedback.current.correction ?? null,
+              createdAt: body.feedback.current.created_at,
+            }
+          : null,
+      };
+      setView((current) =>
+        current
+          ? {
+              ...current,
+              slots: current.slots.map((candidate) =>
+                candidate.id === slot.id
+                  ? { ...candidate, feedback: persistedFeedback }
+                  : candidate,
+              ),
+            }
+          : current,
+      );
+      void import("posthog-js")
+        .then(({ default: posthog }) =>
+          posthog.capture("live_view_card_feedback", {
+            action: rating ?? "clear",
+            component: slot.component,
+            pipe: slot.binding?.pipeName ?? null,
+            has_correction: Boolean(correction?.trim()),
+          }),
+        )
+        .catch(() => undefined);
+      return true;
+    } catch (feedbackError) {
+      toast({
+        title: "failed to save feedback",
+        description:
+          feedbackError instanceof Error
+            ? feedbackError.message
+            : String(feedbackError),
+        variant: "destructive",
+      });
+      return false;
+    }
   };
 
   const editSlotWithAi = async (
@@ -616,6 +687,7 @@ export function BrainOverview() {
             order: current.slots.length,
             binding: null,
             value: null,
+            feedback: { upCount: 0, downCount: 0, current: null },
           },
         ],
       };
@@ -1029,9 +1101,12 @@ export function BrainOverview() {
                 refreshIsActive &&
                 Boolean(dataRefresh?.slotIds.includes(slot.id))
               }
-              feedback={cardFeedback[slot.id] ?? null}
+              feedback={slot.feedback?.current?.rating ?? null}
+              feedbackCorrection={slot.feedback?.current?.correction ?? null}
               aiEditing={aiEditingSlotId === slot.id}
-              onFeedback={(rating) => recordCardFeedback(slot, rating)}
+              onFeedback={(rating, correction) =>
+                recordCardFeedback(slot, rating, correction)
+              }
               onRegenerate={() => void refreshConnectedPipes(view, [slot])}
               onAiEdit={(prompt) => editSlotWithAi(slot, prompt)}
             />

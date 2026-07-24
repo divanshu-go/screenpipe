@@ -735,6 +735,10 @@ mod tests {
             "POST",
             "/outputs/targets/desktop.brain-overview:main:focus-time/submit"
         ));
+        assert!(!p.is_endpoint_allowed(
+            "POST",
+            "/outputs/targets/desktop.brain-overview:main:focus-time/feedback"
+        ));
         assert!(!p.is_endpoint_allowed("POST", "/meetings/stop"));
         assert!(!p.is_endpoint_allowed("DELETE", "/data/delete-range"));
     }

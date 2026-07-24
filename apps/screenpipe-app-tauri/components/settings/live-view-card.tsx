@@ -240,6 +240,7 @@ export function LiveViewCard({
   preview = false,
   refreshing = false,
   feedback = null,
+  feedbackCorrection = null,
   aiEditing = false,
   onFeedback,
   onRegenerate,
@@ -249,15 +250,24 @@ export function LiveViewCard({
   preview?: boolean;
   refreshing?: boolean;
   feedback?: "up" | "down" | null;
+  feedbackCorrection?: string | null;
   aiEditing?: boolean;
-  onFeedback?: (rating: "up" | "down") => void;
+  onFeedback?: (
+    rating: "up" | "down" | null,
+    correction?: string,
+  ) => Promise<boolean>;
   onRegenerate?: () => void;
   onAiEdit?: (prompt: string) => Promise<boolean>;
 }) {
   const [aiOpen, setAiOpen] = useState(false);
   const [aiPrompt, setAiPrompt] = useState("");
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [feedbackNote, setFeedbackNote] = useState("");
+  const [feedbackSaving, setFeedbackSaving] = useState<
+    "up" | "down" | "clear" | null
+  >(null);
   const hasActions = Boolean(onFeedback || onRegenerate || onAiEdit);
-  const busy = refreshing || aiEditing;
+  const busy = refreshing || aiEditing || feedbackSaving !== null;
 
   const submitAiEdit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -266,6 +276,21 @@ export function LiveViewCard({
     if (await onAiEdit(prompt)) {
       setAiPrompt("");
       setAiOpen(false);
+    }
+  };
+
+  const saveFeedback = async (
+    rating: "up" | "down" | null,
+    correction?: string,
+  ) => {
+    if (!onFeedback || !slot.value) return;
+    setFeedbackSaving(rating ?? "clear");
+    try {
+      if (await onFeedback(rating, correction)) {
+        setFeedbackOpen(false);
+      }
+    } finally {
+      setFeedbackSaving(null);
     }
   };
 
@@ -301,23 +326,97 @@ export function LiveViewCard({
             className={`h-7 w-7 rounded-none ${
               feedback === "up" ? "bg-foreground text-background" : ""
             }`}
-            onClick={() => onFeedback?.("up")}
+            disabled={!slot.value || busy}
+            onClick={() => void saveFeedback(feedback === "up" ? null : "up")}
           >
-            <ThumbsUp className="h-3 w-3" />
+            {feedbackSaving === "up" || feedbackSaving === "clear" ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <ThumbsUp className="h-3 w-3" />
+            )}
           </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label={`mark ${slot.title} not useful`}
-            aria-pressed={feedback === "down"}
-            className={`h-7 w-7 rounded-none ${
-              feedback === "down" ? "bg-foreground text-background" : ""
-            }`}
-            onClick={() => onFeedback?.("down")}
+          <Popover
+            open={feedbackOpen}
+            onOpenChange={(open) => {
+              setFeedbackOpen(open);
+              if (open) setFeedbackNote(feedbackCorrection ?? "");
+            }}
           >
-            <ThumbsDown className="h-3 w-3" />
-          </Button>
+            <PopoverTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label={`mark ${slot.title} not useful`}
+                aria-pressed={feedback === "down"}
+                className={`h-7 w-7 rounded-none ${
+                  feedback === "down" ? "bg-foreground text-background" : ""
+                }`}
+                disabled={!slot.value || busy}
+              >
+                {feedbackSaving === "down" ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <ThumbsDown className="h-3 w-3" />
+                )}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent
+              align="end"
+              sideOffset={6}
+              className="w-72 rounded-none p-3"
+            >
+              <form
+                className="space-y-2"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void saveFeedback("down", feedbackNote.trim());
+                }}
+              >
+                <div>
+                  <p className="text-xs font-medium">What should improve?</p>
+                  <p className="mt-0.5 text-[10px] text-muted-foreground">
+                    Optional. The connected Pipe will use this next time.
+                  </p>
+                </div>
+                <Input
+                  autoFocus
+                  value={feedbackNote}
+                  onChange={(event) => setFeedbackNote(event.target.value)}
+                  placeholder="e.g. exclude meetings"
+                  className="h-8 rounded-none text-xs"
+                  maxLength={500}
+                />
+                <div className="flex items-center justify-between gap-2">
+                  {feedback === "down" ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 rounded-none text-xs"
+                      disabled={feedbackSaving !== null}
+                      onClick={() => void saveFeedback(null)}
+                    >
+                      clear
+                    </Button>
+                  ) : (
+                    <span />
+                  )}
+                  <Button
+                    type="submit"
+                    size="sm"
+                    className="h-7 rounded-none text-xs"
+                    disabled={feedbackSaving !== null}
+                  >
+                    {feedbackSaving === "down" && (
+                      <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                    )}
+                    save feedback
+                  </Button>
+                </div>
+              </form>
+            </PopoverContent>
+          </Popover>
           <Button
             type="button"
             variant="ghost"

@@ -17,8 +17,9 @@ use std::sync::Arc;
 use super::artifacts::{register_artifact_handler, RegisterArtifactRequest};
 use crate::server::AppState;
 use crate::structured_outputs::{
-    commit_output_submission, prepare_output_submission, targets_for_pipe, AssignedOutputTarget,
-    OutputEvidenceRef, StructuredOutputError, StructuredOutputErrorKind,
+    commit_output_submission, prepare_output_submission, set_output_feedback, targets_for_pipe,
+    AssignedOutputTarget, OutputEvidenceRef, OutputFeedbackRating, OutputFeedbackSummary,
+    StructuredOutputError, StructuredOutputErrorKind,
 };
 
 type ApiError = (StatusCode, Json<Value>);
@@ -66,6 +67,22 @@ pub(crate) struct SubmitStructuredOutputResponse {
     pub target_id: String,
     pub artifact_output_id: i64,
     pub artifact_version: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct SetStructuredOutputFeedbackRequest {
+    pub artifact_output_id: i64,
+    pub artifact_version: i64,
+    #[serde(default)]
+    pub rating: Option<OutputFeedbackRating>,
+    #[serde(default)]
+    pub correction: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct SetStructuredOutputFeedbackResponse {
+    pub target_id: String,
+    pub feedback: OutputFeedbackSummary,
 }
 
 pub(crate) async fn assigned_targets_handler(
@@ -174,6 +191,33 @@ pub(crate) async fn submit_structured_output_handler(
         target_id: target.id,
         artifact_output_id: artifact.id,
         artifact_version: prepared.artifact_version,
+    }))
+}
+
+pub(crate) async fn set_structured_output_feedback_handler(
+    State(state): State<Arc<AppState>>,
+    permissions: Option<Extension<Arc<PipePermissions>>>,
+    Path(target_id): Path<String>,
+    Json(payload): Json<SetStructuredOutputFeedbackRequest>,
+) -> Result<Json<SetStructuredOutputFeedbackResponse>, ApiError> {
+    if permissions.is_some() {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "pipes cannot rate their own structured outputs" })),
+        ));
+    }
+    let feedback = set_output_feedback(
+        &state.screenpipe_dir,
+        &target_id,
+        payload.artifact_output_id,
+        payload.artifact_version,
+        payload.rating,
+        payload.correction,
+    )
+    .map_err(api_error)?;
+    Ok(Json(SetStructuredOutputFeedbackResponse {
+        target_id,
+        feedback,
     }))
 }
 

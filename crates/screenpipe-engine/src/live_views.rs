@@ -10,7 +10,8 @@
 //! not contain React components, CSS, or arbitrary HTML supplied by pipes.
 
 use crate::structured_outputs::{
-    list_output_targets, replace_consumer_targets, OutputTargetInput, StructuredOutputValue,
+    list_output_targets, output_feedback_summary, replace_consumer_targets, OutputFeedbackSummary,
+    OutputTarget, OutputTargetInput, StructuredOutputValue,
 };
 use chrono::Utc;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -223,6 +224,8 @@ pub struct LiveViewBlock {
     pub source: Option<LiveViewSource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<StructuredOutputValue>,
+    #[serde(default)]
+    pub feedback: OutputFeedbackSummary,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -596,11 +599,11 @@ fn hydrate(
     templates: Vec<LiveViewTemplate>,
 ) -> Result<Vec<LiveView>, LiveViewError> {
     sync_targets(screenpipe_dir, &templates)?;
-    let values: HashMap<String, StructuredOutputValue> = list_output_targets(screenpipe_dir)
+    let targets: HashMap<String, OutputTarget> = list_output_targets(screenpipe_dir)
         .map_err(|error| LiveViewError::io(error.to_string()))?
         .into_iter()
         .filter(|target| target.consumer == LIVE_VIEW_CONSUMER_ID)
-        .filter_map(|target| target.latest.map(|latest| (target.id, latest)))
+        .map(|target| (target.id.clone(), target))
         .collect();
     Ok(templates
         .into_iter()
@@ -612,16 +615,18 @@ fn hydrate(
             blocks: template
                 .blocks
                 .into_iter()
-                .map(|block| LiveViewBlock {
-                    value: values
-                        .get(&live_view_target_id(&template.id, &block.id))
-                        .cloned(),
-                    id: block.id,
-                    title: block.title,
-                    kind: block.kind,
-                    width: block.width,
-                    order: block.order,
-                    source: block.source,
+                .map(|block| {
+                    let target = targets.get(&live_view_target_id(&template.id, &block.id));
+                    LiveViewBlock {
+                        value: target.and_then(|target| target.latest.clone()),
+                        feedback: target.map(output_feedback_summary).unwrap_or_default(),
+                        id: block.id,
+                        title: block.title,
+                        kind: block.kind,
+                        width: block.width,
+                        order: block.order,
+                        source: block.source,
+                    }
                 })
                 .collect(),
             created_at: template.created_at,

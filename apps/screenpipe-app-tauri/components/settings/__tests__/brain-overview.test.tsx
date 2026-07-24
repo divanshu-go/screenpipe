@@ -91,6 +91,7 @@ const populatedView: ViewDefinition = {
       width: 6,
       order: 0,
       binding: { pipeName: "daily-summary" },
+      feedback: { upCount: 0, downCount: 0, current: null },
       value: {
         payload: { value: 4.5, unit: "hours", delta: "+45m" },
         evidence: [
@@ -342,6 +343,25 @@ describe("BrainOverview", () => {
   });
 
   it("offers per-card feedback and regenerates only that card", async () => {
+    mocks.localFetch.mockImplementation(async (path: string) => ({
+      ok: true,
+      status: 200,
+      json: async () =>
+        path.endsWith("/feedback")
+          ? {
+              feedback: {
+                up_count: 1,
+                down_count: 0,
+                current: {
+                  rating: "up",
+                  artifact_output_id: 88,
+                  artifact_version: 2,
+                  created_at: "2026-07-24T18:00:00Z",
+                },
+              },
+            }
+          : { success: true },
+    }));
     mocks.listBrainViews.mockResolvedValue({
       status: "ok",
       data: [populatedView],
@@ -352,16 +372,91 @@ describe("BrainOverview", () => {
       name: "mark Focus time useful",
     });
     fireEvent.click(useful);
-    expect(useful.getAttribute("aria-pressed")).toBe("true");
+    await waitFor(() =>
+      expect(useful.getAttribute("aria-pressed")).toBe("true"),
+    );
+    const feedbackCall = mocks.localFetch.mock.calls.find(([path]) =>
+      String(path).endsWith("/feedback"),
+    );
+    expect(feedbackCall?.[0]).toBe(
+      "/outputs/targets/live-view%3Amy-overview%3Afocus-time/feedback",
+    );
+    expect(JSON.parse(feedbackCall?.[1].body)).toEqual({
+      artifact_output_id: 88,
+      artifact_version: 2,
+      rating: "up",
+      correction: null,
+    });
 
     fireEvent.click(
       screen.getByRole("button", { name: "regenerate Focus time" }),
     );
-    await waitFor(() => expect(mocks.localFetch).toHaveBeenCalledTimes(1));
-    const [, request] = mocks.localFetch.mock.calls[0];
+    await waitFor(() =>
+      expect(
+        mocks.localFetch.mock.calls.some(
+          ([path]) => path === "/pipes/daily-summary/run",
+        ),
+      ).toBe(true),
+    );
+    const [, request] = mocks.localFetch.mock.calls.find(
+      ([path]) => path === "/pipes/daily-summary/run",
+    )!;
     expect(JSON.parse(request.body).notification_context).toEqual(
       expect.objectContaining({
         target_ids: ["live-view:my-overview:focus-time"],
+      }),
+    );
+  });
+
+  it("lets a user explain a down rating so the Pipe can correct its next output", async () => {
+    mocks.localFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        feedback: {
+          up_count: 0,
+          down_count: 1,
+          current: {
+            rating: "down",
+            artifact_output_id: 88,
+            artifact_version: 2,
+            correction: "exclude meetings",
+            created_at: "2026-07-24T18:00:00Z",
+          },
+        },
+      }),
+    });
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [populatedView],
+    });
+    render(<BrainOverview />);
+
+    const notUseful = await screen.findByRole("button", {
+      name: "mark Focus time not useful",
+    });
+    fireEvent.click(notUseful);
+    fireEvent.change(
+      await screen.findByPlaceholderText("e.g. exclude meetings"),
+      {
+        target: { value: "exclude meetings" },
+      },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "save feedback" }));
+
+    await waitFor(() =>
+      expect(notUseful.getAttribute("aria-pressed")).toBe("true"),
+    );
+    expect(mocks.localFetch).toHaveBeenCalledWith(
+      "/outputs/targets/live-view%3Amy-overview%3Afocus-time/feedback",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          artifact_output_id: 88,
+          artifact_version: 2,
+          rating: "down",
+          correction: "exclude meetings",
+        }),
       }),
     );
   });

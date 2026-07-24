@@ -13,7 +13,9 @@ use screenpipe_engine::live_views::{
     delete_live_view, list_live_views, save_live_view, LiveView, LiveViewBlock, LiveViewBlockKind,
     LiveViewSource, LiveViewTemplateBlock, SaveLiveViewRequest,
 };
-use screenpipe_engine::structured_outputs::StructuredOutputValue;
+use screenpipe_engine::structured_outputs::{
+    OutputFeedbackRating, OutputFeedbackSummary, StructuredOutputValue,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
@@ -120,6 +122,56 @@ impl From<StructuredOutputValue> for BrainViewValue {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BrainViewFeedbackRating {
+    Up,
+    Down,
+}
+
+impl From<OutputFeedbackRating> for BrainViewFeedbackRating {
+    fn from(rating: OutputFeedbackRating) -> Self {
+        match rating {
+            OutputFeedbackRating::Up => Self::Up,
+            OutputFeedbackRating::Down => Self::Down,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BrainViewFeedback {
+    pub rating: BrainViewFeedbackRating,
+    pub artifact_output_id: i64,
+    pub artifact_version: i64,
+    pub correction: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BrainViewFeedbackSummary {
+    pub up_count: usize,
+    pub down_count: usize,
+    pub current: Option<BrainViewFeedback>,
+}
+
+impl From<OutputFeedbackSummary> for BrainViewFeedbackSummary {
+    fn from(summary: OutputFeedbackSummary) -> Self {
+        Self {
+            up_count: summary.up_count,
+            down_count: summary.down_count,
+            current: summary.current.map(|feedback| BrainViewFeedback {
+                rating: feedback.rating.into(),
+                artifact_output_id: feedback.artifact_output_id,
+                artifact_version: feedback.artifact_version,
+                correction: feedback.correction,
+                created_at: feedback.created_at,
+            }),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct BrainViewSlot {
@@ -130,6 +182,7 @@ pub struct BrainViewSlot {
     pub order: u16,
     pub binding: Option<BrainViewBinding>,
     pub value: Option<BrainViewValue>,
+    pub feedback: BrainViewFeedbackSummary,
 }
 
 impl From<LiveViewBlock> for BrainViewSlot {
@@ -142,6 +195,7 @@ impl From<LiveViewBlock> for BrainViewSlot {
             order: block.order,
             binding: block.source.map(Into::into),
             value: block.value.map(Into::into),
+            feedback: block.feedback.into(),
         }
     }
 }

@@ -2596,7 +2596,10 @@ export type BrainViewBinding = { pipeName: string }
 export type BrainViewComponent = "metric.v1" | "list.v1" | "bar-chart.v1" | "timeline.v1" | "markdown.v1"
 export type BrainViewDefinition = { id: string; title: string; revision: number; slots: BrainViewSlot[]; createdAt: string; updatedAt: string }
 export type BrainViewEvidenceRef = { eventId: number | null; frameId: number | null; transcriptionId: number | null; ts: string | null; deviceId: string | null }
-export type BrainViewSlot = { id: string; title: string; component: BrainViewComponent; width: number; order: number; binding: BrainViewBinding | null; value: BrainViewValue | null }
+export type BrainViewFeedback = { rating: BrainViewFeedbackRating; artifactOutputId: number; artifactVersion: number; correction: string | null; createdAt: string }
+export type BrainViewFeedbackRating = "up" | "down"
+export type BrainViewFeedbackSummary = { upCount: number; downCount: number; current: BrainViewFeedback | null }
+export type BrainViewSlot = { id: string; title: string; component: BrainViewComponent; width: number; order: number; binding: BrainViewBinding | null; value: BrainViewValue | null; feedback: BrainViewFeedbackSummary }
 export type BrainViewSlotInput = { id: string; title: string; component: BrainViewComponent; width: number; order: number; binding: BrainViewBinding | null }
 export type BrainViewValue = { payload: JsonValue; evidence: BrainViewEvidenceRef[]; sourcePipe: string; artifactOutputId: number; artifactVersion: number; updatedAt: string }
 /**

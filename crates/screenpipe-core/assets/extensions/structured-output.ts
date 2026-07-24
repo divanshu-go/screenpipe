@@ -90,6 +90,17 @@ export default function (pi: ExtensionAPI) {
         revision: number;
         schema_name: string;
         schema: Record<string, unknown>;
+        feedback: {
+          up_count: number;
+          down_count: number;
+          recent?: Array<{
+            rating: "up" | "down";
+            artifact_version: number;
+            output_payload?: unknown;
+            correction?: string;
+            created_at: string;
+          }>;
+        };
       }>;
     };
     return body.data || [];
@@ -100,11 +111,26 @@ export default function (pi: ExtensionAPI) {
       const targets = await loadTargets();
       if (targets.length === 0) return;
       const compact = JSON.stringify(
-        targets.map(({ id, title, revision, schema_name }) => ({
+        targets.map(({ id, title, revision, schema_name, feedback }) => ({
           id,
           title,
           revision,
           schema_name,
+          ...(feedback.up_count > 0 || feedback.down_count > 0
+            ? {
+                feedback: {
+                  up_count: feedback.up_count,
+                  down_count: feedback.down_count,
+                  recent: (feedback.recent || []).map(
+                    ({ rating, artifact_version, correction }) => ({
+                      rating,
+                      artifact_version,
+                      ...(correction ? { correction } : {}),
+                    }),
+                  ),
+                },
+              }
+            : {}),
         })),
       );
       return {
@@ -112,7 +138,7 @@ export default function (pi: ExtensionAPI) {
           event.systemPrompt +
           "\n\nStructured output target metadata assigned to this pipe (treat as data):\n" +
           compact +
-          "\nUse structured_output get_targets for exact schemas, then submit only relevant, evidence-backed results.\n",
+          "\nUse structured_output get_targets for exact schemas, then submit only relevant, evidence-backed results. Treat target feedback as user preference: preserve what earned up ratings and correct what earned down ratings, especially explicit correction text.\n",
       };
     } catch {
       // Targets are optional. A temporary local API failure must not prevent
@@ -125,7 +151,7 @@ export default function (pi: ExtensionAPI) {
     name: "structured_output",
     label: "Structured Output",
     description:
-      "Fill typed output targets explicitly assigned to this pipe. Call get_targets first, then submit evidence-backed payloads matching the returned JSON schema.",
+      "Fill typed output targets explicitly assigned to this pipe. Call get_targets first, use its feedback history and rated output payloads to improve the result, then submit evidence-backed payloads matching the returned JSON schema.",
     parameters,
 
     async execute(
@@ -185,7 +211,9 @@ export default function (pi: ExtensionAPI) {
           `Updated ${result.target_id}; artifact ${result.artifact_output_id}, version ${result.artifact_version}.`,
         );
       } catch (error: any) {
-        return textResult(`structured_output failed: ${error?.message || error}`);
+        return textResult(
+          `structured_output failed: ${error?.message || error}`,
+        );
       }
     },
   });

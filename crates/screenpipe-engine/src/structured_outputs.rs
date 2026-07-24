@@ -22,6 +22,8 @@ const MAX_TARGETS: usize = 256;
 const MAX_SCHEMA_BYTES: usize = 32 * 1024;
 const MAX_PAYLOAD_BYTES: usize = 64 * 1024;
 const MAX_EVIDENCE: usize = 50;
+const MAX_FEEDBACK_PER_TARGET: usize = 20;
+const MAX_FEEDBACK_CORRECTION_CHARS: usize = 500;
 
 static STORE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -54,6 +56,35 @@ pub struct StructuredOutputValue {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputFeedbackRating {
+    Up,
+    Down,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OutputFeedback {
+    pub rating: OutputFeedbackRating,
+    pub artifact_output_id: i64,
+    pub artifact_version: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_payload: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correction: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct OutputFeedbackSummary {
+    pub up_count: usize,
+    pub down_count: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current: Option<OutputFeedback>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recent: Vec<OutputFeedback>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct OutputTarget {
     pub id: String,
@@ -65,6 +96,8 @@ pub struct OutputTarget {
     pub revision: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latest: Option<StructuredOutputValue>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub feedback: Vec<OutputFeedback>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -85,6 +118,7 @@ pub struct AssignedOutputTarget {
     pub revision: u64,
     pub schema_name: String,
     pub schema: Value,
+    pub feedback: OutputFeedbackSummary,
 }
 
 #[derive(Debug, Clone)]
@@ -354,6 +388,11 @@ pub fn replace_consumer_targets(
                     } else {
                         None
                     },
+                    feedback: if compatible {
+                        previous.feedback.clone()
+                    } else {
+                        Vec::new()
+                    },
                     created_at: previous.created_at.clone(),
                     updated_at: if compatible && metadata_unchanged {
                         previous.updated_at.clone()
@@ -371,6 +410,7 @@ pub fn replace_consumer_targets(
                     schema: input.schema,
                     revision: 1,
                     latest: None,
+                    feedback: Vec::new(),
                     created_at: now.clone(),
                     updated_at: now.clone(),
                 });
@@ -407,9 +447,109 @@ pub fn targets_for_pipe(
                 revision: target.revision,
                 schema_name: target.schema_name.clone(),
                 schema: target.schema.clone(),
+                feedback: output_feedback_summary(target),
             })
             .collect();
         Ok((targets, false))
+    })
+}
+
+pub fn output_feedback_summary(target: &OutputTarget) -> OutputFeedbackSummary {
+    let up_count = target
+        .feedback
+        .iter()
+        .filter(|feedback| feedback.rating == OutputFeedbackRating::Up)
+        .count();
+    let down_count = target.feedback.len().saturating_sub(up_count);
+    let current = target.latest.as_ref().and_then(|latest| {
+        target
+            .feedback
+            .iter()
+            .rev()
+            .find(|feedback| {
+                feedback.artifact_output_id == latest.artifact_output_id
+                    && feedback.artifact_version == latest.artifact_version
+            })
+            .cloned()
+    });
+    let recent = target.feedback.iter().rev().take(5).cloned().collect();
+    OutputFeedbackSummary {
+        up_count,
+        down_count,
+        current,
+        recent,
+    }
+}
+
+pub fn set_output_feedback(
+    screenpipe_dir: &Path,
+    target_id: &str,
+    artifact_output_id: i64,
+    artifact_version: i64,
+    rating: Option<OutputFeedbackRating>,
+    correction: Option<String>,
+) -> Result<OutputFeedbackSummary, StructuredOutputError> {
+    validate_identifier(target_id, "target id")?;
+    let correction = correction
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    if correction
+        .as_ref()
+        .is_some_and(|value| value.chars().count() > MAX_FEEDBACK_CORRECTION_CHARS)
+    {
+        return Err(StructuredOutputError::invalid(format!(
+            "feedback correction must be at most {MAX_FEEDBACK_CORRECTION_CHARS} characters"
+        )));
+    }
+    if correction.is_some() && rating != Some(OutputFeedbackRating::Down) {
+        return Err(StructuredOutputError::invalid(
+            "a feedback correction requires a down rating",
+        ));
+    }
+
+    with_store(screenpipe_dir, |store| {
+        let target = store
+            .targets
+            .iter_mut()
+            .find(|target| target.id == target_id)
+            .ok_or_else(|| {
+                StructuredOutputError::not_found(format!("target '{target_id}' not found"))
+            })?;
+        let latest = target.latest.as_ref().ok_or_else(|| {
+            StructuredOutputError::conflict(format!(
+                "target '{target_id}' does not have an output to rate"
+            ))
+        })?;
+        if latest.artifact_output_id != artifact_output_id
+            || latest.artifact_version != artifact_version
+        {
+            return Err(StructuredOutputError::conflict(format!(
+                "target output changed (current artifact {} version {})",
+                latest.artifact_output_id, latest.artifact_version
+            )));
+        }
+
+        target.feedback.retain(|feedback| {
+            feedback.artifact_output_id != artifact_output_id
+                || feedback.artifact_version != artifact_version
+        });
+        if let Some(rating) = rating {
+            target.feedback.push(OutputFeedback {
+                rating,
+                artifact_output_id,
+                artifact_version,
+                output_payload: Some(latest.payload.clone()),
+                correction,
+                created_at: Utc::now().to_rfc3339(),
+            });
+        }
+        if target.feedback.len() > MAX_FEEDBACK_PER_TARGET {
+            let excess = target.feedback.len() - MAX_FEEDBACK_PER_TARGET;
+            target.feedback.drain(0..excess);
+        }
+        target.updated_at = Utc::now().to_rfc3339();
+        let summary = output_feedback_summary(target);
+        Ok((summary, true))
     })
 }
 
@@ -889,6 +1029,71 @@ mod tests {
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].id, "brain/main/focus");
         assert_eq!(targets[0].schema_name, "metric.v1");
+    }
+
+    #[test]
+    fn feedback_is_persisted_for_the_exact_output_and_returned_to_the_bound_pipe() {
+        let dir = tempfile::tempdir().unwrap();
+        let created = replace_consumer_targets(
+            dir.path(),
+            "live-view.v1",
+            vec![target(
+                "live-view:main:focus",
+                "daily-summary",
+                metric_schema(),
+            )],
+        )
+        .unwrap();
+        let prepared = prepare_output_submission(
+            dir.path(),
+            "live-view:main:focus",
+            created[0].revision,
+            "daily-summary",
+            json!({"value": 4.5}),
+            vec![],
+        )
+        .unwrap();
+        commit_output_submission(dir.path(), &prepared, 42).unwrap();
+
+        let feedback = set_output_feedback(
+            dir.path(),
+            "live-view:main:focus",
+            42,
+            1,
+            Some(OutputFeedbackRating::Down),
+            Some("exclude meetings".to_string()),
+        )
+        .unwrap();
+        assert_eq!(feedback.down_count, 1);
+        assert_eq!(
+            feedback.current.as_ref().unwrap().correction.as_deref(),
+            Some("exclude meetings")
+        );
+
+        let assigned = targets_for_pipe(dir.path(), "daily-summary").unwrap();
+        assert_eq!(assigned[0].feedback.down_count, 1);
+        assert_eq!(assigned[0].feedback.recent[0].artifact_version, 1);
+        assert_eq!(
+            assigned[0].feedback.recent[0].output_payload,
+            Some(json!({"value": 4.5}))
+        );
+        assert_eq!(
+            assigned[0].feedback.recent[0].correction.as_deref(),
+            Some("exclude meetings")
+        );
+        assert_eq!(
+            set_output_feedback(
+                dir.path(),
+                "live-view:main:focus",
+                999,
+                1,
+                Some(OutputFeedbackRating::Up),
+                None,
+            )
+            .unwrap_err()
+            .kind,
+            StructuredOutputErrorKind::Conflict
+        );
     }
 
     #[test]
