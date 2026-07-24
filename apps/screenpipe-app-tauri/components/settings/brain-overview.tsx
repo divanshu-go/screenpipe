@@ -20,6 +20,7 @@ import {
   type LiveViewGenerationIntent,
 } from "@/components/settings/live-view-ai-composer";
 import { LiveViewCard as OverviewCard } from "@/components/settings/live-view-card";
+import { LiveViewCreateDashboardDialog } from "@/components/settings/live-view-create-dashboard-dialog";
 import { LiveViewDashboardSwitcher } from "@/components/settings/live-view-dashboard-switcher";
 import { LiveViewLayoutEditor } from "@/components/settings/live-view-layout-editor";
 import {
@@ -299,6 +300,7 @@ export function BrainOverview() {
   const [aiEditingSlotId, setAiEditingSlotId] = useState<string | null>(null);
   const [templateKits, setTemplateKits] = useState<BrainViewTemplateKit[]>([]);
   const [templateGalleryOpen, setTemplateGalleryOpen] = useState(false);
+  const [createDashboardOpen, setCreateDashboardOpen] = useState(false);
   const [undoView, setUndoView] = useState<ViewDefinition | null>(null);
   const [undoRevision, setUndoRevision] = useState<number | null>(null);
   const [previewDestination, setPreviewDestination] =
@@ -533,6 +535,7 @@ export function BrainOverview() {
     setUndoView(null);
     setUndoRevision(null);
     setReplaceConfirmationOpen(false);
+    setCreateDashboardOpen(false);
   };
 
   const selectDashboard = (id: string) => {
@@ -552,7 +555,12 @@ export function BrainOverview() {
       });
       return;
     }
+    setCreateDashboardOpen(true);
+  };
+
+  const beginManualCreate = () => {
     const now = new Date().toISOString();
+    setCreateDashboardOpen(false);
     setDraft({
       id: uniqueDashboardId("untitled-dashboard", views),
       title: "Untitled dashboard",
@@ -681,6 +689,7 @@ export function BrainOverview() {
       );
       setEditing(false);
       setAiPreview(true);
+      return true;
     } catch (generateError) {
       toast({
         title: "failed to generate Live View",
@@ -690,9 +699,19 @@ export function BrainOverview() {
             : String(generateError),
         variant: "destructive",
       });
+      return false;
     } finally {
       setGenerating(false);
     }
+  };
+
+  const generateFromComposer = async (
+    prompt: string,
+    scope: LiveViewGenerationScope,
+    preset: AIPreset,
+    intent: LiveViewGenerationIntent,
+  ) => {
+    await generate(prompt, scope, preset, intent);
   };
 
   const recordCardFeedback = async (
@@ -1233,7 +1252,10 @@ export function BrainOverview() {
         data-testid="brain-overview-empty"
         className="mx-auto flex min-h-80 w-full max-w-5xl flex-col items-center justify-center px-6 py-8 text-center"
       >
-        <LiveViewAiComposer busy={generating} onGenerate={generate} />
+        <LiveViewAiComposer
+          busy={generating}
+          onGenerate={generateFromComposer}
+        />
         {templateKits.length > 0 && (
           <div className="mt-8 w-full border-t border-border pt-6 text-left">
             <LiveViewTemplateGallery
@@ -1247,7 +1269,7 @@ export function BrainOverview() {
           data-testid="overview-create"
           type="button"
           className="mt-4 text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
-          onClick={beginCreate}
+          onClick={beginManualCreate}
         >
           or build it manually
         </button>
@@ -1568,6 +1590,15 @@ export function BrainOverview() {
             onDuplicate={duplicateDashboard}
             onDelete={deleteDashboard}
           />
+          <LiveViewCreateDashboardDialog
+            open={createDashboardOpen}
+            busy={generating}
+            onOpenChange={setCreateDashboardOpen}
+            onGenerate={(prompt, preset) =>
+              generate(prompt, "dashboard", preset, "new-dashboard")
+            }
+            onCreateBlank={beginManualCreate}
+          />
           <p className="mt-2 text-xs text-muted-foreground">
             Pipes fill these Blocks for {selectedPeriod.label.toLowerCase()}.
             Data changes when you refresh or a connected Pipe runs.
@@ -1673,7 +1704,7 @@ export function BrainOverview() {
           busy={generating}
           compact
           currentViewTitle={view.title}
-          onGenerate={generate}
+          onGenerate={generateFromComposer}
         />
       </div>
       {undoView && (

@@ -28,6 +28,7 @@ const GENERATION_STEPS = [
 type LiveViewAiComposerProps = {
   busy: boolean;
   compact?: boolean;
+  autoFocus?: boolean;
   currentViewTitle?: string | null;
   onGenerate: (
     prompt: string,
@@ -76,6 +77,7 @@ export function inferLiveViewGenerationIntent(
 export function LiveViewAiComposer({
   busy,
   compact = false,
+  autoFocus = false,
   currentViewTitle = null,
   onGenerate,
 }: LiveViewAiComposerProps) {
@@ -147,6 +149,7 @@ export function LiveViewAiComposer({
       )}
       <Textarea
         data-testid="live-view-ai-prompt"
+        autoFocus={autoFocus}
         value={prompt}
         disabled={busy}
         rows={compact ? 2 : 3}

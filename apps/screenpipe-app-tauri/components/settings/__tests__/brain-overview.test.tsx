@@ -10,6 +10,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 
 const mocks = vi.hoisted(() => ({
@@ -291,7 +292,7 @@ describe("BrainOverview", () => {
     expect(mocks.saveBrainView).not.toHaveBeenCalled();
   });
 
-  it("creates and names a separate dashboard from the dashboard switcher", async () => {
+  it("opens AI creation first and keeps blank manual creation available", async () => {
     mocks.listBrainViews.mockResolvedValue({
       status: "ok",
       data: [populatedView],
@@ -309,6 +310,16 @@ describe("BrainOverview", () => {
     render(<BrainOverview />);
 
     fireEvent.click(await screen.findByTestId("overview-new-dashboard"));
+    const createDialog = await screen.findByTestId(
+      "live-view-create-dashboard-dialog",
+    );
+    expect(
+      within(createDialog).getByText(/Describe the outcome you want/),
+    ).toBeTruthy();
+    const aiPrompt = within(createDialog).getByTestId("live-view-ai-prompt");
+    expect(aiPrompt).toBeTruthy();
+    await waitFor(() => expect(aiPrompt).toHaveFocus());
+    fireEvent.click(within(createDialog).getByTestId("live-view-create-blank"));
     fireEvent.change(screen.getByTestId("overview-title"), {
       target: { value: "GTM dashboard" },
     });
@@ -327,6 +338,60 @@ describe("BrainOverview", () => {
         "overview-dashboard-selector",
       )) as HTMLSelectElement,
     ).toHaveValue("gtm-dashboard");
+  });
+
+  it("creates a new AI dashboard directly from the dashboard switcher", async () => {
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [populatedView],
+    });
+    mocks.generateLiveViewWithPi.mockResolvedValue({
+      title: "GTM pulse",
+      timeRange: "7d",
+      note: "A focused GTM dashboard.",
+      blocks: [
+        {
+          title: "GTM time",
+          intent: "Calculate time spent on source-backed GTM activity.",
+          component: "metric.v1",
+          width: 6,
+          pipeName: "daily-summary",
+        },
+      ],
+    });
+    render(<BrainOverview />);
+
+    fireEvent.click(await screen.findByTestId("overview-new-dashboard"));
+    const createDialog = await screen.findByTestId(
+      "live-view-create-dashboard-dialog",
+    );
+    fireEvent.change(within(createDialog).getByTestId("live-view-ai-prompt"), {
+      target: { value: "show my GTM progress this week" },
+    });
+    const generateButton = within(createDialog).getByTestId(
+      "live-view-ai-generate",
+    );
+    await waitFor(() => expect(generateButton).not.toBeDisabled());
+    fireEvent.click(generateButton);
+
+    await waitFor(() =>
+      expect(mocks.generateLiveViewWithPi).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prompt: "show my GTM progress this week",
+          scope: "dashboard",
+          currentView: null,
+        }),
+      ),
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByTestId("live-view-create-dashboard-dialog"),
+      ).toBeNull(),
+    );
+    expect(await screen.findByText("GTM pulse")).toBeTruthy();
+    expect(screen.getByTestId("overview-apply-ai").textContent).toContain(
+      "create dashboard",
+    );
   });
 
   it("keeps one stable visible refresh label while data is loading", async () => {

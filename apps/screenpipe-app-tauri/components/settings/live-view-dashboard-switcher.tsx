@@ -101,7 +101,8 @@ export function LiveViewDashboardSwitcher({
             variant="outline"
             size="icon"
             className="h-9 w-9 shrink-0 rounded-none"
-            aria-label="new dashboard"
+            aria-label="create dashboard with AI"
+            title="create dashboard with AI"
             disabled={busy || views.length >= MAX_DASHBOARDS}
             onClick={onCreate}
           >
