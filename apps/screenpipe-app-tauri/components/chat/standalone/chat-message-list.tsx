@@ -93,8 +93,6 @@ export interface ChatMessageListProps {
   onContinueConnectionAction?: (prompt: string, label?: string) => void | Promise<void>;
   onDismissConnectionAction?: (messageId: string, connectionId: string) => void;
   onAnswerAgentAction?: (block: Extract<ContentBlock, { type: "agent_action" }>, selectedOptionId?: string) => Promise<boolean> | boolean;
-  onAcpAuthAction?: (messageId: string, action: "recheck" | "switch") => void;
-  defaultProviderLabel?: string;
   onAskUserReply?: (reply: string, displayLabel: string) => Promise<void> | void;
   suppressSourceFooters?: boolean;
 }
@@ -135,8 +133,6 @@ export function ChatMessageList({
   onContinueConnectionAction,
   onDismissConnectionAction,
   onAnswerAgentAction,
-  onAcpAuthAction,
-  defaultProviderLabel,
   onAskUserReply,
   suppressSourceFooters = false,
 }: ChatMessageListProps) {
@@ -396,8 +392,6 @@ export function ChatMessageList({
                           onContinueConnectionAction={onContinueConnectionAction}
                           onDismissConnectionAction={onDismissConnectionAction}
                           onAnswerAgentAction={onAnswerAgentAction}
-                          onAcpAuthAction={onAcpAuthAction}
-                          defaultProviderLabel={defaultProviderLabel}
                           onAskUserReply={onAskUserReply}
                         />
                       )}

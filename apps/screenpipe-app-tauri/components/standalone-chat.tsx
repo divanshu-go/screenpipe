@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { Settings2, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SchedulePromptDialog } from "@/components/chat/schedule-prompt-dialog";
+import { AcpSignInDialog, type AcpSignInRequest } from "@/components/chat/standalone/acp-sign-in-dialog";
 import { BrowserSidebar } from "@/components/browser-sidebar";
 import { toast } from "@/components/ui/use-toast";
 import type { AIPreset, JsonValue } from "@/lib/utils/tauri";
@@ -207,6 +208,20 @@ export function StandaloneChat({
   // their messages from the chat store instead — see the `messages` derivation
   // below, after `conversationId` is known.
   const [localMessages, setMessages] = useState<Message[]>([]);
+  // One dialog for every ACP sign-in — CLI login (Kimi, OpenCode) and
+  // in-protocol auth-method selection alike. Single piece of state → deduped.
+  const [acpSignIn, setAcpSignIn] = useState<AcpSignInRequest | null>(null);
+  // A CLI retry is in flight: we re-attempted the connection and are waiting to
+  // see if the agent connects (acp_ready → close) or asks to sign in again
+  // (→ error). The dialog never toggles closed in between, so it can't flicker.
+  const [acpSignInBusy, setAcpSignInBusy] = useState(false);
+  // Red line shown in the sign-in dialog when the last check failed.
+  const [acpSignInError, setAcpSignInError] = useState<string | null>(null);
+  // Event callbacks fire outside React state, so mirror "checking" into a ref
+  // to tell a first-time prompt from a failed retry; the timeout guards the
+  // case where neither acp_ready nor acp_external_auth_required comes back.
+  const acpSignInBusyRef = useRef(false);
+  const acpSignInTimeoutRef = useRef<number | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
@@ -1059,6 +1074,9 @@ export function StandaloneChat({
         return [{ ...message, contentBlocks: nextBlocks }];
       });
     setMessages(stripRequest);
+    // Auth prompts live in the sign-in dialog, not the message list — clear it
+    // too when this request is answered/withdrawn.
+    setAcpSignIn((cur) => (cur?.kind === "methods" && cur.requestId === requestId ? null : cur));
     const store = useChatStore.getState();
     const stored = store.sessions[sessionId]?.messages as Message[] | undefined;
     if (stored) store.actions.setMessages(sessionId, stripRequest(stored));
@@ -1080,6 +1098,9 @@ export function StandaloneChat({
         return [{ ...message, contentBlocks: nextBlocks }];
       });
     setMessages(stripSession);
+    // acp_authenticated / acp_fatal / acp_auth_cancelled clear the session's
+    // actions — dismiss any open sign-in dialog for it as well.
+    setAcpSignIn((cur) => (cur?.kind === "methods" && cur.sessionId === sessionId ? null : cur));
     const store = useChatStore.getState();
     const stored = store.sessions[sessionId]?.messages as Message[] | undefined;
     if (stored) store.actions.setMessages(sessionId, stripSession(stored));
@@ -1332,6 +1353,23 @@ export function StandaloneChat({
         })
       : [];
     const messageText = typeof inner.message === "string" ? inner.message : undefined;
+
+    // Sign-in prompts go to the unified sign-in dialog, not an inline card, so
+    // every ACP auth (CLI login and in-protocol method selection) looks the
+    // same. Permission prompts stay inline — they recur mid-turn and a modal
+    // per approval would be disruptive.
+    if (actionKind === "auth") {
+      setAcpSignIn({
+        kind: "methods",
+        requestId,
+        sessionId,
+        title: agentActionTitle(rawTitle, actionKind),
+        message: messageText,
+        options,
+      });
+      return true;
+    }
+
     const message: Message = {
       id: `agent-action-${requestId}`,
       role: "assistant",
@@ -1381,6 +1419,29 @@ export function StandaloneChat({
     handleInvalidatedAuthToken,
     lastUserMessageRef,
     markTurnIntentConsumed,
+    onAcpExternalAuthRequired: (info) => {
+      // If this fired during a retry, the user still isn't signed in — surface
+      // a red error. On the first prompt it's just the initial ask (no error).
+      // Either way the dialog stays open (open never goes false → no flicker).
+      const wasChecking = acpSignInBusyRef.current;
+      acpSignInBusyRef.current = false;
+      if (acpSignInTimeoutRef.current != null) window.clearTimeout(acpSignInTimeoutRef.current);
+      setAcpSignInBusy(false);
+      setAcpSignIn({ kind: "cli", ...info });
+      setAcpSignInError(
+        wasChecking
+          ? `still not signed in to ${info.agentName}. run the command below in a terminal, then retry.`
+          : null,
+      );
+    },
+    // Session opened successfully — dismiss any sign-in dialog waiting on it.
+    onAcpSessionReady: () => {
+      acpSignInBusyRef.current = false;
+      if (acpSignInTimeoutRef.current != null) window.clearTimeout(acpSignInTimeoutRef.current);
+      setAcpSignInBusy(false);
+      setAcpSignInError(null);
+      setAcpSignIn(null);
+    },
     messages,
     messagesRef,
     mountedRef,
@@ -1509,28 +1570,6 @@ export function StandaloneChat({
     onConnectConnectionAction: connectFromInlineCard,
     onDeclineConnectionAction: declineConnectionAction,
     onAnswerAgentAction: answerAgentAction,
-    // The "sign in via CLI" card (Kimi/OpenCode) offers two actions:
-    // "recheck" (kept the agent — retry after logging in) and "switch"
-    // (fall back to the default preset). Both dismiss the card and, if the
-    // user had a message queued, resend it; with no pending message it just
-    // returns to the (now empty) chat.
-    defaultProviderLabel:
-      settings?.aiPresets?.find((preset) => preset.defaultPreset)?.id ?? "screenpipe-cloud",
-    onAcpAuthAction: (messageId: string, action: "recheck" | "switch") => {
-      setMessages((prev) => prev.filter((message) => message.id !== messageId));
-      if (action === "switch") {
-        const fallback =
-          settings?.aiPresets?.find((preset) => preset.defaultPreset) ?? settings?.aiPresets?.[0];
-        // handleSetActivePreset updates activePresetRef synchronously, so the
-        // resend below goes to the default provider, not the failed agent.
-        if (fallback) handleSetActivePreset(fallback);
-      }
-      const pending = lastUserMessageRef.current?.trim();
-      if (pending) {
-        piMessageIdRef.current = null;
-        void sendMessage(pending);
-      }
-    },
     scheduleMessage: (message, displayLabel) => {
       piMessageIdRef.current = null;
       sendMessage(message, displayLabel);
@@ -1540,6 +1579,117 @@ export function StandaloneChat({
     messages,
     citationPlan,
   });
+
+  // Sign-in dialog actions.
+  const acpDefaultPresetLabel =
+    settings?.aiPresets?.find((preset) => preset.defaultPreset)?.id ?? "screenpipe-cloud";
+  const clearAcpSignInProbe = useCallback(() => {
+    acpSignInBusyRef.current = false;
+    if (acpSignInTimeoutRef.current != null) {
+      window.clearTimeout(acpSignInTimeoutRef.current);
+      acpSignInTimeoutRef.current = null;
+    }
+    setAcpSignInBusy(false);
+  }, []);
+  // "i've signed in, retry": re-attempt the connection and report the outcome
+  // in the dialog. First a hard check that the CLI is even installed (a clear,
+  // actionable error if not). Then reconnect: acp_ready closes the dialog and
+  // resends the pending message; acp_external_auth_required re-fires as a red
+  // "still not signed in" error; a timeout guards the case where neither comes
+  // back. The dialog stays open throughout, so the user always sees what
+  // happened instead of it silently closing or spinning forever.
+  const handleAcpRetry = useCallback(() => {
+    if (acpSignIn?.kind !== "cli") return;
+    const { agentId, agentName } = acpSignIn;
+    setAcpSignInError(null);
+    setAcpSignInBusy(true);
+    acpSignInBusyRef.current = true;
+
+    void (async () => {
+      try {
+        const status = await commands.piAcpAgentInstallStatus(agentId);
+        if (status.requiresInstall && !status.installed) {
+          clearAcpSignInProbe();
+          setAcpSignInError(
+            status.command
+              ? `${agentName} isn't installed yet. install it first: ${status.command}`
+              : `${agentName} isn't installed yet — install it, then retry.`,
+          );
+          return;
+        }
+      } catch {
+        // Install check is best-effort; fall through to the connect attempt.
+      }
+      if (!acpSignInBusyRef.current) return; // dismissed while checking
+
+      if (acpSignInTimeoutRef.current != null) window.clearTimeout(acpSignInTimeoutRef.current);
+      acpSignInTimeoutRef.current = window.setTimeout(() => {
+        if (!acpSignInBusyRef.current) return;
+        clearAcpSignInProbe();
+        setAcpSignInError(`couldn't reach ${agentName}. make sure you ran the command, then retry.`);
+      }, 25_000);
+
+      // Trigger a fresh connection. A pending message rides along on success;
+      // with none, restart the session directly so the check still runs.
+      const pending = lastUserMessageRef.current?.trim();
+      if (pending) {
+        piMessageIdRef.current = null;
+        void sendMessage(pending).catch(() => {});
+      } else {
+        const cfg = buildProviderConfig();
+        if (cfg) void restartCurrentPiSession(cfg).catch(() => {});
+      }
+    })();
+  }, [acpSignIn, clearAcpSignInProbe, lastUserMessageRef, piMessageIdRef, sendMessage, buildProviderConfig, restartCurrentPiSession]);
+  // "switch to default": fall back to the default preset and resend there.
+  // Safe to close immediately — the default provider won't re-trigger the
+  // agent's CLI-login prompt, so there's no reopen to flicker against.
+  const handleAcpSwitchToDefault = useCallback(() => {
+    clearAcpSignInProbe();
+    setAcpSignInError(null);
+    setAcpSignIn(null);
+    const fallback =
+      settings?.aiPresets?.find((preset) => preset.defaultPreset) ?? settings?.aiPresets?.[0];
+    // handleSetActivePreset updates activePresetRef synchronously, so the
+    // resend below goes to the default provider, not the failed agent.
+    if (fallback) handleSetActivePreset(fallback);
+    const pending = lastUserMessageRef.current?.trim();
+    if (pending) {
+      piMessageIdRef.current = null;
+      void sendMessage(pending).catch(() => {});
+    }
+  }, [clearAcpSignInProbe, settings, handleSetActivePreset, lastUserMessageRef, piMessageIdRef, sendMessage]);
+  // In-protocol auth: answer the agent's method-selection request. An undefined
+  // optionId cancels it (used by "not now" and by dismissing the dialog).
+  const handleAcpSignInMethod = useCallback(
+    async (optionId?: string): Promise<boolean> => {
+      if (acpSignIn?.kind !== "methods") return false;
+      const ok = await answerAgentAction(
+        {
+          type: "agent_action",
+          actionKind: "auth",
+          requestId: acpSignIn.requestId,
+          sessionId: acpSignIn.sessionId,
+          title: acpSignIn.title,
+          message: acpSignIn.message,
+          options: acpSignIn.options,
+        },
+        optionId,
+      );
+      if (ok) setAcpSignIn(null);
+      return ok;
+    },
+    [acpSignIn, answerAgentAction],
+  );
+  const handleAcpDismiss = useCallback(() => {
+    if (acpSignIn?.kind === "methods") {
+      void handleAcpSignInMethod(undefined);
+      return;
+    }
+    clearAcpSignInProbe();
+    setAcpSignInError(null);
+    setAcpSignIn(null);
+  }, [acpSignIn, handleAcpSignInMethod, clearAcpSignInProbe]);
 
   return (
     <div ref={dropRootRef} className={cn("flex flex-col bg-background", className ?? "h-screen")} data-testid="section-home">
@@ -1836,6 +1986,17 @@ export function StandaloneChat({
         <SchedulePromptDialog {...scheduleDialogProps} />
       )}
       <ImageViewerDialog {...imageViewerProps} />
+
+      <AcpSignInDialog
+        request={acpSignIn}
+        busy={acpSignInBusy}
+        error={acpSignInError}
+        defaultPresetLabel={acpDefaultPresetLabel}
+        onSwitchToDefault={handleAcpSwitchToDefault}
+        onRetry={handleAcpRetry}
+        onSelectMethod={handleAcpSignInMethod}
+        onDismiss={handleAcpDismiss}
+      />
 
     </div>
   );

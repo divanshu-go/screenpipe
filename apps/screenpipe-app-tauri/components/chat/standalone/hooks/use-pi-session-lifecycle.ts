@@ -8,6 +8,7 @@ import { homeDir, join } from "@tauri-apps/api/path";
 import { readActiveAiPresetId } from "@/lib/active-ai-preset";
 import { toast } from "@/components/ui/use-toast";
 import { buildAppAwarenessContext, buildConnectionsContext, buildSystemPrompt } from "@/lib/chat/system-prompt";
+import { isAcpAuthenticationCancelledError, isAcpExternalAuthError } from "@/lib/chat/auth-errors";
 import { commands, type AIPreset, type PiInfo, type PiProviderConfig } from "@/lib/utils/tauri";
 import type { ActivityAppItem, ConnectedIntegration, ConnectionListItem } from "@/lib/chat/connection-suggestions";
 import { useAcpSessionConfig } from "@/lib/stores/acp-session-config";
@@ -413,6 +414,14 @@ export function usePiSessionLifecycle({
         }
       });
       void switchPromise.catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        // An ACP agent that needs a CLI login (Kimi/OpenCode) or whose sign-in
+        // was cancelled surfaces its own dialog — this rejection is expected,
+        // so don't log it as an error (it would pop the dev overlay).
+        if (isAcpExternalAuthError(message) || isAcpAuthenticationCancelledError(message)) {
+          console.warn("[Pi] preset switch needs sign-in:", message);
+          return;
+        }
         console.error("[Pi] Preset switch failed:", error);
       });
       return;

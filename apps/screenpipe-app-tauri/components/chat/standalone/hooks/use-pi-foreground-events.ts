@@ -51,6 +51,8 @@ export function usePiForegroundEvents({
   handleInvalidatedAuthToken,
   lastUserMessageRef,
   markTurnIntentConsumed,
+  onAcpExternalAuthRequired,
+  onAcpSessionReady,
   messages,
   messagesRef,
   mountedRef,
@@ -201,17 +203,16 @@ export function usePiForegroundEvents({
         const agentName = stringValue(data.agentName, "This agent");
         const agentId = stringValue(data.agentId);
         const command = stringValue(data.command);
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: `acp-auth-${agentId || Date.now()}`,
-            role: "assistant",
-            content: "",
-            timestamp: Date.now(),
-            contentBlocks: [{ type: "acp_auth_cli", agentId, agentName, command }],
-          },
-        ]);
+        // A single unified sign-in dialog, deduped by the panel — not an
+        // inline message card (which could be appended twice on retries).
+        onAcpExternalAuthRequired?.({ agentId, agentName, command });
         return;
+      }
+
+      if (data.type === "acp_ready") {
+        // The ACP session opened (auth passed or wasn't needed). If a sign-in
+        // dialog was waiting on a retry, this is the signal to close it.
+        onAcpSessionReady?.();
       }
 
         const emitSessionActivity = (
