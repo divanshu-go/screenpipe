@@ -3000,7 +3000,7 @@ impl PipeManager {
     /// in a spawned tokio task.  Use this from API handlers to avoid holding
     /// the PipeManager mutex for the entire execution duration.
     pub async fn start_pipe_background(&self, name: &str) -> Result<()> {
-        self.start_pipe_background_with_trigger(name, "manual")
+        self.start_pipe_background_with_context(name, "manual", None)
             .await
     }
 
@@ -3009,6 +3009,19 @@ impl PipeManager {
         &self,
         name: &str,
         trigger: &str,
+    ) -> Result<()> {
+        self.start_pipe_background_with_context(name, trigger, None)
+            .await
+    }
+
+    /// Start one manual run with request-scoped context. Unlike the manager's
+    /// shared integration context, this value belongs only to this execution
+    /// and cannot leak into another concurrently started pipe.
+    pub async fn start_pipe_background_with_context(
+        &self,
+        name: &str,
+        trigger: &str,
+        run_context: Option<&str>,
     ) -> Result<()> {
         let (config, body, _raw) = {
             let pipes = self.pipes.lock().await;
@@ -3166,7 +3179,19 @@ impl PipeManager {
             self.local_api_key.as_deref(),
             config.agent == "pi" && pi_package_enabled("pi-subagents"),
         );
-        let prompt = self.render_prompt(&config, &body, preset_prompt.as_deref());
+        let combined_context = match (self.extra_context.as_deref(), run_context) {
+            (Some(shared), Some(scoped)) => Some(format!("{shared}\n{scoped}")),
+            (Some(shared), None) => Some(shared.to_string()),
+            (None, Some(scoped)) => Some(scoped.to_string()),
+            (None, None) => None,
+        };
+        let prompt = render_prompt_with_port(
+            &config,
+            &body,
+            self.api_port,
+            preset_prompt.as_deref(),
+            combined_context.as_deref(),
+        );
         let pipe_name = name.to_string();
 
         // Mark running in DB
@@ -6168,7 +6193,8 @@ fn render_prompt_with_port(
     let mut prompt = String::new();
 
     let header = format!(
-        r#"Time range: {start_time} to {end_time}
+        r#"Default run lookback: {start_time} to {end_time}
+Structured output targets may declare an authoritative time range that overrides this default for that target.
 Date: {date}
 Timezone: {timezone} (UTC{tz_offset})
 Pipe name: {}
@@ -8985,8 +9011,9 @@ mod tests {
             trigger: None,
         };
         let prompt = render_prompt_with_port(&config, "body text", 3031, None, None);
-        // User prompt contains time range and the "Execute" instruction
-        assert!(prompt.contains("Time range:"));
+        // User prompt contains a default lookback and the "Execute" instruction.
+        assert!(prompt.contains("Default run lookback:"));
+        assert!(prompt.contains("authoritative time range"));
         assert!(prompt.contains("Do the work described above now."));
         // Port / body go into system prompt, not user prompt
         let sys = render_pipe_system_prompt("body text", 3031, None, None, None, false);

@@ -18,24 +18,28 @@ describe("parseGeneratedLiveView", () => {
         blocks: [
           {
             title: "Focus time",
+            intent: "Calculate focused work time in the selected period.",
             component: "metric.v1",
             width: 3,
             pipeName: "daily-summary",
           },
           {
             title: "Time by project",
+            intent: "Group active time by project.",
             component: "bar-chart",
             width: "half",
             pipeName: "time-tracker",
           },
           {
             title: "Focus trend",
+            intent: "Show focused work over time.",
             component: "line-chart",
             width: 12,
             pipeName: "time-tracker",
           },
           {
             title: "Project detail",
+            intent: "List project activity with supporting details.",
             component: "table.v1",
             width: 12,
             pipeName: "daily-summary",
@@ -53,24 +57,28 @@ describe("parseGeneratedLiveView", () => {
       blocks: [
         {
           title: "Focus time",
+          intent: "Calculate focused work time in the selected period.",
           component: "metric.v1",
           width: 3,
           pipeName: "daily-summary",
         },
         {
           title: "Time by project",
+          intent: "Group active time by project.",
           component: "bar-chart.v1",
           width: 6,
           pipeName: "time-tracker",
         },
         {
           title: "Focus trend",
+          intent: "Show focused work over time.",
           component: "line-chart.v1",
           width: 12,
           pipeName: "time-tracker",
         },
         {
           title: "Project detail",
+          intent: "List project activity with supporting details.",
           component: "table.v1",
           width: 12,
           pipeName: "daily-summary",

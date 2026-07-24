@@ -20,6 +20,10 @@
     "title": "Meeting follow-through",
     "revision": 1,
     "timeRange": "24h",
+    "periodPolicy": {
+      "type": "selectable.v1",
+      "values": ["24h", "7d", "30d"]
+    },
     "blocks": [
       {
         "id": "latest-meeting",
@@ -27,6 +31,7 @@
         "kind": "markdown.v1",
         "width": 12,
         "order": 0,
+        "intent": "Summarize the most recent substantive meeting inside the selected period, naming the meeting and its source-backed purpose and outcome.",
         "source": {
           "type": "pipe.v1",
           "pipeName": "meeting-summary"
@@ -38,6 +43,7 @@
         "kind": "list.v1",
         "width": 6,
         "order": 1,
+        "intent": "List explicit decisions made in the most recent substantive meeting inside the selected period. Do not turn suggestions into decisions.",
         "source": {
           "type": "pipe.v1",
           "pipeName": "meeting-summary"
@@ -49,6 +55,7 @@
         "kind": "list.v1",
         "width": 6,
         "order": 2,
+        "intent": "List explicit action items from the most recent substantive meeting inside the selected period, including owner and timing when stated.",
         "source": {
           "type": "pipe.v1",
           "pipeName": "meeting-summary"
@@ -60,6 +67,7 @@
         "kind": "table.v1",
         "width": 6,
         "order": 3,
+        "intent": "Show the people, organizations, roles, and relevant context explicitly present in the most recent substantive meeting inside the selected period.",
         "source": {
           "type": "pipe.v1",
           "pipeName": "meeting-summary"
@@ -71,6 +79,7 @@
         "kind": "list.v1",
         "width": 6,
         "order": 4,
+        "intent": "Find unresolved questions, promised follow-ups, and incomplete commitments connected to the most recent meeting inside the selected period.",
         "source": {
           "type": "pipe.v1",
           "pipeName": "missed-todos"
@@ -82,6 +91,7 @@
         "kind": "markdown.v1",
         "width": 12,
         "order": 5,
+        "intent": "Recommend the next concrete follow-through step for the most recent meeting based on its explicit decisions, action items, and open loops.",
         "source": {
           "type": "pipe.v1",
           "pipeName": "missed-todos"

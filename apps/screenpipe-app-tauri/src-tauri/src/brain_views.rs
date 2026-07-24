@@ -12,8 +12,8 @@ use crate::store::SettingsStore;
 use screenpipe_core::pipes::install_bundled_pipe;
 use screenpipe_engine::live_views::{
     delete_live_view, list_bundled_live_view_kits, list_live_views, save_live_view, LiveView,
-    LiveViewBlock, LiveViewBlockKind, LiveViewKit, LiveViewSource, LiveViewTemplateBlock,
-    LiveViewTimeRange, SaveLiveViewRequest,
+    LiveViewBlock, LiveViewBlockKind, LiveViewKit, LiveViewPeriodPolicy, LiveViewSource,
+    LiveViewTemplateBlock, LiveViewTimeRange, SaveLiveViewRequest,
 };
 use screenpipe_engine::structured_outputs::{
     OutputFeedbackRating, OutputFeedbackSummary, StructuredOutputValue,
@@ -59,6 +59,54 @@ impl From<LiveViewTimeRange> for BrainViewTimeRange {
             LiveViewTimeRange::Last24Hours => Self::Last24Hours,
             LiveViewTimeRange::Last7Days => Self::Last7Days,
             LiveViewTimeRange::Last30Days => Self::Last30Days,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq, Eq)]
+#[serde(tag = "type")]
+pub enum BrainViewPeriodPolicy {
+    #[serde(rename = "fixed.v1")]
+    FixedV1 { value: BrainViewTimeRange },
+    #[serde(rename = "selectable.v1")]
+    SelectableV1 { values: Vec<BrainViewTimeRange> },
+}
+
+impl Default for BrainViewPeriodPolicy {
+    fn default() -> Self {
+        Self::SelectableV1 {
+            values: vec![
+                BrainViewTimeRange::Today,
+                BrainViewTimeRange::Last24Hours,
+                BrainViewTimeRange::Last7Days,
+                BrainViewTimeRange::Last30Days,
+            ],
+        }
+    }
+}
+
+impl From<BrainViewPeriodPolicy> for LiveViewPeriodPolicy {
+    fn from(policy: BrainViewPeriodPolicy) -> Self {
+        match policy {
+            BrainViewPeriodPolicy::FixedV1 { value } => Self::FixedV1 {
+                value: value.into(),
+            },
+            BrainViewPeriodPolicy::SelectableV1 { values } => Self::SelectableV1 {
+                values: values.into_iter().map(Into::into).collect(),
+            },
+        }
+    }
+}
+
+impl From<LiveViewPeriodPolicy> for BrainViewPeriodPolicy {
+    fn from(policy: LiveViewPeriodPolicy) -> Self {
+        match policy {
+            LiveViewPeriodPolicy::FixedV1 { value } => Self::FixedV1 {
+                value: value.into(),
+            },
+            LiveViewPeriodPolicy::SelectableV1 { values } => Self::SelectableV1 {
+                values: values.into_iter().map(Into::into).collect(),
+            },
         }
     }
 }
@@ -225,6 +273,7 @@ pub struct BrainViewSlot {
     pub component: BrainViewComponent,
     pub width: u8,
     pub order: u16,
+    pub intent: Option<String>,
     pub binding: Option<BrainViewBinding>,
     pub value: Option<BrainViewValue>,
     pub feedback: BrainViewFeedbackSummary,
@@ -238,6 +287,7 @@ impl From<LiveViewBlock> for BrainViewSlot {
             component: block.kind.into(),
             width: block.width,
             order: block.order,
+            intent: block.intent,
             binding: block.source.map(Into::into),
             value: block.value.map(Into::into),
             feedback: block.feedback.into(),
@@ -252,6 +302,7 @@ pub struct BrainViewDefinition {
     pub title: String,
     pub revision: u64,
     pub time_range: BrainViewTimeRange,
+    pub period_policy: BrainViewPeriodPolicy,
     pub slots: Vec<BrainViewSlot>,
     pub created_at: String,
     pub updated_at: String,
@@ -264,6 +315,7 @@ impl From<LiveView> for BrainViewDefinition {
             title: view.title,
             revision: view.revision,
             time_range: view.time_range.into(),
+            period_policy: view.period_policy.into(),
             slots: view.blocks.into_iter().map(Into::into).collect(),
             created_at: view.created_at,
             updated_at: view.updated_at,
@@ -279,6 +331,7 @@ pub struct BrainViewSlotInput {
     pub component: BrainViewComponent,
     pub width: u8,
     pub order: u16,
+    pub intent: Option<String>,
     pub binding: Option<BrainViewBinding>,
 }
 
@@ -297,6 +350,7 @@ pub struct BrainViewTemplateKit {
     pub description: String,
     pub version: u64,
     pub time_range: BrainViewTimeRange,
+    pub period_policy: BrainViewPeriodPolicy,
     pub pipes: Vec<BrainViewTemplatePipe>,
     pub slots: Vec<BrainViewSlotInput>,
 }
@@ -309,6 +363,7 @@ impl From<LiveViewKit> for BrainViewTemplateKit {
             description: kit.description,
             version: kit.version,
             time_range: kit.template.time_range.into(),
+            period_policy: kit.template.period_policy.into(),
             pipes: kit
                 .pipes
                 .into_iter()
@@ -327,6 +382,7 @@ impl From<LiveViewKit> for BrainViewTemplateKit {
                     component: block.kind.into(),
                     width: block.width,
                     order: block.order,
+                    intent: block.intent,
                     binding: block.source.map(Into::into),
                 })
                 .collect(),
@@ -342,6 +398,7 @@ impl From<BrainViewSlotInput> for LiveViewTemplateBlock {
             kind: slot.component.into(),
             width: slot.width,
             order: slot.order,
+            intent: slot.intent,
             source: slot.binding.map(Into::into),
         }
     }
@@ -354,6 +411,7 @@ pub struct SaveBrainViewRequest {
     pub title: String,
     pub expected_revision: Option<u64>,
     pub time_range: BrainViewTimeRange,
+    pub period_policy: BrainViewPeriodPolicy,
     pub slots: Vec<BrainViewSlotInput>,
 }
 
@@ -372,6 +430,7 @@ impl From<SaveBrainViewRequest> for SaveLiveViewRequest {
             title: request.title,
             expected_revision: request.expected_revision,
             time_range: request.time_range.into(),
+            period_policy: Some(request.period_policy.into()),
             blocks: request.slots.into_iter().map(Into::into).collect(),
         }
     }
@@ -427,6 +486,7 @@ pub async fn install_brain_view_template_kit(
             title: kit.template.title,
             expected_revision: request.expected_revision,
             time_range: kit.template.time_range,
+            period_policy: Some(kit.template.period_policy),
             blocks: kit.template.blocks,
         },
     )
@@ -463,6 +523,7 @@ mod tests {
             component: BrainViewComponent::MetricV1,
             width: 6,
             order: 0,
+            intent: Some("Calculate focused work time".to_string()),
             binding: Some(BrainViewBinding {
                 pipe_name: "daily-summary".to_string(),
             }),

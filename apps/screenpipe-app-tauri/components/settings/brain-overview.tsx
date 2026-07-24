@@ -47,11 +47,18 @@ import {
   type LiveViewGenerationScope,
 } from "@/lib/live-views/generate-live-view-with-pi";
 import {
+  allowedLiveViewTimeRanges,
+  buildLiveViewTimeContext,
+  DEFAULT_LIVE_VIEW_PERIOD_POLICY,
+  getLiveViewTimeRangeOption,
+} from "@/lib/live-views/time-range";
+import {
   commands,
   type AIPreset,
   type BrainViewComponent,
   type BrainViewDefinition,
   type BrainViewSlot,
+  type BrainViewSlotInput,
   type BrainViewTemplateKit,
   type BrainViewTimeRange,
 } from "@/lib/utils/tauri";
@@ -110,39 +117,16 @@ const COMPONENTS: Array<{
   { value: "markdown.v1", label: "Text", schema: "a short formatted brief" },
 ];
 
-const TIME_RANGES: Array<{
-  value: BrainViewTimeRange;
-  label: string;
-  milliseconds: number | null;
-}> = [
-  { value: "today", label: "Today", milliseconds: null },
-  { value: "24h", label: "Last 24 hours", milliseconds: 24 * 60 * 60 * 1000 },
-  { value: "7d", label: "Last 7 days", milliseconds: 7 * 24 * 60 * 60 * 1000 },
-  {
-    value: "30d",
-    label: "Last 30 days",
-    milliseconds: 30 * 24 * 60 * 60 * 1000,
-  },
-];
-
-function timeRangeContext(timeRange: BrainViewTimeRange) {
-  const selected =
-    TIME_RANGES.find((candidate) => candidate.value === timeRange) ??
-    TIME_RANGES[0];
-  const end = new Date();
-  const start = new Date(end);
-  if (selected.milliseconds === null) {
-    start.setHours(0, 0, 0, 0);
-  } else {
-    start.setTime(end.getTime() - selected.milliseconds);
-  }
-  return {
-    preset: selected.value,
-    label: selected.label,
-    start: start.toISOString(),
-    end: end.toISOString(),
-    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
-  };
+function serializedSlots(slots: ViewSlot[]): BrainViewSlotInput[] {
+  return normalizedSlots(slots).map((slot) => ({
+    id: slot.id,
+    title: slot.title.trim(),
+    intent: slot.intent?.trim() || null,
+    component: slot.component,
+    width: slot.width,
+    order: slot.order,
+    binding: slot.binding,
+  }));
 }
 
 function DataRefreshBanner({ state }: { state: DataRefreshState }) {
@@ -155,7 +139,7 @@ function DataRefreshBanner({ state }: { state: DataRefreshState }) {
           ? `${state.filled} of ${state.total} sections updated`
           : `${state.pipeNames.join(", ")} ${state.pipeNames.length === 1 ? "is" : "are"} building your live data`
         : state.status === "complete"
-          ? `all ${state.total} sections are up to date`
+          ? `${state.total} sections updated from source data`
           : state.message || "some sections could not be updated";
 
   return (
@@ -208,6 +192,7 @@ function generatedSlots(
     return {
       id,
       title: block.title,
+      intent: block.intent,
       component: block.component,
       width: block.width,
       order: existingSlots.length + index,
@@ -428,10 +413,10 @@ export function BrainOverview() {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                  notification_context: {
+                  run_context: {
                     source: "live-view",
                     live_view_id: targetView.id,
-                    time_range: timeRangeContext(targetView.timeRange),
+                    time_range: buildLiveViewTimeContext(targetView.timeRange),
                     target_ids: boundSlots
                       .filter((slot) => slot.binding?.pipeName === pipeName)
                       .map((slot) => `live-view:${targetView.id}:${slot.id}`),
@@ -573,6 +558,7 @@ export function BrainOverview() {
       title: "Untitled dashboard",
       revision: 0,
       timeRange: "today",
+      periodPolicy: DEFAULT_LIVE_VIEW_PERIOD_POLICY,
       slots: [],
       createdAt: now,
       updatedAt: now,
@@ -600,6 +586,7 @@ export function BrainOverview() {
       title: kit.title,
       revision: view?.revision ?? 0,
       timeRange: kit.timeRange,
+      periodPolicy: kit.periodPolicy,
       slots: kitSlots(kit),
       createdAt: view?.createdAt ?? now,
       updatedAt: now,
@@ -641,6 +628,7 @@ export function BrainOverview() {
                 timeRange: view.timeRange,
                 blocks: normalizedSlots(view.slots).map((slot) => ({
                   title: slot.title,
+                  intent: slot.intent ?? slot.title,
                   component: slot.component,
                   width: slot.width === 3 || slot.width === 12 ? slot.width : 6,
                   pipeName: slot.binding?.pipeName ?? null,
@@ -649,17 +637,19 @@ export function BrainOverview() {
             : null,
       });
       const now = new Date().toISOString();
-      const base: ViewDefinition = view
-        ? copyViewDefinition(view)
-        : {
-            id: "my-overview",
-            title: generated.title,
-            revision: 0,
-            timeRange: generated.timeRange,
-            slots: [],
-            createdAt: now,
-            updatedAt: now,
-          };
+      const base: ViewDefinition =
+        view && intent !== "new-dashboard"
+          ? copyViewDefinition(view)
+          : {
+              id: "my-overview",
+              title: generated.title,
+              revision: 0,
+              timeRange: generated.timeRange,
+              periodPolicy: DEFAULT_LIVE_VIEW_PERIOD_POLICY,
+              slots: [],
+              createdAt: now,
+              updatedAt: now,
+            };
       const slots =
         scope === "block"
           ? normalizedSlots([
@@ -671,7 +661,10 @@ export function BrainOverview() {
         ...base,
         title: scope === "dashboard" || !view ? generated.title : base.title,
         timeRange:
-          scope === "dashboard" || !view ? generated.timeRange : base.timeRange,
+          (scope === "dashboard" || !view) &&
+          base.periodPolicy.type !== "fixed.v1"
+            ? generated.timeRange
+            : base.timeRange,
         slots,
         updatedAt: now,
       });
@@ -822,6 +815,7 @@ export function BrainOverview() {
           blocks: [
             {
               title: slot.title,
+              intent: slot.intent ?? slot.title,
               component: slot.component,
               width: slot.width === 3 || slot.width === 12 ? slot.width : 6,
               pipeName: slot.binding?.pipeName ?? null,
@@ -830,32 +824,28 @@ export function BrainOverview() {
         },
       });
       const replacement = generated.blocks[0];
+      const nextSlots = normalizedSlots(view.slots).map((current) =>
+        current.id === slot.id
+          ? {
+              ...current,
+              title: replacement.title,
+              intent: replacement.intent,
+              component: replacement.component,
+              width: replacement.width,
+              binding: replacement.pipeName
+                ? { pipeName: replacement.pipeName }
+                : null,
+              value: null,
+            }
+          : current,
+      );
       const result = await commands.saveBrainView({
         id: view.id,
         title: view.title,
         expectedRevision: view.revision,
         timeRange: view.timeRange,
-        slots: normalizedSlots(view.slots).map((current) =>
-          current.id === slot.id
-            ? {
-                id: current.id,
-                title: replacement.title,
-                component: replacement.component,
-                width: replacement.width,
-                order: current.order,
-                binding: replacement.pipeName
-                  ? { pipeName: replacement.pipeName }
-                  : null,
-              }
-            : {
-                id: current.id,
-                title: current.title,
-                component: current.component,
-                width: current.width,
-                order: current.order,
-                binding: current.binding,
-              },
-        ),
+        periodPolicy: view.periodPolicy,
+        slots: serializedSlots(nextSlots),
       });
       if (result.status === "error") throw new Error(result.error);
       setView(result.data);
@@ -908,14 +898,8 @@ export function BrainOverview() {
         title: targetTitle,
         expectedRevision: creatingNew ? null : draft.revision,
         timeRange: draft.timeRange,
-        slots: normalizedSlots(draft.slots).map((slot) => ({
-          id: slot.id,
-          title: slot.title.trim(),
-          component: slot.component,
-          width: slot.width,
-          order: slot.order,
-          binding: slot.binding,
-        })),
+        periodPolicy: draft.periodPolicy,
+        slots: serializedSlots(draft.slots),
       });
       if (result.status === "error") throw new Error(result.error);
       setView(result.data);
@@ -941,6 +925,7 @@ export function BrainOverview() {
             !previous ||
             previousView?.timeRange !== result.data.timeRange ||
             previous.title !== slot.title ||
+            previous.intent !== slot.intent ||
             previous.component !== slot.component ||
             previous.binding?.pipeName !== slot.binding.pipeName ||
             !slot.value
@@ -994,14 +979,8 @@ export function BrainOverview() {
           title: requestedTitle,
           expectedRevision: installedView.revision,
           timeRange: installedView.timeRange,
-          slots: normalizedSlots(installedView.slots).map((slot) => ({
-            id: slot.id,
-            title: slot.title,
-            component: slot.component,
-            width: slot.width,
-            order: slot.order,
-            binding: slot.binding,
-          })),
+          periodPolicy: installedView.periodPolicy,
+          slots: serializedSlots(installedView.slots),
         });
         if (renameResult.status === "error")
           throw new Error(renameResult.error);
@@ -1050,14 +1029,8 @@ export function BrainOverview() {
         title: uniqueTitle,
         expectedRevision: view.revision,
         timeRange: view.timeRange,
-        slots: normalizedSlots(view.slots).map((slot) => ({
-          id: slot.id,
-          title: slot.title,
-          component: slot.component,
-          width: slot.width,
-          order: slot.order,
-          binding: slot.binding,
-        })),
+        periodPolicy: view.periodPolicy,
+        slots: serializedSlots(view.slots),
       });
       if (result.status === "error") throw new Error(result.error);
       setView(result.data);
@@ -1095,14 +1068,8 @@ export function BrainOverview() {
         title,
         expectedRevision: null,
         timeRange: view.timeRange,
-        slots: normalizedSlots(view.slots).map((slot) => ({
-          id: slot.id,
-          title: slot.title,
-          component: slot.component,
-          width: slot.width,
-          order: slot.order,
-          binding: slot.binding,
-        })),
+        periodPolicy: view.periodPolicy,
+        slots: serializedSlots(view.slots),
       });
       if (result.status === "error") throw new Error(result.error);
       clearTransientState();
@@ -1161,14 +1128,8 @@ export function BrainOverview() {
         title: undoView.title,
         expectedRevision: undoRevision ?? view.revision,
         timeRange: undoView.timeRange,
-        slots: normalizedSlots(undoView.slots).map((slot) => ({
-          id: slot.id,
-          title: slot.title,
-          component: slot.component,
-          width: slot.width,
-          order: slot.order,
-          binding: slot.binding,
-        })),
+        periodPolicy: undoView.periodPolicy,
+        slots: serializedSlots(undoView.slots),
       });
       if (result.status === "error") throw new Error(result.error);
       setView(result.data);
@@ -1193,6 +1154,19 @@ export function BrainOverview() {
 
   const changeTimeRange = async (timeRange: BrainViewTimeRange) => {
     if (!view || timeRange === view.timeRange) return;
+    if (
+      !allowedLiveViewTimeRanges(view.periodPolicy).some(
+        (range) => range.value === timeRange,
+      )
+    ) {
+      toast({
+        title: "this dashboard uses a fixed period",
+        description:
+          "Choose another dashboard or template for a different period.",
+        variant: "destructive",
+      });
+      return;
+    }
     const previousView = copyViewDefinition(view);
     setSaving(true);
     try {
@@ -1201,21 +1175,15 @@ export function BrainOverview() {
         title: view.title,
         expectedRevision: view.revision,
         timeRange,
-        slots: normalizedSlots(view.slots).map((slot) => ({
-          id: slot.id,
-          title: slot.title,
-          component: slot.component,
-          width: slot.width,
-          order: slot.order,
-          binding: slot.binding,
-        })),
+        periodPolicy: view.periodPolicy,
+        slots: serializedSlots(view.slots),
       });
       if (result.status === "error") throw new Error(result.error);
       setView(result.data);
       setUndoView(previousView);
       setUndoRevision(result.data.revision);
       toast({
-        title: `showing ${timeRangeContext(timeRange).label.toLowerCase()}`,
+        title: `showing ${getLiveViewTimeRangeOption(timeRange).label.toLowerCase()}`,
       });
       void refreshConnectedPipes(result.data);
     } catch (rangeError) {
@@ -1556,7 +1524,6 @@ export function BrainOverview() {
         draft={draft}
         saving={saving}
         componentOptions={COMPONENTS}
-        timeRangeOptions={TIME_RANGES}
         pipeNames={installedPipes.map((pipe) => pipe.config.name)}
         onChange={setDraft}
         onCancel={() => {
@@ -1572,6 +1539,17 @@ export function BrainOverview() {
   if (!view) return null;
   const slots = normalizedSlots(view.slots);
   const boundSlotCount = slots.filter((slot) => slot.binding).length;
+  const periodRanges = allowedLiveViewTimeRanges(view.periodPolicy);
+  const selectedPeriod =
+    periodRanges.find((range) => range.value === view.timeRange) ??
+    getLiveViewTimeRangeOption(view.timeRange);
+  const latestDataTimestamp = slots.reduce<number | null>((latest, slot) => {
+    const timestamp = slot.value?.updatedAt
+      ? Date.parse(slot.value.updatedAt)
+      : Number.NaN;
+    if (!Number.isFinite(timestamp)) return latest;
+    return latest === null ? timestamp : Math.max(latest, timestamp);
+  }, null);
   const refreshIsActive =
     dataRefresh?.viewId === view.id &&
     (dataRefresh.status === "starting" || dataRefresh.status === "running");
@@ -1591,30 +1569,45 @@ export function BrainOverview() {
             onDelete={deleteDashboard}
           />
           <p className="mt-2 text-xs text-muted-foreground">
-            Blocks are updated by connected Pipes for the selected time window
-            and stored as source-backed artifacts.
+            Pipes fill these Blocks for {selectedPeriod.label.toLowerCase()}.
+            Data changes when you refresh or a connected Pipe runs.
+            {latestDataTimestamp !== null && (
+              <span className="ml-1">
+                Last data {new Date(latestDataTimestamp).toLocaleString()}.
+              </span>
+            )}
           </p>
         </div>
         <div
           data-testid="overview-header-controls"
           className="flex w-full flex-wrap items-center gap-2 xl:w-auto xl:justify-end"
         >
-          <select
-            data-testid="overview-time-range"
-            aria-label="Live View time range"
-            value={view.timeRange}
-            disabled={dashboardBusy}
-            className="h-9 min-w-36 flex-1 border border-border bg-background px-3 text-xs outline-none focus:border-foreground disabled:opacity-50 sm:flex-none"
-            onChange={(event) =>
-              void changeTimeRange(event.target.value as BrainViewTimeRange)
-            }
-          >
-            {TIME_RANGES.map((range) => (
-              <option key={range.value} value={range.value}>
-                {range.label}
-              </option>
-            ))}
-          </select>
+          {view.periodPolicy.type === "fixed.v1" ? (
+            <div
+              data-testid="overview-fixed-period"
+              aria-label={`Live View period: ${selectedPeriod.label}`}
+              className="inline-flex h-9 min-w-28 flex-1 items-center border border-border bg-muted/20 px-3 text-xs sm:flex-none"
+            >
+              {selectedPeriod.label}
+            </div>
+          ) : (
+            <select
+              data-testid="overview-time-range"
+              aria-label="Live View time range"
+              value={view.timeRange}
+              disabled={dashboardBusy}
+              className="h-9 min-w-36 flex-1 border border-border bg-background px-3 text-xs outline-none focus:border-foreground disabled:opacity-50 sm:flex-none"
+              onChange={(event) =>
+                void changeTimeRange(event.target.value as BrainViewTimeRange)
+              }
+            >
+              {periodRanges.map((range) => (
+                <option key={range.value} value={range.value}>
+                  {range.label}
+                </option>
+              ))}
+            </select>
+          )}
           {templateKits.length > 0 && (
             <Button
               data-testid="overview-templates"

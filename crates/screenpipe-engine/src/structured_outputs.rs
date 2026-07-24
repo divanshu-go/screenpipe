@@ -18,7 +18,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 const STORE_VERSION: u8 = 1;
-const MAX_TARGETS: usize = 256;
+// Live Views alone may define 12 dashboards × 24 Blocks. Keep headroom for
+// other renderer-agnostic consumers while retaining a hard global bound.
+const MAX_TARGETS: usize = 512;
 const MAX_SCHEMA_BYTES: usize = 32 * 1024;
 const MAX_PAYLOAD_BYTES: usize = 64 * 1024;
 const MAX_EVIDENCE: usize = 50;
@@ -90,6 +92,10 @@ pub struct OutputTarget {
     pub id: String,
     pub consumer: String,
     pub title: String,
+    /// Consumer-owned semantic instructions for producing this target. The
+    /// rendering title is deliberately separate and may change independently.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instruction: Option<String>,
     pub bound_pipe: String,
     pub schema_name: String,
     pub schema: Value,
@@ -106,6 +112,7 @@ pub struct OutputTarget {
 pub struct OutputTargetInput {
     pub id: String,
     pub title: String,
+    pub instruction: String,
     pub bound_pipe: String,
     pub schema_name: String,
     pub schema: Value,
@@ -115,6 +122,7 @@ pub struct OutputTargetInput {
 pub struct AssignedOutputTarget {
     pub id: String,
     pub title: String,
+    pub instruction: String,
     pub revision: u64,
     pub schema_name: String,
     pub schema: Value,
@@ -323,6 +331,7 @@ pub fn replace_consumer_targets(
     for input in &inputs {
         validate_identifier(&input.id, "target id")?;
         validate_text(&input.title, "target title", 160)?;
+        validate_text(&input.instruction, "target instruction", 800)?;
         validate_text(&input.bound_pipe, "bound pipe", 128)?;
         validate_identifier(&input.schema_name, "schema name")?;
         if !ids.insert(input.id.clone()) {
@@ -369,12 +378,14 @@ pub fn replace_consumer_targets(
             if let Some(previous) = existing.get(&input.id) {
                 let compatible = previous.bound_pipe == input.bound_pipe
                     && previous.schema_name == input.schema_name
-                    && previous.schema == input.schema;
+                    && previous.schema == input.schema
+                    && previous.instruction.as_deref() == Some(input.instruction.trim());
                 let metadata_unchanged = previous.title == input.title.trim();
                 replacement.push(OutputTarget {
                     id: input.id,
                     consumer: consumer.to_string(),
                     title: input.title.trim().to_string(),
+                    instruction: Some(input.instruction.trim().to_string()),
                     bound_pipe: input.bound_pipe.trim().to_string(),
                     schema_name: input.schema_name,
                     schema: input.schema,
@@ -405,6 +416,7 @@ pub fn replace_consumer_targets(
                     id: input.id,
                     consumer: consumer.to_string(),
                     title: input.title.trim().to_string(),
+                    instruction: Some(input.instruction.trim().to_string()),
                     bound_pipe: input.bound_pipe.trim().to_string(),
                     schema_name: input.schema_name,
                     schema: input.schema,
@@ -444,6 +456,10 @@ pub fn targets_for_pipe(
             .map(|target| AssignedOutputTarget {
                 id: target.id.clone(),
                 title: target.title.clone(),
+                instruction: target
+                    .instruction
+                    .clone()
+                    .unwrap_or_else(|| target.title.clone()),
                 revision: target.revision,
                 schema_name: target.schema_name.clone(),
                 schema: target.schema.clone(),
@@ -903,6 +919,7 @@ mod tests {
         OutputTargetInput {
             id: id.to_string(),
             title: "Focus time".to_string(),
+            instruction: "Calculate focused work time".to_string(),
             bound_pipe: pipe.to_string(),
             schema_name: "metric.v1".to_string(),
             schema,

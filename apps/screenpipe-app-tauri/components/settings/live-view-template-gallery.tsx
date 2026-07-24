@@ -5,14 +5,8 @@
 
 import { Check, Download, LayoutTemplate } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { getLiveViewTimeRangeOption } from "@/lib/live-views/time-range";
 import type { BrainViewTemplateKit } from "@/lib/utils/tauri";
-
-const TIME_RANGE_LABELS = {
-  today: "Today",
-  "24h": "24 hours",
-  "7d": "7 days",
-  "30d": "30 days",
-} as const;
 
 export type TemplatePipeReadiness = {
   state: "none" | "partial" | "ready";
@@ -105,7 +99,7 @@ export function LiveViewTemplateGallery({
                 </div>
                 <span className="shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">
                   {kit.slots.length} sections ·{" "}
-                  {TIME_RANGE_LABELS[kit.timeRange]}
+                  {getLiveViewTimeRangeOption(kit.timeRange).label}
                 </span>
               </div>
               <div

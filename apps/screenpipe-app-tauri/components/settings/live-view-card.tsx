@@ -14,6 +14,7 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
+import { getLiveViewTimeRangeOption } from "@/lib/live-views/time-range";
 import { Input } from "@/components/ui/input";
 import {
   Popover,
@@ -35,13 +36,6 @@ const COMPONENT_LABELS: Record<BrainViewComponent, string> = {
   "table.v1": "Table",
   "timeline.v1": "Timeline",
   "markdown.v1": "Text",
-};
-
-const TIME_RANGE_LABELS: Record<BrainViewTimeRange, string> = {
-  today: "Today",
-  "24h": "Last 24 hours",
-  "7d": "Last 7 days",
-  "30d": "Last 30 days",
 };
 
 function timeAgo(iso: string): string {
@@ -415,7 +409,8 @@ export function LiveViewCard({
         <div className={`min-w-0 ${hasActions ? "pr-32" : ""}`}>
           <h3 className="truncate text-sm font-medium">{slot.title}</h3>
           <p className="mt-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-            {COMPONENT_LABELS[slot.component]} · {TIME_RANGE_LABELS[timeRange]}
+            {COMPONENT_LABELS[slot.component]} ·{" "}
+            {getLiveViewTimeRangeOption(timeRange).label}
           </p>
         </div>
         {slot.value && !hasActions && (
@@ -604,9 +599,7 @@ export function LiveViewCard({
       <div
         data-testid={`overview-card-scroll-${slot.id}`}
         className={`min-h-0 flex-1 ${
-          slot.component === "metric.v1"
-            ? ""
-            : "max-h-[min(26rem,55vh)] overflow-auto overscroll-contain pr-2 [scrollbar-gutter:stable]"
+          slot.component === "table.v1" ? "overflow-x-auto pb-2" : ""
         }`}
       >
         <LiveViewCardBody

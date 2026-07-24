@@ -98,6 +98,10 @@ const populatedView: ViewDefinition = {
   title: "How I worked today",
   revision: 3,
   timeRange: "today",
+  periodPolicy: {
+    type: "selectable.v1",
+    values: ["today", "24h", "7d", "30d"],
+  },
   createdAt: "2026-07-23T16:00:00Z",
   updatedAt: "2026-07-23T17:00:00Z",
   slots: [
@@ -107,6 +111,7 @@ const populatedView: ViewDefinition = {
       component: "metric.v1",
       width: 6,
       order: 0,
+      intent: "Calculate focused work time",
       binding: { pipeName: "daily-summary" },
       feedback: { upCount: 0, downCount: 0, current: null },
       value: {
@@ -135,6 +140,7 @@ const dailyMemoryTemplate = {
   description: "Remember what changed and where to resume.",
   version: 1,
   timeRange: "today" as const,
+  periodPolicy: { type: "fixed.v1" as const, value: "today" as const },
   pipes: [
     { name: "day-recap", distribution: "bundled" },
     { name: "missed-todos", distribution: "bundled" },
@@ -146,6 +152,7 @@ const dailyMemoryTemplate = {
       component: "markdown.v1" as const,
       width: 12,
       order: 0,
+      intent: "Summarize today",
       binding: { pipeName: "day-recap" },
     },
     {
@@ -154,6 +161,7 @@ const dailyMemoryTemplate = {
       component: "list.v1" as const,
       width: 12,
       order: 1,
+      intent: "Find unfinished work from today",
       binding: { pipeName: "missed-todos" },
     },
   ],
@@ -361,6 +369,26 @@ describe("BrainOverview", () => {
     );
   });
 
+  it("shows a fixed period without offering a misleading range selector", async () => {
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [
+        {
+          ...populatedView,
+          title: "Daily memory",
+          periodPolicy: { type: "fixed.v1", value: "today" },
+        },
+      ],
+    });
+    render(<BrainOverview />);
+
+    expect(
+      await screen.findByTestId("overview-fixed-period"),
+    ).toHaveTextContent("Today");
+    expect(screen.queryByTestId("overview-time-range")).toBeNull();
+    expect(screen.getByText(/Data changes when you refresh/)).toBeTruthy();
+  });
+
   it("persists a time window and sends its exact bounds to connected Pipes", async () => {
     mocks.listBrainViews.mockResolvedValue({
       status: "ok",
@@ -395,7 +423,7 @@ describe("BrainOverview", () => {
       String(path).endsWith("/run"),
     );
     const payload = JSON.parse(String(runCall?.[1]?.body));
-    expect(payload.notification_context.time_range).toEqual(
+    expect(payload.run_context.time_range).toEqual(
       expect.objectContaining({
         preset: "7d",
         label: "Last 7 days",
@@ -406,7 +434,7 @@ describe("BrainOverview", () => {
     );
   });
 
-  it("renders time-series and dense data inside reliable card scroll regions", async () => {
+  it("keeps vertical scrolling on the dashboard while dense tables can scroll sideways", async () => {
     const advancedView: ViewDefinition = {
       ...populatedView,
       timeRange: "7d",
@@ -457,11 +485,13 @@ describe("BrainOverview", () => {
     ).toBeTruthy();
     expect(screen.getByText("Line chart · Last 7 days")).toBeTruthy();
     expect(screen.getByText("Project 30")).toBeTruthy();
-    expect(
-      screen
-        .getByTestId("overview-card-scroll-project-table")
-        .className.includes("overflow-auto"),
-    ).toBe(true);
+    const trendBody = screen.getByTestId("overview-card-scroll-focus-trend");
+    const tableBody = screen.getByTestId("overview-card-scroll-project-table");
+    expect(trendBody.className).not.toContain("overflow-auto");
+    expect(trendBody.className).not.toContain("max-h-");
+    expect(tableBody.className).toContain("overflow-x-auto");
+    expect(tableBody.className).not.toContain("overflow-auto");
+    expect(tableBody.className).not.toContain("max-h-");
   });
 
   it("does not render raw HTML from a markdown card", async () => {
@@ -692,6 +722,8 @@ describe("BrainOverview", () => {
       ...populatedView,
       title: dailyMemoryTemplate.title,
       revision: 4,
+      timeRange: dailyMemoryTemplate.timeRange,
+      periodPolicy: dailyMemoryTemplate.periodPolicy,
       slots: dailyMemoryTemplate.slots.map((slot) => ({
         ...slot,
         value: null,
@@ -783,12 +815,14 @@ describe("BrainOverview", () => {
       blocks: [
         {
           title: "Time by project",
+          intent: "Group active time by project.",
           component: "bar-chart.v1",
           width: 6,
           pipeName: "daily-summary",
         },
         {
           title: "Work to automate",
+          intent: "List repeated work worth automating.",
           component: "list.v1",
           width: 6,
           pipeName: "daily-summary",
@@ -862,6 +896,7 @@ describe("BrainOverview", () => {
       blocks: [
         {
           title: "Automation opportunities",
+          intent: "List repeated work worth automating.",
           component: "list.v1",
           width: 6,
           pipeName: "daily-summary",
@@ -911,6 +946,7 @@ describe("BrainOverview", () => {
           note: string;
           blocks: Array<{
             title: string;
+            intent: string;
             component: "metric.v1";
             width: 6;
             pipeName: string;
@@ -948,6 +984,7 @@ describe("BrainOverview", () => {
         blocks: [
           {
             title: "Active time",
+            intent: "Calculate active time.",
             component: "metric.v1",
             width: 6,
             pipeName: "daily-summary",
@@ -976,6 +1013,7 @@ describe("BrainOverview", () => {
       blocks: [
         {
           title: "Time by project",
+          intent: "Group active time by project.",
           component: "bar-chart.v1",
           width: 12,
           pipeName: "daily-summary",
@@ -1047,6 +1085,7 @@ describe("BrainOverview", () => {
       blocks: [
         {
           title: "Time by project",
+          intent: "Group active time by project.",
           component: "bar-chart.v1",
           width: 12,
           pipeName: "daily-summary",
@@ -1119,6 +1158,7 @@ describe("BrainOverview", () => {
       blocks: [
         {
           title: "Active time",
+          intent: "Calculate active time.",
           component: "metric.v1",
           width: 6,
           pipeName: "daily-summary",
@@ -1208,7 +1248,7 @@ describe("BrainOverview", () => {
     const [, request] = mocks.localFetch.mock.calls.find(
       ([path]) => path === "/pipes/daily-summary/run",
     )!;
-    expect(JSON.parse(request.body).notification_context).toEqual(
+    expect(JSON.parse(request.body).run_context).toEqual(
       expect.objectContaining({
         target_ids: ["live-view:my-overview:focus-time"],
       }),
@@ -1280,6 +1320,7 @@ describe("BrainOverview", () => {
       blocks: [
         {
           title: "Time by project",
+          intent: "Group active time by project.",
           component: "bar-chart.v1",
           width: 12,
           pipeName: "daily-summary",
@@ -1324,6 +1365,7 @@ describe("BrainOverview", () => {
       expect.objectContaining({
         id: "focus-time",
         title: "Time by project",
+        intent: "Group active time by project.",
         component: "bar-chart.v1",
         width: 12,
       }),

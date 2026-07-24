@@ -18,6 +18,7 @@ import {
 import { LiveViewCard } from "@/components/settings/live-view-card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { allowedLiveViewTimeRanges } from "@/lib/live-views/time-range";
 import { cn } from "@/lib/utils";
 import type {
   BrainViewComponent,
@@ -30,11 +31,6 @@ type ComponentOption = {
   value: BrainViewComponent;
   label: string;
   schema: string;
-};
-
-type TimeRangeOption = {
-  value: BrainViewTimeRange;
-  label: string;
 };
 
 type DragSession = {
@@ -116,7 +112,6 @@ export function LiveViewLayoutEditor({
   draft,
   saving,
   componentOptions,
-  timeRangeOptions,
   pipeNames,
   onChange,
   onCancel,
@@ -125,7 +120,6 @@ export function LiveViewLayoutEditor({
   draft: BrainViewDefinition;
   saving: boolean;
   componentOptions: ComponentOption[];
-  timeRangeOptions: TimeRangeOption[];
   pipeNames: string[];
   onChange: (draft: BrainViewDefinition) => void;
   onCancel: () => void;
@@ -141,6 +135,7 @@ export function LiveViewLayoutEditor({
   const dropTarget = useRef<string | null>(null);
   const slots = useMemo(() => normalizedSlots(draft.slots), [draft.slots]);
   const selectedSlot = slots.find((slot) => slot.id === selectedSlotId) ?? null;
+  const allowedTimeRangeOptions = allowedLiveViewTimeRanges(draft.periodPolicy);
   const canSave =
     Boolean(draft.title.trim()) && slots.every((slot) => slot.title.trim());
 
@@ -172,6 +167,7 @@ export function LiveViewLayoutEditor({
       component: "metric.v1",
       width: 6,
       order: slots.length,
+      intent: null,
       binding: null,
       value: null,
       feedback: { upCount: 0, downCount: 0, current: null },
@@ -283,23 +279,29 @@ export function LiveViewLayoutEditor({
           <span className="block text-[10px] uppercase tracking-wide text-muted-foreground">
             Time window
           </span>
-          <select
-            aria-label="template time range"
-            value={draft.timeRange}
-            className="h-9 w-full border border-border bg-background px-2 text-xs outline-none focus:border-foreground"
-            onChange={(event) =>
-              onChange({
-                ...draft,
-                timeRange: event.target.value as BrainViewTimeRange,
-              })
-            }
-          >
-            {timeRangeOptions.map((range) => (
-              <option key={range.value} value={range.value}>
-                {range.label}
-              </option>
-            ))}
-          </select>
+          {draft.periodPolicy.type === "fixed.v1" ? (
+            <div className="flex h-9 w-full items-center border border-border bg-muted/20 px-2 text-xs">
+              {allowedTimeRangeOptions[0]?.label ?? "Fixed"}
+            </div>
+          ) : (
+            <select
+              aria-label="template time range"
+              value={draft.timeRange}
+              className="h-9 w-full border border-border bg-background px-2 text-xs outline-none focus:border-foreground"
+              onChange={(event) =>
+                onChange({
+                  ...draft,
+                  timeRange: event.target.value as BrainViewTimeRange,
+                })
+              }
+            >
+              {allowedTimeRangeOptions.map((range) => (
+                <option key={range.value} value={range.value}>
+                  {range.label}
+                </option>
+              ))}
+            </select>
+          )}
         </label>
       </div>
 
@@ -414,6 +416,26 @@ export function LiveViewLayoutEditor({
                 <option value={12}>Full</option>
               </select>
             </label>
+            <label className="space-y-1 md:col-span-2 xl:col-span-4">
+              <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                What this Block should show
+              </span>
+              <textarea
+                data-testid={`overview-block-intent-${selectedSlot.id}`}
+                value={selectedSlot.intent ?? ""}
+                maxLength={800}
+                rows={2}
+                placeholder={`For example: Calculate time spent on GTM as a percentage of all active time in the selected period. Use 0 when no GTM activity is observed.`}
+                className="w-full resize-y border border-border bg-background px-3 py-2 text-xs outline-none focus:border-foreground"
+                onChange={(event) =>
+                  updateSlot(selectedSlot.id, (slot) => ({
+                    ...slot,
+                    intent: event.target.value || null,
+                    value: null,
+                  }))
+                }
+              />
+            </label>
           </div>
           <p className="mt-2 text-[10px] text-muted-foreground">
             {
@@ -421,7 +443,8 @@ export function LiveViewLayoutEditor({
                 (component) => component.value === selectedSlot.component,
               )?.schema
             }
-            . The connected Pipe receives this Block on its next run.
+            . The title is display copy. The instruction above is the data
+            contract the connected Pipe receives on its next run.
           </p>
         </section>
       )}

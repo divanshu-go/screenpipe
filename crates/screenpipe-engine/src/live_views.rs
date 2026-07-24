@@ -26,7 +26,7 @@ pub const LIVE_VIEW_KIT_SCHEMA: &str = "live-view-kit.v1";
 pub const LIVE_VIEW_SCHEMA: &str = "live-view.v1";
 pub const LIVE_VIEW_CONSUMER_ID: &str = "live-views.v1";
 
-const STORE_VERSION: u8 = 1;
+const STORE_VERSION: u8 = 2;
 const LEGACY_CONSUMER_ID: &str = "desktop.brain-overview.v1";
 const MAX_VIEWS: usize = 12;
 const MAX_BLOCKS: usize = 24;
@@ -75,6 +75,13 @@ pub enum LiveViewTimeRange {
 }
 
 impl LiveViewTimeRange {
+    pub const ALL: [Self; 4] = [
+        Self::Today,
+        Self::Last24Hours,
+        Self::Last7Days,
+        Self::Last30Days,
+    ];
+
     pub fn schema_name(self) -> &'static str {
         match self {
             Self::Today => "today",
@@ -90,6 +97,42 @@ impl LiveViewTimeRange {
             Self::Last24Hours => "the rolling 24 hours ending now",
             Self::Last7Days => "the rolling 7 days ending now",
             Self::Last30Days => "the rolling 30 days ending now",
+        }
+    }
+}
+
+/// Declares which periods make sense for a Live View independently from the
+/// currently selected period. Renderers can hide the selector for fixed views
+/// without knowing template names such as "Daily memory".
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type")]
+pub enum LiveViewPeriodPolicy {
+    #[serde(rename = "fixed.v1")]
+    FixedV1 { value: LiveViewTimeRange },
+    #[serde(rename = "selectable.v1")]
+    SelectableV1 { values: Vec<LiveViewTimeRange> },
+}
+
+impl Default for LiveViewPeriodPolicy {
+    fn default() -> Self {
+        Self::SelectableV1 {
+            values: LiveViewTimeRange::ALL.to_vec(),
+        }
+    }
+}
+
+impl LiveViewPeriodPolicy {
+    pub fn allows(&self, range: LiveViewTimeRange) -> bool {
+        match self {
+            Self::FixedV1 { value } => *value == range,
+            Self::SelectableV1 { values } => values.contains(&range),
+        }
+    }
+
+    pub fn values(&self) -> Vec<LiveViewTimeRange> {
+        match self {
+            Self::FixedV1 { value } => vec![*value],
+            Self::SelectableV1 { values } => values.clone(),
         }
     }
 }
@@ -249,6 +292,11 @@ pub struct LiveViewTemplateBlock {
     pub kind: LiveViewBlockKind,
     pub width: u8,
     pub order: u16,
+    /// The semantic question this Block asks its Pipe to answer. It is kept
+    /// separate from the display title so copy/layout edits do not silently
+    /// change, or retain, the meaning of an existing value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intent: Option<String>,
     #[serde(
         default,
         alias = "binding",
@@ -267,6 +315,8 @@ pub struct LiveViewTemplate {
     pub revision: u64,
     #[serde(default)]
     pub time_range: LiveViewTimeRange,
+    #[serde(default)]
+    pub period_policy: LiveViewPeriodPolicy,
     pub blocks: Vec<LiveViewTemplateBlock>,
     pub created_at: String,
     pub updated_at: String,
@@ -299,6 +349,8 @@ pub struct LiveViewBlock {
     pub kind: LiveViewBlockKind,
     pub width: u8,
     pub order: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intent: Option<String>,
     #[serde(
         default,
         alias = "binding",
@@ -320,6 +372,7 @@ pub struct LiveView {
     pub title: String,
     pub revision: u64,
     pub time_range: LiveViewTimeRange,
+    pub period_policy: LiveViewPeriodPolicy,
     pub blocks: Vec<LiveViewBlock>,
     pub created_at: String,
     pub updated_at: String,
@@ -332,6 +385,9 @@ pub struct SaveLiveViewRequest {
     pub title: String,
     pub expected_revision: Option<u64>,
     pub time_range: LiveViewTimeRange,
+    /// Optional at the HTTP boundary so older clients keep the existing policy.
+    #[serde(default)]
+    pub period_policy: Option<LiveViewPeriodPolicy>,
     pub blocks: Vec<LiveViewTemplateBlock>,
 }
 
@@ -479,6 +535,14 @@ fn validate_blocks(blocks: &[LiveViewTemplateBlock]) -> Result<(), LiveViewError
     for block in blocks {
         validate_slug(&block.id, "Block id")?;
         validate_title(&block.title, "Block title")?;
+        if let Some(intent) = &block.intent {
+            let length = intent.trim().chars().count();
+            if length == 0 || length > 800 {
+                return Err(LiveViewError::invalid(
+                    "Block intent must be between 1 and 800 characters",
+                ));
+            }
+        }
         if !matches!(block.width, 3 | 6 | 12) {
             return Err(LiveViewError::invalid("Block width must be 3, 6, or 12"));
         }
@@ -501,6 +565,39 @@ fn validate_blocks(blocks: &[LiveViewTemplateBlock]) -> Result<(), LiveViewError
     Ok(())
 }
 
+fn validate_period_policy(
+    policy: &LiveViewPeriodPolicy,
+    selected: LiveViewTimeRange,
+) -> Result<(), LiveViewError> {
+    let values = policy.values();
+    if values.is_empty() {
+        return Err(LiveViewError::invalid(
+            "selectable period policy must allow at least one time range",
+        ));
+    }
+    if values.len() > LiveViewTimeRange::ALL.len() {
+        return Err(LiveViewError::invalid(
+            "period policy contains too many time ranges",
+        ));
+    }
+    let mut unique = Vec::new();
+    for value in values {
+        if unique.contains(&value) {
+            return Err(LiveViewError::invalid(
+                "period policy contains a duplicate time range",
+            ));
+        }
+        unique.push(value);
+    }
+    if !policy.allows(selected) {
+        return Err(LiveViewError::invalid(format!(
+            "time range '{}' is not allowed by this Live View's period policy",
+            selected.schema_name()
+        )));
+    }
+    Ok(())
+}
+
 pub fn validate_live_view_template(template: &LiveViewTemplate) -> Result<(), LiveViewError> {
     if template.schema != LIVE_VIEW_TEMPLATE_SCHEMA {
         return Err(LiveViewError::invalid(format!(
@@ -515,6 +612,7 @@ pub fn validate_live_view_template(template: &LiveViewTemplate) -> Result<(), Li
             "Live View revision must be greater than zero",
         ));
     }
+    validate_period_policy(&template.period_policy, template.time_range)?;
     validate_blocks(&template.blocks)
 }
 
@@ -589,23 +687,70 @@ pub fn list_bundled_live_view_kits() -> Result<Vec<LiveViewKit>, LiveViewError> 
         .collect()
 }
 
-fn read_store(path: &Path) -> Result<LiveViewStore, LiveViewError> {
+fn same_kit_shape(template: &LiveViewTemplate, kit_template: &LiveViewTemplate) -> bool {
+    template.blocks.len() == kit_template.blocks.len()
+        && kit_template.blocks.iter().all(|kit_block| {
+            template.blocks.iter().any(|block| {
+                block.id == kit_block.id
+                    && block.kind == kit_block.kind
+                    && block.source == kit_block.source
+            })
+        })
+}
+
+fn migrate_store_v1(mut store: LiveViewStore) -> Result<LiveViewStore, LiveViewError> {
+    let kits = list_bundled_live_view_kits()?;
+    for template in &mut store.templates {
+        if let Some(kit) = kits
+            .iter()
+            .find(|kit| same_kit_shape(template, &kit.template))
+        {
+            template.period_policy = kit.template.period_policy.clone();
+            if !template.period_policy.allows(template.time_range) {
+                template.time_range = kit.template.time_range;
+            }
+            for block in &mut template.blocks {
+                let Some(kit_block) = kit
+                    .template
+                    .blocks
+                    .iter()
+                    .find(|kit_block| kit_block.id == block.id)
+                else {
+                    continue;
+                };
+                if block.intent.is_none() && block.title == kit_block.title {
+                    block.intent = kit_block.intent.clone();
+                }
+            }
+        }
+    }
+    store.store_version = STORE_VERSION;
+    Ok(store)
+}
+
+fn read_store(path: &Path) -> Result<(LiveViewStore, bool), LiveViewError> {
     let contents = std::fs::read_to_string(path).map_err(|error| {
         LiveViewError::io(format!("failed to read {}: {error}", path.display()))
     })?;
     let store: LiveViewStore = serde_json::from_str(&contents).map_err(|error| {
         LiveViewError::io(format!("failed to parse {}: {error}", path.display()))
     })?;
-    if store.store_version != STORE_VERSION {
+    if store.store_version != 1 && store.store_version != STORE_VERSION {
         return Err(LiveViewError::io(format!(
             "unsupported Live View store version {}",
             store.store_version
         )));
     }
+    let migrated = store.store_version == 1;
+    let store = if migrated {
+        migrate_store_v1(store)?
+    } else {
+        store
+    };
     for template in &store.templates {
         validate_live_view_template(template)?;
     }
-    Ok(store)
+    Ok((store, migrated))
 }
 
 fn read_legacy_store(path: &Path) -> Result<LiveViewStore, LiveViewError> {
@@ -615,7 +760,7 @@ fn read_legacy_store(path: &Path) -> Result<LiveViewStore, LiveViewError> {
     let legacy: LegacyStore = serde_json::from_str(&contents).map_err(|error| {
         LiveViewError::io(format!("failed to parse {}: {error}", path.display()))
     })?;
-    if legacy.version != STORE_VERSION {
+    if legacy.version != 1 {
         return Err(LiveViewError::io(format!(
             "unsupported legacy Brain view store version {}",
             legacy.version
@@ -632,6 +777,7 @@ fn read_legacy_store(path: &Path) -> Result<LiveViewStore, LiveViewError> {
                 title: view.title,
                 revision: view.revision,
                 time_range: LiveViewTimeRange::Today,
+                period_policy: LiveViewPeriodPolicy::default(),
                 blocks: view
                     .slots
                     .into_iter()
@@ -641,6 +787,7 @@ fn read_legacy_store(path: &Path) -> Result<LiveViewStore, LiveViewError> {
                         kind: block.component,
                         width: block.width,
                         order: block.order,
+                        intent: None,
                         source: block
                             .binding
                             .map(|binding| LiveViewSource::pipe(binding.pipe_name)),
@@ -660,7 +807,7 @@ fn read_legacy_store(path: &Path) -> Result<LiveViewStore, LiveViewError> {
 fn load_store_unlocked(screenpipe_dir: &Path) -> Result<(LiveViewStore, bool), LiveViewError> {
     let path = store_path(screenpipe_dir);
     if path.exists() {
-        return read_store(&path).map(|store| (store, false));
+        return read_store(&path);
     }
     let legacy_path = legacy_store_path(screenpipe_dir);
     if legacy_path.exists() {
@@ -730,12 +877,21 @@ pub fn compile_live_view_targets(templates: &[LiveViewTemplate]) -> Vec<OutputTa
                         json!({
                             "preset": template.time_range.schema_name(),
                             "instruction": template.time_range.instruction(),
+                            "authority": "target",
                         }),
                     );
                 }
+                let instruction = block
+                    .intent
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|intent| !intent.is_empty())
+                    .unwrap_or_else(|| block.title.trim())
+                    .to_string();
                 Some(OutputTargetInput {
                     id: live_view_target_id(&template.id, &block.id),
                     title: block.title.clone(),
+                    instruction,
                     bound_pipe: source.pipe_name().to_string(),
                     schema_name: block.kind.schema_name().to_string(),
                     schema,
@@ -781,6 +937,7 @@ fn hydrate(
             title: template.title,
             revision: template.revision,
             time_range: template.time_range,
+            period_policy: template.period_policy,
             blocks: template
                 .blocks
                 .into_iter()
@@ -794,6 +951,7 @@ fn hydrate(
                         kind: block.kind,
                         width: block.width,
                         order: block.order,
+                        intent: block.intent,
                         source: block.source,
                     }
                 })
@@ -848,12 +1006,18 @@ pub fn save_live_view(
                     existing.revision, request.expected_revision
                 )));
             }
+            let period_policy = request
+                .period_policy
+                .clone()
+                .unwrap_or_else(|| existing.period_policy.clone());
+            validate_period_policy(&period_policy, request.time_range)?;
             store.templates[index] = LiveViewTemplate {
                 schema: LIVE_VIEW_TEMPLATE_SCHEMA.to_string(),
                 id: existing.id.clone(),
                 title: request.title.trim().to_string(),
                 revision: existing.revision + 1,
                 time_range: request.time_range,
+                period_policy,
                 blocks: request.blocks,
                 created_at: existing.created_at.clone(),
                 updated_at: now,
@@ -869,12 +1033,15 @@ pub fn save_live_view(
                     "at most {MAX_VIEWS} Live Views may be created"
                 )));
             }
+            let period_policy = request.period_policy.clone().unwrap_or_default();
+            validate_period_policy(&period_policy, request.time_range)?;
             store.templates.push(LiveViewTemplate {
                 schema: LIVE_VIEW_TEMPLATE_SCHEMA.to_string(),
                 id: request.id,
                 title: request.title.trim().to_string(),
                 revision: 1,
                 time_range: request.time_range,
+                period_policy,
                 blocks: request.blocks,
                 created_at: now.clone(),
                 updated_at: now,
@@ -906,6 +1073,7 @@ pub fn apply_live_view_template(
             title: template.title,
             expected_revision,
             time_range: template.time_range,
+            period_policy: Some(template.period_policy),
             blocks: template.blocks,
         },
     )
@@ -947,6 +1115,7 @@ mod tests {
             kind: LiveViewBlockKind::MetricV1,
             width: 6,
             order: 0,
+            intent: Some("Calculate focused work time".to_string()),
             source: pipe_name.map(LiveViewSource::pipe),
         }
     }
@@ -961,6 +1130,7 @@ mod tests {
                 title: "My overview".to_string(),
                 expected_revision: None,
                 time_range: LiveViewTimeRange::Last7Days,
+                period_policy: None,
                 blocks: vec![block(Some("daily-summary"))],
             },
         )
@@ -972,7 +1142,15 @@ mod tests {
         assert_eq!(targets[0].consumer, LIVE_VIEW_CONSUMER_ID);
         assert_eq!(targets[0].bound_pipe, "daily-summary");
         assert_eq!(targets[0].schema_name, "metric.v1");
+        assert_eq!(
+            targets[0].instruction.as_deref(),
+            Some("Calculate focused work time")
+        );
         assert_eq!(targets[0].schema["x-screenpipe-time-range"]["preset"], "7d");
+        assert_eq!(
+            targets[0].schema["x-screenpipe-time-range"]["authority"],
+            "target"
+        );
 
         save_live_view(
             dir.path(),
@@ -981,6 +1159,7 @@ mod tests {
                 title: "My overview".to_string(),
                 expected_revision: Some(1),
                 time_range: LiveViewTimeRange::Last7Days,
+                period_policy: None,
                 blocks: vec![block(None)],
             },
         )
@@ -998,6 +1177,7 @@ mod tests {
                 title: "My overview".to_string(),
                 expected_revision: None,
                 time_range: LiveViewTimeRange::Today,
+                period_policy: None,
                 blocks: vec![],
             },
         )
@@ -1009,6 +1189,7 @@ mod tests {
                 title: "Stale".to_string(),
                 expected_revision: Some(0),
                 time_range: LiveViewTimeRange::Today,
+                period_policy: None,
                 blocks: vec![],
             },
         )
@@ -1042,6 +1223,123 @@ mod tests {
         .unwrap();
 
         assert_eq!(template.time_range, LiveViewTimeRange::Today);
+        assert_eq!(template.period_policy, LiveViewPeriodPolicy::default());
+    }
+
+    #[test]
+    fn fixed_period_policy_rejects_an_incompatible_selection() {
+        let dir = tempfile::tempdir().unwrap();
+        let error = save_live_view(
+            dir.path(),
+            SaveLiveViewRequest {
+                id: "daily".to_string(),
+                title: "Daily".to_string(),
+                expected_revision: None,
+                time_range: LiveViewTimeRange::Last7Days,
+                period_policy: Some(LiveViewPeriodPolicy::FixedV1 {
+                    value: LiveViewTimeRange::Today,
+                }),
+                blocks: vec![],
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind, LiveViewErrorKind::Invalid);
+        assert!(error.message.contains("not allowed"));
+    }
+
+    #[test]
+    fn changing_block_intent_invalidates_the_previous_target_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let view = save_live_view(
+            dir.path(),
+            SaveLiveViewRequest {
+                id: "metrics".to_string(),
+                title: "Metrics".to_string(),
+                expected_revision: None,
+                time_range: LiveViewTimeRange::Today,
+                period_policy: None,
+                blocks: vec![block(Some("daily-summary"))],
+            },
+        )
+        .unwrap();
+        let target = list_output_targets(dir.path()).unwrap().remove(0);
+        let prepared = crate::structured_outputs::prepare_output_submission(
+            dir.path(),
+            &target.id,
+            target.revision,
+            "daily-summary",
+            json!({"value": 100}),
+            vec![],
+        )
+        .unwrap();
+        crate::structured_outputs::commit_output_submission(dir.path(), &prepared, 42).unwrap();
+
+        let mut changed = block(Some("daily-summary"));
+        changed.intent = Some("Calculate the percentage of GTM work".to_string());
+        save_live_view(
+            dir.path(),
+            SaveLiveViewRequest {
+                id: view.id,
+                title: view.title,
+                expected_revision: Some(view.revision),
+                time_range: view.time_range,
+                period_policy: Some(view.period_policy),
+                blocks: vec![changed],
+            },
+        )
+        .unwrap();
+
+        let target = list_output_targets(dir.path()).unwrap().remove(0);
+        assert_eq!(target.revision, 2);
+        assert_eq!(
+            target.instruction.as_deref(),
+            Some("Calculate the percentage of GTM work")
+        );
+        assert!(target.latest.is_none());
+    }
+
+    #[test]
+    fn store_v1_migrates_matching_kits_to_period_policy_and_intents() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut template = serde_json::to_value(
+            list_bundled_live_view_kits()
+                .unwrap()
+                .into_iter()
+                .find(|kit| kit.id == "daily-memory")
+                .unwrap()
+                .template,
+        )
+        .unwrap();
+        let object = template.as_object_mut().unwrap();
+        object.remove("periodPolicy");
+        object.insert("timeRange".to_string(), json!("7d"));
+        for block in object["blocks"].as_array_mut().unwrap() {
+            block.as_object_mut().unwrap().remove("intent");
+        }
+        let path = store_path(dir.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            serde_json::to_vec_pretty(&json!({
+                "storeVersion": 1,
+                "templates": [template]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let migrated = list_live_view_templates(dir.path()).unwrap().remove(0);
+        assert_eq!(migrated.time_range, LiveViewTimeRange::Today);
+        assert_eq!(
+            migrated.period_policy,
+            LiveViewPeriodPolicy::FixedV1 {
+                value: LiveViewTimeRange::Today
+            }
+        );
+        assert!(migrated.blocks.iter().all(|block| block.intent.is_some()));
+        let persisted: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(persisted["storeVersion"], STORE_VERSION);
     }
 
     #[test]

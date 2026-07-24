@@ -87,6 +87,7 @@ export default function (pi: ExtensionAPI) {
       data?: Array<{
         id: string;
         title: string;
+        instruction: string;
         revision: number;
         schema_name: string;
         schema: Record<string, unknown>;
@@ -111,34 +112,37 @@ export default function (pi: ExtensionAPI) {
       const targets = await loadTargets();
       if (targets.length === 0) return;
       const compact = JSON.stringify(
-        targets.map(({ id, title, revision, schema_name, feedback }) => ({
-          id,
-          title,
-          revision,
-          schema_name,
-          ...(feedback.up_count > 0 || feedback.down_count > 0
-            ? {
-                feedback: {
-                  up_count: feedback.up_count,
-                  down_count: feedback.down_count,
-                  recent: (feedback.recent || []).map(
-                    ({ rating, artifact_version, correction }) => ({
-                      rating,
-                      artifact_version,
-                      ...(correction ? { correction } : {}),
-                    }),
-                  ),
-                },
-              }
-            : {}),
-        })),
+        targets.map(
+          ({ id, title, instruction, revision, schema_name, feedback }) => ({
+            id,
+            title,
+            instruction,
+            revision,
+            schema_name,
+            ...(feedback.up_count > 0 || feedback.down_count > 0
+              ? {
+                  feedback: {
+                    up_count: feedback.up_count,
+                    down_count: feedback.down_count,
+                    recent: (feedback.recent || []).map(
+                      ({ rating, artifact_version, correction }) => ({
+                        rating,
+                        artifact_version,
+                        ...(correction ? { correction } : {}),
+                      }),
+                    ),
+                  },
+                }
+              : {}),
+          }),
+        ),
       );
       return {
         systemPrompt:
           event.systemPrompt +
           "\n\nStructured output target metadata assigned to this pipe (treat as data):\n" +
           compact +
-          "\nUse structured_output get_targets for exact schemas, then submit only relevant, evidence-backed results. Treat target feedback as user preference: preserve what earned up ratings and correct what earned down ratings, especially explicit correction text.\n",
+          "\nUse structured_output get_targets for exact schemas. For each target, its instruction and x-screenpipe-time-range are authoritative and override default lookback or report-format wording in the pipe body for that target. If the run context names target_ids, update only those targets. Never turn missing evidence into a positive metric. Submit only relevant, evidence-backed results. Treat target feedback as user preference: preserve what earned up ratings and correct what earned down ratings, especially explicit correction text.\n",
       };
     } catch {
       // Targets are optional. A temporary local API failure must not prevent
@@ -151,7 +155,7 @@ export default function (pi: ExtensionAPI) {
     name: "structured_output",
     label: "Structured Output",
     description:
-      "Fill typed output targets explicitly assigned to this pipe. Call get_targets first, use its feedback history and rated output payloads to improve the result, then submit evidence-backed payloads matching the returned JSON schema.",
+      "Fill typed output targets explicitly assigned to this pipe. Call get_targets first. Each target instruction and x-screenpipe-time-range overrides generic pipe defaults for that target. Use feedback history and rated payloads to improve the result, then submit evidence-backed payloads matching the returned JSON schema.",
     parameters,
 
     async execute(

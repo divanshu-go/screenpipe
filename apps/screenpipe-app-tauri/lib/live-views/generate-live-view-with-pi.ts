@@ -48,6 +48,7 @@ export type LiveViewPipeSummary = {
 
 export type GeneratedLiveViewBlock = {
   title: string;
+  intent: string;
   component: BrainViewComponent;
   width: 3 | 6 | 12;
   pipeName: string | null;
@@ -146,6 +147,10 @@ export function parseGeneratedLiveView(
       const component = componentValue(block.component ?? block.type);
       const title = typeof block.title === "string" ? block.title.trim() : "";
       if (!component || !title) return null;
+      const intent =
+        typeof block.intent === "string" && block.intent.trim()
+          ? block.intent.trim().slice(0, 800)
+          : title;
       const requestedPipe =
         typeof block.pipeName === "string"
           ? block.pipeName
@@ -154,6 +159,7 @@ export function parseGeneratedLiveView(
             : null;
       return {
         title: title.slice(0, 120),
+        intent,
         component,
         width: widthValue(block.width),
         pipeName:
@@ -205,12 +211,13 @@ Allowed components:
 
 Allowed widths are 3, 6, or 12. Prefer 6 for most sections, 12 for timelines or detailed briefs, and 3 only for compact metrics.
 Only use a pipeName from the installed pipes supplied by the user. Use null when none fits. Do not invent pipes.
+Every section must include an intent: one precise, self-contained sentence describing what the Pipe should calculate, classify, or summarize. The intent is data logic, not display copy. Define percentages and scores explicitly, name the selected-period denominator, require source evidence, and say how to handle unclassified or missing evidence. Never use a vague intent such as "show this metric".
 For a whole dashboard, create 4 to 7 distinct sections. Prefer a useful mix with at least one metric, one bar chart, and one list or timeline when the request supports them. Never return placeholder titles such as "test", duplicate sections, or multiple metrics that show the same number.
 Choose one timeRange for the whole dashboard: "today", "24h", "7d", or "30d". Infer it from the request. Use "today" when the request does not specify a period. Prefer line-chart.v1 over bar-chart.v1 when the user asks how something changed over time.
 For one section, return exactly one focused section.
 
 Required JSON shape:
-{"title":"View title","timeRange":"today","blocks":[{"title":"Section title","component":"metric.v1","width":6,"pipeName":"exact-installed-pipe-name-or-null"}],"note":"One short sentence explaining what you created"}`;
+{"title":"View title","timeRange":"today","blocks":[{"title":"Section title","intent":"Precise source-backed question or calculation for this section and selected period.","component":"metric.v1","width":6,"pipeName":"exact-installed-pipe-name-or-null"}],"note":"One short sentence explaining what you created"}`;
 }
 
 function generationPrompt(options: GenerateLiveViewOptions): string {
