@@ -4,7 +4,13 @@
 
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 
 const mocks = vi.hoisted(() => ({
   listBrainViews: vi.fn(),
@@ -858,6 +864,68 @@ describe("BrainOverview", () => {
         currentView: expect.objectContaining({ title: "How I worked today" }),
       }),
     );
+  });
+
+  it("locks dashboard navigation while AI generation is in progress", async () => {
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [
+        populatedView,
+        { ...populatedView, id: "projects", title: "Projects" },
+      ],
+    });
+    let finishGeneration:
+      | ((result: {
+          title: string;
+          timeRange: "today";
+          note: string;
+          blocks: Array<{
+            title: string;
+            component: "metric.v1";
+            width: 6;
+            pipeName: string;
+          }>;
+        }) => void)
+      | null = null;
+    mocks.generateLiveViewWithPi.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishGeneration = resolve;
+        }),
+    );
+    render(<BrainOverview />);
+
+    fireEvent.change(
+      await screen.findByPlaceholderText(/Ask AI to create a dashboard/),
+      { target: { value: "track my time" } },
+    );
+    const generateButton = screen.getByTestId("live-view-ai-generate");
+    await waitFor(() => expect(generateButton).not.toBeDisabled());
+    fireEvent.click(generateButton);
+
+    await waitFor(() =>
+      expect(mocks.generateLiveViewWithPi).toHaveBeenCalledTimes(1),
+    );
+    expect(screen.getByTestId("overview-dashboard-selector")).toBeDisabled();
+    expect(screen.getByTestId("overview-new-dashboard")).toBeDisabled();
+    expect(screen.getByTestId("overview-edit")).toBeDisabled();
+
+    await act(async () => {
+      finishGeneration?.({
+        title: "Time tracking",
+        timeRange: "today",
+        note: "A time dashboard.",
+        blocks: [
+          {
+            title: "Active time",
+            component: "metric.v1",
+            width: 6,
+            pipeName: "daily-summary",
+          },
+        ],
+      });
+    });
+    await screen.findByText("AI draft");
   });
 
   it("creates whole-dashboard AI drafts as a new named dashboard by default", async () => {

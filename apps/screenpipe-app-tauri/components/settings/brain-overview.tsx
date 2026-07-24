@@ -617,6 +617,7 @@ export function BrainOverview() {
     preset: AIPreset,
     intent: LiveViewGenerationIntent,
   ) => {
+    setTemplateGalleryOpen(false);
     setGenerating(true);
     try {
       const generated = await generateLiveViewWithPi({
@@ -1563,6 +1564,7 @@ export function BrainOverview() {
   const refreshIsActive =
     dataRefresh?.viewId === view.id &&
     (dataRefresh.status === "starting" || dataRefresh.status === "running");
+  const dashboardBusy = saving || refreshIsActive || generating;
   return (
     <div className="min-h-0 flex-1 overflow-y-auto pb-8 pr-4 [scrollbar-gutter:stable]">
       <div className="mb-5 grid gap-4 border-b border-border pb-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-end">
@@ -1570,7 +1572,7 @@ export function BrainOverview() {
           <LiveViewDashboardSwitcher
             views={views}
             current={view}
-            busy={saving || refreshIsActive}
+            busy={dashboardBusy}
             onSelect={selectDashboard}
             onCreate={beginCreate}
             onRename={renameDashboard}
@@ -1590,7 +1592,7 @@ export function BrainOverview() {
             data-testid="overview-time-range"
             aria-label="Live View time range"
             value={view.timeRange}
-            disabled={saving || refreshIsActive}
+            disabled={dashboardBusy}
             className="h-9 min-w-36 flex-1 border border-border bg-background px-3 text-xs outline-none focus:border-foreground disabled:opacity-50 sm:flex-none"
             onChange={(event) =>
               void changeTimeRange(event.target.value as BrainViewTimeRange)
@@ -1608,6 +1610,7 @@ export function BrainOverview() {
               variant="outline"
               size="sm"
               className="h-9 flex-1 rounded-none px-3 sm:flex-none"
+              disabled={dashboardBusy}
               onClick={() => setTemplateGalleryOpen((open) => !open)}
             >
               <LayoutTemplate className="mr-1.5 h-3.5 w-3.5" /> templates
@@ -1620,7 +1623,7 @@ export function BrainOverview() {
               size="sm"
               className="h-9 flex-1 rounded-none px-3 sm:flex-none"
               aria-label={refreshIsActive ? "loading data" : "refresh data"}
-              disabled={refreshIsActive}
+              disabled={dashboardBusy}
               onClick={() => void refreshConnectedPipes(view)}
             >
               <RefreshCw
@@ -1636,6 +1639,7 @@ export function BrainOverview() {
             variant="outline"
             size="sm"
             className="h-9 flex-1 rounded-none px-3 sm:flex-none"
+            disabled={dashboardBusy}
             onClick={beginEdit}
           >
             <SlidersHorizontal className="mr-1.5 h-3.5 w-3.5" /> customize
