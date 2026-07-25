@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   saveBrainView: vi.fn(),
   deleteBrainView: vi.fn(),
   generateLiveViewWithPi: vi.fn(),
+  createOnboardingLiveView: vi.fn(),
   localFetch: vi.fn(),
   toast: vi.fn(),
   refetchPipes: vi.fn(),
@@ -116,11 +117,16 @@ vi.mock("@/components/rewind/ai-presets-selector", () => ({
 vi.mock("@/lib/live-views/generate-live-view-with-pi", () => ({
   generateLiveViewWithPi: mocks.generateLiveViewWithPi,
 }));
+vi.mock("@/lib/live-views/onboarding-live-view", () => ({
+  createOnboardingLiveView: mocks.createOnboardingLiveView,
+}));
 import { BrainOverview, type ViewDefinition } from "../brain-overview";
 import { inferLiveViewGenerationIntent } from "../live-view-ai-composer";
 import { getTemplatePipeReadiness } from "../live-view-template-gallery";
 import {
   getOnboardingLiveViewActivation,
+  markOnboardingLiveViewSetupNeedsRetry,
+  setOnboardingLiveViewGuideStep,
   startOnboardingLiveViewActivation,
 } from "@/lib/live-views/onboarding-activation";
 
@@ -211,6 +217,12 @@ beforeEach(() => {
   });
   mocks.refetchPipes.mockResolvedValue(undefined);
   mocks.deleteBrainView.mockResolvedValue({ status: "ok", data: null });
+  mocks.createOnboardingLiveView.mockResolvedValue({
+    view: populatedView,
+    pipeSlugs: ["daily-summary"],
+    blockCount: 1,
+    refreshStartedCount: 1,
+  });
   mocks.localFetch.mockResolvedValue({
     ok: true,
     status: 200,
@@ -292,6 +304,83 @@ describe("BrainOverview", () => {
     expect(
       screen.queryByText("waiting for daily-summary to publish data"),
     ).toBeNull();
+  });
+
+  it("guides the user from their dashboard to the real-result wait state", async () => {
+    const coldStartView: ViewDefinition = {
+      ...populatedView,
+      id: "first-dashboard-guide",
+      title: "Work patterns",
+      slots: populatedView.slots.map((slot) => ({ ...slot, value: null })),
+    };
+    startOnboardingLiveViewActivation(coldStartView.id, "work_patterns", {
+      goal: "Show how I spend time",
+      setupStatus: "ready",
+    });
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [coldStartView],
+    });
+
+    render(<BrainOverview />);
+
+    expect(
+      await screen.findByText("this dashboard was made for your goal"),
+    ).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "show me how it fills" }),
+    );
+    expect(await screen.findByText("wait for real work")).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "got it, let me work" }),
+    );
+
+    await waitFor(() =>
+      expect(getOnboardingLiveViewActivation(coldStartView.id)?.guideStep).toBe(
+        "result",
+      ),
+    );
+    expect(screen.queryByTestId("focused-spotlight")).toBeNull();
+  });
+
+  it("resumes interrupted dashboard setup from the focused guide", async () => {
+    const interruptedView: ViewDefinition = {
+      ...populatedView,
+      id: "first-dashboard-interrupted",
+      title: "Meeting follow-through",
+      slots: [],
+    };
+    startOnboardingLiveViewActivation(
+      interruptedView.id,
+      "meeting_follow_through",
+      {
+        goal: "Help me follow through after meetings",
+      },
+    );
+    markOnboardingLiveViewSetupNeedsRetry(
+      interruptedView.id,
+      "Setup was paused before it finished.",
+    );
+    setOnboardingLiveViewGuideStep(interruptedView.id, "waiting");
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [interruptedView],
+    });
+
+    render(<BrainOverview />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "finish setup" }),
+    );
+    await waitFor(() =>
+      expect(mocks.createOnboardingLiveView).toHaveBeenCalledWith(
+        expect.objectContaining({
+          dashboardId: interruptedView.id,
+          goal: "Help me follow through after meetings",
+          goalCategory: "meeting_follow_through",
+        }),
+      ),
+    );
   });
 
   it("reveals the first real result and completes activation after review", async () => {

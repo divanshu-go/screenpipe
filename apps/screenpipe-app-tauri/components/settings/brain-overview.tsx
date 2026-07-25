@@ -31,6 +31,7 @@ import { LiveViewCreateDashboardDialog } from "@/components/settings/live-view-c
 import { LiveViewDashboardSwitcher } from "@/components/settings/live-view-dashboard-switcher";
 import { LiveViewLayoutEditor } from "@/components/settings/live-view-layout-editor";
 import { LiveViewOnboardingActivation } from "@/components/settings/live-view-onboarding-activation";
+import { LiveViewOnboardingGuide } from "@/components/settings/live-view-onboarding-guide";
 import {
   getTemplatePipeReadiness,
   LiveViewTemplateGallery,
@@ -56,6 +57,7 @@ import {
   type GeneratedLiveViewBlock,
   type LiveViewGenerationScope,
 } from "@/lib/live-views/generate-live-view-with-pi";
+import { createOnboardingLiveView } from "@/lib/live-views/onboarding-live-view";
 import {
   allowedLiveViewTimeRanges,
   buildLiveViewTimeContext,
@@ -306,7 +308,12 @@ export function BrainOverview() {
     useState<PreviewDestination>("new");
   const [replaceConfirmationOpen, setReplaceConfirmationOpen] = useState(false);
   const [activationVersion, setActivationVersion] = useState(0);
+  const [onboardingRetrying, setOnboardingRetrying] = useState(false);
   const activationViewedRef = useRef(new Set<string>());
+  const refreshOnboardingActivation = useCallback(
+    () => setActivationVersion((version) => version + 1),
+    [],
+  );
 
   const installedPipes = useMemo(
     () => [...pipes].sort((a, b) => a.config.name.localeCompare(b.config.name)),
@@ -344,10 +351,9 @@ export function BrainOverview() {
       onboardingPipeNames.every((name) =>
         pipes.some((pipe) => pipe.config.name === name && pipe.config.enabled),
       ));
-  const captureReadiness =
-    isServerDown
-      ? ("blocked" as const)
-      : healthLoading || !health
+  const captureReadiness = isServerDown
+    ? ("blocked" as const)
+    : healthLoading || !health
       ? ("checking" as const)
       : health.status === "unhealthy" || health.status === "error"
         ? ("blocked" as const)
@@ -591,6 +597,70 @@ export function BrainOverview() {
     },
     [onboardingActivation, view],
   );
+
+  const retryOnboardingSetup = useCallback(async () => {
+    if (
+      !view ||
+      !onboardingActivation ||
+      !onboardingActivation.goal ||
+      !defaultAiPreset ||
+      onboardingRetrying
+    ) {
+      toast({
+        title: "setup could not resume",
+        description:
+          "Create or customize this Live View directly from Brain instead.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setOnboardingRetrying(true);
+    posthog.capture("onboarding_live_view_setup_retried", {
+      goal_category: onboardingActivation.goalCategory,
+    });
+    try {
+      const result = await createOnboardingLiveView({
+        goal: onboardingActivation.goal,
+        goalCategory: onboardingActivation.goalCategory,
+        dashboardId: view.id,
+        preset: defaultAiPreset,
+        userToken: settings.user?.token ?? null,
+      });
+      setView(result.view);
+      await refetchPipes();
+      setActivationVersion((version) => version + 1);
+      posthog.capture("onboarding_live_view_setup_retry_succeeded", {
+        goal_category: onboardingActivation.goalCategory,
+        pipe_count: result.pipeSlugs.length,
+      });
+    } catch (retryError) {
+      setActivationVersion((version) => version + 1);
+      posthog.capture("onboarding_live_view_setup_retry_failed", {
+        goal_category: onboardingActivation.goalCategory,
+        failure_reason:
+          retryError instanceof Error ? retryError.name : "unknown",
+      });
+      toast({
+        title: "setup still needs attention",
+        description:
+          retryError instanceof Error
+            ? retryError.message
+            : "Try again in a moment.",
+        variant: "destructive",
+      });
+    } finally {
+      setOnboardingRetrying(false);
+    }
+  }, [
+    defaultAiPreset,
+    onboardingActivation,
+    onboardingRetrying,
+    refetchPipes,
+    settings.user?.token,
+    toast,
+    view,
+  ]);
 
   useEffect(() => {
     if (!dataRefresh || dataRefresh.status !== "running") return;
@@ -1707,7 +1777,10 @@ export function BrainOverview() {
   const onboardingColdStart = showOnboardingActivation && !onboardingHasResult;
   return (
     <div className="min-h-0 flex-1 overflow-y-auto pb-8 pr-4 [scrollbar-gutter:stable]">
-      <div className="mb-5 grid gap-4 border-b border-border pb-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-end">
+      <div
+        data-onboarding-guide-target="dashboard"
+        className="mb-5 grid gap-4 border-b border-border pb-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-end"
+      >
         <div className="min-w-0">
           <LiveViewDashboardSwitcher
             views={views}
@@ -1869,8 +1942,12 @@ export function BrainOverview() {
           captureReadiness={captureReadiness}
           pipesReady={onboardingPipesReady}
           pipeNames={onboardingPipeNames}
+          setupStatus={onboardingActivation.setupStatus}
+          setupError={onboardingActivation.setupError}
           hasResult={onboardingHasResult}
           refreshing={refreshIsActive}
+          retrying={onboardingRetrying}
+          onRetry={() => void retryOnboardingSetup()}
           onFixCapture={() =>
             window.dispatchEvent(
               new CustomEvent("open-settings", {
@@ -1886,6 +1963,16 @@ export function BrainOverview() {
             void refreshConnectedPipes(view);
           }}
           onComplete={() => finishOnboardingActivation("confirmed")}
+        />
+      )}
+      {showOnboardingActivation && onboardingActivation && (
+        <LiveViewOnboardingGuide
+          activation={onboardingActivation}
+          hasResult={onboardingHasResult}
+          retrying={onboardingRetrying}
+          onRetry={() => void retryOnboardingSetup()}
+          onComplete={() => finishOnboardingActivation("confirmed")}
+          onActivationChange={refreshOnboardingActivation}
         />
       )}
       {showOnboardingActivation &&

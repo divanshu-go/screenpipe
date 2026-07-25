@@ -18,12 +18,40 @@ const MAX_STORED_ACTIVATIONS = 12;
 export type OnboardingLiveViewActivation = {
   viewId: string;
   goalCategory: OnboardingGoalCategory;
+  goal: string | null;
+  setupStatus: "building" | "ready" | "needs_retry";
+  setupError: string | null;
+  guideStep: "dashboard" | "waiting" | "result" | "done";
   createdAt: string;
   firstResultAt: string | null;
   completedAt: string | null;
 };
 
 type ActivationMap = Record<string, OnboardingLiveViewActivation>;
+
+function normalizeActivation(
+  value: Partial<OnboardingLiveViewActivation>,
+): OnboardingLiveViewActivation | null {
+  if (!value.viewId || !value.goalCategory || !value.createdAt) return null;
+  const buildingIsStale =
+    value.setupStatus === "building" &&
+    Date.now() - Date.parse(value.createdAt) > 2 * 60 * 1_000;
+  return {
+    viewId: value.viewId,
+    goalCategory: value.goalCategory,
+    goal: typeof value.goal === "string" ? value.goal : null,
+    setupStatus: buildingIsStale
+      ? "needs_retry"
+      : (value.setupStatus ?? "ready"),
+    setupError: buildingIsStale
+      ? "Setup stopped before it finished."
+      : (value.setupError ?? null),
+    guideStep: value.guideStep ?? "dashboard",
+    createdAt: value.createdAt,
+    firstResultAt: value.firstResultAt ?? null,
+    completedAt: value.completedAt ?? null,
+  };
+}
 
 function readActivations(): ActivationMap {
   if (typeof window === "undefined") return {};
@@ -32,7 +60,19 @@ function readActivations(): ActivationMap {
       window.localStorage.getItem(ACTIVATIONS_STORAGE_KEY) ?? "{}",
     );
     if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-    return value as ActivationMap;
+    return Object.fromEntries(
+      Object.entries(value)
+        .map(([key, activation]) => [
+          key,
+          normalizeActivation(
+            activation as Partial<OnboardingLiveViewActivation>,
+          ),
+        ])
+        .filter(
+          (entry): entry is [string, OnboardingLiveViewActivation] =>
+            entry[1] !== null,
+        ),
+    );
   } catch {
     return {};
   }
@@ -86,20 +126,65 @@ export function selectedLiveViewDashboardId(): string | null {
 export function startOnboardingLiveViewActivation(
   viewId: string,
   goalCategory: OnboardingGoalCategory,
+  options: {
+    goal?: string | null;
+    setupStatus?: OnboardingLiveViewActivation["setupStatus"];
+    resetProgress?: boolean;
+  } = {},
 ): OnboardingLiveViewActivation {
+  const activations = readActivations();
+  const existing = activations[viewId];
   const activation: OnboardingLiveViewActivation = {
     viewId,
     goalCategory,
-    createdAt: new Date().toISOString(),
-    firstResultAt: null,
-    completedAt: null,
+    goal: options.goal ?? existing?.goal ?? null,
+    setupStatus: options.setupStatus ?? existing?.setupStatus ?? "building",
+    setupError: null,
+    guideStep: options.resetProgress
+      ? "dashboard"
+      : (existing?.guideStep ?? "dashboard"),
+    createdAt:
+      options.resetProgress || !existing
+        ? new Date().toISOString()
+        : existing.createdAt,
+    firstResultAt: options.resetProgress
+      ? null
+      : (existing?.firstResultAt ?? null),
+    completedAt: options.resetProgress ? null : (existing?.completedAt ?? null),
   };
-  const activations = readActivations();
   activations[viewId] = activation;
   writeActivations(activations);
   rememberSelectedLiveViewDashboard(viewId);
   requestOnboardingBrainHandoff(viewId);
   return activation;
+}
+
+export function markOnboardingLiveViewSetupReady(
+  viewId: string,
+): OnboardingLiveViewActivation | null {
+  return updateActivation(viewId, (current) => ({
+    ...current,
+    setupStatus: "ready",
+    setupError: null,
+  }));
+}
+
+export function markOnboardingLiveViewSetupNeedsRetry(
+  viewId: string,
+  message: string,
+): OnboardingLiveViewActivation | null {
+  return updateActivation(viewId, (current) => ({
+    ...current,
+    setupStatus: "needs_retry",
+    setupError: message,
+  }));
+}
+
+export function setOnboardingLiveViewGuideStep(
+  viewId: string,
+  guideStep: OnboardingLiveViewActivation["guideStep"],
+): OnboardingLiveViewActivation | null {
+  return updateActivation(viewId, (current) => ({ ...current, guideStep }));
 }
 
 export function getOnboardingLiveViewActivation(

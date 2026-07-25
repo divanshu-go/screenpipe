@@ -17,9 +17,11 @@ import { useSettings } from "@/lib/hooks/use-settings";
 import {
   createOnboardingLiveView,
   OnboardingLiveViewSetupError,
+  prepareOnboardingLiveViewShell,
   type OnboardingLiveViewProgress,
   type OnboardingLiveViewStage,
 } from "@/lib/live-views/onboarding-live-view";
+import { markOnboardingLiveViewSetupNeedsRetry } from "@/lib/live-views/onboarding-activation";
 import {
   ONBOARDING_GOALS,
   type OnboardingGoalCategory,
@@ -27,6 +29,25 @@ import {
 import type { AIPreset } from "@/lib/utils/tauri";
 
 const STALLED_BUILD_ESCAPE_DELAY_MS = 12_000;
+const SHELL_PREPARE_TIMEOUT_MS = 8_000;
+
+async function withTimeout<T>(
+  operation: Promise<T>,
+  timeoutMs: number,
+  message: string,
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
 
 const BUILD_STEPS: Array<{
   stage: OnboardingLiveViewStage;
@@ -148,6 +169,7 @@ export default function FirstDashboard() {
   const [stage, setStage] = useState<OnboardingLiveViewStage | null>(null);
   const [selectedPipes, setSelectedPipes] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [dashboardPrepared, setDashboardPrepared] = useState(false);
   const [canContinueWithoutWaiting, setCanContinueWithoutWaiting] =
     useState(false);
   const [isContinuingWithoutWaiting, setIsContinuingWithoutWaiting] =
@@ -174,7 +196,7 @@ export default function FirstDashboard() {
 
   const isBuilding = stage !== null;
   useEffect(() => {
-    if (!isBuilding) {
+    if (!isBuilding || !dashboardPrepared) {
       setCanContinueWithoutWaiting(false);
       return;
     }
@@ -183,11 +205,12 @@ export default function FirstDashboard() {
       setCanContinueWithoutWaiting(true);
     }, STALLED_BUILD_ESCAPE_DELAY_MS);
     return () => window.clearTimeout(timeout);
-  }, [isBuilding]);
+  }, [dashboardPrepared, isBuilding]);
 
   const reportProgress = useCallback(
     (progress: OnboardingLiveViewProgress) => {
       latestStageRef.current = progress.stage;
+      if (progress.dashboardReady) setDashboardPrepared(true);
       setStage(progress.stage);
       if (progress.pipeSlugs) setSelectedPipes(progress.pipeSlugs);
       if (progress.stage === "plan_ready") {
@@ -229,6 +252,7 @@ export default function FirstDashboard() {
     const attemptId = ++createAttemptRef.current;
     setError(null);
     setSelectedPipes([]);
+    setDashboardPrepared(false);
     latestStageRef.current = "planning";
     setStage("planning");
     posthog.capture("onboarding_first_dashboard_goal_submitted", {
@@ -239,10 +263,23 @@ export default function FirstDashboard() {
     });
 
     try {
+      const preparedView = await withTimeout(
+        prepareOnboardingLiveViewShell({
+          dashboardId: dashboardIdRef.current,
+          goal: normalizedGoal,
+          goalCategory,
+          resetProgress: true,
+        }),
+        SHELL_PREPARE_TIMEOUT_MS,
+        "Screenpipe could not prepare the Live View in time.",
+      );
+      if (createAttemptRef.current !== attemptId) return;
+      setDashboardPrepared(true);
       const result = await createOnboardingLiveView({
         goal: normalizedGoal,
         goalCategory,
         dashboardId: dashboardIdRef.current,
+        preparedView,
         preset: defaultPreset,
         userToken: settings.user?.token ?? null,
         onProgress: (progress) => {
@@ -310,6 +347,10 @@ export default function FirstDashboard() {
     escapeCompletingRef.current = true;
     // Ignore any progress or result that arrives from the abandoned attempt.
     createAttemptRef.current += 1;
+    markOnboardingLiveViewSetupNeedsRetry(
+      dashboardIdRef.current,
+      "Setup was paused before it finished.",
+    );
     setIsContinuingWithoutWaiting(true);
     posthog.capture("onboarding_first_dashboard_build_bypassed", {
       goal_category: goalCategory,
@@ -319,7 +360,7 @@ export default function FirstDashboard() {
 
     try {
       await completeOnboarding({
-        method: "pipe_step_skipped",
+        method: "live_view_deferred",
         goalCategory,
       });
     } catch {
@@ -409,8 +450,7 @@ export default function FirstDashboard() {
           {canContinueWithoutWaiting && (
             <div className="mt-4 border-t border-border pt-3">
               <p className="font-mono text-[9px] leading-relaxed text-muted-foreground">
-                taking longer than expected. you can finish this later from
-                Brain.
+                your Live View is saved. open it now and finish setup there.
               </p>
               <button
                 type="button"
@@ -420,7 +460,7 @@ export default function FirstDashboard() {
               >
                 {isContinuingWithoutWaiting
                   ? "opening Brain..."
-                  : "continue without waiting"}
+                  : "continue to my Live View"}
               </button>
             </div>
           )}

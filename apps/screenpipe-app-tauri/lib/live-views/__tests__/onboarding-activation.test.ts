@@ -8,8 +8,11 @@ import {
   consumeOnboardingBrainHandoff,
   getOnboardingLiveViewActivation,
   markOnboardingLiveViewFirstResult,
+  markOnboardingLiveViewSetupNeedsRetry,
+  markOnboardingLiveViewSetupReady,
   removeOnboardingLiveViewActivation,
   selectedLiveViewDashboardId,
+  setOnboardingLiveViewGuideStep,
   startOnboardingLiveViewActivation,
 } from "../onboarding-activation";
 
@@ -37,7 +40,10 @@ describe("onboarding Live View activation", () => {
   });
 
   it("persists the selected dashboard and one-time Brain handoff", () => {
-    startOnboardingLiveViewActivation("first-dashboard-1", "work_memory");
+    startOnboardingLiveViewActivation("first-dashboard-1", "work_memory", {
+      goal: "Help me resume my work",
+      setupStatus: "building",
+    });
 
     expect(selectedLiveViewDashboardId()).toBe("first-dashboard-1");
     expect(consumeOnboardingBrainHandoff()).toBe("first-dashboard-1");
@@ -45,8 +51,39 @@ describe("onboarding Live View activation", () => {
     expect(getOnboardingLiveViewActivation("first-dashboard-1")).toEqual(
       expect.objectContaining({
         goalCategory: "work_memory",
+        goal: "Help me resume my work",
+        setupStatus: "building",
+        guideStep: "dashboard",
         firstResultAt: null,
         completedAt: null,
+      }),
+    );
+  });
+
+  it("keeps setup recovery and guide progress on the same activation", () => {
+    startOnboardingLiveViewActivation("first-dashboard-3", "work_memory", {
+      goal: "Help me resume my work",
+    });
+
+    markOnboardingLiveViewSetupNeedsRetry(
+      "first-dashboard-3",
+      "Setup was paused.",
+    );
+    setOnboardingLiveViewGuideStep("first-dashboard-3", "waiting");
+    expect(getOnboardingLiveViewActivation("first-dashboard-3")).toEqual(
+      expect.objectContaining({
+        setupStatus: "needs_retry",
+        setupError: "Setup was paused.",
+        guideStep: "waiting",
+      }),
+    );
+
+    markOnboardingLiveViewSetupReady("first-dashboard-3");
+    expect(getOnboardingLiveViewActivation("first-dashboard-3")).toEqual(
+      expect.objectContaining({
+        setupStatus: "ready",
+        setupError: null,
+        guideStep: "waiting",
       }),
     );
   });

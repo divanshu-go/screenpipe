@@ -17,6 +17,7 @@ export type OnboardingCompletionContext = {
   method:
     | "pipes_installed"
     | "pipe_step_skipped"
+    | "live_view_deferred"
     | "hidden_enterprise"
     | "live_view_created";
   pipeCount?: number;

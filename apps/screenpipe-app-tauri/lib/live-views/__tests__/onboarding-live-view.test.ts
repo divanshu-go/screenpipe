@@ -11,6 +11,22 @@ const mocks = vi.hoisted(() => ({
   saveBrainView: vi.fn(),
 }));
 
+const localStorageMock = (() => {
+  let store: Record<string, string> = {};
+  return {
+    clear: () => {
+      store = {};
+    },
+    getItem: (key: string) => store[key] ?? null,
+    removeItem: (key: string) => {
+      delete store[key];
+    },
+    setItem: (key: string, value: string) => {
+      store[key] = value;
+    },
+  };
+})();
+
 vi.mock("@/lib/api", () => ({ localFetch: mocks.localFetch }));
 vi.mock("@/lib/live-views/generate-live-view-with-pi", () => ({
   generateLiveViewWithPi: mocks.generateLiveViewWithPi,
@@ -28,6 +44,7 @@ import {
   rankOnboardingPipeCandidates,
   selectOnboardingPipeCandidates,
 } from "../onboarding-live-view";
+import { getOnboardingLiveViewActivation } from "../onboarding-activation";
 
 function response(body: unknown, ok = true, status = ok ? 200 : 500) {
   return {
@@ -156,6 +173,11 @@ describe("rankOnboardingPipeCandidates", () => {
 describe("createOnboardingLiveView", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      value: localStorageMock,
+    });
+    localStorageMock.clear();
     mocks.listBrainViews.mockResolvedValue({ status: "ok", data: [] });
     mocks.generateLiveViewWithPi.mockResolvedValue({
       title: "Meeting follow-through",
@@ -280,7 +302,7 @@ describe("createOnboardingLiveView", () => {
     expect(mocks.saveBrainView).toHaveBeenCalledWith(
       expect.objectContaining({
         id: "first-dashboard",
-        expectedRevision: null,
+        expectedRevision: 1,
         title: "Meeting follow-through",
         slots: [
           expect.objectContaining({
@@ -303,6 +325,51 @@ describe("createOnboardingLiveView", () => {
     );
     expect(progress).toHaveBeenLastCalledWith(
       expect.objectContaining({ stage: "complete", blockCount: 2 }),
+    );
+    expect(getOnboardingLiveViewActivation("first-dashboard")).toEqual(
+      expect.objectContaining({
+        goal: "help me follow through after meetings",
+        setupStatus: "ready",
+        guideStep: "dashboard",
+      }),
+    );
+  });
+
+  it("keeps a recoverable dashboard when AI planning fails", async () => {
+    mocks.generateLiveViewWithPi.mockRejectedValueOnce(
+      new Error("model unavailable"),
+    );
+
+    await expect(
+      createOnboardingLiveView({
+        goal: "help me follow through after meetings",
+        goalCategory: "meeting_follow_through",
+        preset: {
+          id: "default",
+          provider: "screenpipe-cloud",
+          url: "",
+          model: "auto",
+          apiKey: null,
+          defaultPreset: true,
+          maxContextChars: 100_000,
+          prompt: "",
+        },
+        userToken: "user-token",
+      }),
+    ).rejects.toThrow("model unavailable");
+
+    expect(mocks.saveBrainView).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "first-dashboard",
+        title: "Meeting follow-through",
+        slots: [],
+      }),
+    );
+    expect(getOnboardingLiveViewActivation("first-dashboard")).toEqual(
+      expect.objectContaining({
+        setupStatus: "needs_retry",
+        setupError: "model unavailable",
+      }),
     );
   });
 

@@ -12,8 +12,10 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  prepareOnboardingLiveViewShell: vi.fn(),
   createOnboardingLiveView: vi.fn(),
   completeOnboarding: vi.fn(),
+  markSetupNeedsRetry: vi.fn(),
   capture: vi.fn(),
 }));
 
@@ -50,9 +52,14 @@ vi.mock("@/lib/live-views/onboarding-live-view", async (importOriginal) => {
     >();
   return {
     ...original,
+    prepareOnboardingLiveViewShell: mocks.prepareOnboardingLiveViewShell,
     createOnboardingLiveView: mocks.createOnboardingLiveView,
   };
 });
+
+vi.mock("@/lib/live-views/onboarding-activation", () => ({
+  markOnboardingLiveViewSetupNeedsRetry: mocks.markSetupNeedsRetry,
+}));
 
 vi.mock("posthog-js", () => ({
   default: { capture: mocks.capture },
@@ -90,6 +97,19 @@ describe("FirstDashboard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.completeOnboarding.mockResolvedValue(undefined);
+    mocks.prepareOnboardingLiveViewShell.mockResolvedValue({
+      id: "first-dashboard",
+      title: "Meeting follow-through",
+      revision: 1,
+      timeRange: "today",
+      periodPolicy: {
+        type: "selectable.v1",
+        values: ["today", "24h", "7d", "30d"],
+      },
+      slots: [],
+      createdAt: "2026-07-25T00:00:00Z",
+      updatedAt: "2026-07-25T00:00:00Z",
+    });
     successfulSetup();
   });
 
@@ -175,7 +195,7 @@ describe("FirstDashboard", () => {
     );
   });
 
-  it("offers a safe escape when dashboard creation stalls", () => {
+  it("offers a safe escape when dashboard creation stalls", async () => {
     vi.useFakeTimers();
     mocks.createOnboardingLiveView.mockImplementation(
       async ({ onProgress }) => {
@@ -193,18 +213,26 @@ describe("FirstDashboard", () => {
     );
 
     expect(
-      screen.queryByRole("button", { name: /continue without waiting/i }),
+      screen.queryByRole("button", { name: /continue to my Live View/i }),
     ).not.toBeInTheDocument();
 
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
     act(() => vi.advanceTimersByTime(12_000));
 
     fireEvent.click(
-      screen.getByRole("button", { name: /continue without waiting/i }),
+      screen.getByRole("button", { name: /continue to my Live View/i }),
     );
     expect(mocks.completeOnboarding).toHaveBeenCalledWith({
-      method: "pipe_step_skipped",
+      method: "live_view_deferred",
       goalCategory: "meeting_follow_through",
     });
+    expect(mocks.markSetupNeedsRetry).toHaveBeenCalledWith(
+      expect.stringMatching(/^first-dashboard-/),
+      "Setup was paused before it finished.",
+    );
     expect(mocks.capture).toHaveBeenCalledWith(
       "onboarding_first_dashboard_build_bypassed",
       expect.objectContaining({

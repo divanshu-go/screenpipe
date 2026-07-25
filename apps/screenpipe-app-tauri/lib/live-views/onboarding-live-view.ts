@@ -12,7 +12,11 @@ import {
   preferredStorePipeSlugs,
   type OnboardingGoalCategory,
 } from "@/lib/live-views/onboarding-goals";
-import { startOnboardingLiveViewActivation } from "@/lib/live-views/onboarding-activation";
+import {
+  markOnboardingLiveViewSetupNeedsRetry,
+  markOnboardingLiveViewSetupReady,
+  startOnboardingLiveViewActivation,
+} from "@/lib/live-views/onboarding-activation";
 import {
   buildLiveViewTimeContext,
   DEFAULT_LIVE_VIEW_PERIOD_POLICY,
@@ -56,6 +60,7 @@ export type OnboardingLiveViewStage =
 
 export type OnboardingLiveViewProgress = {
   stage: OnboardingLiveViewStage;
+  dashboardReady?: boolean;
   pipeSlug?: string;
   pipeIndex?: number;
   pipeCount?: number;
@@ -64,6 +69,20 @@ export type OnboardingLiveViewProgress = {
   timeRange?: GeneratedLiveView["timeRange"];
   installed?: boolean;
   refreshStartedCount?: number;
+};
+
+const GOAL_SHELLS: Record<
+  OnboardingGoalCategory,
+  { title: string; timeRange: BrainViewDefinition["timeRange"] }
+> = {
+  work_memory: { title: "Work memory", timeRange: "today" },
+  meeting_follow_through: {
+    title: "Meeting follow-through",
+    timeRange: "today",
+  },
+  work_patterns: { title: "Work patterns", timeRange: "7d" },
+  process_automation: { title: "Process discovery", timeRange: "7d" },
+  custom: { title: "My first Live View", timeRange: "today" },
 };
 
 export type OnboardingLiveViewResult = {
@@ -462,10 +481,74 @@ function slotInputs(
   });
 }
 
+export async function prepareOnboardingLiveViewShell(options: {
+  dashboardId?: string;
+  goal: string;
+  goalCategory: OnboardingGoalCategory;
+  resetProgress?: boolean;
+}): Promise<BrainViewDefinition> {
+  const dashboardId = options.dashboardId ?? FIRST_DASHBOARD_ID;
+  const listed = await commands.listBrainViews();
+  if (listed.status === "error") {
+    throw new OnboardingLiveViewSetupError(
+      "dashboard_save_failed",
+      "planning",
+      "Could not prepare your first Live View.",
+    );
+  }
+
+  const existing = listed.data.find((view) => view.id === dashboardId);
+  if (!existing && listed.data.length >= MAX_DASHBOARDS) {
+    throw new OnboardingLiveViewSetupError(
+      "dashboard_save_failed",
+      "planning",
+      `You already have ${MAX_DASHBOARDS} dashboards. Delete one, then try setup again.`,
+    );
+  }
+
+  let view = existing;
+  if (!view) {
+    const shell = GOAL_SHELLS[options.goalCategory];
+    const usedTitles = new Set(
+      listed.data.map((candidate) => candidate.title.toLowerCase()),
+    );
+    let title = shell.title;
+    let suffix = 2;
+    while (usedTitles.has(title.toLowerCase())) {
+      title = `${shell.title} ${suffix}`;
+      suffix += 1;
+    }
+    const saved = await commands.saveBrainView({
+      id: dashboardId,
+      title,
+      expectedRevision: null,
+      timeRange: shell.timeRange,
+      periodPolicy: DEFAULT_LIVE_VIEW_PERIOD_POLICY,
+      slots: [],
+    });
+    if (saved.status === "error") {
+      throw new OnboardingLiveViewSetupError(
+        "dashboard_save_failed",
+        "planning",
+        "Could not prepare your first Live View.",
+      );
+    }
+    view = saved.data;
+  }
+
+  startOnboardingLiveViewActivation(view.id, options.goalCategory, {
+    goal: options.goal,
+    setupStatus: "building",
+    resetProgress: options.resetProgress,
+  });
+  return view;
+}
+
 async function saveFirstDashboard(
   generated: GeneratedLiveView,
   readyPipeNames: Map<string, string>,
   dashboardId: string,
+  preparedView?: BrainViewDefinition,
 ): Promise<BrainViewDefinition> {
   const listed = await commands.listBrainViews();
   if (listed.status === "error") {
@@ -475,7 +558,9 @@ async function saveFirstDashboard(
       "Could not check existing dashboards.",
     );
   }
-  const existing = listed.data.find((view) => view.id === dashboardId);
+  const existing =
+    listed.data.find((view) => view.id === dashboardId) ??
+    (preparedView?.id === dashboardId ? preparedView : undefined);
   if (!existing && listed.data.length >= MAX_DASHBOARDS) {
     throw new OnboardingLiveViewSetupError(
       "dashboard_save_failed",
@@ -565,6 +650,7 @@ export async function createOnboardingLiveView(options: {
   goal: string;
   goalCategory: OnboardingGoalCategory;
   dashboardId?: string;
+  preparedView?: BrainViewDefinition;
   preset: AIPreset;
   userToken: string | null;
   onProgress?: (progress: OnboardingLiveViewProgress) => void;
@@ -577,109 +663,141 @@ export async function createOnboardingLiveView(options: {
     }
   };
 
+  const dashboardId = options.dashboardId ?? FIRST_DASHBOARD_ID;
   report({ stage: "planning" });
-  await waitForServer();
-  const candidates = await loadStoreCandidates(
-    options.goal,
-    options.goalCategory,
-  );
-
-  let generated: GeneratedLiveView;
   try {
-    generated = await generateLiveViewWithPi({
-      prompt: options.goal,
-      scope: "dashboard",
-      preset: options.preset,
-      userToken: options.userToken,
-      pipes: candidates,
-      pipeAvailability: "store",
-      maxSelectedPipes: MAX_SELECTED_PIPES,
-      requirePipeBinding: true,
-      currentView: null,
+    const preparedView =
+      options.preparedView ??
+      (await prepareOnboardingLiveViewShell({
+        dashboardId,
+        goal: options.goal,
+        goalCategory: options.goalCategory,
+      }));
+    report({ stage: "planning", dashboardReady: true });
+    await waitForServer();
+    const candidates = await loadStoreCandidates(
+      options.goal,
+      options.goalCategory,
+    );
+
+    let generated: GeneratedLiveView;
+    try {
+      generated = await generateLiveViewWithPi({
+        prompt: options.goal,
+        scope: "dashboard",
+        preset: options.preset,
+        userToken: options.userToken,
+        pipes: candidates,
+        pipeAvailability: "store",
+        maxSelectedPipes: MAX_SELECTED_PIPES,
+        requirePipeBinding: true,
+        currentView: null,
+      });
+    } catch (error) {
+      throw new OnboardingLiveViewSetupError(
+        "ai_plan_failed",
+        "planning",
+        error instanceof Error
+          ? error.message
+          : "AI could not design the dashboard.",
+      );
+    }
+
+    const pipeSlugs = Array.from(
+      new Set(
+        generated.blocks
+          .map((block) => block.pipeName)
+          .filter((name): name is string => Boolean(name)),
+      ),
+    );
+    if (pipeSlugs.length === 0 || pipeSlugs.length > MAX_SELECTED_PIPES) {
+      throw new OnboardingLiveViewSetupError(
+        "ai_plan_failed",
+        "planning",
+        "AI did not choose a valid Pipe set.",
+      );
+    }
+
+    report({
+      stage: "plan_ready",
+      dashboardReady: true,
+      pipeSlugs,
+      pipeCount: pipeSlugs.length,
+      blockCount: generated.blocks.length,
+      timeRange: generated.timeRange,
     });
+
+    const readyPipeNames = new Map<string, string>();
+    for (const [index, pipeSlug] of pipeSlugs.entries()) {
+      report({
+        stage: "installing",
+        dashboardReady: true,
+        pipeSlug,
+        pipeIndex: index,
+        pipeCount: pipeSlugs.length,
+      });
+      const ready = await ensurePipeReady(pipeSlug, options.preset.id || null);
+      readyPipeNames.set(pipeSlug, ready.name);
+      report({
+        stage: "pipe_ready",
+        dashboardReady: true,
+        pipeSlug,
+        pipeIndex: index,
+        pipeCount: pipeSlugs.length,
+        installed: ready.installed,
+      });
+    }
+
+    report({
+      stage: "saving",
+      dashboardReady: true,
+      blockCount: generated.blocks.length,
+    });
+    const view = await saveFirstDashboard(
+      generated,
+      readyPipeNames,
+      dashboardId,
+      preparedView,
+    );
+
+    report({
+      stage: "refreshing",
+      dashboardReady: true,
+      pipeCount: pipeSlugs.length,
+    });
+    const refreshStartedCount = await refreshDashboard(view);
+    if (refreshStartedCount === 0) {
+      throw new OnboardingLiveViewSetupError(
+        "refresh_failed",
+        "refreshing",
+        "The dashboard is ready, but its Pipes did not start. Try again.",
+      );
+    }
+
+    markOnboardingLiveViewSetupReady(view.id);
+
+    report({
+      stage: "complete",
+      dashboardReady: true,
+      pipeSlugs,
+      pipeCount: pipeSlugs.length,
+      blockCount: view.slots.length,
+      timeRange: view.timeRange,
+      refreshStartedCount,
+    });
+    return {
+      view,
+      pipeSlugs,
+      blockCount: view.slots.length,
+      refreshStartedCount,
+    };
   } catch (error) {
-    throw new OnboardingLiveViewSetupError(
-      "ai_plan_failed",
-      "planning",
+    markOnboardingLiveViewSetupNeedsRetry(
+      dashboardId,
       error instanceof Error
         ? error.message
-        : "AI could not design the dashboard.",
+        : "Setup stopped before it finished.",
     );
+    throw error;
   }
-
-  const pipeSlugs = Array.from(
-    new Set(
-      generated.blocks
-        .map((block) => block.pipeName)
-        .filter((name): name is string => Boolean(name)),
-    ),
-  );
-  if (pipeSlugs.length === 0 || pipeSlugs.length > MAX_SELECTED_PIPES) {
-    throw new OnboardingLiveViewSetupError(
-      "ai_plan_failed",
-      "planning",
-      "AI did not choose a valid Pipe set.",
-    );
-  }
-
-  report({
-    stage: "plan_ready",
-    pipeSlugs,
-    pipeCount: pipeSlugs.length,
-    blockCount: generated.blocks.length,
-    timeRange: generated.timeRange,
-  });
-
-  const readyPipeNames = new Map<string, string>();
-  for (const [index, pipeSlug] of pipeSlugs.entries()) {
-    report({
-      stage: "installing",
-      pipeSlug,
-      pipeIndex: index,
-      pipeCount: pipeSlugs.length,
-    });
-    const ready = await ensurePipeReady(pipeSlug, options.preset.id || null);
-    readyPipeNames.set(pipeSlug, ready.name);
-    report({
-      stage: "pipe_ready",
-      pipeSlug,
-      pipeIndex: index,
-      pipeCount: pipeSlugs.length,
-      installed: ready.installed,
-    });
-  }
-
-  report({ stage: "saving", blockCount: generated.blocks.length });
-  const view = await saveFirstDashboard(
-    generated,
-    readyPipeNames,
-    options.dashboardId ?? FIRST_DASHBOARD_ID,
-  );
-
-  report({ stage: "refreshing", pipeCount: pipeSlugs.length });
-  const refreshStartedCount = await refreshDashboard(view);
-  if (refreshStartedCount === 0) {
-    throw new OnboardingLiveViewSetupError(
-      "refresh_failed",
-      "refreshing",
-      "The dashboard is ready, but its Pipes did not start. Try again.",
-    );
-  }
-
-  startOnboardingLiveViewActivation(view.id, options.goalCategory);
-
-  report({
-    stage: "complete",
-    pipeSlugs,
-    pipeCount: pipeSlugs.length,
-    blockCount: view.slots.length,
-    timeRange: view.timeRange,
-    refreshStartedCount,
-  });
-  return {
-    view,
-    pipeSlugs,
-    blockCount: view.slots.length,
-    refreshStartedCount,
-  };
 }

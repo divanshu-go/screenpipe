@@ -8,6 +8,7 @@ import React from "react";
 import { AlertCircle, Check, Circle, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { OnboardingGoalCategory } from "@/lib/live-views/onboarding-goals";
+import type { OnboardingLiveViewActivation } from "@/lib/live-views/onboarding-activation";
 
 type CaptureReadiness = "checking" | "ready" | "blocked";
 
@@ -80,9 +81,13 @@ export function LiveViewOnboardingActivation({
   captureReadiness,
   pipesReady,
   pipeNames,
+  setupStatus,
+  setupError,
   hasResult,
   refreshing,
+  retrying,
   onRefresh,
+  onRetry,
   onFixCapture,
   onComplete,
 }: {
@@ -90,9 +95,13 @@ export function LiveViewOnboardingActivation({
   captureReadiness: CaptureReadiness;
   pipesReady: boolean;
   pipeNames: string[];
+  setupStatus: OnboardingLiveViewActivation["setupStatus"];
+  setupError: string | null;
   hasResult: boolean;
   refreshing: boolean;
+  retrying: boolean;
   onRefresh: () => void;
+  onRetry: () => void;
   onFixCapture: () => void;
   onComplete: () => void;
 }) {
@@ -102,6 +111,7 @@ export function LiveViewOnboardingActivation({
     return (
       <div
         data-testid="onboarding-live-view-first-result"
+        data-onboarding-guide-target="activation"
         className="mb-4 grid gap-3 border border-foreground p-4 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center"
       >
         <span className="flex h-8 w-8 items-center justify-center bg-foreground text-background">
@@ -145,6 +155,7 @@ export function LiveViewOnboardingActivation({
   return (
     <div
       data-testid="onboarding-live-view-cold-start"
+      data-onboarding-guide-target="activation"
       className="border border-foreground"
     >
       <div className="grid gap-4 border-b border-border p-5 lg:grid-cols-[minmax(0,1fr)_18rem]">
@@ -176,12 +187,20 @@ export function LiveViewOnboardingActivation({
           detail={captureStatus.detail}
         />
         <StatusRow
-          state={pipesReady ? "ready" : "working"}
+          state={
+            setupStatus === "needs_retry"
+              ? "blocked"
+              : pipesReady
+                ? "ready"
+                : "working"
+          }
           label={pipeNames.length === 1 ? "context Pipe" : "context Pipes"}
           detail={
-            pipesReady
-              ? `${pipeNames.join(" + ")} ${pipeNames.length === 1 ? "is" : "are"} connected.`
-              : "Finishing the local tools selected for this outcome."
+            setupStatus === "needs_retry"
+              ? (setupError ?? "Setup paused before the Pipes were connected.")
+              : pipesReady
+                ? `${pipeNames.join(" + ")} ${pipeNames.length === 1 ? "is" : "are"} connected.`
+                : "Finishing the local tools selected for this outcome."
           }
         />
         <StatusRow
@@ -196,7 +215,20 @@ export function LiveViewOnboardingActivation({
       </div>
 
       <div className="flex flex-wrap items-center gap-2 border-t border-border p-4">
-        {captureReadiness === "blocked" ? (
+        {setupStatus === "needs_retry" ? (
+          <Button
+            data-testid="onboarding-live-view-retry"
+            size="sm"
+            className="rounded-none"
+            disabled={retrying}
+            onClick={onRetry}
+          >
+            <RefreshCw
+              className={`mr-1.5 h-3.5 w-3.5 ${retrying ? "animate-spin" : ""}`}
+            />
+            {retrying ? "finishing setup" : "finish setup"}
+          </Button>
+        ) : captureReadiness === "blocked" ? (
           <Button
             data-testid="onboarding-live-view-fix-capture"
             size="sm"
