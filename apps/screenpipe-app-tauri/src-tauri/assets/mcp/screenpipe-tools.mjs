@@ -16,6 +16,7 @@ import { writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, extname, basename } from "node:path";
 import { Buffer } from "node:buffer";
+import { createServer } from "node:http";
 
 const PROTOCOL_VERSION = "2025-06-18";
 const SERVER_INFO = { name: "screenpipe-tools", version: "0.1.0" };
@@ -425,26 +426,24 @@ const TOOLS = [
   },
 ];
 
-function send(message) {
-  process.stdout.write(`${JSON.stringify(message)}\n`);
-}
-
-function reply(id, result) {
+// `send` is the transport sink — stdout for stdio, a per-request collector for
+// HTTP — so the same handler serves both transports.
+function reply(send, id, result) {
   send({ jsonrpc: "2.0", id, result });
 }
 
-function replyError(id, code, message) {
+function replyError(send, id, code, message) {
   send({ jsonrpc: "2.0", id, error: { code, message } });
 }
 
-async function handle(msg) {
+async function handle(msg, send) {
   const { id, method, params } = msg;
   // Notifications (no id) get no response.
   if (id === undefined || id === null) return;
 
   switch (method) {
     case "initialize":
-      reply(id, {
+      reply(send, id, {
         protocolVersion:
           typeof params?.protocolVersion === "string" ? params.protocolVersion : PROTOCOL_VERSION,
         capabilities: { tools: {} },
@@ -452,10 +451,10 @@ async function handle(msg) {
       });
       return;
     case "ping":
-      reply(id, {});
+      reply(send, id, {});
       return;
     case "tools/list":
-      reply(id, {
+      reply(send, id, {
         tools: TOOLS.map((t) => ({
           name: t.name,
           description: t.description,
@@ -466,16 +465,16 @@ async function handle(msg) {
     case "tools/call": {
       const tool = TOOLS.find((t) => t.name === params?.name);
       if (!tool) {
-        replyError(id, -32602, `unknown tool: ${params?.name}`);
+        replyError(send, id, -32602, `unknown tool: ${params?.name}`);
         return;
       }
       try {
         const text = await tool.run(params?.arguments ?? {});
-        reply(id, { content: [{ type: "text", text }] });
+        reply(send, id, { content: [{ type: "text", text }] });
       } catch (error) {
         // MCP convention: tool failures come back as isError content, not a
         // JSON-RPC error, so the agent can read and react to the message.
-        reply(id, {
+        reply(send, id, {
           content: [{ type: "text", text: String(error instanceof Error ? error.message : error) }],
           isError: true,
         });
@@ -483,26 +482,102 @@ async function handle(msg) {
       return;
     }
     default:
-      replyError(id, -32601, `unsupported method: ${method ?? "<missing>"}`);
+      replyError(send, id, -32601, `unsupported method: ${method ?? "<missing>"}`);
   }
 }
 
-let buffer = "";
-process.stdin.setEncoding("utf-8");
-process.stdin.on("data", (chunk) => {
-  buffer += chunk;
-  let index;
-  while ((index = buffer.indexOf("\n")) >= 0) {
-    const line = buffer.slice(0, index).trim();
-    buffer = buffer.slice(index + 1);
-    if (!line) continue;
-    let msg;
-    try {
-      msg = JSON.parse(line);
-    } catch {
-      continue;
+// Transport selection. A configured HTTP port (set by the desktop for harnesses
+// that only accept http/sse MCP servers, e.g. Cursor) switches this to a
+// stateless Streamable-HTTP server; otherwise it speaks the default MCP stdio
+// transport. Stdio behavior is byte-identical when no port is configured.
+const httpPort = Number.parseInt(process.env.SCREENPIPE_TOOLS_HTTP_PORT || "", 10);
+
+if (Number.isInteger(httpPort) && httpPort > 0) {
+  startHttpServer(httpPort);
+} else {
+  startStdioServer();
+}
+
+function startStdioServer() {
+  const stdoutSend = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
+  let buffer = "";
+  process.stdin.setEncoding("utf-8");
+  process.stdin.on("data", (chunk) => {
+    buffer += chunk;
+    let index;
+    while ((index = buffer.indexOf("\n")) >= 0) {
+      const line = buffer.slice(0, index).trim();
+      buffer = buffer.slice(index + 1);
+      if (!line) continue;
+      let msg;
+      try {
+        msg = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      void handle(msg, stdoutSend);
     }
-    void handle(msg);
-  }
-});
-process.stdin.on("end", () => process.exit(0));
+  });
+  process.stdin.on("end", () => process.exit(0));
+}
+
+// Stateless Streamable-HTTP: each POST /mcp carries one JSON-RPC request (or a
+// batch) and gets a single JSON response. None of these tools stream, so no SSE
+// channel is opened. Bound to loopback with an Origin check per the MCP spec's
+// DNS-rebinding guidance; no session id (stateless), which every ACP harness we
+// target tolerates.
+const LOOPBACK_ORIGIN = /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/i;
+
+function startHttpServer(port) {
+  const server = createServer((req, res) => {
+    const url = req.url || "/";
+    if (req.method === "GET" && url.startsWith("/health")) {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, server: SERVER_INFO }));
+      return;
+    }
+    if (!url.startsWith("/mcp")) {
+      res.writeHead(404).end();
+      return;
+    }
+    const origin = req.headers["origin"];
+    if (origin && !LOOPBACK_ORIGIN.test(origin)) {
+      res.writeHead(403).end();
+      return;
+    }
+    if (req.method !== "POST") {
+      res.writeHead(405, { Allow: "POST" }).end();
+      return;
+    }
+    let body = "";
+    req.setEncoding("utf-8");
+    req.on("data", (chunk) => {
+      body += chunk;
+      if (body.length > 4_000_000) req.destroy();
+    });
+    req.on("end", async () => {
+      let payload;
+      try {
+        payload = JSON.parse(body);
+      } catch {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "parse error" } }));
+        return;
+      }
+      const collected = [];
+      const collect = (message) => collected.push(message);
+      const items = Array.isArray(payload) ? payload : [payload];
+      for (const item of items) await handle(item, collect);
+      // A notifications-only body produces no response (spec: 202, no content).
+      if (collected.length === 0) {
+        res.writeHead(202).end();
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(Array.isArray(payload) ? collected : collected[0]));
+    });
+  });
+  server.listen(port, "127.0.0.1", () => {
+    process.stderr.write(`[screenpipe-tools] http mcp listening on http://127.0.0.1:${port}/mcp\n`);
+  });
+}

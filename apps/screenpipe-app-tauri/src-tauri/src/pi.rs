@@ -1517,6 +1517,40 @@ fn ensure_live_views_extension(project_dir: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Grant pi "project trust" for `project_dir` by adding it to pi's trust.json.
+/// pi 0.80 gates project `.pi/extensions` and `.pi/skills` behind a trust
+/// prompt that rpc mode can't answer; native pi passes `--approve`, but the
+/// pi-acp adapter spawns pi with fixed args and no `--approve`, so without this
+/// its project extensions/skills silently never load. The dir is created and
+/// populated exclusively by screenpipe, so it is trusted by definition. Keyed
+/// by the canonical absolute path, matching pi's own trust-store lookup.
+fn seed_pi_project_trust(project_dir: &str) -> Result<(), String> {
+    let trust_path = get_pi_config_dir()?.join("trust.json");
+    let key = std::fs::canonicalize(project_dir)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| project_dir.to_string());
+
+    let mut map: serde_json::Map<String, serde_json::Value> = std::fs::read_to_string(&trust_path)
+        .ok()
+        .and_then(|contents| serde_json::from_str(&contents).ok())
+        .unwrap_or_default();
+    if map.get(&key).and_then(|value| value.as_bool()) == Some(true) {
+        return Ok(());
+    }
+    map.insert(key, serde_json::Value::Bool(true));
+
+    if let Some(parent) = trust_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create pi config dir: {}", e))?;
+    }
+    let body = serde_json::to_string_pretty(&map)
+        .map_err(|e| format!("Failed to serialize trust.json: {}", e))?;
+    std::fs::write(&trust_path, body)
+        .map_err(|e| format!("Failed to write trust.json: {}", e))?;
+    debug!("seeded pi project trust for {:?}", trust_path);
+    Ok(())
+}
+
 fn ensure_connection_gate_extension(project_dir: &str) -> Result<(), String> {
     let ext_dir = Path::new(project_dir).join(".pi").join("extensions");
     std::fs::create_dir_all(&ext_dir)
@@ -2164,8 +2198,21 @@ pub async fn pi_start_inner(
     // Ensure screenpipe skills exist in project
     ensure_screenpipe_skill(&project_dir)?;
 
+    // The pi-acp ACP agent wraps the SAME @earendil-works/pi-coding-agent we run
+    // natively, in the same project dir and PI_CODING_AGENT_DIR — but it drops
+    // the ACP mcpServers we send and spawns pi with fixed args (no `--approve`).
+    // So it gets our tools the native way instead of over MCP: seed pi's
+    // extensions and grant project trust (below).
+    let is_pi_acp = use_acp
+        && provider_config
+            .as_ref()
+            .and_then(|config| config.acp_agent.as_ref())
+            .map(|agent| agent.id.as_str())
+            == Some("pi-acp");
+
     // ACP agents receive Screenpipe via MCP during session/new. Pi-only
-    // extensions and packages must not be installed or required there.
+    // extensions and packages must not be installed or required there — except
+    // pi-acp, which is pi and can't consume the MCP servers.
     if !use_acp {
         // Install web-search extension only for screenpipe-cloud presets
         ensure_web_search_extension(&project_dir, provider_config.as_ref())?;
@@ -2186,6 +2233,22 @@ pub async fn pi_start_inner(
         // Ensure Pi is configured with the user's provider
         ensure_pi_config(user_token.as_deref(), provider_config.as_ref()).await?;
         ensure_required_pi_extension_package().await?;
+    } else if is_pi_acp {
+        // Same pi as native — seed the project-local extensions so its tools
+        // reach the model. web-search is intentionally omitted: it needs the
+        // screenpipe-cloud JWT, which ACP sessions deliberately do not receive.
+        // (Core search + save/connect already work via the seeded skills and
+        // the local API, both authenticated by the local key in the env.)
+        ensure_mcp_bridge_extension(&project_dir)?;
+        ensure_save_artifact_extension(&project_dir)?;
+        ensure_connection_gate_extension(&project_dir)?;
+
+        // pi-acp can't pass pi's `--approve`, so rpc-mode pi would silently skip
+        // the project's .pi/extensions and .pi/skills (untrusted-by-default).
+        // Grant trust on disk — the on-disk equivalent of --approve.
+        if let Err(e) = seed_pi_project_trust(&project_dir) {
+            warn!("failed to seed pi project trust for pi-acp: {}", e);
+        }
     }
 
     // Determine which Pi provider and model to use
