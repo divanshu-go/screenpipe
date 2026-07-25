@@ -23,6 +23,12 @@ use crate::high_fps_controller::HighFpsController;
 use crate::hot_frame_cache::HotFrameCache;
 use crate::power::PowerProfile;
 
+/// Marker in [`VisionManager::start`]'s error for "the OS enumerated zero
+/// displays". Deliberately says nothing about the cause — see the emit site.
+/// Shared so the monitor watcher and the app's health matcher key off one
+/// constant instead of three copies of a prose substring.
+pub const ZERO_DISPLAYS_ENUMERATED: &str = "no displays enumerated";
+
 /// Configuration for VisionManager
 #[derive(Clone)]
 pub struct VisionManagerConfig {
@@ -317,6 +323,25 @@ impl VisionManager {
             // Roll status back so the next .start() attempt isn't blocked by the
             // idempotency guard above.
             *self.status.write().await = VisionManagerStatus::Stopped;
+            // Zero *enumerated* displays is not an allowlist problem, so don't
+            // blame monitor_ids for it (the old message did, which misdirected
+            // debugging of day-long capture gaps). Don't blame the permission
+            // either: `list_monitors` collapses every failure mode into an empty
+            // vec — enumeration timeout, retry budget exhausted, a genuinely
+            // asleep/clamshell display — so a revoked grant is only ONE of the
+            // causes and this site has no evidence which. The monitor watcher
+            // owns that verdict: it cross-checks CG topology and screen lock
+            // over several passes before reporting a permission loss.
+            if total_monitors == 0 {
+                warn!(
+                    "VisionManager: {} — display asleep/clamshell, enumeration failure, or \
+                     screen-recording permission revoked; the monitor watcher will classify it",
+                    ZERO_DISPLAYS_ENUMERATED
+                );
+                return Err(anyhow::anyhow!(
+                    "{ZERO_DISPLAYS_ENUMERATED} (0 enumerated, 0 started)"
+                ));
+            }
             warn!(
                 "VisionManager: no monitors matched the allowed list \
                  ({} enumerated, 0 started) — stale monitor_ids?",
