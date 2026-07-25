@@ -26,6 +26,8 @@ import {
 } from "@/lib/live-views/onboarding-goals";
 import type { AIPreset } from "@/lib/utils/tauri";
 
+const STALLED_BUILD_ESCAPE_DELAY_MS = 12_000;
+
 const BUILD_STEPS: Array<{
   stage: OnboardingLiveViewStage;
   label: string;
@@ -146,7 +148,14 @@ export default function FirstDashboard() {
   const [stage, setStage] = useState<OnboardingLiveViewStage | null>(null);
   const [selectedPipes, setSelectedPipes] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [canContinueWithoutWaiting, setCanContinueWithoutWaiting] =
+    useState(false);
+  const [isContinuingWithoutWaiting, setIsContinuingWithoutWaiting] =
+    useState(false);
   const completingRef = useRef(false);
+  const escapeCompletingRef = useRef(false);
+  const createAttemptRef = useRef(0);
+  const latestStageRef = useRef<OnboardingLiveViewStage | null>(null);
   const mountedAtRef = useRef(Date.now());
   const dashboardIdRef = useRef(
     `first-dashboard-${Date.now().toString(36)}-${Math.random()
@@ -163,8 +172,22 @@ export default function FirstDashboard() {
     posthog.capture("onboarding_first_dashboard_viewed");
   }, []);
 
+  const isBuilding = stage !== null;
+  useEffect(() => {
+    if (!isBuilding) {
+      setCanContinueWithoutWaiting(false);
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      setCanContinueWithoutWaiting(true);
+    }, STALLED_BUILD_ESCAPE_DELAY_MS);
+    return () => window.clearTimeout(timeout);
+  }, [isBuilding]);
+
   const reportProgress = useCallback(
     (progress: OnboardingLiveViewProgress) => {
+      latestStageRef.current = progress.stage;
       setStage(progress.stage);
       if (progress.pipeSlugs) setSelectedPipes(progress.pipeSlugs);
       if (progress.stage === "plan_ready") {
@@ -203,8 +226,10 @@ export default function FirstDashboard() {
     }
 
     completingRef.current = true;
+    const attemptId = ++createAttemptRef.current;
     setError(null);
     setSelectedPipes([]);
+    latestStageRef.current = "planning";
     setStage("planning");
     posthog.capture("onboarding_first_dashboard_goal_submitted", {
       goal_category: goalCategory,
@@ -220,8 +245,12 @@ export default function FirstDashboard() {
         dashboardId: dashboardIdRef.current,
         preset: defaultPreset,
         userToken: settings.user?.token ?? null,
-        onProgress: reportProgress,
+        onProgress: (progress) => {
+          if (createAttemptRef.current !== attemptId) return;
+          reportProgress(progress);
+        },
       });
+      if (createAttemptRef.current !== attemptId) return;
       posthog.capture("onboarding_first_dashboard_created", {
         goal_category: goalCategory,
         pipe_count: result.pipeSlugs.length,
@@ -246,11 +275,12 @@ export default function FirstDashboard() {
         goalCategory,
       });
     } catch (setupError) {
+      if (createAttemptRef.current !== attemptId) return;
       const knownError =
         setupError instanceof OnboardingLiveViewSetupError ? setupError : null;
       posthog.capture("onboarding_first_dashboard_failed", {
         failure_reason: knownError?.code ?? "unknown",
-        stage: knownError?.stage ?? stage ?? "planning",
+        stage: knownError?.stage ?? latestStageRef.current ?? "planning",
         pipe_slug: knownError?.pipeSlug,
         goal_category: goalCategory,
         time_spent_ms: Date.now() - mountedAtRef.current,
@@ -259,6 +289,7 @@ export default function FirstDashboard() {
         knownError?.message ??
           "We could not finish the dashboard. Try again or skip for now.",
       );
+      latestStageRef.current = null;
       setStage(null);
       completingRef.current = false;
     }
@@ -269,8 +300,37 @@ export default function FirstDashboard() {
     goalCategory,
     reportProgress,
     settings.user?.token,
-    stage,
   ]);
+
+  const handleContinueWithoutWaiting = useCallback(async () => {
+    if (!canContinueWithoutWaiting || escapeCompletingRef.current || !stage) {
+      return;
+    }
+
+    escapeCompletingRef.current = true;
+    // Ignore any progress or result that arrives from the abandoned attempt.
+    createAttemptRef.current += 1;
+    setIsContinuingWithoutWaiting(true);
+    posthog.capture("onboarding_first_dashboard_build_bypassed", {
+      goal_category: goalCategory,
+      stalled_stage: stage,
+      time_spent_ms: Date.now() - mountedAtRef.current,
+    });
+
+    try {
+      await completeOnboarding({
+        method: "pipe_step_skipped",
+        goalCategory,
+      });
+    } catch {
+      escapeCompletingRef.current = false;
+      completingRef.current = false;
+      latestStageRef.current = null;
+      setIsContinuingWithoutWaiting(false);
+      setStage(null);
+      setError("Could not finish setup. Try again.");
+    }
+  }, [canContinueWithoutWaiting, completeOnboarding, goalCategory, stage]);
 
   const handleSkip = useCallback(async () => {
     if (completingRef.current) return;
@@ -343,6 +403,25 @@ export default function FirstDashboard() {
             <div className="mt-4 border-t border-border pt-3 font-mono text-[10px] text-muted-foreground">
               <span className="mr-2 lowercase tracking-wide">Pipes</span>
               {selectedPipes.map(displayPipeName).join(" + ")}
+            </div>
+          )}
+
+          {canContinueWithoutWaiting && (
+            <div className="mt-4 border-t border-border pt-3">
+              <p className="font-mono text-[9px] leading-relaxed text-muted-foreground">
+                taking longer than expected. you can finish this later from
+                Brain.
+              </p>
+              <button
+                type="button"
+                onClick={handleContinueWithoutWaiting}
+                disabled={isContinuingWithoutWaiting}
+                className="mt-2 w-full border border-foreground px-3 py-2 font-mono text-[10px] uppercase tracking-wide text-foreground transition-colors hover:bg-foreground hover:text-background disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {isContinuingWithoutWaiting
+                  ? "opening Brain..."
+                  : "continue without waiting"}
+              </button>
             </div>
           )}
         </div>

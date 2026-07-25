@@ -139,7 +139,7 @@ describe("useOnboarding measurement", () => {
     });
   });
 
-  it("replays the focused guide after an explicit onboarding reset", async () => {
+  it("keeps setup reset separate from the optional app tour", async () => {
     mocks.resetOnboarding.mockResolvedValue({ status: "ok", data: null });
     mocks.completeOnboarding.mockResolvedValue({ status: "ok", data: null });
     localStorage.setItem("screenpipe:first-run-guide-pending", "true");
@@ -153,7 +153,7 @@ describe("useOnboarding measurement", () => {
       localStorage.getItem(
         "screenpipe:first-run-guide-replay-after-onboarding",
       ),
-    ).toBe("true");
+    ).toBeNull();
 
     await useOnboarding.getState().completeOnboarding({
       method: "live_view_created",
@@ -167,8 +167,8 @@ describe("useOnboarding measurement", () => {
     ).toBeNull();
     expect(
       localStorage.getItem("screenpipe:first-run-guide-pending"),
-    ).toBe("true");
-    expect(mocks.emit).toHaveBeenCalledWith("first-run-guide-pending");
+    ).toBeNull();
+    expect(mocks.emit).not.toHaveBeenCalledWith("first-run-guide-pending");
     expect(mocks.emit).toHaveBeenCalledWith("navigate", {
       url: "screenpipe://home?section=brain",
     });
