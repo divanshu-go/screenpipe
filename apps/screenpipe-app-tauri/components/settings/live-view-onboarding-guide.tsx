@@ -93,7 +93,7 @@ export function LiveViewOnboardingGuide({
         eyebrow="your first Live View"
         step="1 of 3"
         title="this dashboard was made for your goal"
-        description="Screenpipe saved this view before doing the slow AI work, so you always have a visible place to return to and recover from setup problems."
+        description="Screenpipe designed this Live View around the outcome you chose. It will fill with real activity from your connected Pipes."
         primaryLabel="show me how it fills"
         onPrimary={() => moveTo("waiting")}
         onDismiss={dismiss}
