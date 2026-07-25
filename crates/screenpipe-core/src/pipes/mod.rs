@@ -3000,7 +3000,19 @@ impl PipeManager {
     /// in a spawned tokio task.  Use this from API handlers to avoid holding
     /// the PipeManager mutex for the entire execution duration.
     pub async fn start_pipe_background(&self, name: &str) -> Result<()> {
-        self.start_pipe_background_with_context(name, "manual", None)
+        self.start_pipe_background_with_trigger_and_context(name, "manual", None)
+            .await
+    }
+
+    /// Start one manual run with request-scoped context. Unlike the manager's
+    /// shared integration context, this value belongs only to this execution
+    /// and cannot leak into another concurrently started pipe.
+    pub async fn start_pipe_background_with_context(
+        &self,
+        name: &str,
+        run_context: Option<&str>,
+    ) -> Result<()> {
+        self.start_pipe_background_with_trigger_and_context(name, "manual", run_context)
             .await
     }
 
@@ -3010,14 +3022,14 @@ impl PipeManager {
         name: &str,
         trigger: &str,
     ) -> Result<()> {
-        self.start_pipe_background_with_context(name, trigger, None)
+        self.start_pipe_background_with_trigger_and_context(name, trigger, None)
             .await
     }
 
-    /// Start one manual run with request-scoped context. Unlike the manager's
-    /// shared integration context, this value belongs only to this execution
-    /// and cannot leak into another concurrently started pipe.
-    pub async fn start_pipe_background_with_context(
+    /// Start a Pipe with both low-cardinality telemetry and execution-scoped
+    /// prompt context. Keeping both values as arguments avoids mutating shared
+    /// manager state while a background run is being prepared.
+    pub async fn start_pipe_background_with_trigger_and_context(
         &self,
         name: &str,
         trigger: &str,

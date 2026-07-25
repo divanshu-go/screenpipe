@@ -24,7 +24,9 @@ vi.mock("@/lib/utils/tauri", () => ({
 
 import {
   createOnboardingLiveView,
+  declaredFrontmatterConnections,
   rankOnboardingPipeCandidates,
+  selectOnboardingPipeCandidates,
 } from "../onboarding-live-view";
 
 function response(body: unknown, ok = true, status = ok ? 200 : 500) {
@@ -36,6 +38,22 @@ function response(body: unknown, ok = true, status = ok ? 200 : 500) {
 }
 
 describe("rankOnboardingPipeCandidates", () => {
+  it("reads both inline and list-style connection declarations", () => {
+    expect(
+      declaredFrontmatterConnections(
+        "---\nconnections:\n  - obsidian\n  - gmail\nenabled: true\n---\nbody",
+      ),
+    ).toEqual(["obsidian", "gmail"]);
+    expect(
+      declaredFrontmatterConnections(
+        "---\nconnections: [google-calendar, gmail]\n---\nbody",
+      ),
+    ).toEqual(["google-calendar", "gmail"]);
+    expect(
+      declaredFrontmatterConnections("---\nconnections: []\n---\nbody"),
+    ).toEqual([]);
+  });
+
   it("prioritizes the user's outcome and excludes unreviewed or setup-dependent Pipes", () => {
     const ranked = rankOnboardingPipeCandidates(
       "find repetitive work to automate and turn into an SOP",
@@ -78,6 +96,60 @@ describe("rankOnboardingPipeCandidates", () => {
     expect(ranked[0].slug).toBe("workflow-discovery");
     expect(ranked.map((pipe) => pipe.slug)).not.toContain("unsafe-draft");
     expect(ranked.map((pipe) => pipe.slug)).not.toContain("needs-account");
+  });
+
+  it("uses the product goal routing before popularity", () => {
+    const ranked = rankOnboardingPipeCandidates(
+      "understand my work",
+      [
+        {
+          slug: "popular-generic",
+          title: "Popular generic",
+          description: "understand work and memory",
+          review_status: "approved",
+          install_count: 1_000_000,
+          connections: [],
+        },
+        {
+          slug: "digital-clone",
+          title: "Digital clone",
+          description: "personal work memory",
+          review_status: "approved",
+          install_count: 10,
+          connections: [],
+        },
+      ],
+      ["digital-clone"],
+    );
+
+    expect(ranked[0].slug).toBe("digital-clone");
+  });
+
+  it("limits a suggested outcome to its portable Store Pipes", () => {
+    const selected = selectOnboardingPipeCandidates(
+      "document our support process",
+      "create_sops",
+      [
+        {
+          slug: "digital-clone",
+          title: "Digital clone",
+          description: "popular work memory",
+          review_status: "approved",
+          install_count: 20_000,
+          connections: [],
+        },
+        {
+          slug: "sop-generator",
+          title: "SOP Generator",
+          description: "source-backed process documentation",
+          review_status: "approved",
+          install_count: 10,
+          connections: [],
+        },
+      ],
+    );
+
+    expect(selected.map((pipe) => pipe.slug)).toEqual(["sop-generator"]);
   });
 });
 
@@ -126,26 +198,17 @@ describe("createOnboardingLiveView", () => {
     mocks.localFetch.mockImplementation(
       async (url: string, init?: RequestInit) => {
         if (url === "/health") return response({ status: "healthy" });
-        if (url === "/pipes/store?sort=popular") {
+        if (url === "/pipes/store/meeting-intel") {
           return response({
-            data: [
-              {
-                slug: "meeting-intel",
-                title: "Meeting Intelligence",
-                description: "meeting decisions, tasks, and follow-up",
-                review_status: "approved",
-                connections: [],
-                install_count: 340,
-                featured: true,
-              },
-              {
-                slug: "requires-connection",
-                title: "Requires connection",
-                description: "meeting sync",
-                review_status: "approved",
-                connections: ["calendar"],
-              },
-            ],
+            data: {
+              slug: "meeting-intel",
+              title: "Meeting Intelligence",
+              description: "meeting decisions, tasks, and follow-up",
+              review_status: "approved",
+              connections: [],
+              install_count: 340,
+              featured: true,
+            },
           });
         }
         if (url === "/pipes/meeting-intel/enable") {
@@ -190,6 +253,7 @@ describe("createOnboardingLiveView", () => {
     const progress = vi.fn();
     const result = await createOnboardingLiveView({
       goal: "help me follow through after meetings",
+      goalCategory: "meeting_follow_through",
       preset: {
         id: "default",
         provider: "screenpipe-cloud",
@@ -263,6 +327,7 @@ describe("createOnboardingLiveView", () => {
 
     await createOnboardingLiveView({
       goal: "help me follow through after meetings",
+      goalCategory: "meeting_follow_through",
       preset: {
         id: "default",
         provider: "screenpipe-cloud",

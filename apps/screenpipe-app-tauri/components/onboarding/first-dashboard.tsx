@@ -15,42 +15,12 @@ import {
   type OnboardingLiveViewProgress,
   type OnboardingLiveViewStage,
 } from "@/lib/live-views/onboarding-live-view";
+import {
+  ONBOARDING_GOALS,
+  type OnboardingGoalAudience,
+  type OnboardingGoalCategory,
+} from "@/lib/live-views/onboarding-goals";
 import type { AIPreset } from "@/lib/utils/tauri";
-
-type GoalCategory =
-  | "resume_work"
-  | "meeting_follow_through"
-  | "find_automation"
-  | "custom";
-
-const SUGGESTED_GOALS: Array<{
-  category: Exclude<GoalCategory, "custom">;
-  title: string;
-  description: string;
-  prompt: string;
-}> = [
-  {
-    category: "resume_work",
-    title: "help me resume work",
-    description: "show where I stopped and what needs attention",
-    prompt:
-      "Build a daily dashboard that helps me remember what I worked on, where I stopped, and what I should continue next.",
-  },
-  {
-    category: "meeting_follow_through",
-    title: "follow through after meetings",
-    description: "keep decisions, tasks, and people in one place",
-    prompt:
-      "Build a dashboard for meeting follow-through with decisions, action items, people to contact, and unresolved questions.",
-  },
-  {
-    category: "find_automation",
-    title: "find work to automate",
-    description: "surface repeated workflows and possible SOPs",
-    prompt:
-      "Build a dashboard that finds repeated work, estimates automation opportunities, and shows the best workflow to turn into an SOP next.",
-  },
-];
 
 const BUILD_STEPS: Array<{
   stage: OnboardingLiveViewStage;
@@ -85,8 +55,11 @@ function displayPipeName(slug: string): string {
 export default function FirstDashboard() {
   const { completeOnboarding } = useOnboarding();
   const { settings, isSettingsLoaded } = useSettings();
+  const [goalAudience, setGoalAudience] =
+    useState<OnboardingGoalAudience>("personal");
   const [goal, setGoal] = useState("");
-  const [goalCategory, setGoalCategory] = useState<GoalCategory>("custom");
+  const [goalCategory, setGoalCategory] =
+    useState<OnboardingGoalCategory>("custom");
   const [stage, setStage] = useState<OnboardingLiveViewStage | null>(null);
   const [selectedPipes, setSelectedPipes] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -108,6 +81,7 @@ export default function FirstDashboard() {
       if (progress.pipeSlugs) setSelectedPipes(progress.pipeSlugs);
       if (progress.stage === "plan_ready") {
         posthog.capture("onboarding_first_dashboard_plan_generated", {
+          goal_audience: goalAudience,
           goal_category: goalCategory,
           pipe_count: progress.pipeCount,
           pipe_slugs: progress.pipeSlugs,
@@ -117,6 +91,7 @@ export default function FirstDashboard() {
       }
       if (progress.stage === "pipe_ready") {
         posthog.capture("onboarding_first_dashboard_pipe_ready", {
+          goal_audience: goalAudience,
           goal_category: goalCategory,
           pipe_slug: progress.pipeSlug,
           pipe_index: progress.pipeIndex,
@@ -125,7 +100,7 @@ export default function FirstDashboard() {
         });
       }
     },
-    [goalCategory],
+    [goalAudience, goalCategory],
   );
 
   const handleCreate = useCallback(async () => {
@@ -136,6 +111,7 @@ export default function FirstDashboard() {
       posthog.capture("onboarding_first_dashboard_failed", {
         failure_reason: "ai_preset_unavailable",
         stage: "planning",
+        goal_audience: goalAudience,
         goal_category: goalCategory,
       });
       return;
@@ -146,6 +122,7 @@ export default function FirstDashboard() {
     setSelectedPipes([]);
     setStage("planning");
     posthog.capture("onboarding_first_dashboard_goal_submitted", {
+      goal_audience: goalAudience,
       goal_category: goalCategory,
       custom_goal: goalCategory === "custom",
       goal_length: lengthBucket(normalizedGoal),
@@ -155,11 +132,13 @@ export default function FirstDashboard() {
     try {
       const result = await createOnboardingLiveView({
         goal: normalizedGoal,
+        goalCategory,
         preset: defaultPreset,
         userToken: settings.user?.token ?? null,
         onProgress: reportProgress,
       });
       posthog.capture("onboarding_first_dashboard_created", {
+        goal_audience: goalAudience,
         goal_category: goalCategory,
         pipe_count: result.pipeSlugs.length,
         pipe_slugs: result.pipeSlugs,
@@ -169,6 +148,7 @@ export default function FirstDashboard() {
       });
       posthog.capture("onboarding_path_selected", {
         path: "ai_live_view",
+        goal_audience: goalAudience,
         pipes: result.pipeSlugs,
         pipe_count: result.pipeSlugs.length,
         goal_category: goalCategory,
@@ -180,6 +160,7 @@ export default function FirstDashboard() {
         method: "live_view_created",
         pipeCount: result.pipeSlugs.length,
         dashboardBlockCount: result.blockCount,
+        goalAudience,
         goalCategory,
       });
     } catch (setupError) {
@@ -191,6 +172,7 @@ export default function FirstDashboard() {
         failure_reason: knownError?.code ?? "unknown",
         stage: knownError?.stage ?? stage ?? "planning",
         pipe_slug: knownError?.pipeSlug,
+        goal_audience: goalAudience,
         goal_category: goalCategory,
         time_spent_ms: Date.now() - mountedAtRef.current,
       });
@@ -205,6 +187,7 @@ export default function FirstDashboard() {
     completeOnboarding,
     defaultPreset,
     goal,
+    goalAudience,
     goalCategory,
     reportProgress,
     settings.user?.token,
@@ -215,6 +198,7 @@ export default function FirstDashboard() {
     if (completingRef.current) return;
     completingRef.current = true;
     posthog.capture("onboarding_first_dashboard_skipped", {
+      goal_audience: goalAudience,
       goal_category: goal ? goalCategory : "none",
       time_spent_ms: Date.now() - mountedAtRef.current,
     });
@@ -227,7 +211,7 @@ export default function FirstDashboard() {
       completingRef.current = false;
       setError("Could not finish setup. Try again.");
     }
-  }, [completeOnboarding, goal, goalCategory]);
+  }, [completeOnboarding, goal, goalAudience, goalCategory]);
 
   if (stage) {
     const currentIndex = stageIndex(stage);
@@ -281,15 +265,53 @@ export default function FirstDashboard() {
     <div className="flex flex-col items-center py-2">
       <div className="w-full max-w-sm">
         <h2 className="text-center font-mono text-lg font-semibold lowercase">
-          what should screenpipe do for you?
+          what do you want help with first?
         </h2>
         <p className="mx-auto mt-2 max-w-xs text-center font-mono text-[11px] leading-relaxed text-muted-foreground">
-          choose one outcome. AI will pick the right Pipes and design your
+          choose one outcome. screenpipe will set up the right Pipes and your
           first dashboard.
         </p>
 
-        <div className="mt-5 space-y-2">
-          {SUGGESTED_GOALS.map((suggestion) => {
+        <div
+          className="mt-5 grid grid-cols-2 border border-border p-0.5"
+          role="group"
+          aria-label="who is this setup for?"
+        >
+          {([
+            ["personal", "for me"],
+            ["team", "for my team"],
+          ] as const).map(([audience, label]) => {
+            const selected = goalAudience === audience;
+            return (
+              <button
+                key={audience}
+                type="button"
+                aria-pressed={selected}
+                onClick={() => {
+                  if (audience === goalAudience) return;
+                  setGoalAudience(audience);
+                  setGoal("");
+                  setGoalCategory("custom");
+                  setError(null);
+                  posthog.capture(
+                    "onboarding_first_dashboard_audience_changed",
+                    { goal_audience: audience },
+                  );
+                }}
+                className={`px-3 py-2 font-mono text-[10px] font-semibold uppercase tracking-wide transition-colors duration-150 focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-2 ${
+                  selected
+                    ? "bg-foreground text-background"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="mt-3 space-y-2">
+          {ONBOARDING_GOALS[goalAudience].map((suggestion) => {
             const selected = goalCategory === suggestion.category;
             return (
               <button
@@ -330,7 +352,11 @@ export default function FirstDashboard() {
             value={goalCategory === "custom" ? goal : ""}
             maxLength={240}
             rows={2}
-            placeholder="e.g. show how I spend time across projects"
+            placeholder={
+              goalAudience === "personal"
+                ? "e.g. show how I spend time across projects"
+                : "e.g. document how support handles escalations"
+            }
             onChange={(event) => {
               setGoal(event.target.value);
               setGoalCategory("custom");
@@ -352,7 +378,7 @@ export default function FirstDashboard() {
           disabled={!goal.trim() || !isSettingsLoaded}
           className="mt-4 w-full border border-foreground bg-foreground px-3 py-3 font-mono text-xs font-semibold uppercase tracking-wide text-background transition-colors hover:bg-background hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35"
         >
-          {isSettingsLoaded ? "build my dashboard" : "loading AI"}
+          {isSettingsLoaded ? "set this up" : "loading AI"}
         </button>
         <button
           type="button"

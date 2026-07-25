@@ -122,7 +122,8 @@ describe("useOnboarding measurement", () => {
       method: "live_view_created",
       pipeCount: 2,
       dashboardBlockCount: 5,
-      goalCategory: "resume_work",
+      goalAudience: "personal",
+      goalCategory: "work_memory",
     });
 
     expect(
@@ -140,7 +141,8 @@ describe("useOnboarding measurement", () => {
       pipe_count: 2,
       customized: undefined,
       dashboard_block_count: 5,
-      goal_category: "resume_work",
+      goal_audience: "personal",
+      goal_category: "work_memory",
     });
   });
 });

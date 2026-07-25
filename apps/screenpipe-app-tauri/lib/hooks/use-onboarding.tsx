@@ -25,6 +25,7 @@ export type OnboardingCompletionContext = {
   pipeCount?: number;
   customized?: boolean;
   dashboardBlockCount?: number;
+  goalAudience?: string;
   goalCategory?: string;
 };
 
@@ -110,6 +111,9 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
           customized: context.customized,
           ...(context.dashboardBlockCount !== undefined
             ? { dashboard_block_count: context.dashboardBlockCount }
+            : {}),
+          ...(context.goalAudience
+            ? { goal_audience: context.goalAudience }
             : {}),
           ...(context.goalCategory
             ? { goal_category: context.goalCategory }

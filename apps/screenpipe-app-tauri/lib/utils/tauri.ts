@@ -1665,14 +1665,6 @@ async readAudioExclusions() : Promise<Result<ExcludedApp[], string>> {
     else return { status: "error", error: e  as any };
 }
 },
-async readLogTail(path: string, maxBytes: number) : Promise<Result<string, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("read_log_tail", { path, maxBytes }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
 /**
  * Read text from the system clipboard (native API — navigator.clipboard.readText()
  * is not permitted in the Tauri webview). Returns empty string when the
@@ -1682,6 +1674,14 @@ async readLogTail(path: string, maxBytes: number) : Promise<Result<string, strin
 async readClipboardText() : Promise<Result<string, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("read_clipboard_text") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async readLogTail(path: string, maxBytes: number) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("read_log_tail", { path, maxBytes }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };

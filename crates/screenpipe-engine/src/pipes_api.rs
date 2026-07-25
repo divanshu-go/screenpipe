@@ -308,7 +308,7 @@ pub async fn run_pipe_now(
 
     let trigger_type = run_trigger_type(body.as_ref().map(|Json(b)| b));
     let result = mgr
-        .start_pipe_background_with_context(&id, trigger_type, run_context.as_deref())
+        .start_pipe_background_with_trigger_and_context(&id, trigger_type, run_context.as_deref())
         .await;
 
     match result {
@@ -538,10 +538,12 @@ mod tests {
     #[test]
     fn only_accepts_onboarding_as_a_non_manual_api_trigger() {
         let onboarding = RunPipeBody {
+            run_context: None,
             notification_context: None,
             trigger_type: Some("onboarding".to_string()),
         };
         let untrusted = RunPipeBody {
+            run_context: None,
             notification_context: None,
             trigger_type: Some("scheduled".to_string()),
         };

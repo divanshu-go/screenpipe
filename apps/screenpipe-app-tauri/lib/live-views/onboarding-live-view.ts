@@ -9,6 +9,10 @@ import {
   type LiveViewPipeSummary,
 } from "@/lib/live-views/generate-live-view-with-pi";
 import {
+  preferredStorePipeSlugs,
+  type OnboardingGoalCategory,
+} from "@/lib/live-views/onboarding-goals";
+import {
   buildLiveViewTimeContext,
   DEFAULT_LIVE_VIEW_PERIOD_POLICY,
 } from "@/lib/live-views/time-range";
@@ -72,6 +76,7 @@ export type OnboardingLiveViewFailureCode =
   | "store_unavailable"
   | "no_store_candidates"
   | "ai_plan_failed"
+  | "pipe_requires_connection"
   | "pipe_install_failed"
   | "pipe_enable_failed"
   | "dashboard_save_failed"
@@ -134,8 +139,12 @@ function expandedGoalWords(goal: string): Set<string> {
 export function rankOnboardingPipeCandidates(
   goal: string,
   rawPipes: StorePipeRecord[],
+  preferredSlugs: string[] = [],
 ): OnboardingPipeCandidate[] {
   const goalWords = expandedGoalWords(goal);
+  const preferred = new Map(
+    preferredSlugs.map((slug, index) => [slug, preferredSlugs.length - index]),
+  );
   return rawPipes
     .filter((pipe) => {
       if (typeof pipe.slug !== "string" || !pipe.slug.trim()) return false;
@@ -169,6 +178,7 @@ export function rankOnboardingPipeCandidates(
         }
       }
       if (pipe.featured === true) relevance += 2;
+      relevance += (preferred.get(slug) ?? 0) * 100;
       relevance += Math.min(3, Math.log10(installCount + 1));
       return {
         index,
@@ -192,6 +202,18 @@ export function rankOnboardingPipeCandidates(
     .map(({ candidate }) => candidate);
 }
 
+export function selectOnboardingPipeCandidates(
+  goal: string,
+  goalCategory: OnboardingGoalCategory,
+  rawPipes: StorePipeRecord[],
+): OnboardingPipeCandidate[] {
+  const preferredSlugs = preferredStorePipeSlugs(goalCategory);
+  const ranked = rankOnboardingPipeCandidates(goal, rawPipes, preferredSlugs);
+  return preferredSlugs.length > 0
+    ? ranked.filter((candidate) => preferredSlugs.includes(candidate.slug))
+    : ranked;
+}
+
 function jsonBody(response: Response): Promise<Record<string, unknown>> {
   return response
     .json()
@@ -201,6 +223,37 @@ function jsonBody(response: Response): Promise<Record<string, unknown>> {
         : {},
     )
     .catch(() => ({}));
+}
+
+export function declaredFrontmatterConnections(source: string): string[] {
+  const match = source.match(/^---\s*\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  if (!match) return [];
+  const lines = match[1].split(/\r?\n/);
+  const connections: string[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const declaration = lines[index].match(/^connections:\s*(.*)$/);
+    if (!declaration) continue;
+    const inline = declaration[1].trim();
+    if (inline.startsWith("[") && inline.endsWith("]")) {
+      connections.push(
+        ...inline
+          .slice(1, -1)
+          .split(",")
+          .map((value) => value.trim().replace(/^['"]|['"]$/g, ""))
+          .filter(Boolean),
+      );
+    } else if (inline && inline !== "[]") {
+      connections.push(inline.replace(/^['"]|['"]$/g, ""));
+    } else if (!inline) {
+      for (let child = index + 1; child < lines.length; child += 1) {
+        const item = lines[child].match(/^\s+-\s+(.+?)\s*$/);
+        if (!item) break;
+        connections.push(item[1].replace(/^['"]|['"]$/g, ""));
+      }
+    }
+    break;
+  }
+  return connections;
 }
 
 async function waitForServer(maxWaitMs = 20_000): Promise<void> {
@@ -223,10 +276,42 @@ async function waitForServer(maxWaitMs = 20_000): Promise<void> {
 
 async function loadStoreCandidates(
   goal: string,
+  goalCategory: OnboardingGoalCategory,
 ): Promise<OnboardingPipeCandidate[]> {
-  let response: Response;
+  const preferredSlugs = preferredStorePipeSlugs(goalCategory);
+  let rawPipes: StorePipeRecord[] = [];
   try {
-    response = await localFetch("/pipes/store?sort=popular");
+    if (preferredSlugs.length > 0) {
+      const detailResults = await Promise.allSettled(
+        preferredSlugs.map(async (slug) => {
+          const response = await localFetch(
+            `/pipes/store/${encodeURIComponent(slug)}`,
+          );
+          if (!response.ok) return null;
+          const body = await jsonBody(response);
+          const candidate =
+            typeof body.data === "object" && body.data !== null
+              ? (body.data as StorePipeRecord)
+              : (body as StorePipeRecord);
+          return typeof candidate.slug === "string" ? candidate : null;
+        }),
+      );
+      if (detailResults.every((result) => result.status === "rejected")) {
+        throw new Error("store requests failed");
+      }
+      rawPipes = detailResults.flatMap((result) =>
+        result.status === "fulfilled" && result.value ? [result.value] : [],
+      );
+    } else {
+      const response = await localFetch("/pipes/store?sort=popular");
+      if (!response.ok) throw new Error("store request failed");
+      const body = await jsonBody(response);
+      rawPipes = Array.isArray(body.data)
+        ? (body.data as StorePipeRecord[])
+        : Array.isArray(body.pipes)
+          ? (body.pipes as StorePipeRecord[])
+          : [];
+    }
   } catch {
     throw new OnboardingLiveViewSetupError(
       "store_unavailable",
@@ -234,20 +319,11 @@ async function loadStoreCandidates(
       "The Pipe Store is unavailable. Check your connection and try again.",
     );
   }
-  const body = await jsonBody(response);
-  if (!response.ok) {
-    throw new OnboardingLiveViewSetupError(
-      "store_unavailable",
-      "planning",
-      "The Pipe Store is unavailable. Check your connection and try again.",
-    );
-  }
-  const rawPipes = Array.isArray(body.data)
-    ? (body.data as StorePipeRecord[])
-    : Array.isArray(body.pipes)
-      ? (body.pipes as StorePipeRecord[])
-      : [];
-  const candidates = rankOnboardingPipeCandidates(goal, rawPipes);
+  const candidates = selectOnboardingPipeCandidates(
+    goal,
+    goalCategory,
+    rawPipes,
+  );
   if (candidates.length === 0) {
     throw new OnboardingLiveViewSetupError(
       "no_store_candidates",
@@ -274,6 +350,34 @@ async function ensurePipeReady(
 
   const existing = await enable(slug);
   if (existing.ok) return { name: slug, installed: false };
+
+  const detailResponse = await localFetch(
+    `/pipes/store/${encodeURIComponent(slug)}`,
+  );
+  const detailBody = await jsonBody(detailResponse);
+  const detail =
+    typeof detailBody.data === "object" && detailBody.data !== null
+      ? (detailBody.data as Record<string, unknown>)
+      : detailBody;
+  const declaredConnections = new Set([
+    ...(Array.isArray(detail.connections)
+      ? detail.connections.filter(
+          (connection): connection is string =>
+            typeof connection === "string" && Boolean(connection.trim()),
+        )
+      : []),
+    ...(typeof detail.source_md === "string"
+      ? declaredFrontmatterConnections(detail.source_md)
+      : []),
+  ]);
+  if (declaredConnections.size > 0) {
+    throw new OnboardingLiveViewSetupError(
+      "pipe_requires_connection",
+      "installing",
+      `${slug} needs another account before it can run. Choose another setup or try a custom goal.`,
+      slug,
+    );
+  }
 
   const installResponse = await localFetch("/pipes/store/install", {
     method: "POST",
@@ -433,6 +537,7 @@ async function refreshDashboard(view: BrainViewDefinition): Promise<number> {
 
 export async function createOnboardingLiveView(options: {
   goal: string;
+  goalCategory: OnboardingGoalCategory;
   preset: AIPreset;
   userToken: string | null;
   onProgress?: (progress: OnboardingLiveViewProgress) => void;
@@ -447,7 +552,10 @@ export async function createOnboardingLiveView(options: {
 
   report({ stage: "planning" });
   await waitForServer();
-  const candidates = await loadStoreCandidates(options.goal);
+  const candidates = await loadStoreCandidates(
+    options.goal,
+    options.goalCategory,
+  );
 
   let generated: GeneratedLiveView;
   try {

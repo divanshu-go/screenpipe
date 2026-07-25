@@ -92,11 +92,9 @@ describe("FirstDashboard", () => {
     render(<FirstDashboard />);
 
     fireEvent.click(
-      screen.getByRole("button", { name: /follow through after meetings/i }),
+      screen.getByRole("button", { name: /get more from meetings/i }),
     );
-    fireEvent.click(
-      screen.getByRole("button", { name: /build my dashboard/i }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: /set this up/i }));
 
     await waitFor(() =>
       expect(mocks.createOnboardingLiveView).toHaveBeenCalledTimes(1),
@@ -104,6 +102,7 @@ describe("FirstDashboard", () => {
     expect(mocks.createOnboardingLiveView).toHaveBeenCalledWith(
       expect.objectContaining({
         goal: expect.stringContaining("meeting follow-through"),
+        goalCategory: "meeting_follow_through",
         userToken: "user-token",
       }),
     );
@@ -112,6 +111,7 @@ describe("FirstDashboard", () => {
         method: "live_view_created",
         pipeCount: 1,
         dashboardBlockCount: 5,
+        goalAudience: "personal",
         goalCategory: "meeting_follow_through",
       }),
     );
@@ -121,6 +121,7 @@ describe("FirstDashboard", () => {
     );
     expect(submitted?.[1]).toEqual(
       expect.objectContaining({
+        goal_audience: "personal",
         goal_category: "meeting_follow_through",
         custom_goal: false,
       }),
@@ -136,9 +137,7 @@ describe("FirstDashboard", () => {
       screen.getByPlaceholderText(/show how I spend time across projects/i),
       { target: { value: "show my private project work" } },
     );
-    fireEvent.click(
-      screen.getByRole("button", { name: /build my dashboard/i }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: /set this up/i }));
 
     await waitFor(() =>
       expect(mocks.createOnboardingLiveView).toHaveBeenCalledWith(
@@ -149,9 +148,54 @@ describe("FirstDashboard", () => {
       ([event]) => event === "onboarding_first_dashboard_goal_submitted",
     );
     expect(submitted?.[1]).toEqual(
-      expect.objectContaining({ goal_category: "custom", custom_goal: true }),
+      expect.objectContaining({
+        goal_audience: "personal",
+        goal_category: "custom",
+        custom_goal: true,
+      }),
     );
     expect(JSON.stringify(submitted?.[1])).not.toContain("private project");
+  });
+
+  it("keeps personal and team outcomes separate", async () => {
+    render(<FirstDashboard />);
+
+    expect(
+      screen.getByRole("button", { name: /remember and understand my work/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /create living SOPs/i }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /for my team/i }));
+
+    expect(
+      screen.queryByRole("button", {
+        name: /remember and understand my work/i,
+      }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: /create living SOPs/i }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /set this up/i }));
+
+    await waitFor(() =>
+      expect(mocks.createOnboardingLiveView).toHaveBeenCalledWith(
+        expect.objectContaining({
+          goalCategory: "create_sops",
+          goal: expect.stringContaining("SOP dashboard"),
+        }),
+      ),
+    );
+    const submitted = mocks.capture.mock.calls.find(
+      ([event]) => event === "onboarding_first_dashboard_goal_submitted",
+    );
+    expect(submitted?.[1]).toEqual(
+      expect.objectContaining({
+        goal_audience: "team",
+        goal_category: "create_sops",
+      }),
+    );
   });
 
   it("skips without generating, installing, or saving anything", async () => {
