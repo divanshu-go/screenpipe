@@ -37,7 +37,7 @@
     "imageSrc": "/images/opencode.svg",
     "invertInDark": true,
     "presetName": "opencode",
-    "description": "Use your installed OpenCode agent. First-time login currently requires `opencode auth login` in a terminal.",
+    "description": "Use your installed OpenCode agent.",
     "launch": { "kind": "binary", "command": "opencode", "args": ["acp"] },
     "installUrl": "https://opencode.ai"
   },

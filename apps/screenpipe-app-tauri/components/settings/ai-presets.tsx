@@ -1493,10 +1493,6 @@ const AISection = ({
             />
           )}
 
-          <p className="text-xs text-muted-foreground">
-            Sign-in happens in the chat when the agent asks for it. Browser login is recommended;
-            key-based methods are shown only when their environment variables are available.
-          </p>
 
           {settingsPreset.acpAgent?.id === "custom" && (
             <div className="space-y-4 border-t pt-4">

@@ -717,8 +717,7 @@ export function AIProviderConfig({
               })}
             </div>
             <p className="text-[10px] text-muted-foreground">
-              {acpAdapterInfo(formData.acpAgent?.id || "pi-acp").description}{" "}
-              sign-in happens in the chat when the agent asks for it.
+              {acpAdapterInfo(formData.acpAgent?.id || "pi-acp").description}
             </p>
             <AcpInstallGate
               compact
