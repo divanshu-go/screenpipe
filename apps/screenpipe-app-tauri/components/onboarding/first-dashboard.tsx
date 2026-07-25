@@ -5,7 +5,6 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, Loader2 } from "lucide-react";
 import posthog from "posthog-js";
 import { useOnboarding } from "@/lib/hooks/use-onboarding";
 import { useSettings } from "@/lib/hooks/use-settings";
@@ -25,12 +24,33 @@ import type { AIPreset } from "@/lib/utils/tauri";
 const BUILD_STEPS: Array<{
   stage: OnboardingLiveViewStage;
   label: string;
+  detail: string;
 }> = [
-  { stage: "planning", label: "understand your goal" },
-  { stage: "plan_ready", label: "choose the right Pipes" },
-  { stage: "installing", label: "set up your tools" },
-  { stage: "saving", label: "design your dashboard" },
-  { stage: "refreshing", label: "start the first update" },
+  {
+    stage: "planning",
+    label: "reading your goal",
+    detail: "turning the outcome you chose into a small, useful setup",
+  },
+  {
+    stage: "plan_ready",
+    label: "selecting context Pipes",
+    detail: "choosing only the local context sources this view needs",
+  },
+  {
+    stage: "installing",
+    label: "connecting local context",
+    detail: "starting the Pipes that will keep this view current",
+  },
+  {
+    stage: "saving",
+    label: "composing your Live View",
+    detail: "arranging source-backed Blocks around your goal",
+  },
+  {
+    stage: "refreshing",
+    label: "loading the first signal",
+    detail: "asking each Pipe for its first update",
+  },
 ];
 
 function stageIndex(stage: OnboardingLiveViewStage): number {
@@ -50,6 +70,69 @@ function lengthBucket(value: string): "short" | "medium" | "long" {
 
 function displayPipeName(slug: string): string {
   return slug.replace(/[-_]+/g, " ");
+}
+
+function ScreenpipeBuildVisual({ currentIndex }: { currentIndex: number }) {
+  const filledBlocks = Math.min(4, Math.max(0, currentIndex));
+
+  return (
+    <div
+      data-testid="onboarding-build-visual"
+      aria-hidden="true"
+      className="relative h-28 w-full overflow-hidden border-y border-border"
+    >
+      <div className="absolute left-3 top-5 h-12 w-16">
+        <div className="absolute left-2 top-0 h-10 w-12 border border-border bg-background" />
+        <div className="absolute left-1 top-1 h-10 w-12 border border-border bg-background" />
+        <div className="absolute left-0 top-2 h-10 w-12 overflow-hidden border border-foreground bg-background">
+          <span className="sp-onboarding-scan absolute inset-x-1 top-1 h-px bg-foreground" />
+          <span className="absolute bottom-1 left-1 h-1 w-4 bg-foreground" />
+          <span className="absolute bottom-1 right-1 h-1 w-2 border border-foreground" />
+        </div>
+        <span className="absolute bottom-0 left-0 font-mono text-[8px] lowercase tracking-[0.18em] text-muted-foreground">
+          context
+        </span>
+      </div>
+
+      <div className="absolute left-[22%] right-[27%] top-[43px] h-px bg-border">
+        <span className="sp-onboarding-packet absolute -top-[3px] h-[7px] w-[7px] bg-foreground" />
+      </div>
+
+      <div className="absolute left-1/2 top-[31px] z-10 grid h-6 w-6 -translate-x-1/2 grid-cols-2 gap-[2px] border border-foreground bg-background p-[3px]">
+        {[0, 1, 2, 3].map((cell) => (
+          <span
+            key={cell}
+            className="sp-onboarding-core-cell bg-foreground"
+            style={{ animationDelay: `${cell * -150}ms` }}
+          />
+        ))}
+      </div>
+      <span className="absolute left-1/2 top-[65px] -translate-x-1/2 font-mono text-[8px] lowercase tracking-[0.18em] text-muted-foreground">
+        screenpipe
+      </span>
+
+      <div className="absolute right-3 top-4 h-[54px] w-[76px] border border-foreground bg-background p-1">
+        <div className="grid h-full grid-cols-3 grid-rows-3 gap-1">
+          {[
+            "col-span-2",
+            "row-span-2",
+            "col-span-2",
+            "col-span-3",
+          ].map((span, index) => (
+            <span
+              key={span + index}
+              className={`${span} border border-foreground transition-colors duration-150 ${
+                index < filledBlocks ? "bg-foreground" : "bg-background"
+              }`}
+            />
+          ))}
+        </div>
+      </div>
+      <span className="absolute bottom-3 right-3 font-mono text-[8px] lowercase tracking-[0.18em] text-muted-foreground">
+        Live View
+      </span>
+    </div>
+  );
 }
 
 export default function FirstDashboard() {
@@ -215,45 +298,57 @@ export default function FirstDashboard() {
 
   if (stage) {
     const currentIndex = stageIndex(stage);
+    const currentStep =
+      BUILD_STEPS[Math.min(currentIndex, BUILD_STEPS.length - 1)];
     return (
       <div className="flex flex-col items-center py-3">
-        <div className="mb-6 h-2 w-2 animate-pulse bg-foreground" />
         <h2 className="font-mono text-lg font-semibold lowercase">
-          building your first dashboard
+          building your first Live View
         </h2>
         <p className="mt-2 max-w-sm text-center font-mono text-[11px] leading-relaxed text-muted-foreground">
-          screenpipe is choosing the smallest useful setup for your goal
+          local context in. a useful view out.
         </p>
 
         <div className="mt-7 w-full max-w-sm border border-border p-4">
-          <div className="space-y-3">
-            {BUILD_STEPS.map((step, index) => {
-              const done = currentIndex > index;
-              const active = currentIndex === index;
-              return (
-                <div
-                  key={step.stage}
-                  className={`flex items-center gap-3 font-mono text-[11px] ${
-                    done || active
-                      ? "text-foreground"
-                      : "text-muted-foreground/45"
-                  }`}
-                >
-                  <span className="flex h-4 w-4 items-center justify-center border border-current">
-                    {done ? (
-                      <Check className="h-3 w-3" strokeWidth={2.5} />
-                    ) : active ? (
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                    ) : null}
-                  </span>
-                  <span>{step.label}</span>
-                </div>
-              );
-            })}
+          <ScreenpipeBuildVisual currentIndex={currentIndex} />
+
+          <div className="mt-4 flex items-start justify-between gap-4">
+            <div role="status" aria-live="polite" className="min-w-0">
+              <div className="flex items-center gap-2 font-mono text-xs text-foreground">
+                <span className="sp-onboarding-cursor inline-block h-3 w-[3px] bg-foreground" />
+                <span>{currentStep.label}</span>
+              </div>
+              <p className="mt-1.5 font-mono text-[9px] leading-relaxed text-muted-foreground">
+                {currentStep.detail}
+              </p>
+            </div>
+            <span className="shrink-0 font-mono text-[9px] tabular-nums text-muted-foreground">
+              {String(Math.min(currentIndex + 1, BUILD_STEPS.length)).padStart(
+                2,
+                "0",
+              )}
+              /{String(BUILD_STEPS.length).padStart(2, "0")}
+            </span>
           </div>
+
+          <div
+            className="mt-4 grid grid-cols-5 gap-1"
+            aria-label={`step ${Math.min(currentIndex + 1, BUILD_STEPS.length)} of ${BUILD_STEPS.length}`}
+          >
+            {BUILD_STEPS.map((step, index) => (
+              <span
+                key={step.stage}
+                className={`h-1 border border-foreground transition-colors duration-150 ${
+                  index <= currentIndex ? "bg-foreground" : "bg-background"
+                }`}
+              />
+            ))}
+          </div>
+
           {selectedPipes.length > 0 && (
             <div className="mt-4 border-t border-border pt-3 font-mono text-[10px] text-muted-foreground">
-              using {selectedPipes.map(displayPipeName).join(" + ")}
+              <span className="mr-2 lowercase tracking-wide">Pipes</span>
+              {selectedPipes.map(displayPipeName).join(" + ")}
             </div>
           )}
         </div>

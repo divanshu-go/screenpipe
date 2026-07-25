@@ -130,6 +130,37 @@ describe("FirstDashboard", () => {
     expect(submitted?.[1]).not.toHaveProperty("prompt");
   });
 
+  it("shows the Screenpipe context-to-Live-View build sequence", async () => {
+    mocks.createOnboardingLiveView.mockImplementation(
+      async ({ onProgress }) => {
+        onProgress?.({ stage: "planning" });
+        return new Promise(() => {});
+      },
+    );
+    const { container } = render(<FirstDashboard />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /get more from meetings/i }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /set this up/i }));
+
+    expect(
+      await screen.findByRole("heading", {
+        name: /building your first Live View/i,
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("onboarding-build-visual")).toBeInTheDocument();
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "reading your goal",
+    );
+    expect(screen.getByLabelText("step 1 of 5")).toBeInTheDocument();
+    expect(container.querySelector(".sp-onboarding-packet")).not.toBeNull();
+    expect(container.querySelector(".sp-onboarding-scan")).not.toBeNull();
+    expect(container.querySelectorAll(".sp-onboarding-core-cell")).toHaveLength(
+      4,
+    );
+  });
+
   it("accepts a custom outcome without sending its text to PostHog", async () => {
     render(<FirstDashboard />);
 
