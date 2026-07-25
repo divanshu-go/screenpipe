@@ -5,10 +5,13 @@
 
 import React, {
   useCallback,
+  useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   Loader2,
   RotateCcw,
@@ -26,12 +29,6 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import type {
   BrainViewComponent,
   BrainViewSlot,
@@ -84,8 +81,15 @@ function LiveViewListItemText({
 }) {
   const titleRef = useRef<HTMLParagraphElement>(null);
   const subtitleRef = useRef<HTMLParagraphElement>(null);
+  const triggerRef = useRef<HTMLDivElement>(null);
+  const tooltipId = useId();
   const [isTruncated, setIsTruncated] = useState(false);
   const [tooltipOpen, setTooltipOpen] = useState(false);
+  const [tooltipPosition, setTooltipPosition] = useState({
+    left: 16,
+    top: 16,
+    below: false,
+  });
 
   const measureTruncation = useCallback((): boolean => {
     const truncated = [titleRef.current, subtitleRef.current].some(
@@ -98,7 +102,20 @@ function LiveViewListItemText({
   }, []);
 
   const openTooltipIfTruncated = useCallback(() => {
-    setTooltipOpen(measureTruncation());
+    if (!measureTruncation() || !triggerRef.current) return;
+
+    const rect = triggerRef.current.getBoundingClientRect();
+    const viewportWidth = window.innerWidth;
+    const tooltipWidth = Math.min(384, Math.max(160, viewportWidth - 32));
+    setTooltipPosition({
+      left: Math.min(
+        Math.max(16, rect.left),
+        Math.max(16, viewportWidth - tooltipWidth - 16),
+      ),
+      top: rect.top >= 120 ? rect.top - 8 : rect.bottom + 8,
+      below: rect.top < 120,
+    });
+    setTooltipOpen(true);
   }, [measureTruncation]);
 
   useLayoutEffect(() => {
@@ -111,51 +128,70 @@ function LiveViewListItemText({
     return () => observer.disconnect();
   }, [measureTruncation, title, subtitle]);
 
+  useEffect(() => {
+    if (!tooltipOpen) return;
+    const closeTooltip = () => setTooltipOpen(false);
+    window.addEventListener("resize", closeTooltip);
+    window.addEventListener("scroll", closeTooltip, true);
+    return () => {
+      window.removeEventListener("resize", closeTooltip);
+      window.removeEventListener("scroll", closeTooltip, true);
+    };
+  }, [tooltipOpen]);
+
   return (
-    <Tooltip
-      open={isTruncated && tooltipOpen}
-      onOpenChange={(open) => {
-        // Pointer entry and keyboard focus open the controlled tooltip below.
-        // Still honor Radix close requests such as Escape.
-        if (!open) setTooltipOpen(false);
-      }}
-    >
-      <TooltipTrigger asChild>
-        <div
-          className="min-w-0 flex-1 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-1"
-          tabIndex={isTruncated ? 0 : undefined}
-          onPointerEnter={openTooltipIfTruncated}
-          onPointerLeave={() => setTooltipOpen(false)}
-          onFocus={openTooltipIfTruncated}
-          onBlur={() => setTooltipOpen(false)}
-        >
-          <p ref={titleRef} className="truncate text-sm">
-            {title}
-          </p>
-          {subtitle && (
-            <p
-              ref={subtitleRef}
-              className="mt-0.5 truncate text-xs text-muted-foreground"
-            >
-              {subtitle}
-            </p>
-          )}
-        </div>
-      </TooltipTrigger>
-      <TooltipContent
-        side="top"
-        align="start"
-        sideOffset={6}
-        className="max-w-sm rounded-none px-3 py-2"
+    <>
+      <div
+        ref={triggerRef}
+        className="min-w-0 flex-1 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-1"
+        tabIndex={isTruncated ? 0 : undefined}
+        aria-describedby={tooltipOpen ? tooltipId : undefined}
+        onPointerEnter={openTooltipIfTruncated}
+        onPointerLeave={() => setTooltipOpen(false)}
+        onFocus={openTooltipIfTruncated}
+        onBlur={() => setTooltipOpen(false)}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") setTooltipOpen(false);
+        }}
       >
-        <p className="text-xs font-medium leading-snug">{title}</p>
+        <p ref={titleRef} className="truncate text-sm">
+          {title}
+        </p>
         {subtitle && (
-          <p className="mt-1 text-xs leading-snug text-muted-foreground">
+          <p
+            ref={subtitleRef}
+            className="mt-0.5 truncate text-xs text-muted-foreground"
+          >
             {subtitle}
           </p>
         )}
-      </TooltipContent>
-    </Tooltip>
+      </div>
+      {isTruncated &&
+        tooltipOpen &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div
+            id={tooltipId}
+            role="tooltip"
+            className="pointer-events-none fixed z-[100] w-max max-w-[min(calc(100vw-32px),24rem)] border border-border bg-popover px-3 py-2 text-popover-foreground shadow-md"
+            style={{
+              left: tooltipPosition.left,
+              top: tooltipPosition.top,
+              transform: tooltipPosition.below
+                ? undefined
+                : "translateY(-100%)",
+            }}
+          >
+            <p className="text-xs font-medium leading-snug">{title}</p>
+            {subtitle && (
+              <p className="mt-1 text-xs leading-snug text-muted-foreground">
+                {subtitle}
+              </p>
+            )}
+          </div>,
+          document.body,
+        )}
+    </>
   );
 }
 
@@ -217,28 +253,26 @@ function LiveViewCardBody({
     : [];
   if (slot.component === "list.v1") {
     return (
-      <TooltipProvider delayDuration={250}>
-        <div className="divide-y divide-border border-y border-border">
-          {items.map((item, index) => (
-            <div
-              key={`${stringValue(item.title)}-${index}`}
-              className="flex items-start justify-between gap-3 py-2.5"
-            >
-              <LiveViewListItemText
-                title={stringValue(item.title)}
-                subtitle={
-                  typeof item.subtitle === "string" ? item.subtitle : undefined
-                }
-              />
-              {typeof item.status === "string" && (
-                <span className="shrink-0 border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-                  {item.status}
-                </span>
-              )}
-            </div>
-          ))}
-        </div>
-      </TooltipProvider>
+      <div className="divide-y divide-border border-y border-border">
+        {items.map((item, index) => (
+          <div
+            key={`${stringValue(item.title)}-${index}`}
+            className="flex items-start justify-between gap-3 py-2.5"
+          >
+            <LiveViewListItemText
+              title={stringValue(item.title)}
+              subtitle={
+                typeof item.subtitle === "string" ? item.subtitle : undefined
+              }
+            />
+            {typeof item.status === "string" && (
+              <span className="shrink-0 border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                {item.status}
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
     );
   }
 

@@ -94,6 +94,13 @@ describe("LiveViewCard list overflow", () => {
     expect(within(tooltip).getByText(longTitle)).toBeTruthy();
     expect(within(tooltip).getByText(longSubtitle)).toBeTruthy();
 
+    fireEvent.pointerMove(longText as HTMLElement, {
+      pointerType: "mouse",
+      clientX: 80,
+      clientY: 20,
+    });
+    expect(screen.getByRole("tooltip")).toBe(tooltip);
+
     fireEvent.pointerLeave(longText as HTMLElement, {
       pointerType: "mouse",
       clientX: 200,
