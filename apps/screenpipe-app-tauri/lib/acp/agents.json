@@ -51,15 +51,6 @@
     "installUrl": "https://cursor.com/cli"
   },
   {
-    "id": "github-copilot-cli",
-    "name": "GitHub Copilot",
-    "imageSrc": "/images/acp/github-copilot-cli.svg",
-    "invertInDark": true,
-    "presetName": "github copilot",
-    "description": "Use GitHub Copilot's CLI agent installed on this computer.",
-    "launch": { "kind": "npx", "package": "@github/copilot@1.0.74", "args": ["--acp"] }
-  },
-  {
     "id": "kimi",
     "name": "Kimi CLI",
     "imageSrc": "/images/acp/kimi.svg",

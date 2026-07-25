@@ -2318,6 +2318,16 @@ async fn run_protocol(
                     init.protocol_version
                 )));
             }
+            // Log the agent's advertised capabilities (esp. MCP transports) so we
+            // can see, per agent/version, whether it will honor the stdio MCP
+            // servers we pass. stdio is the ACP baseline (never advertised); some
+            // agents (Cursor, Copilot) only take http/sse and silently drop ours.
+            eprintln!(
+                "[acp:{}] agent capabilities: {}",
+                config.agent_id,
+                serde_json::to_string(&init.agent_capabilities)
+                    .unwrap_or_else(|_| "<unserializable>".to_owned())
+            );
             let (mut session, resumed) =
                 open_or_resume_session(&connection, &state, &init, &config).await?;
             state.output.send(json!({
