@@ -17,6 +17,8 @@ import { buildInvalidatedAuthTokenMessage, isInvalidatedAuthTokenError } from "@
 import { buildNoResponseMessage, buildProviderErrorMessage } from "@/lib/chat/provider-errors";
 import { chatTelemetryContextForResponse } from "@/lib/chat/response-feedback";
 import { qualifiedValue } from "@/lib/analytics/qualified-value";
+import { acpAdapterInfo } from "@/lib/utils/preset-appearance";
+import { toast } from "@/components/ui/use-toast";
 import { registerPiLogListener } from "@/components/chat/standalone/hooks/pi-log-listener";
 import { registerPiReauthListener } from "@/components/chat/standalone/hooks/pi-reauth-listener";
 import {
@@ -33,6 +35,11 @@ import type { Message, ToolCall } from "@/lib/chat/types";
 import type { PiForegroundEventsOptions } from "@/components/chat/standalone/hooks/pi-types";
 
 const POST_STREAM_SIDE_EFFECT_DELAY_MS = 1_500;
+
+/** Agents currently showing an "installing" toast, so the "connected" toast
+ *  fires only after a real install finishes, not on every cached/instant
+ *  connect (which would be noise). */
+const installingAgents = new Set<string>();
 
 export function usePiForegroundEvents({
   activePreset,
@@ -206,6 +213,31 @@ export function usePiForegroundEvents({
         // A single unified sign-in dialog, deduped by the panel — not an
         // inline message card (which could be appended twice on retries).
         onAcpExternalAuthRequired?.({ agentId, agentName, command });
+        return;
+      }
+
+      if (data.type === "acp_status") {
+        // First-run npx download heads-up so a slow, silent startup doesn't
+        // look broken. ACP has no install-progress concept (the agent isn't up
+        // yet), so this is our own out-of-band status, like Zed's.
+        const agentId = stringValue(data.agentId);
+        const name = acpAdapterInfo(agentId).name;
+        if (stringValue(data.phase) === "downloading") {
+          installingAgents.add(agentId);
+          toast({
+            title: `installing ${name}`,
+            description: "downloading the agent. this can take a moment.",
+          });
+        } else if (stringValue(data.phase) === "ready") {
+          // Only follow up when we actually showed an install toast, so a
+          // cached/instant connect stays quiet.
+          if (installingAgents.delete(agentId)) {
+            toast({
+              title: `${name} ready`,
+              description: "the agent is connected. you can start chatting.",
+            });
+          }
+        }
         return;
       }
 

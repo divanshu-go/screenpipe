@@ -62,6 +62,9 @@ export function AcpPresetDefaults({
   const [probeError, setProbeError] = useState<string | null>(null);
   const [probeNonce, setProbeNonce] = useState(0);
   const [copied, setCopied] = useState(false);
+  // True while a probe is installing an npx agent that isn't cached yet, so the
+  // label can say "Installing <agent>…" instead of "loading choices".
+  const [downloadPending, setDownloadPending] = useState(false);
 
   // A custom adapter can't be probed until it has a command.
   const probeable = agentId !== "custom" || Boolean(agent.command?.trim());
@@ -80,6 +83,14 @@ export function AcpPresetDefaults({
     setProbing(true);
     setProbeError(null);
     let cancelled = false;
+    // A not-yet-cached npx agent installs on first probe, so the label can say
+    // "Installing…" instead of a bare "loading…" that looks hung.
+    void commands
+      .piAcpAgentDownloadPending(agentId)
+      .then((pending) => {
+        if (!cancelled) setDownloadPending(pending);
+      })
+      .catch(() => {});
     void (async () => {
       try {
         // Cap the probe so a signed-out/wedged agent can't spin forever; the
@@ -145,6 +156,16 @@ export function AcpPresetDefaults({
       );
     }
     if (probing) {
+      // First-run install of an npx agent: a pulsing label (no spinner, no
+      // percentage), matching how Zed shows external-agent installs.
+      if (downloadPending) {
+        const name = acpAdapterInfo(agentId).name;
+        return (
+          <p className={cn(hintClass, "animate-pulse")}>
+            {compact ? `installing ${name}…` : `Installing ${name}…`}
+          </p>
+        );
+      }
       return (
         <p className={cn(hintClass, "flex items-center gap-1.5")}>
           <Loader2 className="h-3 w-3 animate-spin" />
@@ -174,7 +195,7 @@ export function AcpPresetDefaults({
             <p className={cn("font-medium", compact ? "text-xs" : "text-sm")}>Sign in to {info.name}</p>
             <p className={cn("text-muted-foreground", compact ? "text-[11px]" : "text-xs")}>
               {signInCommand
-                ? `${info.name} signs in from its own terminal, not here. Run this command, then retry.`
+                ? `${info.name} signs in from its own terminal. Run this command, then retry.`
                 : probeError}
             </p>
           </div>

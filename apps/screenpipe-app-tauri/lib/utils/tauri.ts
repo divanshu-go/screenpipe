@@ -1511,6 +1511,15 @@ async piAbortActive(sessionId: string | null) : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+/**
+ * Whether launching this agent will trigger a first-run package install (a
+ * slow, silent-looking wait). The preset editor uses this to show an
+ * "Installing <agent>…" hint instead of a bare "loading…" label. Cheap cache
+ * stat; false for binary/cached agents.
+ */
+async piAcpAgentDownloadPending(agentId: string) : Promise<boolean> {
+    return await TAURI_INVOKE("pi_acp_agent_download_pending", { agentId });
+},
 async piAcpAgentInstallStatus(agentId: string) : Promise<AcpAgentInstallStatus> {
     return await TAURI_INVOKE("pi_acp_agent_install_status", { agentId });
 },

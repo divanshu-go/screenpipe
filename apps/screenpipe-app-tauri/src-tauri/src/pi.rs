@@ -4081,6 +4081,16 @@ pub fn pi_acp_agent_install_status(agent_id: String) -> AcpAgentInstallStatus {
     }
 }
 
+/// Whether launching this agent will trigger a first-run package install (a
+/// slow, silent-looking wait). The preset editor uses this to show an
+/// "Installing <agent>…" hint instead of a bare "loading…" label. Cheap cache
+/// stat; false for binary/cached agents.
+#[tauri::command]
+#[specta::specta]
+pub fn pi_acp_agent_download_pending(agent_id: String) -> bool {
+    crate::acp_runtime::agent_download_pending(&agent_id)
+}
+
 /// Switch the ACP session mode (e.g. a permission mode) advertised through
 /// `acp_session_config`. Allowed while a prompt is streaming.
 #[tauri::command]

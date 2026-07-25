@@ -327,6 +327,60 @@ pub fn agent_install_status(id: &str) -> (bool, bool, Option<String>, Option<Str
     }
 }
 
+/// bun's global package content-cache dir (`$BUN_INSTALL/install/cache`,
+/// default `~/.bun/install/cache`).
+fn bun_cache_dir() -> Option<std::path::PathBuf> {
+    let base = std::env::var_os("BUN_INSTALL")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .map(|home| std::path::PathBuf::from(home).join(".bun"))
+        })?;
+    Some(base.join("install").join("cache"))
+}
+
+/// Whether bun has `<package>@<version>` in its content cache, so `bun x` would
+/// launch it without a network download. bun stores each as
+/// `<cache>/[@scope/]<name>@<version>@@@<n>`. Best-effort: an undocumented
+/// layout, so a wrong answer only mis-words a status hint, never breaks launch.
+fn bun_package_cached(spec: &str) -> bool {
+    let Some(cache) = bun_cache_dir() else {
+        return false;
+    };
+    // spec is `[@scope/]name@version`; bun nests scoped packages under the scope.
+    let (dir, name_ver) = match spec.strip_prefix('@') {
+        Some(rest) => match rest.split_once('/') {
+            Some((scope, name_ver)) => (cache.join(format!("@{scope}")), name_ver.to_string()),
+            None => return false,
+        },
+        None => (cache, spec.to_string()),
+    };
+    let prefix = format!("{name_ver}@@@");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return false;
+    };
+    entries
+        .flatten()
+        .any(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
+}
+
+/// Whether launching this agent will trigger a first-run package download
+/// (a slow, silent-looking wait). Only npx agents download; a binary agent's
+/// CLI is already installed, and any agent already in bun's cache is instant.
+/// Used to show an "Installing <agent>…" hint instead of a bare spinner. ACP
+/// has no install-progress concept (the agent isn't running yet), so this is
+/// handled out of band, like Zed's own loading status.
+pub fn agent_download_pending(id: &str) -> bool {
+    agent_catalog()
+        .into_iter()
+        .find(|agent| agent.id == id)
+        .is_some_and(|agent| match agent.launch {
+            AgentLaunch::Npx { package, .. } => !bun_package_cached(&package),
+            AgentLaunch::Binary { .. } => false,
+        })
+}
+
 /// Best-effort check that `command` resolves to an executable on PATH.
 ///
 /// GUI apps capture PATH at launch (fix_path_env in main), so a CLI the user
@@ -2458,6 +2512,13 @@ async fn run_protocol(
             );
             let (mut session, resumed) =
                 open_or_resume_session(&connection, &state, &init, &config).await?;
+            // The agent is up (any first-run download finished) — clear the
+            // "downloading" hint before announcing readiness.
+            state.output.send(json!({
+                "type": "acp_status",
+                "phase": "ready",
+                "agentId": config.agent_id,
+            }));
             state.output.send(json!({
                 "type": "acp_ready",
                 "agentId": config.agent_id,
@@ -2746,6 +2807,18 @@ pub async fn run_from_env() -> Result<(), String> {
     } else {
         Vec::new()
     };
+    // A first-run npx install is a slow, silent-looking wait. Announce it out
+    // of band (ACP has no install-progress concept; the agent isn't up yet),
+    // so the UI can show "Installing <agent>…" instead of a bare spinner.
+    // Cleared at acp_ready; also re-announced from bun's stderr (below) in case
+    // the cache heuristic missed.
+    if agent_download_pending(&config.agent_id) {
+        output.send(json!({
+            "type": "acp_status",
+            "phase": "downloading",
+            "agentId": config.agent_id,
+        }));
+    }
     let (command_tx, command_rx) = mpsc::unbounded_channel();
     let (parent_closed_tx, mut parent_closed_rx) = oneshot::channel();
     let parent_state = state.clone();
@@ -2794,9 +2867,25 @@ pub async fn run_from_env() -> Result<(), String> {
         .ok_or("failed to open ACP agent stderr")?;
 
     let agent_id_for_stderr = config.agent_id.clone();
+    let stderr_output = output.clone();
     tokio::spawn(async move {
         let mut lines = tokio::io::BufReader::new(stderr).lines();
+        let mut announced_download = false;
         while let Ok(Some(line)) = lines.next_line().await {
+            // bun prints these to stderr while fetching a package on first run;
+            // announce it (once) so the UI can explain the wait.
+            if !announced_download
+                && (line.contains("Resolving dependencies")
+                    || line.contains("downloaded and extracted")
+                    || line.contains("Resolved, downloaded"))
+            {
+                announced_download = true;
+                stderr_output.send(json!({
+                    "type": "acp_status",
+                    "phase": "downloading",
+                    "agentId": agent_id_for_stderr,
+                }));
+            }
             eprintln!("[acp:{agent_id_for_stderr}] {line}");
         }
     });
