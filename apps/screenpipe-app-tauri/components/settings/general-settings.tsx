@@ -50,6 +50,9 @@ export default function GeneralSettings() {
   const handleResetOnboarding = async () => {
     setIsResettingOnboarding(true);
     try {
+      // Reset the separately persisted popup-guide completion flag as part of
+      // the user's explicit request to replay the complete first run.
+      await updateSettings({ firstRunGuideDone: false });
       await resetOnboarding();
       const result = await commands.showOnboardingWindow();
       if (result.status === "error") throw new Error(result.error);

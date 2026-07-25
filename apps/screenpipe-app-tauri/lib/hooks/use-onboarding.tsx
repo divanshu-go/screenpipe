@@ -9,6 +9,7 @@ import { useEffect } from "react";
 import posthog from "posthog-js";
 import {
   isFirstRunGuidePending,
+  isFirstRunGuideReplayAfterOnboarding,
   setFirstRunGuidePending,
   setFirstRunGuideReplayAfterOnboarding,
 } from "@/lib/first-run-guide";
@@ -66,11 +67,13 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
 
   completeOnboarding: async (context) => {
     const firstRunGuideWasPending = isFirstRunGuidePending();
+    const replayFirstRunGuide = isFirstRunGuideReplayAfterOnboarding();
     try {
       set({ isLoading: true, error: null });
-      // The old app tour competes with the user's chosen outcome. Brain now
-      // owns activation; the generic tour remains explicit in Help.
-      setFirstRunGuidePending(false);
+      // A deliberate Settings reset replays the focused popup guide, but the
+      // handoff is armed only as onboarding completes so it cannot appear on
+      // top of the setup window itself.
+      setFirstRunGuidePending(replayFirstRunGuide);
       const result = await commands.completeOnboarding();
       
       if (result.status === "ok") {
@@ -95,6 +98,13 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
             ? { goal_category: context.goalCategory }
             : {}),
         });
+        if (replayFirstRunGuide) {
+          try {
+            void emit("first-run-guide-pending").catch(() => {});
+          } catch {
+            // not in tauri (preview/tests)
+          }
+        }
         // Rust routes a newly created Home to Brain. This covers a reused Home.
         try {
           void emit("navigate", {
@@ -123,9 +133,10 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
       const result = await commands.resetOnboarding();
       
       if (result.status === "ok") {
-        // Reset setup without replaying the separate optional app tour.
+        // Resetting setup is an explicit request to replay the complete first
+        // run, including the focused guide after onboarding finishes.
         setFirstRunGuidePending(false);
-        setFirstRunGuideReplayAfterOnboarding(false);
+        setFirstRunGuideReplayAfterOnboarding(true);
         // Update local state
         set(state => ({
           onboardingData: {
