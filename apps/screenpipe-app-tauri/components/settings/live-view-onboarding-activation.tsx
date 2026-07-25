@@ -42,9 +42,9 @@ const PATH_COPY: Record<
   },
   custom: {
     firstAction:
-      "Use Screenpipe normally. Your first result appears when the selected Pipe has enough source activity to answer your request.",
+      "Use Screenpipe normally. Your first result appears when it has enough activity to answer your request.",
     reviewAction:
-      "Review one result and mark it useful or not useful so the connected Pipe can improve.",
+      "Review one result and mark it useful or not useful so future updates can improve.",
   },
 };
 
@@ -80,7 +80,6 @@ export function LiveViewOnboardingActivation({
   goalCategory,
   captureReadiness,
   pipesReady,
-  pipeNames,
   setupStatus,
   setupError,
   hasResult,
@@ -94,7 +93,6 @@ export function LiveViewOnboardingActivation({
   goalCategory: OnboardingGoalCategory;
   captureReadiness: CaptureReadiness;
   pipesReady: boolean;
-  pipeNames: string[];
   setupStatus: OnboardingLiveViewActivation["setupStatus"];
   setupError: string | null;
   hasResult: boolean;
@@ -123,7 +121,7 @@ export function LiveViewOnboardingActivation({
           </p>
           <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
             {copy.reviewAction} You can also use the thumbs controls on any card
-            to teach its Pipe what good looks like.
+            to help future updates improve.
           </p>
         </div>
         <Button
@@ -175,7 +173,7 @@ export function LiveViewOnboardingActivation({
           <Circle className="mr-3 h-3 w-3 fill-foreground" />
           <p className="text-[11px] leading-relaxed">
             Keep Screenpipe running. This page will reveal the dashboard as soon
-            as one source-backed result arrives.
+            as soon as one real result is ready.
           </p>
         </div>
       </div>
@@ -194,18 +192,18 @@ export function LiveViewOnboardingActivation({
                 ? "ready"
                 : "working"
           }
-          label={pipeNames.length === 1 ? "context Pipe" : "context Pipes"}
+          label="setup"
           detail={
             setupStatus === "needs_retry"
-              ? (setupError ?? "Setup paused before the Pipes were connected.")
+              ? (setupError ?? "Setup paused before it finished.")
               : pipesReady
-                ? `${pipeNames.join(" + ")} ${pipeNames.length === 1 ? "is" : "are"} connected.`
-                : "Finishing the local tools selected for this outcome."
+                ? "Screenpipe is ready to update this view."
+                : "Finishing setup for this view."
           }
         />
         <StatusRow
           state="working"
-          label="first source-backed result"
+          label="first result"
           detail={
             refreshing
               ? "Reading recent activity now."
@@ -253,7 +251,7 @@ export function LiveViewOnboardingActivation({
           </Button>
         )}
         <span className="text-[11px] text-muted-foreground">
-          You can leave this page. The connected Pipe keeps working locally.
+          You can leave this page. Screenpipe keeps working.
         </span>
       </div>
     </div>

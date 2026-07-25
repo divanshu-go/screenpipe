@@ -61,23 +61,23 @@ const BUILD_STEPS: Array<{
   },
   {
     stage: "plan_ready",
-    label: "selecting context Pipes",
-    detail: "choosing only the local context sources this view needs",
+    label: "choosing what this view needs",
+    detail: "keeping the setup focused on your goal",
   },
   {
     stage: "installing",
-    label: "connecting local context",
-    detail: "starting the Pipes that will keep this view current",
+    label: "connecting your activity",
+    detail: "getting this view ready to update",
   },
   {
     stage: "saving",
     label: "composing your Live View",
-    detail: "arranging source-backed Blocks around your goal",
+    detail: "arranging this view around your goal",
   },
   {
     stage: "refreshing",
     label: "loading the first signal",
-    detail: "asking each Pipe for its first update",
+    detail: "loading your first result",
   },
 ];
 
@@ -442,7 +442,7 @@ export default function FirstDashboard() {
 
           {selectedPipes.length > 0 && (
             <div className="mt-4 border-t border-border pt-3 font-mono text-[10px] text-muted-foreground">
-              <span className="mr-2 lowercase tracking-wide">Pipes</span>
+              <span className="mr-2 lowercase tracking-wide">using</span>
               {selectedPipes.map(displayPipeName).join(" + ")}
             </div>
           )}

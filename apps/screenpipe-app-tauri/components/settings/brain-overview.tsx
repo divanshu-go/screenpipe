@@ -1949,7 +1949,6 @@ export function BrainOverview({
           goalCategory={onboardingActivation.goalCategory}
           captureReadiness={captureReadiness}
           pipesReady={onboardingPipesReady}
-          pipeNames={onboardingPipeNames}
           setupStatus={onboardingActivation.setupStatus}
           setupError={onboardingActivation.setupError}
           hasResult={onboardingHasResult}

@@ -93,7 +93,7 @@ export function LiveViewOnboardingGuide({
         eyebrow="your first Live View"
         step="1 of 3"
         title="this dashboard was made for your goal"
-        description="Screenpipe designed this Live View around the outcome you chose. It will fill with real activity from your connected Pipes."
+        description="Screenpipe created this Live View for the goal you chose. It fills with your real activity."
         primaryLabel="show me how it fills"
         onPrimary={() => moveTo("waiting")}
         onDismiss={dismiss}
@@ -104,14 +104,14 @@ export function LiveViewOnboardingGuide({
   if (visibleStep === "waiting") {
     const needsRetry = activation.setupStatus === "needs_retry";
     const description = needsRetry
-      ? "The setup paused before the Pipes were fully connected. Your dashboard is safe. Finish setup here instead of starting onboarding again."
+      ? "Setup paused before it finished. Your dashboard is safe. Finish here instead of starting over."
       : hasResult
-        ? "Your first source-backed result has arrived. Open it next and check whether it matches what you actually did."
-        : "This status shows what is connected, what Screenpipe is observing, and what still needs to happen before a real result appears. You can leave this page while it learns.";
+        ? "Your first result is ready. Open it next and check if it matches what you actually did."
+        : "This shows what is ready and what Screenpipe still needs before your first result appears. You can leave this page while it works.";
     return (
       <FocusedSpotlight
         targetSelector='[data-onboarding-guide-target="activation"]'
-        eyebrow="from setup to evidence"
+        eyebrow="how it updates"
         step="2 of 3"
         title={
           needsRetry ? "finish the interrupted setup" : "wait for real work"
@@ -136,10 +136,10 @@ export function LiveViewOnboardingGuide({
   return (
     <FocusedSpotlight
       targetSelector='[data-testid="brain-overview-grid"]'
-      eyebrow="source-backed result"
+      eyebrow="your first result"
       step="3 of 3"
-      title="check it, then teach the Pipe"
-      description="Open a result, verify it against your work, and use the thumbs controls on a card. That feedback is attached to the source Pipe so future updates can improve."
+      title="check it and help it improve"
+      description="Open the result, check it against your work, and use thumbs up or down. Your feedback helps future updates improve."
       primaryLabel="I found my first result"
       onPrimary={onComplete}
       onDismiss={dismiss}
