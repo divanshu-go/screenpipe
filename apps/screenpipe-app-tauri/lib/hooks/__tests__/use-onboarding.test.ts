@@ -25,6 +25,7 @@ const localStorageMock = (() => {
 
 const mocks = vi.hoisted(() => ({
   completeOnboarding: vi.fn(),
+  resetOnboarding: vi.fn(),
   capture: vi.fn(),
   emit: vi.fn().mockResolvedValue(undefined),
 }));
@@ -32,6 +33,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/lib/utils/tauri", () => ({
   commands: {
     completeOnboarding: mocks.completeOnboarding,
+    resetOnboarding: mocks.resetOnboarding,
   },
 }));
 
@@ -143,6 +145,41 @@ describe("useOnboarding measurement", () => {
       dashboard_block_count: 5,
       goal_audience: "personal",
       goal_category: "work_memory",
+    });
+  });
+
+  it("replays the final guide after an explicit onboarding reset", async () => {
+    mocks.resetOnboarding.mockResolvedValue({ status: "ok", data: null });
+    mocks.completeOnboarding.mockResolvedValue({ status: "ok", data: null });
+    localStorage.setItem("screenpipe:first-run-guide-pending", "true");
+
+    await useOnboarding.getState().resetOnboarding();
+
+    expect(
+      localStorage.getItem("screenpipe:first-run-guide-pending"),
+    ).toBeNull();
+    expect(
+      localStorage.getItem(
+        "screenpipe:first-run-guide-replay-after-onboarding",
+      ),
+    ).toBe("true");
+
+    await useOnboarding.getState().completeOnboarding({
+      method: "live_view_created",
+      dashboardBlockCount: 4,
+    });
+
+    expect(
+      localStorage.getItem(
+        "screenpipe:first-run-guide-replay-after-onboarding",
+      ),
+    ).toBeNull();
+    expect(
+      localStorage.getItem("screenpipe:first-run-guide-pending"),
+    ).toBe("true");
+    expect(mocks.emit).toHaveBeenCalledWith("first-run-guide-pending");
+    expect(mocks.emit).not.toHaveBeenCalledWith("navigate", {
+      url: "screenpipe://home?section=brain",
     });
   });
 });

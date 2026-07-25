@@ -13,7 +13,9 @@ import {
 } from "@/lib/sidebar-pipes";
 import {
   isFirstRunGuidePending,
+  isFirstRunGuideReplayAfterOnboarding,
   setFirstRunGuidePending,
+  setFirstRunGuideReplayAfterOnboarding,
 } from "@/lib/first-run-guide";
 
 export type OnboardingCompletionContext = {
@@ -71,7 +73,9 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
   completeOnboarding: async (context) => {
     let previousPipesCollapsed: string | null = null;
     const firstRunGuideWasPending = isFirstRunGuidePending();
-    const prepareFirstRunGuide = context.method !== "live_view_created";
+    const replayFirstRunGuide = isFirstRunGuideReplayAfterOnboarding();
+    const prepareFirstRunGuide =
+      context.method !== "live_view_created" || replayFirstRunGuide;
     try {
       set({ isLoading: true, error: null });
       if (prepareFirstRunGuide) {
@@ -96,6 +100,9 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
       const result = await commands.completeOnboarding();
       
       if (result.status === "ok") {
+        if (replayFirstRunGuide) {
+          setFirstRunGuideReplayAfterOnboarding(false);
+        }
         // Update local state
         set(state => ({
           onboardingData: {
@@ -169,6 +176,11 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
       const result = await commands.resetOnboarding();
       
       if (result.status === "ok") {
+        // Resetting setup is an explicit request to see the entire first-run
+        // experience again. Keep this intent separate from the Home handoff so
+        // the guide cannot appear over the onboarding window.
+        setFirstRunGuidePending(false);
+        setFirstRunGuideReplayAfterOnboarding(true);
         // Update local state
         set(state => ({
           onboardingData: {
