@@ -79,8 +79,8 @@ vi.mock("@/components/onboarding/engine-startup", () => ({
 vi.mock("@/components/onboarding/connect-apps", () => ({
   default: () => <div>connect apps</div>,
 }));
-vi.mock("@/components/onboarding/pick-pipe", () => ({
-  default: () => <div>pick pipe</div>,
+vi.mock("@/components/onboarding/first-dashboard", () => ({
+  default: () => <div>first dashboard</div>,
 }));
 vi.mock("@/lib/utils/tauri", () => ({
   commands: {

@@ -44,6 +44,9 @@ export type LiveViewGenerationScope = "dashboard" | "block";
 export type LiveViewPipeSummary = {
   name: string;
   description: string;
+  category?: string;
+  featured?: boolean;
+  installCount?: number;
 };
 
 export type GeneratedLiveViewBlock = {
@@ -67,6 +70,9 @@ type GenerateLiveViewOptions = {
   preset: AIPreset;
   userToken: string | null;
   pipes: LiveViewPipeSummary[];
+  pipeAvailability?: "installed" | "store";
+  maxSelectedPipes?: number;
+  requirePipeBinding?: boolean;
   currentView?: {
     title: string;
     timeRange: BrainViewTimeRange;
@@ -210,7 +216,7 @@ Allowed components:
 - markdown.v1: a short narrative brief
 
 Allowed widths are 3, 6, or 12. Prefer 6 for most sections, 12 for timelines or detailed briefs, and 3 only for compact metrics.
-Only use a pipeName from the installed pipes supplied by the user. Use null when none fits. Do not invent pipes.
+Only use a pipeName from the available pipes supplied by the user. Use null when none fits. Do not invent pipes.
 Every section must include an intent: one precise, self-contained sentence describing what the Pipe should calculate, classify, or summarize. The intent is data logic, not display copy. Define percentages and scores explicitly, name the selected-period denominator, require source evidence, and say how to handle unclassified or missing evidence. Never use a vague intent such as "show this metric".
 For a whole dashboard, create 4 to 7 distinct sections. Prefer a useful mix with at least one metric, one bar chart, and one list or timeline when the request supports them. Never return placeholder titles such as "test", duplicate sections, or multiple metrics that show the same number.
 Choose one timeRange for the whole dashboard: "today", "24h", "7d", or "30d". Infer it from the request. Use "today" when the request does not specify a period. Prefer line-chart.v1 over bar-chart.v1 when the user asks how something changed over time.
@@ -228,14 +234,27 @@ function generationPrompt(options: GenerateLiveViewOptions): string {
   const pipes = relevantPipes(options.prompt, options.pipes).map((pipe) => ({
     name: pipe.name,
     description: pipe.description.slice(0, 500),
+    ...(pipe.category ? { category: pipe.category } : {}),
+    ...(pipe.featured ? { featured: true } : {}),
+    ...(typeof pipe.installCount === "number"
+      ? { installCount: pipe.installCount }
+      : {}),
   }));
 
+  const pipeInstruction =
+    options.pipeAvailability === "store"
+      ? `These are reviewed Pipe Store candidates available for automatic installation. Bind every section to one of them. Use at most ${options.maxSelectedPipes ?? 2} distinct pipes across the dashboard. Prefer the smallest set that works from Screenpipe's local capture alone. Avoid a pipe that mentions syncing or saving to a named external app unless the user explicitly asked for that app.`
+      : "These pipes are already installed. Use null only when no installed pipe can produce the requested section.";
+
   return `${scopeInstruction}
+
+Pipe rules:
+${pipeInstruction}
 
 User request:
 ${options.prompt.trim()}
 
-Installed pipes:
+Available pipes:
 ${JSON.stringify(pipes)}
 
 Current Live View:
@@ -393,9 +412,29 @@ export async function generateLiveViewWithPi(
   if (!options.prompt.trim()) throw new Error("Describe what you want to see");
   if (!options.preset.model?.trim()) throw new Error("Select an AI model");
   const raw = await rawGeneration(options);
-  return parseGeneratedLiveView(
+  const generated = parseGeneratedLiveView(
     raw,
     options.pipes.map((pipe) => pipe.name),
     options.scope,
   );
+  const selectedPipes = new Set(
+    generated.blocks
+      .map((block) => block.pipeName)
+      .filter((pipeName): pipeName is string => Boolean(pipeName)),
+  );
+  if (
+    options.requirePipeBinding &&
+    generated.blocks.some((block) => !block.pipeName)
+  ) {
+    throw new Error("AI created a section without a usable Pipe");
+  }
+  if (
+    options.maxSelectedPipes &&
+    selectedPipes.size > options.maxSelectedPipes
+  ) {
+    throw new Error(
+      `AI selected ${selectedPipes.size} Pipes; expected at most ${options.maxSelectedPipes}`,
+    );
+  }
+  return generated;
 }

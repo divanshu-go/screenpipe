@@ -17,9 +17,15 @@ import {
 } from "@/lib/first-run-guide";
 
 export type OnboardingCompletionContext = {
-  method: "pipes_installed" | "pipe_step_skipped" | "hidden_enterprise";
+  method:
+    | "pipes_installed"
+    | "pipe_step_skipped"
+    | "hidden_enterprise"
+    | "live_view_created";
   pipeCount?: number;
   customized?: boolean;
+  dashboardBlockCount?: number;
+  goalCategory?: string;
 };
 
 interface OnboardingState {
@@ -64,21 +70,28 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
   completeOnboarding: async (context) => {
     let previousPipesCollapsed: string | null = null;
     const firstRunGuideWasPending = isFirstRunGuidePending();
+    const prepareFirstRunGuide = context.method !== "live_view_created";
     try {
       set({ isLoading: true, error: null });
-      try {
-        previousPipesCollapsed = localStorage.getItem(PIPES_SIDEBAR_COLLAPSED_KEY);
-      } catch {
-        // localStorage may be unavailable in restricted webviews.
+      if (prepareFirstRunGuide) {
+        try {
+          previousPipesCollapsed = localStorage.getItem(PIPES_SIDEBAR_COLLAPSED_KEY);
+        } catch {
+          // localStorage may be unavailable in restricted webviews.
+        }
+        // Rust opens Home before this command resolves, so persist and broadcast
+        // the expanded state first. A newly-created Home reads the preference;
+        // an existing Home receives the event.
+        await setPipesSidebarCollapsed(false);
+        // This explicit handoff is the eligibility gate for the guide. Existing
+        // onboarded installs never receive it, even though their settings are
+        // hydrated with firstRunGuideDone=false for backwards compatibility.
+        setFirstRunGuidePending(true);
+      } else {
+        // A stale handoff from an interrupted older onboarding must not stack
+        // the generic create-a-Pipe tour over the new personalized dashboard.
+        setFirstRunGuidePending(false);
       }
-      // Rust opens Home before this command resolves, so persist and broadcast
-      // the expanded state first. A newly-created Home reads the preference;
-      // an existing Home receives the event.
-      await setPipesSidebarCollapsed(false);
-      // This explicit handoff is the eligibility gate for the guide. Existing
-      // onboarded installs never receive it, even though their settings are
-      // hydrated with firstRunGuideDone=false for backwards compatibility.
-      setFirstRunGuidePending(true);
       const result = await commands.completeOnboarding();
       
       if (result.status === "ok") {
@@ -95,26 +108,48 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
           completion_method: context.method,
           pipe_count: context.pipeCount,
           customized: context.customized,
+          ...(context.dashboardBlockCount !== undefined
+            ? { dashboard_block_count: context.dashboardBlockCount }
+            : {}),
+          ...(context.goalCategory
+            ? { goal_category: context.goalCategory }
+            : {}),
         });
         // A Home window that already existed before onboarding completed is
         // reused by Rust (shown, not reloaded), so it consumed the guide
         // handoff as `false` at its original mount. Nudge it to re-check.
         // A freshly created Home reads localStorage on mount instead, so
         // missing this event there is harmless.
-        try {
-          void emit("first-run-guide-pending").catch(() => {});
-        } catch {
-          // not in tauri (preview/tests)
+        if (prepareFirstRunGuide) {
+          try {
+            void emit("first-run-guide-pending").catch(() => {});
+          } catch {
+            // not in tauri (preview/tests)
+          }
+        } else {
+          // The personalized dashboard replaces the generic create-a-Pipe tour.
+          // Send the reused or newly opened Home window directly to Brain.
+          try {
+            void emit("navigate", {
+              url: "screenpipe://home?section=brain",
+            }).catch(() => {});
+          } catch {
+            // not in tauri (preview/tests)
+          }
         }
       } else {
         throw new Error(result.error);
       }
     } catch (error) {
-      setFirstRunGuidePending(firstRunGuideWasPending);
-      const wasCollapsed = previousPipesCollapsed == null
-        ? true
-        : previousPipesCollapsed === "true";
-      await setPipesSidebarCollapsed(wasCollapsed);
+      if (prepareFirstRunGuide) {
+        setFirstRunGuidePending(firstRunGuideWasPending);
+        const wasCollapsed = previousPipesCollapsed == null
+          ? true
+          : previousPipesCollapsed === "true";
+        await setPipesSidebarCollapsed(wasCollapsed);
+      } else {
+        setFirstRunGuidePending(firstRunGuideWasPending);
+      }
       console.error("Error completing onboarding:", error);
       set({ 
         error: error instanceof Error ? error.message : "Failed to complete onboarding",

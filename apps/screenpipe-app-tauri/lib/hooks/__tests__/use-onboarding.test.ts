@@ -112,4 +112,35 @@ describe("useOnboarding measurement", () => {
       { collapsed: true },
     );
   });
+
+  it("opens the personalized dashboard without launching the generic Pipe tour", async () => {
+    localStorage.setItem("screenpipe:pipes-collapsed", "true");
+    localStorage.setItem("screenpipe:first-run-guide-pending", "true");
+    mocks.completeOnboarding.mockResolvedValue({ status: "ok", data: null });
+
+    await useOnboarding.getState().completeOnboarding({
+      method: "live_view_created",
+      pipeCount: 2,
+      dashboardBlockCount: 5,
+      goalCategory: "resume_work",
+    });
+
+    expect(
+      localStorage.getItem("screenpipe:first-run-guide-pending"),
+    ).toBeNull();
+    expect(localStorage.getItem("screenpipe:pipes-collapsed")).toBe("true");
+    expect(mocks.emit).toHaveBeenCalledWith("navigate", {
+      url: "screenpipe://home?section=brain",
+    });
+    expect(mocks.emit).not.toHaveBeenCalledWith(
+      "first-run-guide-pending",
+    );
+    expect(mocks.capture).toHaveBeenCalledWith("onboarding_completed", {
+      completion_method: "live_view_created",
+      pipe_count: 2,
+      customized: undefined,
+      dashboard_block_count: 5,
+      goal_category: "resume_work",
+    });
+  });
 });
