@@ -6,7 +6,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Check, Loader } from "lucide-react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import { commands } from "@/lib/utils/tauri";
 import { getClaudeConfigPath } from "@/lib/hooks/use-hardcoded-tiles";
 import { localFetch } from "@/lib/api";
@@ -264,6 +264,11 @@ const INTEGRATIONS: Integration[] = [
   },
 ];
 
+const OPTIONAL_INTEGRATION_IDS = new Set(["notion", "obsidian", "chatgpt"]);
+const OPTIONAL_INTEGRATIONS = INTEGRATIONS.filter((integration) =>
+  OPTIONAL_INTEGRATION_IDS.has(integration.id)
+);
+
 const ICONS: Record<string, React.ReactNode> = {
   notion: (
     // eslint-disable-next-line @next/next/no-img-element
@@ -425,7 +430,9 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
   const [seconds, setSeconds] = useState(0);
   const mountTimeRef = useRef(Date.now());
   const [detectedAiTools, setDetectedAiTools] = useState<ConnectAllToolId[]>([]);
+  const [detectionComplete, setDetectionComplete] = useState(false);
   const [connectAllRunning, setConnectAllRunning] = useState(false);
+  const [showOptionalConnections, setShowOptionalConnections] = useState(false);
 
   // Check existing connections on mount
   useEffect(() => {
@@ -433,14 +440,19 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
       // Only promise tools whose config we can safely write into — a broken
       // config is excluded from the one-click list (its own card and settings
       // still carry it). Lazy error disclosure: errors only follow clicks.
-      detectAiTools()
-        .then(async (tools) => {
-          const healthy = await Promise.all(
-            tools.map((id) => isToolConfigHealthy(id).catch(() => false))
-          );
-          setDetectedAiTools(tools.filter((_, i) => healthy[i]));
-        })
-        .catch(() => {});
+      let availableAiTools: ConnectAllToolId[] = [];
+      try {
+        const tools = await detectAiTools();
+        const healthy = await Promise.all(
+          tools.map((id) => isToolConfigHealthy(id).catch(() => false))
+        );
+        availableAiTools = tools.filter((_, i) => healthy[i]);
+        setDetectedAiTools(availableAiTools);
+      } catch {
+        // Detection is best-effort. The user can continue without local tools.
+      } finally {
+        setDetectionComplete(true);
+      }
 
       const stateUpdates: Record<string, CardState> = {};
       const nameUpdates: Record<string, string> = {};
@@ -529,6 +541,13 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
         setCardStates((prev) => ({ ...prev, ...stateUpdates }));
       if (Object.keys(nameUpdates).length > 0)
         setDisplayNames((prev) => ({ ...prev, ...nameUpdates }));
+
+      posthog.capture("onboarding_connect_apps_viewed", {
+        detected_tools: availableAiTools,
+        detected_count: availableAiTools.length,
+        already_connected: Object.keys(stateUpdates),
+        connect_all_visible: availableAiTools.length > 0,
+      });
     };
     check();
   }, []);
@@ -549,8 +568,14 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
   }, []);
 
   const handleConnect = useCallback(
-    async (integration: Integration) => {
-      posthog.capture("onboarding_integration_connect_clicked", { integration: integration.id });
+    async (
+      integration: Integration,
+      source: "card" | "connect_all" = "card"
+    ) => {
+      posthog.capture("onboarding_integration_connect_clicked", {
+        integration: integration.id,
+        source,
+      });
       setErrorMessages((prev) => { const next = { ...prev }; delete next[integration.cardKey]; return next; });
       setCardState(integration.cardKey, "connecting");
 
@@ -560,8 +585,15 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
           if (res.status === "ok" && res.data) {
             setCardState(integration.cardKey, "connected");
             setDisplayNames((prev) => ({ ...prev, [integration.cardKey]: "ChatGPT Plus" }));
-            posthog.capture("onboarding_integration_connected", { integration: integration.id });
+            posthog.capture("onboarding_integration_connected", {
+              integration: integration.id,
+              source,
+            });
           } else {
+            posthog.capture("onboarding_integration_connect_cancelled", {
+              integration: integration.id,
+              source,
+            });
             setCardState(integration.cardKey, "idle");
           }
           return;
@@ -570,21 +602,30 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
         if (integration.type === "mcp") {
           await connectAiTool("cursor");
           setCardState(integration.cardKey, "connected");
-          posthog.capture("onboarding_integration_connected", { integration: integration.id });
+          posthog.capture("onboarding_integration_connected", {
+            integration: integration.id,
+            source,
+          });
           return;
         }
 
         if (integration.type === "claude") {
           await connectAiTool("claude");
           setCardState(integration.cardKey, "connected");
-          posthog.capture("onboarding_integration_connected", { integration: integration.id });
+          posthog.capture("onboarding_integration_connected", {
+            integration: integration.id,
+            source,
+          });
           return;
         }
 
         if (integration.type === "codex") {
           await connectAiTool("codex");
           setCardState(integration.cardKey, "connected");
-          posthog.capture("onboarding_integration_connected", { integration: integration.id });
+          posthog.capture("onboarding_integration_connected", {
+            integration: integration.id,
+            source,
+          });
           return;
         }
 
@@ -592,7 +633,10 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
           const vaultName = await connectObsidianFirstVault();
           setCardState(integration.cardKey, "connected");
           setDisplayNames((prev) => ({ ...prev, [integration.cardKey]: vaultName }));
-          posthog.capture("onboarding_integration_connected", { integration: integration.id });
+          posthog.capture("onboarding_integration_connected", {
+            integration: integration.id,
+            source,
+          });
           return;
         }
 
@@ -613,15 +657,24 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
           }
           posthog.capture("onboarding_integration_connected", {
             integration: integration.id,
+            source,
             has_display_name: !!res.data.display_name,
           });
         } else {
           // User cancelled or OAuth didn't complete — go back to idle quietly
+          posthog.capture("onboarding_integration_connect_cancelled", {
+            integration: integration.id,
+            source,
+          });
           setCardState(integration.cardKey, "idle");
         }
       } catch (err) {
         // Timeout = user closed the browser tab — silently go back to idle
         if (err instanceof Error && err.message === "oauth_timeout") {
+          posthog.capture("onboarding_integration_connect_timeout", {
+            integration: integration.id,
+            source,
+          });
           setCardState(integration.cardKey, "idle");
         } else {
           const msg = err instanceof Error ? err.message : String(err);
@@ -629,6 +682,7 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
           // so keep the raw error here for support/debugging.
           posthog.capture("onboarding_integration_connect_failed", {
             integration: integration.id,
+            source,
             error_kind: classifyConnectError(
               { name: integration.name, type: integration.type },
               msg,
@@ -662,7 +716,7 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
 
       const integration = INTEGRATIONS.find((i) => i.id === id);
       if (integration) {
-        await handleConnect(integration);
+        await handleConnect(integration, "connect_all");
         continue;
       }
 
@@ -673,11 +727,15 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
       try {
         await connectAiTool(id);
         setCardState(id, "connected");
-        posthog.capture("onboarding_integration_connected", { integration: id });
+        posthog.capture("onboarding_integration_connected", {
+          integration: id,
+          source: "connect_all",
+        });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         posthog.capture("onboarding_integration_connect_failed", {
           integration: id,
+          source: "connect_all",
           error_message: msg,
         });
         setErrorMessages((prev) => ({ ...prev, [id]: msg }));
@@ -693,16 +751,6 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
   const handleContinue = useCallback(() => {
     setErrorMessages({}); // leaving the step: settings owns error truth now
     posthog.capture("onboarding_connect_apps_completed", {
-      num_connected: numConnected,
-      integrations_connected: connectedKeys,
-      time_spent_ms: Date.now() - mountTimeRef.current,
-    });
-    handleNextSlide();
-  }, [numConnected, connectedKeys, handleNextSlide]);
-
-  const handleSkip = useCallback(() => {
-    setErrorMessages({}); // leaving the step: settings owns error truth now
-    posthog.capture("onboarding_connect_apps_skipped", {
       num_connected: numConnected,
       integrations_connected: connectedKeys,
       time_spent_ms: Date.now() - mountTimeRef.current,
@@ -741,14 +789,14 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
         animate={{ opacity: 1 }}
         transition={{ delay: 0.15 }}
       >
-        <h2 className="font-mono text-base font-bold lowercase">connect your world</h2>
+        <h2 className="font-mono text-base font-bold lowercase">connect detected tools</h2>
         <p className="font-mono text-[10px] text-muted-foreground/60 mt-1 max-w-[300px]">
-          everything is unlocked — connect what you use
+          one click for the local AI tools already on this computer
         </p>
       </motion.div>
 
-      {/* Connect-all card — only shown when at least one AI tool is detected */}
-      {detectedAiTools.length > 0 && (() => {
+      {/* The primary path contains only tools found on this computer. */}
+      {detectionComplete && detectedAiTools.length > 0 && (() => {
         const allConnected = detectedAiTools.every(
           (id) => (cardStates[id] ?? "idle") === "connected"
         );
@@ -781,10 +829,10 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
           ? `retry ${failedNames[0]}`
           : failedIds.length > 1
           ? "retry failed"
-          : "connect all";
+          : "connect detected";
         return (
           <motion.div
-            className="w-full mb-3 p-3 rounded-lg border border-border/40 bg-card/40"
+            className="w-full mb-3 p-4 border border-border bg-card/40"
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.18 }}
@@ -792,7 +840,7 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
             <div className="flex items-center justify-between gap-3">
               <div className="flex flex-col min-w-0">
                 <span className="font-mono text-xs font-semibold lowercase">
-                  connect all your ai tools in one click
+                  {detectedAiTools.length} local {detectedAiTools.length === 1 ? "tool" : "tools"} found
                 </span>
                 {/* Status list, not chips: passive text indicators, never
                     clickable pills. Monochrome like the cards below — state
@@ -817,7 +865,7 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
                         ) : state === "connected" ? (
                           <Check className="h-2.5 w-2.5" />
                         ) : (
-                          <span className="h-1 w-1 rounded-full bg-muted-foreground/30" />
+                          <span className="h-1 w-1 bg-muted-foreground/30" />
                         )}
                         {CONNECT_ALL_TOOL_NAMES[id].toLowerCase()}
                         {state === "error" && " · failed"}
@@ -829,7 +877,7 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
                     Persists until retry or until the user leaves the step. */}
                 {failedIds.length > 0 && (
                   <p className="font-mono text-[10px] mt-1.5 flex items-start gap-1.5">
-                    <span className="inline-flex h-3 w-3 items-center justify-center rounded-full bg-red-500/15 text-red-500 text-[8px] font-bold shrink-0 mt-px">
+                    <span className="inline-flex h-3 w-3 items-center justify-center border border-muted-foreground/40 text-[8px] font-bold shrink-0 mt-px">
                       !
                     </span>
                     <span className="text-muted-foreground">{deferralLine}</span>
@@ -845,7 +893,7 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
                 <button
                   onClick={handleConnectAll}
                   disabled={connectAllRunning}
-                  className="font-mono text-[11px] px-3 py-1 rounded bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-all shrink-0"
+                  className="border border-foreground bg-foreground px-3 py-1 font-mono text-[11px] text-background transition-colors hover:bg-background hover:text-foreground disabled:opacity-50 shrink-0"
                 >
                   {buttonLabel}
                 </button>
@@ -855,47 +903,73 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
         );
       })()}
 
-      <div className="grid grid-cols-3 gap-2 w-full auto-rows-fr">
-        {INTEGRATIONS.map((integration, i) => (
+      {detectionComplete && detectedAiTools.length === 0 && (
+        <motion.div
+          className="w-full border border-border p-4"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+        >
+          <p className="font-mono text-xs">no local AI tools found</p>
+          <p className="mt-1 font-mono text-[10px] text-muted-foreground">
+            nothing is required here. connect services later if you need them.
+          </p>
+        </motion.div>
+      )}
+
+      <div className="mt-3 w-full border-t border-border/60 pt-3">
+        <button
+          type="button"
+          aria-expanded={showOptionalConnections}
+          onClick={() => {
+            const next = !showOptionalConnections;
+            setShowOptionalConnections(next);
+            if (next) posthog.capture("onboarding_optional_connections_opened");
+          }}
+          className="flex w-full items-center justify-between font-mono text-[10px] text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <span>connect more tools (optional)</span>
+          <span>{showOptionalConnections ? "hide ↑" : "notion · obsidian · chatgpt ↓"}</span>
+        </button>
+
+        {showOptionalConnections && (
           <motion.div
-            key={integration.cardKey}
-            className="h-full"
-            initial={{ opacity: 0, y: 8 }}
+            className="mt-3"
+            initial={{ opacity: 0, y: 4 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.2 + i * 0.05, duration: 0.3 }}
           >
-            <IntegrationCard
-              integration={integration}
-              state={cardStates[integration.cardKey] ?? "idle"}
-              displayName={displayNames[integration.cardKey] ?? null}
-              errorMessage={errorMessages[integration.cardKey] ?? null}
-              onConnect={() => handleConnect(integration)}
-            />
+            <p className="mb-2 font-mono text-[9px] text-muted-foreground/60">
+              skip these now and connect them anytime in settings
+            </p>
+            <div className="grid grid-cols-3 gap-2 w-full auto-rows-fr">
+              {OPTIONAL_INTEGRATIONS.map((integration, i) => (
+                <motion.div
+                  key={integration.cardKey}
+                  className="h-full"
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: i * 0.05, duration: 0.15 }}
+                >
+                  <IntegrationCard
+                    integration={integration}
+                    state={cardStates[integration.cardKey] ?? "idle"}
+                    displayName={displayNames[integration.cardKey] ?? null}
+                    errorMessage={errorMessages[integration.cardKey] ?? null}
+                    onConnect={() => handleConnect(integration, "card")}
+                  />
+                </motion.div>
+              ))}
+            </div>
           </motion.div>
-        ))}
+        )}
       </div>
 
       {/* Actions */}
       <div className="mt-5 flex flex-col items-center gap-2 w-full">
-        <AnimatePresence>
-          {numConnected > 0 && (
-            <motion.button
-              key="continue"
-              initial={{ opacity: 0, y: 4 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 4 }}
-              onClick={handleContinue}
-              className="w-full border border-foreground bg-foreground text-background py-3 font-mono text-sm uppercase tracking-widest hover:bg-background hover:text-foreground transition-colors duration-150"
-            >
-              continue →
-            </motion.button>
-          )}
-        </AnimatePresence>
         <button
-          onClick={handleSkip}
-          className="font-mono text-[10px] text-muted-foreground/30 hover:text-muted-foreground/50 transition-colors"
+          onClick={handleContinue}
+          className="w-full border border-foreground bg-foreground text-background py-3 font-mono text-sm uppercase tracking-widest hover:bg-background hover:text-foreground transition-colors duration-150"
         >
-          {numConnected > 0 ? "skip remaining →" : "skip for now →"}
+          continue →
         </button>
       </div>
     </motion.div>
