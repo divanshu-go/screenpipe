@@ -347,6 +347,9 @@ export function BrainSection() {
   const initialTypeFilterRef = useRef<TypeFilter>(brainViewState.typeFilter);
   const [memories, setMemories] = useState<MemoryRecord[]>([]);
   const [total, setTotal] = useState(0);
+  const [liveViewsTabCount, setLiveViewsTabCount] = useState<number | null>(null);
+  const [memoriesTabCount, setMemoriesTabCount] = useState<number | null>(null);
+  const [artifactsTabCount, setArtifactsTabCount] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
@@ -389,6 +392,32 @@ export function BrainSection() {
       tab: initialTypeFilterRef.current,
     });
   }, []);
+
+  const refreshTabCounts = useCallback(async () => {
+    const [viewsResult, memoriesResult, artifactsResult] = await Promise.allSettled([
+      commands.listBrainViews(),
+      localFetch("/memories?limit=1&offset=0"),
+      localFetch("/artifacts?limit=1&offset=0"),
+    ]);
+
+    if (viewsResult.status === "fulfilled" && viewsResult.value.status === "ok") {
+      setLiveViewsTabCount(viewsResult.value.data.length);
+    }
+    if (memoriesResult.status === "fulfilled" && memoriesResult.value.ok) {
+      const data: MemoryListResponse = await memoriesResult.value.json();
+      setMemoriesTabCount(data.pagination.total);
+    }
+    if (artifactsResult.status === "fulfilled" && artifactsResult.value.ok) {
+      const data = await artifactsResult.value.json();
+      setArtifactsTabCount(data.pagination?.total ?? 0);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshTabCounts();
+    const interval = window.setInterval(refreshTabCounts, 30_000);
+    return () => window.clearInterval(interval);
+  }, [refreshTabCounts]);
 
   const loadArtifactContent = async (key: string, path: string) => {
     if (!artifactContents.has(key)) {
@@ -588,6 +617,11 @@ export function BrainSection() {
     typeFilter === "artifacts",
   );
 
+  useEffect(() => {
+    if (typeFilter !== "artifacts" || artifactsLoading || artifactsError) return;
+    setArtifactsTabCount(artifactsTotal);
+  }, [artifactsError, artifactsLoading, artifactsTotal, typeFilter]);
+
   // Fetch only the currently visible filter options; do not load every memory
   // label up front because large memory stores can have many distinct tags.
   useEffect(() => {
@@ -658,6 +692,7 @@ export function BrainSection() {
           append ? [...prev, ...data.data] : data.data,
         );
         setTotal(data.pagination.total);
+        setMemoriesTabCount(data.pagination.total);
       } catch (err) {
         if (offset === 0) {
           toast({
@@ -1231,9 +1266,9 @@ export function BrainSection() {
         <div className="inline-flex items-center gap-1 border-b border-border">
           {(
             [
-              { value: "overview", label: "Live Views" },
-              { value: "memories", label: "Memories", count: total },
-              { value: "artifacts", label: "Artifacts", count: artifactsTotal },
+              { value: "overview", label: "Live Views", count: liveViewsTabCount ?? undefined },
+              { value: "memories", label: "Memories", count: memoriesTabCount ?? undefined },
+              { value: "artifacts", label: "Artifacts", count: artifactsTabCount ?? undefined },
             ] as { value: TypeFilter; label: string; count?: number }[]
           ).map(({ value, label, count }) => (
             <button
@@ -1349,7 +1384,7 @@ export function BrainSection() {
       </div>
 
       {typeFilter === "overview" ? (
-        <BrainOverview />
+        <BrainOverview onViewCountChange={setLiveViewsTabCount} />
       ) : (
         <>
 

@@ -279,7 +279,11 @@ function uniqueDashboardTitle(title: string, views: ViewDefinition[]): string {
   return `${title} ${suffix}`;
 }
 
-export function BrainOverview() {
+export function BrainOverview({
+  onViewCountChange,
+}: {
+  onViewCountChange?: (count: number) => void;
+} = {}) {
   const { toast } = useToast();
   const { pipes, refetch: refetchPipes } = usePipes();
   const { settings } = useSettings();
@@ -405,6 +409,10 @@ export function BrainOverview() {
       return next;
     });
   }, [view]);
+
+  useEffect(() => {
+    onViewCountChange?.(views.length);
+  }, [onViewCountChange, views.length]);
 
   useEffect(() => {
     void load();
