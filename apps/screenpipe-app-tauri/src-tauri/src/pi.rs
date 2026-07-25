@@ -4014,6 +4014,22 @@ pub async fn pi_acp_probe_agent(agent: AcpAgentConfig) -> Result<String, String>
                         .unwrap_or("the agent failed to start")
                         .to_string())
                 }
+                // External-CLI-login agents (Kimi, OpenCode): the runtime can't
+                // complete their sign-in over ACP and emits this with the CLI
+                // command. Surface it (with the command) so the editor shows a
+                // sign-in hint instead of spinning until the probe times out.
+                Some("acp_external_auth_required") => {
+                    let name = event
+                        .get("agentName")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("this agent");
+                    return Err(match event.get("command").and_then(|v| v.as_str()) {
+                        Some(command) => format!(
+                            "{name} needs a one-time sign in — run `{command}` in a terminal, then retry."
+                        ),
+                        None => format!("{name} needs to sign in first, then retry."),
+                    });
+                }
                 // Agent-managed login would block forever without a UI;
                 // report it instead so the editor can hint at signing in.
                 Some("extension_ui_request") => {

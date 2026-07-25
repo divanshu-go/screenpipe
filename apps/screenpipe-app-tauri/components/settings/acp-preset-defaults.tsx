@@ -66,15 +66,23 @@ export function AcpPresetDefaults({
     let cancelled = false;
     void (async () => {
       try {
-        const result = await commands.piAcpProbeAgent({
-          id: agentId,
-          command: agent.command ?? null,
-          args: agent.args ?? [],
-          env: agent.env ?? {},
-          authMethod: null,
-          config: {},
-          modeId: null,
-        });
+        // Cap the probe so a signed-out/wedged agent can't spin forever; the
+        // timeout surfaces as a retryable error (reactive fallback for agents
+        // the proactive auth gate couldn't classify).
+        const result = await Promise.race([
+          commands.piAcpProbeAgent({
+            id: agentId,
+            command: agent.command ?? null,
+            args: agent.args ?? [],
+            env: agent.env ?? {},
+            authMethod: null,
+            config: {},
+            modeId: null,
+          }),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("timed out waiting for the agent")), 30_000),
+          ),
+        ]);
         if (result.status === "error") throw new Error(result.error);
         cacheAdvertisement(JSON.parse(result.data));
       } catch (error) {
@@ -126,14 +134,25 @@ export function AcpPresetDefaults({
         </p>
       );
     }
+    // Reactive fallback: if the probe failed because the agent isn't signed in
+    // (kimi/opencode need a CLI login; others may need in-chat sign-in), show
+    // the probe's own sign-in message (it already names the CLI command)
+    // instead of a raw "could not load" error.
+    const authErr =
+      !!probeError &&
+      /-32000|authentication required|auth[_ ]?required|not logged in|not authenticated|api key is missing|please run .{0,3}\/login|sign[- ]?in|log ?in/i.test(
+        probeError,
+      );
     return (
       <div className={cn(hintClass, "flex items-center gap-2")}>
         <span>
-          {probeError
-            ? `could not load choices: ${probeError}`
-            : compact
-              ? "model and mode choices unavailable"
-              : "Model and mode choices are unavailable for this agent."}
+          {authErr
+            ? probeError
+            : probeError
+              ? `could not load choices: ${probeError}`
+              : compact
+                ? "model and mode choices unavailable"
+                : "Model and mode choices are unavailable for this agent."}
         </span>
         <button
           type="button"
