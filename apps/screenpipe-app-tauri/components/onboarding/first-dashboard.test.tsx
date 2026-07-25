@@ -151,6 +151,9 @@ describe("FirstDashboard", () => {
       }),
     ).toBeInTheDocument();
     expect(screen.getByTestId("onboarding-build-visual")).toBeInTheDocument();
+    expect(screen.getByTestId("onboarding-build-captions")).toHaveTextContent(
+      "contextscreenpipeLive View",
+    );
     expect(await screen.findByRole("status")).toHaveTextContent(
       "reading your goal",
     );

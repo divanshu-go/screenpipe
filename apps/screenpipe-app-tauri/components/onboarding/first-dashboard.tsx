@@ -86,7 +86,7 @@ function ScreenpipeBuildVisual({ currentIndex }: { currentIndex: number }) {
       aria-hidden="true"
       className="relative h-28 w-full overflow-hidden border-y border-border"
     >
-      <div className="absolute left-3 top-5 h-12 w-16">
+      <div className="absolute left-3 top-4 h-[54px] w-16">
         <div className="absolute left-2 top-0 h-10 w-12 border border-border bg-background" />
         <div className="absolute left-1 top-1 h-10 w-12 border border-border bg-background" />
         <div className="absolute left-0 top-2 h-10 w-12 overflow-hidden border border-foreground bg-background">
@@ -94,16 +94,13 @@ function ScreenpipeBuildVisual({ currentIndex }: { currentIndex: number }) {
           <span className="absolute bottom-1 left-1 h-1 w-4 bg-foreground" />
           <span className="absolute bottom-1 right-1 h-1 w-2 border border-foreground" />
         </div>
-        <span className="absolute bottom-0 left-0 font-mono text-[8px] lowercase tracking-[0.18em] text-muted-foreground">
-          context
-        </span>
       </div>
 
-      <div className="absolute left-[22%] right-[27%] top-[43px] h-px bg-border">
+      <div className="absolute left-[22%] right-[27%] top-[36px] h-px bg-border">
         <span className="sp-onboarding-packet absolute -top-[3px] h-[7px] w-[7px] bg-foreground" />
       </div>
 
-      <div className="absolute left-1/2 top-[31px] z-10 grid h-6 w-6 -translate-x-1/2 grid-cols-2 gap-[2px] border border-foreground bg-background p-[3px]">
+      <div className="absolute left-1/2 top-6 z-10 grid h-6 w-6 -translate-x-1/2 grid-cols-2 gap-[2px] border border-foreground bg-background p-[3px]">
         {[0, 1, 2, 3].map((cell) => (
           <span
             key={cell}
@@ -112,11 +109,8 @@ function ScreenpipeBuildVisual({ currentIndex }: { currentIndex: number }) {
           />
         ))}
       </div>
-      <span className="absolute left-1/2 top-[65px] -translate-x-1/2 font-mono text-[8px] lowercase tracking-[0.18em] text-muted-foreground">
-        screenpipe
-      </span>
 
-      <div className="absolute right-3 top-4 h-[54px] w-[76px] border border-foreground bg-background p-1">
+      <div className="absolute right-3 top-2 h-[54px] w-[76px] border border-foreground bg-background p-1">
         <div className="grid h-full grid-cols-3 grid-rows-3 gap-1">
           {["col-span-2", "row-span-2", "col-span-2", "col-span-3"].map(
             (span, index) => (
@@ -130,9 +124,15 @@ function ScreenpipeBuildVisual({ currentIndex }: { currentIndex: number }) {
           )}
         </div>
       </div>
-      <span className="absolute bottom-3 right-3 font-mono text-[8px] lowercase tracking-[0.18em] text-muted-foreground">
-        Live View
-      </span>
+
+      <div
+        data-testid="onboarding-build-captions"
+        className="absolute inset-x-3 bottom-3 grid grid-cols-[72px_minmax(0,1fr)_80px] items-center font-mono text-[8px] lowercase tracking-[0.18em] text-muted-foreground"
+      >
+        <span className="text-left">context</span>
+        <span className="text-center">screenpipe</span>
+        <span className="text-right">Live View</span>
+      </div>
     </div>
   );
 }
