@@ -110,7 +110,7 @@ export function AcpSignInDialog({
   const isCli = request?.kind === "cli";
   const title = `sign in to ${agentName}`;
   const description = isCli
-    ? `${agentName} signs in through its own terminal, not the chat. run this command, then retry:`
+    ? `${agentName} signs in through its own terminal. run this command, then retry:`
     : request?.kind === "methods"
       ? request.message ?? `${agentName} handles sign-in itself. pick how you'd like to continue:`
       : "";

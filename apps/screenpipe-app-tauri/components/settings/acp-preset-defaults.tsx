@@ -4,9 +4,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Loader2, RefreshCw } from "lucide-react";
+import { Check, Copy, Loader2, RefreshCw } from "lucide-react";
 import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
 import { commands } from "@/lib/utils/tauri";
+import { acpAdapterInfo } from "@/lib/utils/preset-appearance";
 import { dedupedModes, useAcpSessionConfig } from "@/lib/stores/acp-session-config";
 import { cn } from "@/lib/utils";
 
@@ -24,6 +26,12 @@ export interface AcpPresetAgent {
 
 /** One probe per adapter at a time, shared across both preset editors. */
 const probesInFlight = new Set<string>();
+
+/** Remembers the last failed/sign-in verdict per adapter across editor opens,
+ *  so reopening (or switching back to) an agent doesn't cold-spawn a fresh
+ *  probe every time. A successful probe caches its config in the store instead;
+ *  an explicit "retry" clears this so the agent is checked again. */
+const probeVerdicts = new Map<string, string>();
 
 /** The no-override choice, named after what the agent will actually use. */
 const defaultChoiceLabel = (name?: string) =>
@@ -53,6 +61,7 @@ export function AcpPresetDefaults({
   const [probing, setProbing] = useState(false);
   const [probeError, setProbeError] = useState<string | null>(null);
   const [probeNonce, setProbeNonce] = useState(0);
+  const [copied, setCopied] = useState(false);
 
   // A custom adapter can't be probed until it has a command.
   const probeable = agentId !== "custom" || Boolean(agent.command?.trim());
@@ -60,6 +69,13 @@ export function AcpPresetDefaults({
   useEffect(() => {
     if (advertised || !probeable) return;
     if (probesInFlight.has(agentId)) return;
+    // Reuse a remembered verdict instead of spawning a fresh agent again.
+    const cached = probeVerdicts.get(agentId);
+    if (cached !== undefined) {
+      setProbeError(cached);
+      setProbing(false);
+      return;
+    }
     probesInFlight.add(agentId);
     setProbing(true);
     setProbeError(null);
@@ -86,7 +102,9 @@ export function AcpPresetDefaults({
         if (result.status === "error") throw new Error(result.error);
         cacheAdvertisement(JSON.parse(result.data));
       } catch (error) {
-        if (!cancelled) setProbeError(String(error instanceof Error ? error.message : error));
+        const message = String(error instanceof Error ? error.message : error);
+        probeVerdicts.set(agentId, message);
+        if (!cancelled) setProbeError(message);
       } finally {
         probesInFlight.delete(agentId);
         if (!cancelled) setProbing(false);
@@ -134,29 +152,74 @@ export function AcpPresetDefaults({
         </p>
       );
     }
-    // Reactive fallback: if the probe failed because the agent isn't signed in
-    // (kimi/opencode need a CLI login; others may need in-chat sign-in), show
-    // the probe's own sign-in message (it already names the CLI command)
-    // instead of a raw "could not load" error.
+    // The probe reports (the official ACP way) when the agent needs sign-in.
+    // Render it as a card matching the install gate: the agent, what to do,
+    // the CLI command with a copy button, and a retry.
     const authErr =
       !!probeError &&
       /-32000|authentication required|auth[_ ]?required|not logged in|not authenticated|api key is missing|please run .{0,3}\/login|sign[- ]?in|log ?in/i.test(
         probeError,
       );
+    if (authErr) {
+      const info = acpAdapterInfo(agentId);
+      // The probe embeds the CLI login command in backticks (kimi/opencode);
+      // in-protocol agents have none and just get the message.
+      const signInCommand = probeError?.match(/`([^`]+)`/)?.[1] ?? null;
+      return (
+        <div
+          className={cn("space-y-3 rounded-lg border border-input bg-muted/20", compact ? "p-3" : "p-4")}
+          data-testid="acp-preset-signin"
+        >
+          <div className="space-y-1">
+            <p className={cn("font-medium", compact ? "text-xs" : "text-sm")}>Sign in to {info.name}</p>
+            <p className={cn("text-muted-foreground", compact ? "text-[11px]" : "text-xs")}>
+              {signInCommand
+                ? `${info.name} signs in from its own terminal, not here. Run this command, then retry.`
+                : probeError}
+            </p>
+          </div>
+          {signInCommand && (
+            <div className="relative">
+              <pre className={cn("overflow-x-auto rounded-md bg-muted py-2 pl-3 pr-10 font-mono text-foreground", compact ? "text-[11px]" : "text-xs")}>
+                <code>{signInCommand}</code>
+              </pre>
+              <button
+                type="button"
+                aria-label={copied ? "Copied" : "Copy command"}
+                title={copied ? "Copied" : "Copy"}
+                onClick={async () => {
+                  try {
+                    await commands.copyTextToClipboard(signInCommand);
+                    setCopied(true);
+                    window.setTimeout(() => setCopied(false), 1500);
+                  } catch {
+                    /* clipboard best-effort */
+                  }
+                }}
+                className="absolute right-1.5 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
+              >
+                {copied ? <Check className="h-3.5 w-3.5" aria-hidden /> : <Copy className="h-3.5 w-3.5" aria-hidden />}
+              </button>
+            </div>
+          )}
+          <Button size="sm" onClick={() => { probeVerdicts.delete(agentId); setProbeNonce((nonce) => nonce + 1); }}>
+            <RefreshCw className="mr-1.5 h-3.5 w-3.5" /> I&apos;ve signed in, retry
+          </Button>
+        </div>
+      );
+    }
     return (
       <div className={cn(hintClass, "flex items-center gap-2")}>
         <span>
-          {authErr
-            ? probeError
-            : probeError
-              ? `could not load choices: ${probeError}`
-              : compact
-                ? "model and mode choices unavailable"
-                : "Model and mode choices are unavailable for this agent."}
+          {probeError
+            ? `could not load choices: ${probeError}`
+            : compact
+              ? "model and mode choices unavailable"
+              : "Model and mode choices are unavailable for this agent."}
         </span>
         <button
           type="button"
-          onClick={() => setProbeNonce((nonce) => nonce + 1)}
+          onClick={() => { probeVerdicts.delete(agentId); setProbeNonce((nonce) => nonce + 1); }}
           className="inline-flex items-center gap-1 underline underline-offset-2 hover:text-foreground"
         >
           <RefreshCw className="h-3 w-3" /> retry
