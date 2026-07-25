@@ -12,6 +12,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import { ACTIVE_AI_PRESET_STORAGE_KEY } from "@/lib/active-ai-preset";
 
 const mocks = vi.hoisted(() => ({
   listBrainViews: vi.fn(),
@@ -79,6 +80,7 @@ vi.mock("@/lib/hooks/use-pipes", () => ({
 }));
 vi.mock("@/lib/hooks/use-settings", () => ({
   useSettings: () => ({
+    isSettingsLoaded: true,
     settings: {
       user: { token: "test-token" },
       aiPresets: [
@@ -88,6 +90,16 @@ vi.mock("@/lib/hooks/use-settings", () => ({
           url: "",
           model: "auto",
           defaultPreset: true,
+          prompt: "",
+          apiKey: null,
+          maxContextChars: 100_000,
+        },
+        {
+          id: "quality",
+          provider: "screenpipe-cloud",
+          url: "",
+          model: "claude-sonnet-4-5",
+          defaultPreset: false,
           prompt: "",
           apiKey: null,
           maxContextChars: 100_000,
@@ -106,10 +118,16 @@ vi.mock("@/lib/hooks/use-health-check", () => ({
 vi.mock("@/components/rewind/ai-presets-selector", () => ({
   AIPresetsSelector: ({
     controlledPresetId,
+    onControlledSelect,
   }: {
-    controlledPresetId: string;
+    controlledPresetId: string | null;
+    onControlledSelect?: (presetId: string | null) => void;
   }) => (
-    <button type="button" data-testid="model-selector">
+    <button
+      type="button"
+      data-testid="model-selector"
+      onClick={() => onControlledSelect?.("quality")}
+    >
       {controlledPresetId ?? "model"}
     </button>
   ),
@@ -1604,5 +1622,66 @@ describe("BrainOverview", () => {
         width: 12,
       }),
     ]);
+  });
+
+  it("uses the selected model for card edits and restores it after navigation", async () => {
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [populatedView],
+    });
+    mocks.generateLiveViewWithPi.mockResolvedValue({
+      title: "Time by project",
+      timeRange: "today",
+      note: "Changed the breakdown.",
+      blocks: [
+        {
+          title: "Time by project",
+          intent: "Group active time by project.",
+          component: "bar-chart.v1",
+          width: 12,
+          pipeName: "daily-summary",
+        },
+      ],
+    });
+    mocks.saveBrainView.mockImplementation(async (request) => ({
+      status: "ok",
+      data: {
+        ...populatedView,
+        revision: 4,
+        slots: request.slots.map((slot: object) => ({
+          ...slot,
+          value: null,
+        })),
+      },
+    }));
+    const firstRender = render(<BrainOverview />);
+
+    const modelSelector = await screen.findByTestId("model-selector");
+    expect(modelSelector.textContent).toBe("auto");
+    fireEvent.click(modelSelector);
+    await waitFor(() => expect(modelSelector.textContent).toBe("quality"));
+    expect(localStorage.getItem(ACTIVE_AI_PRESET_STORAGE_KEY)).toBe("quality");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "edit Focus time with AI" }),
+    );
+    fireEvent.change(
+      await screen.findByPlaceholderText("e.g. group by project instead"),
+      { target: { value: "group this by project" } },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "update" }));
+
+    await waitFor(() => expect(mocks.generateLiveViewWithPi).toHaveBeenCalled());
+    expect(mocks.generateLiveViewWithPi).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preset: expect.objectContaining({ id: "quality" }),
+      }),
+    );
+
+    firstRender.unmount();
+    render(<BrainOverview />);
+    await waitFor(() =>
+      expect(screen.getByTestId("model-selector").textContent).toBe("quality"),
+    );
   });
 });

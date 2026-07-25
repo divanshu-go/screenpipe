@@ -30,6 +30,8 @@ type LiveViewAiComposerProps = {
   compact?: boolean;
   autoFocus?: boolean;
   currentViewTitle?: string | null;
+  selectedPresetId: string | null;
+  onSelectedPresetIdChange: (presetId: string | null) => void;
   onGenerate: (
     prompt: string,
     scope: LiveViewGenerationScope,
@@ -79,6 +81,8 @@ export function LiveViewAiComposer({
   compact = false,
   autoFocus = false,
   currentViewTitle = null,
+  selectedPresetId,
+  onSelectedPresetIdChange,
   onGenerate,
 }: LiveViewAiComposerProps) {
   const { settings } = useSettings();
@@ -87,17 +91,7 @@ export function LiveViewAiComposer({
     [settings.aiPresets],
   );
   const [prompt, setPrompt] = useState("");
-  const [presetId, setPresetId] = useState<string | null>(null);
   const [generationStep, setGenerationStep] = useState(0);
-
-  useEffect(() => {
-    if (presetId && presets.some((preset) => preset.id === presetId)) return;
-    const next =
-      presets.find((preset) => preset.defaultPreset)?.id ??
-      presets[0]?.id ??
-      null;
-    setPresetId(next);
-  }, [presetId, presets]);
 
   useEffect(() => {
     if (!busy) return;
@@ -109,7 +103,9 @@ export function LiveViewAiComposer({
     return () => window.clearInterval(interval);
   }, [busy]);
 
-  const selectedPreset = presets.find((preset) => preset.id === presetId);
+  const selectedPreset = presets.find(
+    (preset) => preset.id === selectedPresetId,
+  );
   const canSubmit = Boolean(prompt.trim() && selectedPreset && !busy);
   const intent = inferLiveViewGenerationIntent(
     prompt,
@@ -171,8 +167,8 @@ export function LiveViewAiComposer({
       <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-2 py-2">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <AIPresetsSelector
-            controlledPresetId={presetId}
-            onControlledSelect={setPresetId}
+            controlledPresetId={selectedPresetId}
+            onControlledSelect={onSelectedPresetIdChange}
             compact
             showModelOnly
             showLoginCta

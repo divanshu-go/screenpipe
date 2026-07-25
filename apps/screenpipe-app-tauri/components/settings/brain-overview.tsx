@@ -51,6 +51,11 @@ import { useSettings } from "@/lib/hooks/use-settings";
 import { useHealthCheck } from "@/lib/hooks/use-health-check";
 import { useToast } from "@/components/ui/use-toast";
 import { localFetch } from "@/lib/api";
+import {
+  readActiveAiPresetId,
+  resolveActiveAiPreset,
+  writeActiveAiPresetId,
+} from "@/lib/active-ai-preset";
 import { Input } from "@/components/ui/input";
 import {
   generateLiveViewWithPi,
@@ -286,7 +291,7 @@ export function BrainOverview({
 } = {}) {
   const { toast } = useToast();
   const { pipes, refetch: refetchPipes } = usePipes();
-  const { settings } = useSettings();
+  const { settings, isSettingsLoaded } = useSettings();
   const { health, isServerDown, isLoading: healthLoading } = useHealthCheck();
   const [views, setViews] = useState<ViewDefinition[]>([]);
   const [view, setView] = useState<ViewDefinition | null>(null);
@@ -313,6 +318,9 @@ export function BrainOverview({
   const [replaceConfirmationOpen, setReplaceConfirmationOpen] = useState(false);
   const [activationVersion, setActivationVersion] = useState(0);
   const [onboardingRetrying, setOnboardingRetrying] = useState(false);
+  const [selectedAiPresetId, setSelectedAiPresetId] = useState<string | null>(
+    readActiveAiPresetId,
+  );
   const activationViewedRef = useRef(new Set<string>());
   const refreshOnboardingActivation = useCallback(
     () => setActivationVersion((version) => version + 1),
@@ -327,10 +335,21 @@ export function BrainOverview({
     () => new Set(installedPipes.map((pipe) => pipe.config.name)),
     [installedPipes],
   );
-  const defaultAiPreset = useMemo(() => {
-    const presets = (settings.aiPresets ?? []) as AIPreset[];
-    return presets.find((preset) => preset.defaultPreset) ?? presets[0] ?? null;
-  }, [settings.aiPresets]);
+  const aiPresets = useMemo(
+    () => (settings.aiPresets ?? []) as AIPreset[],
+    [settings.aiPresets],
+  );
+  const selectedAiPreset = useMemo(
+    () =>
+      isSettingsLoaded
+        ? resolveActiveAiPreset(aiPresets, selectedAiPresetId)
+        : null,
+    [aiPresets, isSettingsLoaded, selectedAiPresetId],
+  );
+  const selectAiPreset = useCallback((presetId: string | null) => {
+    setSelectedAiPresetId(presetId);
+    writeActiveAiPresetId(presetId);
+  }, []);
   const onboardingActivation = useMemo(
     () => (view ? getOnboardingLiveViewActivation(view.id) : null),
     [activationVersion, view?.id],
@@ -611,7 +630,7 @@ export function BrainOverview({
       !view ||
       !onboardingActivation ||
       !onboardingActivation.goal ||
-      !defaultAiPreset ||
+      !selectedAiPreset ||
       onboardingRetrying
     ) {
       toast({
@@ -632,7 +651,7 @@ export function BrainOverview({
         goal: onboardingActivation.goal,
         goalCategory: onboardingActivation.goalCategory,
         dashboardId: view.id,
-        preset: defaultAiPreset,
+        preset: selectedAiPreset,
         userToken: settings.user?.token ?? null,
       });
       setView(result.view);
@@ -661,7 +680,7 @@ export function BrainOverview({
       setOnboardingRetrying(false);
     }
   }, [
-    defaultAiPreset,
+    selectedAiPreset,
     onboardingActivation,
     onboardingRetrying,
     refetchPipes,
@@ -1007,7 +1026,7 @@ export function BrainOverview({
     slot: ViewSlot,
     prompt: string,
   ): Promise<boolean> => {
-    if (!view || !defaultAiPreset) {
+    if (!view || !selectedAiPreset) {
       toast({
         title: "choose an AI model first",
         description: "Add an AI preset in Settings, then try again.",
@@ -1022,7 +1041,7 @@ export function BrainOverview({
       const generated = await generateLiveViewWithPi({
         prompt: `Replace only the existing section "${slot.title}". Do not add another section. User request: ${prompt}`,
         scope: "block",
-        preset: defaultAiPreset,
+        preset: selectedAiPreset,
         userToken: settings.user?.token ?? null,
         pipes: installedPipes.map((pipe) => ({
           name: pipe.config.name,
@@ -1457,6 +1476,8 @@ export function BrainOverview({
       >
         <LiveViewAiComposer
           busy={generating}
+          selectedPresetId={selectedAiPreset?.id ?? null}
+          onSelectedPresetIdChange={selectAiPreset}
           onGenerate={generateFromComposer}
         />
         {templateKits.length > 0 && (
@@ -1803,7 +1824,9 @@ export function BrainOverview({
           <LiveViewCreateDashboardDialog
             open={createDashboardOpen}
             busy={generating}
+            selectedPresetId={selectedAiPreset?.id ?? null}
             onOpenChange={setCreateDashboardOpen}
+            onSelectedPresetIdChange={selectAiPreset}
             onGenerate={(prompt, preset) =>
               generate(prompt, "dashboard", preset, "new-dashboard")
             }
@@ -1918,6 +1941,8 @@ export function BrainOverview({
             busy={generating}
             compact
             currentViewTitle={view.title}
+            selectedPresetId={selectedAiPreset?.id ?? null}
+            onSelectedPresetIdChange={selectAiPreset}
             onGenerate={generateFromComposer}
           />
         </div>

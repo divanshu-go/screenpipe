@@ -19,7 +19,9 @@ import type { AIPreset } from "@/lib/utils/tauri";
 type LiveViewCreateDashboardDialogProps = {
   open: boolean;
   busy: boolean;
+  selectedPresetId: string | null;
   onOpenChange: (open: boolean) => void;
+  onSelectedPresetIdChange: (presetId: string | null) => void;
   onGenerate: (prompt: string, preset: AIPreset) => Promise<boolean>;
   onCreateBlank: () => void;
 };
@@ -27,7 +29,9 @@ type LiveViewCreateDashboardDialogProps = {
 export function LiveViewCreateDashboardDialog({
   open,
   busy,
+  selectedPresetId,
   onOpenChange,
+  onSelectedPresetIdChange,
   onGenerate,
   onCreateBlank,
 }: LiveViewCreateDashboardDialogProps) {
@@ -62,6 +66,8 @@ export function LiveViewCreateDashboardDialog({
           <LiveViewAiComposer
             busy={busy}
             autoFocus
+            selectedPresetId={selectedPresetId}
+            onSelectedPresetIdChange={onSelectedPresetIdChange}
             onGenerate={async (prompt, _scope, preset) => {
               const generated = await onGenerate(prompt, preset);
               if (generated) onOpenChange(false);
