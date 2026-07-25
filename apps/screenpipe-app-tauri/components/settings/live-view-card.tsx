@@ -87,14 +87,19 @@ function LiveViewListItemText({
   const [isTruncated, setIsTruncated] = useState(false);
   const [tooltipOpen, setTooltipOpen] = useState(false);
 
-  const measureTruncation = useCallback(() => {
+  const measureTruncation = useCallback((): boolean => {
     const truncated = [titleRef.current, subtitleRef.current].some(
       (element) =>
         element !== null && element.scrollWidth > element.clientWidth,
     );
     setIsTruncated(truncated);
     if (!truncated) setTooltipOpen(false);
+    return truncated;
   }, []);
+
+  const openTooltipIfTruncated = useCallback(() => {
+    setTooltipOpen(measureTruncation());
+  }, [measureTruncation]);
 
   useLayoutEffect(() => {
     measureTruncation();
@@ -109,14 +114,20 @@ function LiveViewListItemText({
   return (
     <Tooltip
       open={isTruncated && tooltipOpen}
-      onOpenChange={setTooltipOpen}
+      onOpenChange={(open) => {
+        // Pointer entry and keyboard focus open the controlled tooltip below.
+        // Still honor Radix close requests such as Escape.
+        if (!open) setTooltipOpen(false);
+      }}
     >
       <TooltipTrigger asChild>
         <div
           className="min-w-0 flex-1 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-1"
           tabIndex={isTruncated ? 0 : undefined}
-          onPointerEnter={measureTruncation}
-          onFocus={measureTruncation}
+          onPointerEnter={openTooltipIfTruncated}
+          onPointerLeave={() => setTooltipOpen(false)}
+          onFocus={openTooltipIfTruncated}
+          onBlur={() => setTooltipOpen(false)}
         >
           <p ref={titleRef} className="truncate text-sm">
             {title}

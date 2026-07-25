@@ -54,6 +54,7 @@ class ResizeObserverMock {
 
 beforeEach(() => {
   vi.stubGlobal("ResizeObserver", ResizeObserverMock);
+  vi.stubGlobal("PointerEvent", MouseEvent);
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(160);
   vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockImplementation(
     function (this: HTMLElement) {
@@ -62,6 +63,17 @@ beforeEach(() => {
         : 160;
     },
   );
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+    x: 0,
+    y: 0,
+    width: 160,
+    height: 40,
+    top: 0,
+    right: 160,
+    bottom: 40,
+    left: 0,
+    toJSON: () => ({}),
+  });
 });
 
 afterEach(() => {
@@ -77,10 +89,19 @@ describe("LiveViewCard list overflow", () => {
     expect(longText).not.toBeNull();
     await waitFor(() => expect(longText?.getAttribute("tabindex")).toBe("0"));
 
-    fireEvent.pointerMove(longText as HTMLElement, { pointerType: "mouse" });
+    fireEvent.pointerEnter(longText as HTMLElement, { pointerType: "mouse" });
     const tooltip = await screen.findByRole("tooltip");
     expect(within(tooltip).getByText(longTitle)).toBeTruthy();
     expect(within(tooltip).getByText(longSubtitle)).toBeTruthy();
+
+    fireEvent.pointerLeave(longText as HTMLElement, {
+      pointerType: "mouse",
+      clientX: 200,
+      clientY: 20,
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    });
   });
 
   it("adds keyboard focus only when a row is truncated", async () => {
@@ -98,5 +119,10 @@ describe("LiveViewCard list overflow", () => {
     const tooltip = await screen.findByRole("tooltip");
     expect(within(tooltip).getByText(longTitle)).toBeTruthy();
     expect(within(tooltip).getByText(longSubtitle)).toBeTruthy();
+
+    fireEvent.blur(longText as HTMLElement);
+    await waitFor(() => {
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    });
   });
 });
