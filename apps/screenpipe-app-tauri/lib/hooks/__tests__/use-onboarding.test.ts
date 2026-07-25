@@ -65,10 +65,7 @@ describe("useOnboarding measurement", () => {
 
   it("records completion only after the persisted command succeeds", async () => {
     localStorage.setItem("screenpipe:pipes-collapsed", "true");
-    mocks.completeOnboarding.mockImplementation(async () => {
-      expect(localStorage.getItem("screenpipe:pipes-collapsed")).toBe("false");
-      return { status: "ok", data: null };
-    });
+    mocks.completeOnboarding.mockResolvedValue({ status: "ok", data: null });
 
     await useOnboarding.getState().completeOnboarding({
       method: "pipes_installed",
@@ -84,10 +81,11 @@ describe("useOnboarding measurement", () => {
     expect(useOnboarding.getState().onboardingData.isCompleted).toBe(true);
     expect(
       localStorage.getItem("screenpipe:first-run-guide-pending"),
-    ).toBe("true");
-    expect(mocks.emit).toHaveBeenCalledWith("sidebar-pipes-collapsed-changed", {
-      collapsed: false,
+    ).toBeNull();
+    expect(mocks.emit).toHaveBeenCalledWith("navigate", {
+      url: "screenpipe://home?section=brain",
     });
+    expect(mocks.emit).not.toHaveBeenCalledWith("first-run-guide-pending");
   });
 
   it("does not record completion when persistence fails", async () => {
@@ -109,10 +107,7 @@ describe("useOnboarding measurement", () => {
       localStorage.getItem("screenpipe:first-run-guide-pending"),
     ).toBeNull();
     expect(localStorage.getItem("screenpipe:pipes-collapsed")).toBe("true");
-    expect(mocks.emit).toHaveBeenLastCalledWith(
-      "sidebar-pipes-collapsed-changed",
-      { collapsed: true },
-    );
+    expect(mocks.emit).not.toHaveBeenCalled();
   });
 
   it("opens the personalized dashboard without launching the generic Pipe tour", async () => {
@@ -124,7 +119,6 @@ describe("useOnboarding measurement", () => {
       method: "live_view_created",
       pipeCount: 2,
       dashboardBlockCount: 5,
-      goalAudience: "personal",
       goalCategory: "work_memory",
     });
 
@@ -135,20 +129,17 @@ describe("useOnboarding measurement", () => {
     expect(mocks.emit).toHaveBeenCalledWith("navigate", {
       url: "screenpipe://home?section=brain",
     });
-    expect(mocks.emit).not.toHaveBeenCalledWith(
-      "first-run-guide-pending",
-    );
+    expect(mocks.emit).not.toHaveBeenCalledWith("first-run-guide-pending");
     expect(mocks.capture).toHaveBeenCalledWith("onboarding_completed", {
       completion_method: "live_view_created",
       pipe_count: 2,
       customized: undefined,
       dashboard_block_count: 5,
-      goal_audience: "personal",
       goal_category: "work_memory",
     });
   });
 
-  it("replays the final guide after an explicit onboarding reset", async () => {
+  it("keeps setup reset separate from the optional app tour", async () => {
     mocks.resetOnboarding.mockResolvedValue({ status: "ok", data: null });
     mocks.completeOnboarding.mockResolvedValue({ status: "ok", data: null });
     localStorage.setItem("screenpipe:first-run-guide-pending", "true");
@@ -162,7 +153,7 @@ describe("useOnboarding measurement", () => {
       localStorage.getItem(
         "screenpipe:first-run-guide-replay-after-onboarding",
       ),
-    ).toBe("true");
+    ).toBeNull();
 
     await useOnboarding.getState().completeOnboarding({
       method: "live_view_created",
@@ -176,9 +167,9 @@ describe("useOnboarding measurement", () => {
     ).toBeNull();
     expect(
       localStorage.getItem("screenpipe:first-run-guide-pending"),
-    ).toBe("true");
-    expect(mocks.emit).toHaveBeenCalledWith("first-run-guide-pending");
-    expect(mocks.emit).not.toHaveBeenCalledWith("navigate", {
+    ).toBeNull();
+    expect(mocks.emit).not.toHaveBeenCalledWith("first-run-guide-pending");
+    expect(mocks.emit).toHaveBeenCalledWith("navigate", {
       url: "screenpipe://home?section=brain",
     });
   });

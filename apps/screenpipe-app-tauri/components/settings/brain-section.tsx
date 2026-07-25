@@ -80,6 +80,10 @@ import {
 } from "@/lib/utils/memory-display";
 import { useChatStore } from "@/lib/stores/chat-store";
 import posthog from "posthog-js";
+import {
+  consumeOnboardingBrainHandoff,
+  ONBOARDING_BRAIN_HANDOFF_EVENT,
+} from "@/lib/live-views/onboarding-activation";
 
 interface MemoryRecord {
   id: number;
@@ -366,7 +370,14 @@ export function BrainSection() {
   const didMountRenderResetRef = useRef(false);
   const memoryDisplayCacheRef = useRef<Map<string, MemoryCardDisplay>>(new Map());
 
-  const [typeFilter, setTypeFilter] = useState<TypeFilter>(brainViewState.typeFilter);
+  const [typeFilter, setTypeFilter] = useState<TypeFilter>(() => {
+    const initial = consumeOnboardingBrainHandoff()
+      ? "overview"
+      : brainViewState.typeFilter;
+    initialTypeFilterRef.current = initial;
+    brainViewState.typeFilter = initial;
+    return initial;
+  });
   const [visibleCount, setVisibleCount] = useState(
     brainViewState.visibleCountByType[brainViewState.typeFilter],
   );
@@ -514,6 +525,16 @@ export function BrainSection() {
     },
     [saveCurrentListPosition, typeFilter],
   );
+
+  useEffect(() => {
+    const openOverview = () => {
+      consumeOnboardingBrainHandoff();
+      switchTypeFilter("overview");
+    };
+    window.addEventListener(ONBOARDING_BRAIN_HANDOFF_EVENT, openOverview);
+    return () =>
+      window.removeEventListener(ONBOARDING_BRAIN_HANDOFF_EVENT, openOverview);
+  }, [switchTypeFilter]);
 
   // debounce search
   useEffect(() => {

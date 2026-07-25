@@ -184,7 +184,7 @@ export default function OnboardingPage() {
         return;
       }
       commands
-        .showWindow({ Home: { page: null } })
+        .showWindow({ Home: { page: "brain" } })
         .then(() => window.close())
         .catch(() => {});
     }

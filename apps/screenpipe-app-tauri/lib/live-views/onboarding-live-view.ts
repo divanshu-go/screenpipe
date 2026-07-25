@@ -12,6 +12,7 @@ import {
   preferredStorePipeSlugs,
   type OnboardingGoalCategory,
 } from "@/lib/live-views/onboarding-goals";
+import { startOnboardingLiveViewActivation } from "@/lib/live-views/onboarding-activation";
 import {
   buildLiveViewTimeContext,
   DEFAULT_LIVE_VIEW_PERIOD_POLICY,
@@ -26,6 +27,7 @@ import {
 const FIRST_DASHBOARD_ID = "first-dashboard";
 const MAX_STORE_CANDIDATES = 20;
 const MAX_SELECTED_PIPES = 2;
+const MAX_DASHBOARDS = 12;
 
 export type OnboardingPipeCandidate = LiveViewPipeSummary & {
   slug: string;
@@ -163,7 +165,9 @@ export function rankOnboardingPipeCandidates(
         typeof pipe.category === "string" ? pipe.category.trim() : undefined;
       const installCount =
         typeof pipe.install_count === "number" ? pipe.install_count : 0;
-      const searchable = words(`${slug} ${title} ${description} ${category ?? ""}`);
+      const searchable = words(
+        `${slug} ${title} ${description} ${category ?? ""}`,
+      );
       let relevance = 0;
       for (const goalWord of goalWords) {
         if (searchable.has(goalWord)) relevance += 8;
@@ -339,11 +343,14 @@ async function ensurePipeReady(
   presetId: string | null,
 ): Promise<{ name: string; installed: boolean }> {
   const enable = async (name: string) => {
-    const response = await localFetch(`/pipes/${encodeURIComponent(name)}/enable`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ enabled: true }),
-    });
+    const response = await localFetch(
+      `/pipes/${encodeURIComponent(name)}/enable`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: true }),
+      },
+    );
     const body = await jsonBody(response);
     return { ok: response.ok && !body.error, body };
   };
@@ -441,7 +448,7 @@ function slotInputs(
     }
     usedIds.add(id);
     const pipeName = block.pipeName
-      ? readyPipeNames.get(block.pipeName) ?? null
+      ? (readyPipeNames.get(block.pipeName) ?? null)
       : null;
     return {
       id,
@@ -458,6 +465,7 @@ function slotInputs(
 async function saveFirstDashboard(
   generated: GeneratedLiveView,
   readyPipeNames: Map<string, string>,
+  dashboardId: string,
 ): Promise<BrainViewDefinition> {
   const listed = await commands.listBrainViews();
   if (listed.status === "error") {
@@ -467,10 +475,28 @@ async function saveFirstDashboard(
       "Could not check existing dashboards.",
     );
   }
-  const existing = listed.data.find((view) => view.id === FIRST_DASHBOARD_ID);
+  const existing = listed.data.find((view) => view.id === dashboardId);
+  if (!existing && listed.data.length >= MAX_DASHBOARDS) {
+    throw new OnboardingLiveViewSetupError(
+      "dashboard_save_failed",
+      "saving",
+      `You already have ${MAX_DASHBOARDS} dashboards. Delete one, then try setup again.`,
+    );
+  }
+  const usedTitles = new Set(
+    listed.data
+      .filter((view) => view.id !== dashboardId)
+      .map((view) => view.title.toLowerCase()),
+  );
+  let title = generated.title;
+  let titleSuffix = 2;
+  while (usedTitles.has(title.toLowerCase())) {
+    title = `${generated.title} ${titleSuffix}`;
+    titleSuffix += 1;
+  }
   const saved = await commands.saveBrainView({
-    id: FIRST_DASHBOARD_ID,
-    title: generated.title,
+    id: dashboardId,
+    title,
     expectedRevision: existing?.revision ?? null,
     timeRange: generated.timeRange,
     periodPolicy: DEFAULT_LIVE_VIEW_PERIOD_POLICY,
@@ -538,6 +564,7 @@ async function refreshDashboard(view: BrainViewDefinition): Promise<number> {
 export async function createOnboardingLiveView(options: {
   goal: string;
   goalCategory: OnboardingGoalCategory;
+  dashboardId?: string;
   preset: AIPreset;
   userToken: string | null;
   onProgress?: (progress: OnboardingLiveViewProgress) => void;
@@ -623,7 +650,11 @@ export async function createOnboardingLiveView(options: {
   }
 
   report({ stage: "saving", blockCount: generated.blocks.length });
-  const view = await saveFirstDashboard(generated, readyPipeNames);
+  const view = await saveFirstDashboard(
+    generated,
+    readyPipeNames,
+    options.dashboardId ?? FIRST_DASHBOARD_ID,
+  );
 
   report({ stage: "refreshing", pipeCount: pipeSlugs.length });
   const refreshStartedCount = await refreshDashboard(view);
@@ -634,6 +665,8 @@ export async function createOnboardingLiveView(options: {
       "The dashboard is ready, but its Pipes did not start. Try again.",
     );
   }
+
+  startOnboardingLiveViewActivation(view.id, options.goalCategory);
 
   report({
     stage: "complete",

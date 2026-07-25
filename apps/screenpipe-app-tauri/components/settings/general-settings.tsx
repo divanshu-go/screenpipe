@@ -50,10 +50,6 @@ export default function GeneralSettings() {
   const handleResetOnboarding = async () => {
     setIsResettingOnboarding(true);
     try {
-      // The final guided tour is persisted separately from native onboarding.
-      // Re-arm it before opening setup so a completed personalized-dashboard
-      // path can still replay the full experience after an explicit reset.
-      await updateSettings({ firstRunGuideDone: false });
       await resetOnboarding();
       const result = await commands.showOnboardingWindow();
       if (result.status === "error") throw new Error(result.error);

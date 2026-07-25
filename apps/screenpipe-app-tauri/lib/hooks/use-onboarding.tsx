@@ -8,12 +8,7 @@ import { commands, OnboardingStore } from "@/lib/utils/tauri";
 import { useEffect } from "react";
 import posthog from "posthog-js";
 import {
-  PIPES_SIDEBAR_COLLAPSED_KEY,
-  setPipesSidebarCollapsed,
-} from "@/lib/sidebar-pipes";
-import {
   isFirstRunGuidePending,
-  isFirstRunGuideReplayAfterOnboarding,
   setFirstRunGuidePending,
   setFirstRunGuideReplayAfterOnboarding,
 } from "@/lib/first-run-guide";
@@ -27,7 +22,6 @@ export type OnboardingCompletionContext = {
   pipeCount?: number;
   customized?: boolean;
   dashboardBlockCount?: number;
-  goalAudience?: string;
   goalCategory?: string;
 };
 
@@ -71,38 +65,16 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
   },
 
   completeOnboarding: async (context) => {
-    let previousPipesCollapsed: string | null = null;
     const firstRunGuideWasPending = isFirstRunGuidePending();
-    const replayFirstRunGuide = isFirstRunGuideReplayAfterOnboarding();
-    const prepareFirstRunGuide =
-      context.method !== "live_view_created" || replayFirstRunGuide;
     try {
       set({ isLoading: true, error: null });
-      if (prepareFirstRunGuide) {
-        try {
-          previousPipesCollapsed = localStorage.getItem(PIPES_SIDEBAR_COLLAPSED_KEY);
-        } catch {
-          // localStorage may be unavailable in restricted webviews.
-        }
-        // Rust opens Home before this command resolves, so persist and broadcast
-        // the expanded state first. A newly-created Home reads the preference;
-        // an existing Home receives the event.
-        await setPipesSidebarCollapsed(false);
-        // This explicit handoff is the eligibility gate for the guide. Existing
-        // onboarded installs never receive it, even though their settings are
-        // hydrated with firstRunGuideDone=false for backwards compatibility.
-        setFirstRunGuidePending(true);
-      } else {
-        // A stale handoff from an interrupted older onboarding must not stack
-        // the generic create-a-Pipe tour over the new personalized dashboard.
-        setFirstRunGuidePending(false);
-      }
+      // The old app tour competes with the user's chosen outcome. Brain now
+      // owns activation; the generic tour remains explicit in Help.
+      setFirstRunGuidePending(false);
       const result = await commands.completeOnboarding();
       
       if (result.status === "ok") {
-        if (replayFirstRunGuide) {
-          setFirstRunGuideReplayAfterOnboarding(false);
-        }
+        setFirstRunGuideReplayAfterOnboarding(false);
         // Update local state
         set(state => ({
           onboardingData: {
@@ -119,48 +91,23 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
           ...(context.dashboardBlockCount !== undefined
             ? { dashboard_block_count: context.dashboardBlockCount }
             : {}),
-          ...(context.goalAudience
-            ? { goal_audience: context.goalAudience }
-            : {}),
           ...(context.goalCategory
             ? { goal_category: context.goalCategory }
             : {}),
         });
-        // A Home window that already existed before onboarding completed is
-        // reused by Rust (shown, not reloaded), so it consumed the guide
-        // handoff as `false` at its original mount. Nudge it to re-check.
-        // A freshly created Home reads localStorage on mount instead, so
-        // missing this event there is harmless.
-        if (prepareFirstRunGuide) {
-          try {
-            void emit("first-run-guide-pending").catch(() => {});
-          } catch {
-            // not in tauri (preview/tests)
-          }
-        } else {
-          // The personalized dashboard replaces the generic create-a-Pipe tour.
-          // Send the reused or newly opened Home window directly to Brain.
-          try {
-            void emit("navigate", {
-              url: "screenpipe://home?section=brain",
-            }).catch(() => {});
-          } catch {
-            // not in tauri (preview/tests)
-          }
+        // Rust routes a newly created Home to Brain. This covers a reused Home.
+        try {
+          void emit("navigate", {
+            url: "screenpipe://home?section=brain",
+          }).catch(() => {});
+        } catch {
+          // not in tauri (preview/tests)
         }
       } else {
         throw new Error(result.error);
       }
     } catch (error) {
-      if (prepareFirstRunGuide) {
-        setFirstRunGuidePending(firstRunGuideWasPending);
-        const wasCollapsed = previousPipesCollapsed == null
-          ? true
-          : previousPipesCollapsed === "true";
-        await setPipesSidebarCollapsed(wasCollapsed);
-      } else {
-        setFirstRunGuidePending(firstRunGuideWasPending);
-      }
+      setFirstRunGuidePending(firstRunGuideWasPending);
       console.error("Error completing onboarding:", error);
       set({ 
         error: error instanceof Error ? error.message : "Failed to complete onboarding",
@@ -176,11 +123,9 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
       const result = await commands.resetOnboarding();
       
       if (result.status === "ok") {
-        // Resetting setup is an explicit request to see the entire first-run
-        // experience again. Keep this intent separate from the Home handoff so
-        // the guide cannot appear over the onboarding window.
+        // Reset setup without replaying the separate optional app tour.
         setFirstRunGuidePending(false);
-        setFirstRunGuideReplayAfterOnboarding(true);
+        setFirstRunGuideReplayAfterOnboarding(false);
         // Update local state
         set(state => ({
           onboardingData: {

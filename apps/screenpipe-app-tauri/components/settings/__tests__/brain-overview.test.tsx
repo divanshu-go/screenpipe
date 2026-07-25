@@ -23,6 +23,25 @@ const mocks = vi.hoisted(() => ({
   localFetch: vi.fn(),
   toast: vi.fn(),
   refetchPipes: vi.fn(),
+  capture: vi.fn(),
+}));
+
+const localStorageMock = (() => {
+  const values = new Map<string, string>();
+  return {
+    clear: () => values.clear(),
+    getItem: (key: string) => values.get(key) ?? null,
+    key: (index: number) => Array.from(values.keys())[index] ?? null,
+    removeItem: (key: string) => values.delete(key),
+    setItem: (key: string, value: string) => values.set(key, String(value)),
+    get length() {
+      return values.size;
+    },
+  } satisfies Storage;
+})();
+
+vi.mock("posthog-js", () => ({
+  default: { capture: mocks.capture },
 }));
 
 vi.mock("@/lib/utils/tauri", () => ({
@@ -76,6 +95,13 @@ vi.mock("@/lib/hooks/use-settings", () => ({
     },
   }),
 }));
+vi.mock("@/lib/hooks/use-health-check", () => ({
+  useHealthCheck: () => ({
+    health: { status: "healthy" },
+    isServerDown: false,
+    isLoading: false,
+  }),
+}));
 vi.mock("@/components/rewind/ai-presets-selector", () => ({
   AIPresetsSelector: ({
     controlledPresetId,
@@ -93,6 +119,10 @@ vi.mock("@/lib/live-views/generate-live-view-with-pi", () => ({
 import { BrainOverview, type ViewDefinition } from "../brain-overview";
 import { inferLiveViewGenerationIntent } from "../live-view-ai-composer";
 import { getTemplatePipeReadiness } from "../live-view-template-gallery";
+import {
+  getOnboardingLiveViewActivation,
+  startOnboardingLiveViewActivation,
+} from "@/lib/live-views/onboarding-activation";
 
 const populatedView: ViewDefinition = {
   id: "my-overview",
@@ -170,11 +200,11 @@ const dailyMemoryTemplate = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  try {
-    window.localStorage.clear();
-  } catch {
-    // The test environment may not provide persistent local storage.
-  }
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: localStorageMock,
+  });
+  localStorageMock.clear();
   mocks.listBrainViewTemplateKits.mockResolvedValue({
     status: "ok",
     data: [],
@@ -239,6 +269,56 @@ describe("getTemplatePipeReadiness", () => {
 });
 
 describe("BrainOverview", () => {
+  it("shows an honest cold start until a source-backed result exists", async () => {
+    const coldStartView: ViewDefinition = {
+      ...populatedView,
+      id: "first-dashboard-cold",
+      title: "Work patterns",
+      slots: populatedView.slots.map((slot) => ({ ...slot, value: null })),
+    };
+    startOnboardingLiveViewActivation(coldStartView.id, "work_patterns");
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [coldStartView],
+    });
+
+    render(<BrainOverview />);
+
+    expect(
+      await screen.findByTestId("onboarding-live-view-cold-start"),
+    ).toHaveTextContent("starts with your real work");
+    expect(screen.getByText(/10–15 minutes/)).toBeTruthy();
+    expect(screen.queryByTestId("brain-overview-grid")).toBeNull();
+    expect(
+      screen.queryByText("waiting for daily-summary to publish data"),
+    ).toBeNull();
+  });
+
+  it("reveals the first real result and completes activation after review", async () => {
+    startOnboardingLiveViewActivation(populatedView.id, "work_memory");
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [populatedView],
+    });
+
+    render(<BrainOverview />);
+
+    expect(
+      await screen.findByTestId("onboarding-live-view-first-result"),
+    ).toHaveTextContent("your first real result is ready");
+    expect(screen.getByTestId("brain-overview-grid")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("onboarding-live-view-reviewed"));
+
+    await waitFor(() =>
+      expect(
+        getOnboardingLiveViewActivation(populatedView.id)?.completedAt,
+      ).not.toBeNull(),
+    );
+    expect(
+      screen.queryByTestId("onboarding-live-view-first-result"),
+    ).toBeNull();
+  });
+
   it("renders validated pipe data with its artifact provenance", async () => {
     mocks.listBrainViews.mockResolvedValue({
       status: "ok",

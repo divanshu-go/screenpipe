@@ -128,7 +128,7 @@ describe("rankOnboardingPipeCandidates", () => {
   it("limits a suggested outcome to its portable Store Pipes", () => {
     const selected = selectOnboardingPipeCandidates(
       "document our support process",
-      "create_sops",
+      "process_automation",
       [
         {
           slug: "digital-clone",
@@ -139,8 +139,8 @@ describe("rankOnboardingPipeCandidates", () => {
           connections: [],
         },
         {
-          slug: "sop-generator",
-          title: "SOP Generator",
+          slug: "workflow-discovery",
+          title: "Workflow Discovery",
           description: "source-backed process documentation",
           review_status: "approved",
           install_count: 10,
@@ -149,7 +149,7 @@ describe("rankOnboardingPipeCandidates", () => {
       ],
     );
 
-    expect(selected.map((pipe) => pipe.slug)).toEqual(["sop-generator"]);
+    expect(selected.map((pipe) => pipe.slug)).toEqual(["workflow-discovery"]);
   });
 });
 
@@ -274,9 +274,7 @@ describe("createOnboardingLiveView", () => {
         pipeAvailability: "store",
         maxSelectedPipes: 2,
         requirePipeBinding: true,
-        pipes: [
-          expect.objectContaining({ name: "meeting-intel" }),
-        ],
+        pipes: [expect.objectContaining({ name: "meeting-intel" })],
       }),
     );
     expect(mocks.saveBrainView).toHaveBeenCalledWith(
