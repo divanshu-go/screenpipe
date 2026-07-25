@@ -57,6 +57,6 @@
     "presetName": "kimi",
     "description": "Use Moonshot's Kimi CLI agent installed on this computer.",
     "launch": { "kind": "binary", "command": "kimi", "args": ["acp"] },
-    "installUrl": "https://github.com/MoonshotAI/kimi-cli"
+    "installUrl": "https://www.kimi.com/code"
   }
 ]
