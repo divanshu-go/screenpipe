@@ -1596,46 +1596,74 @@ fn ensure_tools_mcp_server(config: &RuntimeConfig) -> Option<PathBuf> {
     Some(path)
 }
 
-fn mcp_servers(config: &RuntimeConfig) -> Vec<McpServer> {
-    let api_url = env_nonempty("SCREENPIPE_LOCAL_API_URL").or_else(|| {
+/// Harnesses that ignore client-provided STDIO MCP servers over ACP but do
+/// accept http (Cursor). STDIO is the ACP baseline every conformant agent
+/// honors, so this list stays deliberately small; for these we serve
+/// screenpipe's tools over loopback Streamable-HTTP instead (see
+/// `spawn_http_mcp_servers`).
+fn agent_needs_http_mcp(agent_id: &str) -> bool {
+    matches!(agent_id, "cursor")
+}
+
+/// (name, url) of the loopback http MCP servers the runtime stood up for an
+/// http-only agent. Set once in `run_from_env`; read by `mcp_servers`. Empty /
+/// unset means the default stdio transport (every other agent, and all tests).
+static HTTP_MCP_URLS: std::sync::OnceLock<Vec<(String, String)>> = std::sync::OnceLock::new();
+
+/// The local screenpipe engine base url, from the runtime's env.
+fn engine_api_url() -> Option<String> {
+    env_nonempty("SCREENPIPE_LOCAL_API_URL").or_else(|| {
         env_nonempty("SCREENPIPE_LOCAL_API_PORT").map(|port| format!("http://localhost:{port}"))
-    });
-    let mut args = vec!["x".into(), "screenpipe-mcp@latest".into()];
-    let mut env = Vec::new();
-    if let Some(url) = api_url {
-        args.extend(["--screenpipe-url".into(), url.clone()]);
-        env.push(EnvVariable::new("SCREENPIPE_API_URL", url));
-    }
-    if let Some(key) = env_nonempty("SCREENPIPE_LOCAL_API_KEY") {
-        env.push(EnvVariable::new("SCREENPIPE_LOCAL_API_KEY", key));
-    }
-    let mut servers = vec![McpServer::Stdio(
-        McpServerStdio::new("screenpipe", &config.bun_path)
-            .args(args)
-            .env(env),
-    )];
-    // Bundled companion server: the capabilities that used to live in Pi-only
-    // extensions (save_artifact, list_connections) as MCP tools, so every
-    // harness gets them. Additive next to the core screenpipe server above;
-    // shipped in-app (no npm fetch), talks only to the local engine.
-    if let Some(tools_server) = ensure_tools_mcp_server(config) {
-        let mut tools_env = Vec::new();
-        if let Some(url) = env_nonempty("SCREENPIPE_LOCAL_API_URL").or_else(|| {
-            env_nonempty("SCREENPIPE_LOCAL_API_PORT").map(|port| format!("http://localhost:{port}"))
-        }) {
-            tools_env.push(EnvVariable::new("SCREENPIPE_API_URL", url));
+    })
+}
+
+fn mcp_servers(config: &RuntimeConfig) -> Vec<McpServer> {
+    let mut servers: Vec<McpServer> = Vec::new();
+
+    if let Some(http) = HTTP_MCP_URLS.get().filter(|urls| !urls.is_empty()) {
+        // This agent doesn't honor client stdio MCP servers; the runtime stood
+        // up loopback http servers for screenpipe's tools (see run_from_env),
+        // so advertise those instead. No secrets on the wire — the servers bind
+        // 127.0.0.1 and talk to the local engine themselves.
+        for (name, url) in http {
+            servers.push(McpServer::Http(McpServerHttp::new(name, url)));
+        }
+    } else {
+        let mut args = vec!["x".into(), "screenpipe-mcp@latest".into()];
+        let mut env = Vec::new();
+        if let Some(url) = engine_api_url() {
+            args.extend(["--screenpipe-url".into(), url.clone()]);
+            env.push(EnvVariable::new("SCREENPIPE_API_URL", url));
         }
         if let Some(key) = env_nonempty("SCREENPIPE_LOCAL_API_KEY") {
-            tools_env.push(EnvVariable::new("SCREENPIPE_LOCAL_API_KEY", key));
-        }
-        if let Some(chat_id) = env_nonempty("SCREENPIPE_CHAT_SESSION_ID") {
-            tools_env.push(EnvVariable::new("SCREENPIPE_CHAT_SESSION_ID", chat_id));
+            env.push(EnvVariable::new("SCREENPIPE_LOCAL_API_KEY", key));
         }
         servers.push(McpServer::Stdio(
-            McpServerStdio::new("screenpipe-tools", &config.bun_path)
-                .args(vec![tools_server.to_string_lossy().into_owned()])
-                .env(tools_env),
+            McpServerStdio::new("screenpipe", &config.bun_path)
+                .args(args)
+                .env(env),
         ));
+        // Bundled companion server: the capabilities that used to live in Pi-only
+        // extensions (save_artifact, list_connections) as MCP tools, so every
+        // harness gets them. Additive next to the core screenpipe server above;
+        // shipped in-app (no npm fetch), talks only to the local engine.
+        if let Some(tools_server) = ensure_tools_mcp_server(config) {
+            let mut tools_env = Vec::new();
+            if let Some(url) = engine_api_url() {
+                tools_env.push(EnvVariable::new("SCREENPIPE_API_URL", url));
+            }
+            if let Some(key) = env_nonempty("SCREENPIPE_LOCAL_API_KEY") {
+                tools_env.push(EnvVariable::new("SCREENPIPE_LOCAL_API_KEY", key));
+            }
+            if let Some(chat_id) = env_nonempty("SCREENPIPE_CHAT_SESSION_ID") {
+                tools_env.push(EnvVariable::new("SCREENPIPE_CHAT_SESSION_ID", chat_id));
+            }
+            servers.push(McpServer::Stdio(
+                McpServerStdio::new("screenpipe-tools", &config.bun_path)
+                    .args(vec![tools_server.to_string_lossy().into_owned()])
+                    .env(tools_env),
+            ));
+        }
     }
     // Forward the user's own registered MCP servers so every harness sees
     // the same tool surface the native Pi mcp-bridge extension gives raw Pi.
@@ -1667,6 +1695,106 @@ fn mcp_servers(config: &RuntimeConfig) -> Vec<McpServer> {
         }
     }
     servers
+}
+
+fn free_loopback_port() -> Option<u16> {
+    std::net::TcpListener::bind(("127.0.0.1", 0))
+        .ok()
+        .and_then(|listener| listener.local_addr().ok())
+        .map(|addr| addr.port())
+}
+
+/// Block briefly until a loopback port accepts a connection, so we never hand
+/// the agent a url before its server is listening. Runs once at session start.
+fn wait_port_ready(port: u16, timeout: std::time::Duration) {
+    let deadline = std::time::Instant::now() + timeout;
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    while std::time::Instant::now() < deadline {
+        if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(200)).is_ok()
+        {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
+/// Stand up loopback Streamable-HTTP MCP servers for an http-only agent and
+/// record their urls in `HTTP_MCP_URLS` for `mcp_servers` to advertise. Returns
+/// the child processes so the caller reaps them on shutdown (they also inherit
+/// the runtime's process group, so desktop teardown kills them too). Best
+/// effort: a server that can't spawn is simply omitted.
+fn spawn_http_mcp_servers(config: &RuntimeConfig) -> Vec<std::process::Child> {
+    use std::process::{Command, Stdio};
+    let mut children = Vec::new();
+    let mut urls: Vec<(String, String)> = Vec::new();
+    let engine_url = engine_api_url();
+    let api_key = env_nonempty("SCREENPIPE_LOCAL_API_KEY");
+
+    // Bundled tools server over http (fast, in-app, no npm fetch). Waited on
+    // below so it is listening before session/new.
+    if let (Some(tools_path), Some(port)) = (ensure_tools_mcp_server(config), free_loopback_port())
+    {
+        let mut cmd = Command::new(&config.bun_path);
+        cmd.arg(&tools_path)
+            .env("SCREENPIPE_TOOLS_HTTP_PORT", port.to_string())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit());
+        if let Some(url) = &engine_url {
+            cmd.env("SCREENPIPE_API_URL", url);
+        }
+        if let Some(key) = &api_key {
+            cmd.env("SCREENPIPE_LOCAL_API_KEY", key);
+        }
+        if let Some(chat_id) = env_nonempty("SCREENPIPE_CHAT_SESSION_ID") {
+            cmd.env("SCREENPIPE_CHAT_SESSION_ID", chat_id);
+        }
+        match cmd.spawn() {
+            Ok(child) => {
+                children.push(child);
+                urls.push(("screenpipe-tools".into(), format!("http://127.0.0.1:{port}/mcp")));
+                wait_port_ready(port, std::time::Duration::from_secs(3));
+            }
+            Err(error) => eprintln!("[acp-runtime] tools http server failed to start: {error}"),
+        }
+    }
+
+    // Core search over http. `screenpipe-mcp --http` dispatches to the package's
+    // Streamable-HTTP server (there is no separate screenpipe-mcp-http package,
+    // only that mode). Best-effort: `bun x` may fetch it on first run, so it can
+    // lag; we still advertise it (the agent retries) rather than block on it.
+    if let Some(port) = free_loopback_port() {
+        let mut cmd = Command::new(&config.bun_path);
+        cmd.arg("x")
+            .arg("screenpipe-mcp@latest")
+            .arg("--http")
+            .arg("--port")
+            .arg(port.to_string())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit());
+        if let Some(engine_port) =
+            env_nonempty("SCREENPIPE_LOCAL_API_PORT").or_else(|| env_nonempty("SCREENPIPE_PORT"))
+        {
+            cmd.arg("--screenpipe-port").arg(engine_port);
+        }
+        if let Some(url) = &engine_url {
+            cmd.env("SCREENPIPE_API_URL", url);
+        }
+        if let Some(key) = &api_key {
+            cmd.env("SCREENPIPE_LOCAL_API_KEY", key);
+        }
+        match cmd.spawn() {
+            Ok(child) => {
+                children.push(child);
+                urls.push(("screenpipe".into(), format!("http://127.0.0.1:{port}/mcp")));
+            }
+            Err(error) => eprintln!("[acp-runtime] core http mcp server failed to start: {error}"),
+        }
+    }
+
+    let _ = HTTP_MCP_URLS.set(urls);
+    children
 }
 
 async fn create_session(
@@ -2610,6 +2738,14 @@ pub async fn run_from_env() -> Result<(), String> {
     let config = RuntimeConfig::from_env()?;
     let output = ParentOutput::new();
     let state = Arc::new(RuntimeState::new(output.clone(), &config));
+    // Agents that ignore client stdio MCP servers (Cursor) get screenpipe's
+    // tools over loopback http instead — stand those servers up before the
+    // first session/new so mcp_servers() can advertise their urls.
+    let http_mcp_children = if agent_needs_http_mcp(&config.agent_id) {
+        spawn_http_mcp_servers(&config)
+    } else {
+        Vec::new()
+    };
     let (command_tx, command_rx) = mpsc::unbounded_channel();
     let (parent_closed_tx, mut parent_closed_rx) = oneshot::channel();
     let parent_state = state.clone();
@@ -2772,6 +2908,12 @@ pub async fn run_from_env() -> Result<(), String> {
     }
     process_tree.terminate();
     let _ = child.wait().await;
+    // Reap the loopback http MCP servers (if any) — they die with the runtime's
+    // process group too, but kill explicitly so a graceful exit leaves nothing.
+    for mut http_child in http_mcp_children {
+        let _ = http_child.kill();
+        let _ = http_child.wait();
+    }
     state.shutdown_terminals();
     result
 }
