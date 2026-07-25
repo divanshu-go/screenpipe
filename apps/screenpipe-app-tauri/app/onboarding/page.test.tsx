@@ -135,6 +135,19 @@ describe("enterprise onboarding authentication", () => {
     expect(screen.queryByRole("button", { name: /use enterprise key/i })).not.toBeInTheDocument();
   });
 
+  it("gives the use-case step more room with a scroll fallback", async () => {
+    onboardingData.currentStep = "first-dashboard";
+
+    render(<OnboardingPage />);
+
+    await waitFor(() =>
+      expect(mocks.setWindowSize).toHaveBeenCalledWith("Onboarding", 500, 720),
+    );
+    expect(screen.getByTestId("onboarding-scroll-region")).toHaveClass(
+      "overflow-y-auto",
+    );
+  });
+
   it("advances after either enterprise credential is verified", async () => {
     mocks.enterprisePolicy.authenticationState = "authenticated";
     mocks.enterprisePolicy.isManagedAuthenticated = true;

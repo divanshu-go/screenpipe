@@ -30,7 +30,7 @@ const SLIDE_WINDOW_SIZES: Record<SlideKey, { width: number; height: number }> =
     permissions: { width: 500, height: 560 },
     engine: { width: 500, height: 620 },
     "connect-apps": { width: 500, height: 680 },
-    "first-dashboard": { width: 500, height: 660 },
+    "first-dashboard": { width: 500, height: 720 },
   };
 
 const SLIDE_ORDER: SlideKey[] = [
@@ -290,10 +290,14 @@ export default function OnboardingPage() {
       {/* Drag region */}
       <div className="w-full bg-background p-3" data-tauri-drag-region />
 
-      {/* Content */}
-      <div className="flex-1 flex items-center justify-center p-6 overflow-hidden">
+      {/* Keep short steps centered, but let content taller than the available
+          display grow naturally and scroll from its top instead of clipping. */}
+      <div
+        data-testid="onboarding-scroll-region"
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-6"
+      >
         <div
-          className={`w-full max-w-lg mx-auto transition-opacity duration-300 ${
+          className={`mx-auto flex min-h-full w-full max-w-lg flex-col justify-center transition-opacity duration-300 ${
             isVisible ? "opacity-100" : "opacity-0"
           }`}
         >
