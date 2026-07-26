@@ -26,8 +26,56 @@ interface BrainView {
   id: string;
 }
 
+const SUPPORTED_WINDOW_SIZES = [
+  { width: 800, height: 600, label: "minimum" },
+  { width: 1024, height: 768, label: "compact" },
+  { width: 1280, height: 720, label: "small-windows-laptop" },
+  { width: 1366, height: 768, label: "windows-laptop" },
+  { width: 1440, height: 900, label: "desktop" },
+  { width: 1920, height: 1080, label: "wide" },
+] as const;
+
+async function setCssWindowSize(width: number, height: number) {
+  const devicePixelRatio = (await browser.execute(
+    () => window.devicePixelRatio || 1,
+  )) as number;
+  await browser.setWindowSize(
+    Math.round(width * devicePixelRatio),
+    Math.round(height * devicePixelRatio),
+  );
+}
+
 describe("Brain Live Views", function () {
   this.timeout(120_000);
+
+  it("creates a starter dashboard on first open", async () => {
+    await waitForAppReady();
+    await openHomeWindow();
+
+    const existingViews = await invokeOrThrow<BrainView[]>("list_brain_views");
+    for (const existingView of existingViews) {
+      await invokeOrThrow("delete_brain_view", { id: existingView.id });
+    }
+
+    const brainNav = await $("[data-testid=nav-brain]");
+    await brainNav.waitForExist({ timeout: t(10_000) });
+    await brainNav.click();
+    await waitForTestId("section-brain", 15_000);
+    const selector = await waitForTestId(
+      "overview-dashboard-selector",
+      15_000,
+    );
+    expect(await selector.getValue()).toBe("my-dashboard");
+    expect(await selector.getText()).toContain("My dashboard");
+
+    await setCssWindowSize(1366, 768);
+    await saveScreenshot("brain-first-open-windows");
+
+    const pipesNav = await $("[data-testid=nav-pipes]");
+    await pipesNav.click();
+    await waitForTestId("section-pipes", 15_000);
+    await invokeOrThrow("delete_brain_view", { id: "my-dashboard" });
+  });
 
   it("renders a Pipe-filled Live View template", async () => {
     await waitForAppReady();
@@ -184,7 +232,88 @@ describe("Brain Live Views", function () {
     await brainNav.click();
     await waitForTestId("section-brain", 15_000);
     await waitForTestId("brain-overview-grid", 15_000);
-    await browser.setWindowSize(2200, 1400);
+    for (const size of SUPPORTED_WINDOW_SIZES) {
+      await setCssWindowSize(size.width, size.height);
+      await browser.pause(150);
+      const layout = (await browser.execute(() => {
+        const section = document.querySelector<HTMLElement>(
+          "[data-testid='section-brain']",
+        );
+        const content = document.querySelector<HTMLElement>(
+          "[data-testid='brain-content']",
+        );
+        if (!section || !content) return null;
+        const sectionRect = section.getBoundingClientRect();
+        const firstContentTop =
+          content.firstElementChild?.getBoundingClientRect().top ?? 0;
+        const visibleControls = Array.from(
+          section.querySelectorAll<HTMLElement>(
+            "button, input, select, textarea, a[href]",
+          ),
+        ).filter((element) => {
+          const rect = element.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        });
+        return {
+          viewportWidth: document.documentElement.clientWidth,
+          documentWidth: document.documentElement.scrollWidth,
+          sectionLeft: sectionRect.left,
+          sectionRight: sectionRect.right,
+          firstContentTop,
+          clippedControls: visibleControls
+            .filter((element) => {
+              const rect = element.getBoundingClientRect();
+              return (
+                rect.top < 32 ||
+                rect.left < -1 ||
+                rect.right > document.documentElement.clientWidth + 1
+              );
+            })
+            .map((element) => {
+              const rect = element.getBoundingClientRect();
+              return {
+                label:
+                  element.getAttribute("data-testid") ||
+                  element.getAttribute("aria-label") ||
+                  element.textContent?.trim().slice(0, 40) ||
+                  element.tagName,
+                top: rect.top,
+                left: rect.left,
+                right: rect.right,
+              };
+            }),
+        };
+      })) as {
+        viewportWidth: number;
+        documentWidth: number;
+        sectionLeft: number;
+        sectionRight: number;
+        firstContentTop: number;
+        clippedControls: Array<{
+          label: string;
+          top: number;
+          left: number;
+          right: number;
+        }>;
+      } | null;
+
+      expect(layout).not.toBeNull();
+      expect(layout!.viewportWidth).toBeGreaterThanOrEqual(size.width - 1);
+      expect(layout!.viewportWidth).toBeLessThanOrEqual(size.width + 1);
+      expect(layout!.firstContentTop).toBeGreaterThanOrEqual(32);
+      expect(layout!.sectionLeft).toBeGreaterThanOrEqual(-1);
+      expect(layout!.sectionRight).toBeLessThanOrEqual(
+        layout!.viewportWidth + 1,
+      );
+      expect(layout!.documentWidth).toBeLessThanOrEqual(
+        layout!.viewportWidth + 1,
+      );
+      expect(layout!.clippedControls).toEqual([]);
+      if (size.label === "minimum") {
+        await saveScreenshot("brain-overview-minimum-window");
+      }
+    }
+    await setCssWindowSize(1440, 900);
     const collapseSidebar = await $("[aria-label='collapse sidebar']");
     if (await collapseSidebar.isExisting()) {
       await collapseSidebar.click();

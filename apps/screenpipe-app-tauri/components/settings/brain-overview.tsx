@@ -118,6 +118,8 @@ type PreviewSource =
 type PreviewDestination = "new" | "replace";
 
 const MAX_DASHBOARDS = 12;
+const STARTER_DASHBOARD_ID = "my-dashboard";
+const STARTER_DASHBOARD_TITLE = "My dashboard";
 
 const COMPONENTS: Array<{
   value: ViewComponent;
@@ -399,15 +401,37 @@ export function BrainOverview({
       try {
         const result = await commands.listBrainViews();
         if (result.status === "error") throw new Error(result.error);
-        setViews(result.data);
+        let loadedViews = result.data;
+        if (loadedViews.length === 0) {
+          const starter = await commands.saveBrainView({
+            id: STARTER_DASHBOARD_ID,
+            title: STARTER_DASHBOARD_TITLE,
+            expectedRevision: null,
+            timeRange: "today",
+            periodPolicy: DEFAULT_LIVE_VIEW_PERIOD_POLICY,
+            slots: [],
+          });
+          if (starter.status === "ok") {
+            loadedViews = [starter.data];
+          } else {
+            // A second mount can win the create race in development or after
+            // a fast route change. Read back before treating that as a failure.
+            const retry = await commands.listBrainViews();
+            if (retry.status === "error" || retry.data.length === 0) {
+              throw new Error(starter.error);
+            }
+            loadedViews = retry.data;
+          }
+        }
+        setViews(loadedViews);
         setView((current) => {
           const preferredId =
             preferredDashboardId ??
             current?.id ??
             selectedLiveViewDashboardId();
           const selected =
-            result.data.find((candidate) => candidate.id === preferredId) ??
-            result.data[0] ??
+            loadedViews.find((candidate) => candidate.id === preferredId) ??
+            loadedViews[0] ??
             null;
           rememberSelectedLiveViewDashboard(selected?.id ?? null);
           return selected;
