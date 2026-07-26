@@ -4,28 +4,54 @@
 "use client";
 
 import { useState } from "react";
+import { SlidersHorizontal } from "lucide-react";
 import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Switch } from "@/components/ui/switch";
 import { commands } from "@/lib/utils/tauri";
 import { dedupedModes, useAcpSessionConfig } from "@/lib/stores/acp-session-config";
 import { cn } from "@/lib/utils";
 
-const SELECT_CLASS =
-  "h-8 max-w-[150px] shrink truncate rounded-md border-0 bg-transparent px-1.5 text-xs " +
-  "text-muted-foreground hover:bg-muted/50 hover:text-foreground focus-visible:outline-none";
+const FIELD_LABEL = "block text-[10px] font-medium uppercase tracking-wide text-muted-foreground";
 
-/** Composer dropdowns for what the ACP adapter advertised for the active
- *  session: its modes (e.g. permission modes) and its select config options
- *  (model, ...). Renders nothing for raw Pi sessions or adapters without
- *  either. Native selects on purpose: portal menus are painted over by the
- *  native webview on Windows. */
+const FIELD_SELECT =
+  "mt-1 h-8 w-full rounded-md border border-input bg-background px-2 text-xs text-foreground " +
+  "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
+
+/** One collapsed "config" control for everything the ACP adapter advertised for
+ *  the active session — its modes (e.g. permission modes), select options
+ *  (model, reasoning, ...) and boolean toggles — stacked inside a single
+ *  popover instead of sprawling across the composer. Renders nothing for raw
+ *  Pi sessions or adapters that advertised neither. Native selects on purpose:
+ *  the OS renders their menu above the webview (Radix menus get painted over on
+ *  Windows). */
 export function AcpConfigSelector({
   sessionId,
+  agentId,
 }: {
   sessionId: string | null | undefined;
+  /** The preset's ACP adapter id, used to fall back to the session-agnostic
+   *  advertisement cache so the composer shows the agent's choices right away
+   *  (matching the preset editor) instead of waiting for a live event. */
+  agentId?: string | null;
 }) {
-  const config = useAcpSessionConfig((state) =>
+  const live = useAcpSessionConfig((state) =>
     sessionId ? state.sessions[sessionId] : undefined,
   );
+  const cached = useAcpSessionConfig((state) =>
+    agentId ? state.byAgent[agentId] : undefined,
+  );
+  // Prefer the live session advertisement; fall back to the per-adapter cache
+  // (same source the preset editor uses) until the live event arrives, so the
+  // agent's models/modes never briefly disappear on a fresh or reopened chat.
+  const liveHasChoices =
+    !!live && ((live.options?.length ?? 0) > 0 || !!live.modes);
+  const config = liveHasChoices ? live : (cached ?? live);
   const [pendingId, setPendingId] = useState<string | null>(null);
   const selects = (config?.options ?? []).filter(
     (option) => option.type === "select" && option.values.length > 0,
@@ -50,98 +76,122 @@ export function AcpConfigSelector({
   };
 
   return (
-    <>
-      {modes && (
-        <select
-          value={modes.currentModeId}
-          disabled={pendingId === "__mode"}
-          title="Agent mode"
-          aria-label="Agent mode"
-          onChange={(event) => {
-            const modeId = event.target.value;
-            void run(
-              "__mode",
-              async () => {
-                const result = await commands.piAcpSetMode(sessionId, modeId);
-                if (result.status === "error") throw new Error(result.error);
-              },
-              "mode",
-            );
-          }}
-          className={cn(SELECT_CLASS, pendingId === "__mode" && "opacity-50")}
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 gap-1.5 px-2 text-xs text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+          title="Agent configuration"
+          aria-label="Agent configuration"
+          data-testid="acp-config-trigger"
         >
-          {modes.availableModes.map((mode) => (
-            <option key={mode.value} value={mode.value} title={mode.description ?? undefined}>
-              {mode.name}
-            </option>
-          ))}
-        </select>
-      )}
-      {selects.map((option) => (
-        <select
-          key={option.id}
-          value={String(option.currentValue ?? "")}
-          disabled={pendingId === option.id}
-          title={option.description || option.name}
-          aria-label={option.name}
-          onChange={(event) => {
-            const value = event.target.value;
-            void run(
-              option.id,
-              async () => {
-                const result = await commands.piAcpSetConfigOption(
-                  sessionId,
-                  option.id,
-                  value,
-                  null,
+          <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden />
+          <span className="font-medium">config</span>
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="end"
+        side="top"
+        sideOffset={6}
+        className="w-64 space-y-3 p-3"
+        data-testid="acp-config-popover"
+      >
+        {modes && (
+          <label className="block">
+            <span className={FIELD_LABEL}>mode</span>
+            <select
+              value={modes.currentModeId}
+              disabled={pendingId === "__mode"}
+              aria-label="Agent mode"
+              onChange={(event) => {
+                const modeId = event.target.value;
+                void run(
+                  "__mode",
+                  async () => {
+                    const result = await commands.piAcpSetMode(sessionId, modeId);
+                    if (result.status === "error") throw new Error(result.error);
+                  },
+                  "mode",
                 );
-                if (result.status === "error") throw new Error(result.error);
-              },
-              option.name,
-            );
-          }}
-          className={cn(SELECT_CLASS, pendingId === option.id && "opacity-50")}
-        >
-          {option.values.map((value) => (
-            <option key={value.value} value={value.value} title={value.description ?? undefined}>
-              {value.name}
-            </option>
-          ))}
-        </select>
-      ))}
-      {toggles.map((option) => (
-        <label
-          key={option.id}
-          title={option.description || option.name}
-          className={cn(
-            "flex items-center gap-1 px-1.5 text-xs text-muted-foreground",
-            pendingId === option.id && "opacity-50",
-          )}
-        >
-          <input
-            type="checkbox"
-            checked={option.currentValue === true}
-            disabled={pendingId === option.id}
-            onChange={(event) => {
-              const next = event.target.checked;
-              void run(
-                option.id,
-                async () => {
-                  const result = await commands.piAcpSetConfigOption(
-                    sessionId,
-                    option.id,
-                    next ? "true" : "false",
-                    true,
-                  );
-                  if (result.status === "error") throw new Error(result.error);
-                },
-                option.name,
-              );
-            }}
-          />
-          <span className="truncate">{option.name.toLowerCase()}</span>
-        </label>
-      ))}
-    </>
+              }}
+              className={cn(FIELD_SELECT, pendingId === "__mode" && "opacity-50")}
+            >
+              {modes.availableModes.map((mode) => (
+                <option key={mode.value} value={mode.value} title={mode.description ?? undefined}>
+                  {mode.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {selects.map((option) => (
+          <label key={option.id} className="block">
+            <span className={FIELD_LABEL}>{option.name}</span>
+            <select
+              value={String(option.currentValue ?? "")}
+              disabled={pendingId === option.id}
+              title={option.description || option.name}
+              aria-label={option.name}
+              onChange={(event) => {
+                const value = event.target.value;
+                void run(
+                  option.id,
+                  async () => {
+                    const result = await commands.piAcpSetConfigOption(
+                      sessionId,
+                      option.id,
+                      value,
+                      null,
+                    );
+                    if (result.status === "error") throw new Error(result.error);
+                  },
+                  option.name,
+                );
+              }}
+              className={cn(FIELD_SELECT, pendingId === option.id && "opacity-50")}
+            >
+              {option.values.map((value) => (
+                <option key={value.value} value={value.value} title={value.description ?? undefined}>
+                  {value.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        ))}
+        {toggles.map((option) => (
+          <div
+            key={option.id}
+            title={option.description || option.name}
+            className={cn(
+              "flex items-center justify-between gap-2 text-xs text-foreground",
+              pendingId === option.id && "opacity-50",
+            )}
+          >
+            <span className="truncate">{option.name}</span>
+            <Switch
+              checked={option.currentValue === true}
+              disabled={pendingId === option.id}
+              aria-label={option.name}
+              onCheckedChange={(next) => {
+                void run(
+                  option.id,
+                  async () => {
+                    const result = await commands.piAcpSetConfigOption(
+                      sessionId,
+                      option.id,
+                      next ? "true" : "false",
+                      true,
+                    );
+                    if (result.status === "error") throw new Error(result.error);
+                  },
+                  option.name,
+                );
+              }}
+            />
+          </div>
+        ))}
+      </PopoverContent>
+    </Popover>
   );
 }

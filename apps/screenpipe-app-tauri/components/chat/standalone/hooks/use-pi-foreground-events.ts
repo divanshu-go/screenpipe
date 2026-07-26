@@ -9,6 +9,7 @@ import posthog from "posthog-js";
 import { mountAgentEventBus, onTerminated as onAgentTerminated } from "@/lib/events/bus";
 import { commands } from "@/lib/utils/tauri";
 import { useChatStore } from "@/lib/stores/chat-store";
+import { useAcpSessionConfig } from "@/lib/stores/acp-session-config";
 import { statusForEvent } from "@/lib/stores/pi-event-router";
 import { extractInjectedUserText } from "@/lib/chat-utils";
 import { imageDataUrlsFromPiContent } from "@/lib/chat/image-content";
@@ -239,6 +240,24 @@ export function usePiForegroundEvents({
           }
         }
         return;
+      }
+
+      // ACP adapters advertise their model/mode/toggle selectors per session.
+      // The background router captures this, but the *foregrounded* chat gets
+      // events here exclusively — without this the composer's ACP selectors
+      // (e.g. OpenCode's models) never populate while you're in the chat.
+      if (data.type === "acp_session_config") {
+        useAcpSessionConfig.getState().setFromEvent(piSessionIdRef.current, data);
+        return;
+      }
+      if (data.type === "acp_update") {
+        const update = (data as { update?: { sessionUpdate?: string } }).update;
+        if (
+          update?.sessionUpdate === "current_mode_update" ||
+          update?.sessionUpdate === "config_option_update"
+        ) {
+          useAcpSessionConfig.getState().applyUpdate(piSessionIdRef.current, update);
+        }
       }
 
       if (data.type === "acp_ready") {
