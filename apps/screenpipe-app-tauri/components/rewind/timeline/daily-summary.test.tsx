@@ -150,6 +150,41 @@ describe("TimelineDailySummary", () => {
 		mocks.posthogCapture.mockReset();
 	});
 
+	it("renders a compact icon-only trigger with an accessible label", () => {
+		render(<TimelineDailySummary currentDate={new Date(2026, 6, 25)} />);
+
+		const trigger = screen.getByTestId("timeline-daily-summary-trigger");
+		expect(trigger).toHaveClass("h-10", "w-10");
+		expect(trigger).toHaveAccessibleName(
+			"Turn on Enhanced AI to generate a summary for this day",
+		);
+		expect(trigger).not.toHaveTextContent("daily summary");
+	});
+
+	it("keeps wheel navigation inside the summary content and closes on outside click", async () => {
+		const selectedDate = new Date(2026, 6, 25);
+		mocks.settings.enhancedAI = true;
+		window.localStorage.setItem(dailySummaryCacheKey(selectedDate), "A cached daily summary.");
+		render(<TimelineDailySummary currentDate={selectedDate} />);
+
+		const trigger = screen.getByTestId("timeline-daily-summary-trigger");
+		fireEvent.click(trigger);
+
+		const panel = screen.getByTestId("timeline-daily-summary-panel");
+		const scrollContent = screen.getByTestId("daily-summary-scroll-content");
+		expect(panel).toHaveClass("ai-panel");
+		expect(scrollContent).toHaveClass("overflow-y-auto", "overscroll-contain");
+
+		fireEvent.pointerDown(scrollContent);
+		expect(trigger).toHaveAttribute("aria-expanded", "true");
+
+		fireEvent.pointerDown(document.body);
+		await waitFor(() => {
+			expect(trigger).toHaveAttribute("aria-expanded", "false");
+			expect(screen.queryByTestId("timeline-daily-summary-panel")).not.toBeInTheDocument();
+		});
+	});
+
 	it("asks for consent instead of generating when Enhanced AI is off", () => {
 		render(<TimelineDailySummary currentDate={new Date(2026, 6, 25)} />);
 

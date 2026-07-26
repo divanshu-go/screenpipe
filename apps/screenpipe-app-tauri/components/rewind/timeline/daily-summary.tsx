@@ -10,7 +10,6 @@ import {
 	Check,
 	Copy,
 	Loader2,
-	LockKeyhole,
 	LogIn,
 	RefreshCw,
 	ShieldCheck,
@@ -187,6 +186,8 @@ export function TimelineDailySummary({
 	const [error, setError] = useState("");
 	const [copied, setCopied] = useState(false);
 	const abortRef = useRef<AbortController | null>(null);
+	const triggerRef = useRef<HTMLButtonElement | null>(null);
+	const panelRef = useRef<HTMLElement | null>(null);
 	const dateId = format(currentDate, "yyyy-MM-dd");
 	const enhancedAI = settings?.enhancedAI ?? false;
 	const userToken = settings?.user?.token ?? "";
@@ -380,14 +381,28 @@ export function TimelineDailySummary({
 		}
 	};
 
-	const closePanel = () => {
+	const closePanel = useCallback(() => {
 		if (isGenerating) {
 			abortRef.current?.abort();
 			setStatus("idle");
 			setSummary("");
 		}
 		setPanelOpen(false);
-	};
+	}, [isGenerating]);
+
+	useEffect(() => {
+		if (!panelOpen) return;
+
+		const handleOutsidePointerDown = (event: PointerEvent) => {
+			const target = event.target;
+			if (!(target instanceof Node)) return;
+			if (panelRef.current?.contains(target) || triggerRef.current?.contains(target)) return;
+			closePanel();
+		};
+
+		document.addEventListener("pointerdown", handleOutsidePointerDown, true);
+		return () => document.removeEventListener("pointerdown", handleOutsidePointerDown, true);
+	}, [closePanel, panelOpen]);
 
 	const copySummary = async () => {
 		if (!summary) return;
@@ -419,11 +434,12 @@ export function TimelineDailySummary({
 				<Tooltip>
 					<TooltipTrigger asChild>
 						<button
+							ref={triggerRef}
 							type="button"
 							data-testid="timeline-daily-summary-trigger"
 							onClick={handleTriggerClick}
 							className={cn(
-								"group relative flex h-10 items-center gap-2 border border-border bg-background px-3 font-mono text-xs text-foreground transition-colors duration-150 hover:bg-foreground hover:text-background",
+								"group relative flex h-10 w-10 shrink-0 items-center justify-center border border-border bg-background text-foreground transition-colors duration-150 hover:bg-foreground hover:text-background",
 								panelOpen && "bg-foreground text-background",
 							)}
 							aria-label={tooltipText}
@@ -437,8 +453,6 @@ export function TimelineDailySummary({
 									<Sparkles className="absolute -right-1.5 -top-1.5 h-2.5 w-2.5 fill-current" />
 								</span>
 							)}
-							<span className={cn(embedded && "hidden min-[980px]:inline")}>daily summary</span>
-							{!enhancedAI && <LockKeyhole className="h-3 w-3 opacity-50" />}
 							{summary && !isGenerating && (
 								<span className="absolute -right-1 -top-1 h-2.5 w-2.5 border-2 border-background bg-foreground" />
 							)}
@@ -453,13 +467,14 @@ export function TimelineDailySummary({
 			<AnimatePresence>
 				{panelOpen && (
 					<motion.aside
+						ref={panelRef}
 						data-testid="timeline-daily-summary-panel"
 						initial={{ opacity: 0, y: -10, scale: 0.985 }}
 						animate={{ opacity: 1, y: 0, scale: 1 }}
 						exit={{ opacity: 0, y: -6, scale: 0.99 }}
 						transition={{ duration: 0.15, ease: "easeOut" }}
 						className={cn(
-							"fixed right-5 z-[150] flex max-h-[min(620px,calc(100vh-112px))] w-[min(420px,calc(100vw-32px))] flex-col overflow-hidden border border-border bg-background/95 text-foreground shadow-lg shadow-black/5 backdrop-blur-xl",
+							"ai-panel fixed right-5 z-[150] flex max-h-[min(620px,calc(100vh-112px))] w-[min(420px,calc(100vw-32px))] flex-col overflow-hidden border border-border bg-background/95 text-foreground shadow-lg shadow-black/5 backdrop-blur-xl",
 							embedded ? "top-[68px]" : "top-[calc(env(safe-area-inset-top)+76px)]",
 						)}
 						onWheel={(event) => event.stopPropagation()}
@@ -505,7 +520,10 @@ export function TimelineDailySummary({
 							</div>
 						)}
 
-						<div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 select-text">
+						<div
+							data-testid="daily-summary-scroll-content"
+							className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4 select-text"
+						>
 							{status === "gathering" && !summary && (
 								<div className="space-y-4" data-testid="daily-summary-gathering">
 									<div className="flex items-center gap-2 font-mono text-xs text-muted-foreground">
