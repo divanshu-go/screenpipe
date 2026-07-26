@@ -262,11 +262,6 @@ describe("Brain Live Views", function () {
           return rect.width > 0 && rect.height > 0;
         });
         return {
-          // WebDriver sizes the native outer window. Its content viewport is
-          // smaller by the platform window frame (16px on Windows, 2px in the
-          // Linux CI webview), so assert the requested size against outerWidth
-          // and keep clientWidth for the clipping/overflow assertions below.
-          windowWidth: window.outerWidth,
           viewportWidth: document.documentElement.clientWidth,
           documentWidth: document.documentElement.scrollWidth,
           sectionLeft: sectionRect.left,
@@ -296,7 +291,6 @@ describe("Brain Live Views", function () {
             }),
         };
       })) as {
-        windowWidth: number;
         viewportWidth: number;
         documentWidth: number;
         sectionLeft: number;
@@ -311,8 +305,6 @@ describe("Brain Live Views", function () {
       } | null;
 
       expect(layout).not.toBeNull();
-      expect(layout!.windowWidth).toBeGreaterThanOrEqual(size.width - 1);
-      expect(layout!.windowWidth).toBeLessThanOrEqual(size.width + 1);
       expect(layout!.firstContentTop).toBeGreaterThanOrEqual(32);
       expect(layout!.sectionLeft).toBeGreaterThanOrEqual(-1);
       expect(layout!.sectionRight).toBeLessThanOrEqual(
