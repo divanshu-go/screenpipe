@@ -57,6 +57,14 @@ describe("Brain Live Views", function () {
       await invokeOrThrow("delete_brain_view", { id: existingView.id });
     }
 
+    // A WDIO retry reuses the same app process. Leave Brain before opening it
+    // so its view state is rebuilt from the now-empty backend instead of
+    // retaining the previous attempt's selected dashboard.
+    const pipesNav = await $("[data-testid=nav-pipes]");
+    await pipesNav.waitForExist({ timeout: t(10_000) });
+    await pipesNav.click();
+    await waitForTestId("section-pipes", 15_000);
+
     const brainNav = await $("[data-testid=nav-brain]");
     await brainNav.waitForExist({ timeout: t(10_000) });
     await brainNav.click();
@@ -71,7 +79,6 @@ describe("Brain Live Views", function () {
     await setCssWindowSize(1366, 768);
     await saveScreenshot("brain-first-open-windows");
 
-    const pipesNav = await $("[data-testid=nav-pipes]");
     await pipesNav.click();
     await waitForTestId("section-pipes", 15_000);
     await invokeOrThrow("delete_brain_view", { id: "my-dashboard" });
@@ -255,6 +262,10 @@ describe("Brain Live Views", function () {
           return rect.width > 0 && rect.height > 0;
         });
         return {
+          // innerWidth is the CSS viewport requested through WebDriver.
+          // documentElement.clientWidth excludes the vertical scrollbar,
+          // which is 16px on Windows and 2px in the Linux CI webview.
+          windowWidth: window.innerWidth,
           viewportWidth: document.documentElement.clientWidth,
           documentWidth: document.documentElement.scrollWidth,
           sectionLeft: sectionRect.left,
@@ -284,6 +295,7 @@ describe("Brain Live Views", function () {
             }),
         };
       })) as {
+        windowWidth: number;
         viewportWidth: number;
         documentWidth: number;
         sectionLeft: number;
@@ -298,8 +310,8 @@ describe("Brain Live Views", function () {
       } | null;
 
       expect(layout).not.toBeNull();
-      expect(layout!.viewportWidth).toBeGreaterThanOrEqual(size.width - 1);
-      expect(layout!.viewportWidth).toBeLessThanOrEqual(size.width + 1);
+      expect(layout!.windowWidth).toBeGreaterThanOrEqual(size.width - 1);
+      expect(layout!.windowWidth).toBeLessThanOrEqual(size.width + 1);
       expect(layout!.firstContentTop).toBeGreaterThanOrEqual(32);
       expect(layout!.sectionLeft).toBeGreaterThanOrEqual(-1);
       expect(layout!.sectionRight).toBeLessThanOrEqual(
