@@ -19,6 +19,15 @@ import { homeDir, join } from "@tauri-apps/api/path";
 import { platform } from "@tauri-apps/plugin-os";
 import posthog from "posthog-js";
 import { areExternalAgentSkillsInstalled } from "@/lib/external-agent-skills";
+import { useSettings } from "@/lib/hooks/use-settings";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { notifyConnectionsUpdated } from "@/lib/connections-events";
+import {
+  authorizeComposioToolkit,
+  fetchComposioStatus,
+  registerComposioMcpServer,
+  type ComposioStatus,
+} from "@/lib/composio";
 // Connect-all: one click wires every DETECTED tool through the same per-tool
 // connect path the individual cards use (bundled-bun MCP with the local API
 // key, plus both skills where supported). Tools that are not detected are
@@ -41,13 +50,6 @@ function ObsidianIcon({ className = "w-5 h-5" }: { className?: string }) {
     <svg viewBox="0 0 24 24" className={className} fill="#7C3AED">
       <path d="M19.355 18.538a68.967 68.959 0 0 0 1.858-2.954.81.81 0 0 0-.062-.9c-.516-.685-1.504-2.075-2.042-3.362-.553-1.321-.636-3.375-.64-4.377a1.707 1.707 0 0 0-.358-1.05l-3.198-4.064a3.744 3.744 0 0 1-.076.543c-.106.503-.307 1.004-.536 1.5-.134.29-.29.6-.446.914l-.31.626c-.516 1.068-.997 2.227-1.132 3.59-.124 1.26.046 2.73.815 4.481.128.011.257.025.386.044a6.363 6.363 0 0 1 3.326 1.505c.916.79 1.744 1.922 2.415 3.5zM8.199 22.569c.073.012.146.02.22.02.78.024 2.095.092 3.16.29.87.16 2.593.64 4.01 1.055 1.083.316 2.198-.548 2.355-1.664.114-.814.33-1.735.725-2.58l-.01.005c-.67-1.87-1.522-3.078-2.416-3.849a5.295 5.295 0 0 0-2.778-1.257c-1.54-.216-2.952.19-3.84.45.532 2.218.368 4.829-1.425 7.531zM5.533 9.938c-.023.1-.056.197-.098.29L2.82 16.059a1.602 1.602 0 0 0 .313 1.772l4.116 4.24c2.103-3.101 1.796-6.02.836-8.3-.728-1.73-1.832-3.081-2.55-3.831zM9.32 14.01c.615-.183 1.606-.465 2.745-.534-.683-1.725-.848-3.233-.716-4.577.154-1.552.7-2.847 1.235-3.95.113-.235.223-.454.328-.664.149-.297.288-.577.419-.86.217-.47.379-.885.46-1.27.08-.38.08-.72-.014-1.043-.095-.325-.297-.675-.68-1.06a1.6 1.6 0 0 0-1.475.36l-4.95 4.452a1.602 1.602 0 0 0-.513.952l-.427 2.83c.672.59 2.328 2.316 3.335 4.711.09.21.175.43.253.653z"/>
     </svg>
-  );
-}
-
-function ChatGptIcon({ className = "w-5 h-5" }: { className?: string }) {
-  return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img src="/images/openai.png" alt="ChatGPT" className={className} style={{ borderRadius: 3 }} />
   );
 }
 
@@ -205,24 +207,24 @@ interface Integration {
   name: string;
   valueProp: string;
   ahaCopy?: string;
-  type: "oauth" | "mcp" | "chatgpt" | "claude" | "codex" | "obsidian";
+  type: "oauth" | "composio" | "mcp" | "claude" | "codex" | "obsidian";
 }
 
 type CardState = "idle" | "connecting" | "connected" | "error";
 
 // ─── Integration list ─────────────────────────────────────────────────────────
 //
-// Google Calendar was removed because the Google Workspace OAuth verification
-// process blocks shipping it broadly. Notion, Codex, Obsidian, Claude, Cursor,
-// and ChatGPT are available on every screenpipe plan.
+// Keep cloud services optional: Google Calendar uses Screenpipe's read-only
+// OAuth flow, while Gmail uses Composio managed auth because direct Gmail
+// OAuth is still blocked on Google CASA review.
 
 const INTEGRATIONS: Integration[] = [
   {
-    id: "notion",
-    cardKey: "notion",
-    name: "Notion",
-    valueProp: "search your notes alongside screen",
-    ahaCopy: "notes context active",
+    id: "google-calendar",
+    cardKey: "google-calendar",
+    name: "Google Calendar",
+    valueProp: "use your schedule for meeting context",
+    ahaCopy: "calendar context active",
     type: "oauth",
   },
   {
@@ -255,24 +257,32 @@ const INTEGRATIONS: Integration[] = [
     type: "mcp",
   },
   {
-    id: "chatgpt",
-    cardKey: "chatgpt",
-    name: "ChatGPT",
-    valueProp: "use ChatGPT Plus as screenpipe's AI brain",
-    ahaCopy: "ChatGPT connected",
-    type: "chatgpt",
+    id: "gmail",
+    cardKey: "gmail",
+    name: "Gmail",
+    valueProp: "search Gmail with AI via Composio",
+    ahaCopy: "email context active",
+    type: "composio",
   },
 ];
 
-const OPTIONAL_INTEGRATION_IDS = new Set(["notion", "obsidian", "chatgpt"]);
+const OPTIONAL_INTEGRATION_IDS = new Set([
+  "google-calendar",
+  "obsidian",
+  "gmail",
+]);
 const OPTIONAL_INTEGRATIONS = INTEGRATIONS.filter((integration) =>
   OPTIONAL_INTEGRATION_IDS.has(integration.id)
 );
 
 const ICONS: Record<string, React.ReactNode> = {
-  notion: (
+  "google-calendar": (
     // eslint-disable-next-line @next/next/no-img-element
-    <img src="/images/notion.svg" alt="Notion" className="w-5 h-5 dark:invert" />
+    <img
+      src="/images/google-calendar.svg"
+      alt="Google Calendar"
+      className="w-5 h-5"
+    />
   ),
   codex: (
     // eslint-disable-next-line @next/next/no-img-element
@@ -280,7 +290,10 @@ const ICONS: Record<string, React.ReactNode> = {
   ),
   obsidian: <ObsidianIcon className="w-5 h-5" />,
   cursor: <CursorIcon className="w-5 h-5 rounded" />,
-  chatgpt: <ChatGptIcon className="w-5 h-5" />,
+  gmail: (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img src="/images/gmail.svg" alt="Gmail" className="w-5 h-5" />
+  ),
   claude: (
     // eslint-disable-next-line @next/next/no-img-element
     <img src="/images/claude-ai.svg" alt="Claude" className="w-5 h-5 rounded" />
@@ -423,7 +436,25 @@ interface ConnectAppsProps {
   handleNextSlide: () => void;
 }
 
+const COMPOSIO_POLL_INTERVAL_MS = 2_000;
+const COMPOSIO_MAX_POLLS = 60;
+
+async function waitForGmailConnection(
+  token: string
+): Promise<ComposioStatus> {
+  for (let attempt = 0; attempt < COMPOSIO_MAX_POLLS; attempt += 1) {
+    const status = await fetchComposioStatus(token);
+    if (status?.gmail?.connected) return status;
+    await new Promise((resolve) =>
+      setTimeout(resolve, COMPOSIO_POLL_INTERVAL_MS)
+    );
+  }
+  throw new Error("oauth_timeout");
+}
+
 export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
+  const { settings } = useSettings();
+  const composioToken = settings.user?.token;
   const [cardStates, setCardStates] = useState<Record<string, CardState>>({});
   const [displayNames, setDisplayNames] = useState<Record<string, string>>({});
   const [errorMessages, setErrorMessages] = useState<Record<string, string>>({});
@@ -457,7 +488,7 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
       const stateUpdates: Record<string, CardState> = {};
       const nameUpdates: Record<string, string> = {};
 
-      // Standard OAuth integrations (Notion)
+      // Standard OAuth integrations (Google Calendar)
       await Promise.allSettled(
         INTEGRATIONS.filter((i) => i.type === "oauth").map(async (i) => {
           try {
@@ -472,14 +503,20 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
         })
       );
 
-      // ChatGPT (separate OAuth flow)
-      try {
-        const res = await commands.chatgptOauthStatus();
-        if (res.status === "ok" && res.data.logged_in) {
-          stateUpdates["chatgpt"] = "connected";
-          nameUpdates["chatgpt"] = "ChatGPT Plus";
+      // Gmail (Composio managed auth)
+      if (composioToken) {
+        try {
+          const status = await fetchComposioStatus(composioToken);
+          if (status?.gmail?.connected) {
+            stateUpdates.gmail = "connected";
+            const account = status.gmail.accounts?.[0];
+            const accountName = account?.alias || account?.email;
+            if (accountName) nameUpdates.gmail = accountName;
+          }
+        } catch {
+          // not connected
         }
-      } catch { /* ignore */ }
+      }
 
       // Cursor MCP
       try {
@@ -550,7 +587,7 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
       });
     };
     check();
-  }, []);
+  }, [composioToken]);
 
   // Seconds ticker
   useEffect(() => {
@@ -580,22 +617,32 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
       setCardState(integration.cardKey, "connecting");
 
       try {
-        if (integration.type === "chatgpt") {
-          const res = await commands.chatgptOauthLogin();
-          if (res.status === "ok" && res.data) {
-            setCardState(integration.cardKey, "connected");
-            setDisplayNames((prev) => ({ ...prev, [integration.cardKey]: "ChatGPT Plus" }));
-            posthog.capture("onboarding_integration_connected", {
-              integration: integration.id,
-              source,
-            });
-          } else {
-            posthog.capture("onboarding_integration_connect_cancelled", {
-              integration: integration.id,
-              source,
-            });
-            setCardState(integration.cardKey, "idle");
+        if (integration.type === "composio") {
+          if (!composioToken) {
+            throw new Error("log in to connect Gmail");
           }
+          const redirectUrl = await authorizeComposioToolkit(
+            composioToken,
+            "gmail"
+          );
+          await openUrl(redirectUrl);
+          const status = await waitForGmailConnection(composioToken);
+          await registerComposioMcpServer(composioToken);
+          notifyConnectionsUpdated();
+          const account = status.gmail?.accounts?.[0];
+          const accountName = account?.alias || account?.email;
+          setCardState(integration.cardKey, "connected");
+          if (accountName) {
+            setDisplayNames((prev) => ({
+              ...prev,
+              [integration.cardKey]: accountName,
+            }));
+          }
+          posthog.capture("onboarding_integration_connected", {
+            integration: integration.id,
+            source,
+            provider: "composio",
+          });
           return;
         }
 
@@ -699,7 +746,7 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
         }
       }
     },
-    [setCardState]
+    [composioToken, setCardState]
   );
 
   // Connect every detected AI tool through the same per-tool path the cards
@@ -928,7 +975,11 @@ export default function ConnectApps({ handleNextSlide }: ConnectAppsProps) {
           className="flex w-full items-center justify-between font-mono text-[10px] text-muted-foreground transition-colors hover:text-foreground"
         >
           <span>connect more tools (optional)</span>
-          <span>{showOptionalConnections ? "hide ↑" : "notion · obsidian · chatgpt ↓"}</span>
+          <span>
+            {showOptionalConnections
+              ? "hide ↑"
+              : "google calendar · obsidian · gmail ↓"}
+          </span>
         </button>
 
         {showOptionalConnections && (
