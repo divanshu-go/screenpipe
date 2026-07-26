@@ -22,6 +22,10 @@ interface OutputTarget {
   revision: number;
 }
 
+interface BrainView {
+  id: string;
+}
+
 describe("Brain Live Views", function () {
   this.timeout(120_000);
 
@@ -34,6 +38,14 @@ describe("Brain Live Views", function () {
       "Content-Type": "application/json",
     };
     if (config.key) headers.Authorization = `Bearer ${config.key}`;
+
+    // WDIO retries run against the same app process and data directory. Reset
+    // this test-owned view so a previous failed attempt cannot turn creation
+    // into an optimistic-concurrency update.
+    const existingViews = await invokeOrThrow<BrainView[]>("list_brain_views");
+    if (existingViews.some((view) => view.id === "my-overview")) {
+      await invokeOrThrow("delete_brain_view", { id: "my-overview" });
+    }
 
     const slots = [
       {
@@ -188,7 +200,7 @@ describe("Brain Live Views", function () {
       () => document.body?.innerText || "",
     )) as string;
     expect(renderedText).toContain("Live Views");
-    expect(renderedText).toContain("Dashboards");
+    expect(renderedText).toContain("DASHBOARDS");
     expect(renderedText).toContain("CUSTOMIZE");
     expect(renderedText).toContain("How I worked today");
     expect(renderedText).toContain("Automation opportunities");
