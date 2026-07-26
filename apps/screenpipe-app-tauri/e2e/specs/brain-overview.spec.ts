@@ -262,10 +262,11 @@ describe("Brain Live Views", function () {
           return rect.width > 0 && rect.height > 0;
         });
         return {
-          // innerWidth is the CSS viewport requested through WebDriver.
-          // documentElement.clientWidth excludes the vertical scrollbar,
-          // which is 16px on Windows and 2px in the Linux CI webview.
-          windowWidth: window.innerWidth,
+          // WebDriver sizes the native outer window. Its content viewport is
+          // smaller by the platform window frame (16px on Windows, 2px in the
+          // Linux CI webview), so assert the requested size against outerWidth
+          // and keep clientWidth for the clipping/overflow assertions below.
+          windowWidth: window.outerWidth,
           viewportWidth: document.documentElement.clientWidth,
           documentWidth: document.documentElement.scrollWidth,
           sectionLeft: sectionRect.left,
