@@ -1978,12 +1978,6 @@ fn auth_method_has_required_env(
         ("codex-acp", "api-key") => {
             is_configured("CODEX_API_KEY") || is_configured("OPENAI_API_KEY")
         }
-        ("gemini" | "gemini-acp", "gemini-api-key") => is_configured("GEMINI_API_KEY"),
-        ("gemini" | "gemini-acp", "vertex-ai") => {
-            is_configured("GOOGLE_API_KEY")
-                || (is_configured("GOOGLE_CLOUD_PROJECT") && is_configured("GOOGLE_CLOUD_LOCATION"))
-        }
-        ("gemini" | "gemini-acp", "gateway") => is_configured("GOOGLE_GEMINI_BASE_URL"),
         _ => true,
     }
 }
@@ -2503,7 +2497,7 @@ async fn run_protocol(
             // Log the agent's advertised capabilities (esp. MCP transports) so we
             // can see, per agent/version, whether it will honor the stdio MCP
             // servers we pass. stdio is the ACP baseline (never advertised); some
-            // agents (Cursor, Copilot) only take http/sse and silently drop ours.
+            // agents (e.g. Cursor) only take http/sse and silently drop ours.
             eprintln!(
                 "[acp:{}] agent capabilities: {}",
                 config.agent_id,
@@ -3074,27 +3068,6 @@ mod tests {
     }
 
     #[test]
-    fn gemini_auth_uses_configured_adapter_environment() {
-        use agent_client_protocol::schema::v1::{AuthMethod, AuthMethodAgent};
-
-        let init = InitializeResponse::new(ProtocolVersion::V1).auth_methods(vec![
-            AuthMethod::Agent(AuthMethodAgent::new("gemini-api-key", "Gemini API key")),
-            AuthMethod::Agent(AuthMethodAgent::new("vertex-ai", "Vertex AI")),
-            AuthMethod::Agent(AuthMethodAgent::new("gateway", "Gateway")),
-        ]);
-        let mut config = runtime_config("gemini");
-        config
-            .env
-            .insert("GEMINI_API_KEY".into(), "configured".into());
-
-        let methods = available_auth_methods(&init, &config)
-            .into_iter()
-            .map(|method| method.id().to_string())
-            .collect::<Vec<_>>();
-        assert_eq!(methods, vec!["gemini-api-key"]);
-    }
-
-    #[test]
     fn codex_key_auth_requires_an_available_key() {
         assert!(!auth_method_has_required_env(
             "codex-acp",
@@ -3123,7 +3096,6 @@ mod tests {
         assert_eq!(external_auth_command("kimi"), Some("kimi login"));
         // Agents that authenticate over ACP have no external command.
         assert_eq!(external_auth_command("codex-acp"), None);
-        assert_eq!(external_auth_command("gemini"), None);
     }
 
     #[tokio::test]

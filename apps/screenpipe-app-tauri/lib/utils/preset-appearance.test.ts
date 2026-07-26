@@ -35,7 +35,7 @@ describe("acpAdapterInfo", () => {
 
 describe("presetImageSrc", () => {
   it("uses the agent icon for acp presets", () => {
-    expect(presetImageSrc("acp", "gemini")).toBe("/images/gemini.svg");
+    expect(presetImageSrc("acp", "opencode")).toBe("/images/opencode.svg");
     expect(presetImageSrc("acp", "cursor")).toBe("/images/cursor.png");
   });
 

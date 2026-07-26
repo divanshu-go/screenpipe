@@ -574,10 +574,8 @@ describe("ACP backend", function () {
       "pi-acp",
       "codex-acp",
       "claude-acp",
-      "gemini",
       "opencode",
       "cursor",
-      "github-copilot-cli",
       "kimi",
       "custom",
     ]);

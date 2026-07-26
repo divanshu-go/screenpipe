@@ -450,8 +450,8 @@ describe("pi-event-router: background ACP action requests", () => {
         type: "extension_ui_request",
         method: "select",
         id: "auth-1",
-        title: "acp:auth:sign in to Gemini",
-        options: [{ optionId: "google", name: "Log in with Google" }],
+        title: "acp:auth:sign in to Claude Code",
+        options: [{ optionId: "login", name: "Sign in" }],
       }),
     );
 
@@ -464,7 +464,7 @@ describe("pi-event-router: background ACP action requests", () => {
         actionKind: "auth",
         requestId: "auth-1",
         sessionId: "fresh-acp",
-        title: "sign in to Gemini",
+        title: "sign in to Claude Code",
       }),
     ]);
   });

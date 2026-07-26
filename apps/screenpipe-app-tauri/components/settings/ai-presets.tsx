@@ -1364,7 +1364,7 @@ const AISection = ({
           <AIProviderCard
             type="acp"
             title="Coding agent"
-            description="Use Pi, Codex, Claude Code, Gemini, OpenCode, Cursor, or any ACP-compatible agent"
+            description="Use Pi, Codex, Claude Code, OpenCode, Cursor, or any ACP-compatible agent"
             imageSrc="/images/acp.svg"
             imageClassName="dark:invert"
             selected={settingsPreset?.provider === "acp"}
@@ -1535,7 +1535,7 @@ const AISection = ({
               id="acpEnv"
               value={Object.keys(settingsPreset.acpAgent?.env || {}).join("\n")}
               onChange={(event) => updateAcpAgent({ env: inheritedEnvFromText(event.target.value) })}
-              placeholder={"Optional variable names, one per line\nGEMINI_API_KEY"}
+              placeholder={"Optional variable names, one per line\nOPENAI_API_KEY"}
               className="min-h-[80px] font-mono text-xs"
               spellCheck={false}
             />
