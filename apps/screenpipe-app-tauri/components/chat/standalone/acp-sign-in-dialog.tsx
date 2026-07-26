@@ -11,14 +11,39 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { Button } from "@/components/ui/button";
 import { commands } from "@/lib/utils/tauri";
 import { cn } from "@/lib/utils";
 import type { AgentActionOption } from "@/lib/chat/types";
 
+// Render text with any https URLs as clickable links (opened in the system
+// browser), so a URL in an agent's auth error is actionable inline.
+function LinkifiedText({ text }: { text: string }) {
+  const parts = text.split(/(https?:\/\/[^\s)]+)/g);
+  return (
+    <>
+      {parts.map((part, index) =>
+        /^https?:\/\//.test(part) ? (
+          <button
+            key={index}
+            type="button"
+            onClick={() => void openUrl(part).catch(() => window.open(part, "_blank"))}
+            className="underline underline-offset-2 hover:opacity-80 break-all"
+          >
+            {part}
+          </button>
+        ) : (
+          <span key={index}>{part}</span>
+        ),
+      )}
+    </>
+  );
+}
+
 // One dialog for every ACP sign-in prompt, so the experience is identical
 // whether the agent logs in through its own CLI (Kimi, OpenCode) or offers
-// auth methods over the protocol (Codex, Claude, Gemini).
+// auth methods over the protocol (Codex, Claude).
 export type AcpSignInRequest =
   | { kind: "cli"; agentId: string; agentName: string; command: string }
   | {
@@ -108,9 +133,12 @@ export function AcpSignInDialog({
   }, [requestKey]);
 
   const isCli = request?.kind === "cli";
+  const hasCommand = isCli && Boolean(request.command?.trim());
   const title = `sign in to ${agentName}`;
   const description = isCli
-    ? `${agentName} signs in through its own terminal. run this command, then retry:`
+    ? hasCommand
+      ? `${agentName} signs in through its own terminal. run this command, then retry:`
+      : `${agentName} needs to be set up to continue.`
     : request?.kind === "methods"
       ? request.message ?? `${agentName} handles sign-in itself. pick how you'd like to continue:`
       : "";
@@ -156,15 +184,16 @@ export function AcpSignInDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {/* CLI sign-in failure (still not signed in / not installed / timed
-            out) — a red line so the user knows exactly what happened. */}
-        {isCli && error && (
+        {/* Sign-in failure (still not signed in / not installed / timed out,
+            or the agent's own auth error). Kept visible for every variant so
+            the dialog stays open and explains what happened, URL clickable. */}
+        {error && (
           <div
             className="border-l-2 border-destructive bg-destructive/10 px-3 py-2 text-xs leading-5 text-destructive"
             role="alert"
             data-testid="acp-sign-in-error"
           >
-            {error}
+            <LinkifiedText text={error} />
           </div>
         )}
 
