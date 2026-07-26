@@ -413,4 +413,124 @@ describe("createOnboardingLiveView", () => {
       }),
     );
   });
+
+  it("falls back to another reviewed local Pipe when a recommended Store Pipe is unavailable", async () => {
+    mocks.localFetch.mockImplementation(
+      async (url: string, init?: RequestInit) => {
+        if (url === "/health") return response({ status: "healthy" });
+        if (url === "/pipes/store/meeting-intel") {
+          return response({ error: "missing" }, false, 404);
+        }
+        if (url === "/pipes/store?sort=popular") {
+          return response({
+            data: [
+              {
+                slug: "portable-meeting-notes",
+                title: "Portable meeting notes",
+                description: "meeting decisions, tasks, and follow-up",
+                review_status: "approved",
+                connections: [],
+              },
+              {
+                slug: "needs-calendar",
+                title: "Needs calendar",
+                description: "meeting follow-up",
+                review_status: "approved",
+                connections: ["google-calendar"],
+              },
+            ],
+          });
+        }
+        if (url === "/pipes/portable-meeting-notes/enable") {
+          return response({ success: true });
+        }
+        if (url === "/pipes/portable-meeting-notes/run") {
+          return response({ success: true });
+        }
+        throw new Error(`unexpected URL: ${url} ${init?.method ?? "GET"}`);
+      },
+    );
+    mocks.generateLiveViewWithPi.mockResolvedValueOnce({
+      title: "Meeting follow-through",
+      timeRange: "today",
+      note: "A focused meeting view.",
+      blocks: [
+        {
+          title: "Open actions",
+          intent: "List source-backed open actions from meetings today.",
+          component: "list.v1",
+          width: 6,
+          pipeName: "portable-meeting-notes",
+        },
+      ],
+    });
+
+    const result = await createOnboardingLiveView({
+      goal: "help me follow through after meetings",
+      goalCategory: "meeting_follow_through",
+      preset: {
+        id: "default",
+        provider: "screenpipe-cloud",
+        url: "",
+        model: "auto",
+        apiKey: null,
+        defaultPreset: true,
+        maxContextChars: 100_000,
+        prompt: "",
+      },
+      userToken: "user-token",
+    });
+
+    expect(mocks.generateLiveViewWithPi).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pipes: [expect.objectContaining({ name: "portable-meeting-notes" })],
+      }),
+    );
+    expect(result.pipeSlugs).toEqual(["portable-meeting-notes"]);
+  });
+
+  it("keeps setup recoverable when no connected Pipe can start", async () => {
+    mocks.localFetch.mockImplementation(async (url: string) => {
+      if (url === "/health") return response({ status: "healthy" });
+      if (url === "/pipes/store/meeting-intel") {
+        return response({
+          data: {
+            slug: "meeting-intel",
+            title: "Meeting Intelligence",
+            description: "meeting decisions, tasks, and follow-up",
+            review_status: "approved",
+            connections: [],
+          },
+        });
+      }
+      if (url === "/pipes/meeting-intel/enable") {
+        return response({ success: true });
+      }
+      if (url === "/pipes/meeting-intel/run") {
+        return response({ error: "runtime unavailable" }, false, 503);
+      }
+      throw new Error(`unexpected URL: ${url}`);
+    });
+
+    await expect(
+      createOnboardingLiveView({
+        goal: "help me follow through after meetings",
+        goalCategory: "meeting_follow_through",
+        preset: {
+          id: "default",
+          provider: "screenpipe-cloud",
+          url: "",
+          model: "auto",
+          apiKey: null,
+          defaultPreset: true,
+          maxContextChars: 100_000,
+          prompt: "",
+        },
+        userToken: "user-token",
+      }),
+    ).rejects.toMatchObject({ code: "refresh_failed", stage: "refreshing" });
+    expect(getOnboardingLiveViewActivation("first-dashboard")).toEqual(
+      expect.objectContaining({ setupStatus: "needs_retry" }),
+    );
+  });
 });

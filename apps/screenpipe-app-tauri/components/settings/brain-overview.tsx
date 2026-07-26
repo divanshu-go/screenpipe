@@ -350,10 +350,13 @@ export function BrainOverview({
     setSelectedAiPresetId(presetId);
     writeActiveAiPresetId(presetId);
   }, []);
-  const onboardingActivation = useMemo(
-    () => (view ? getOnboardingLiveViewActivation(view.id) : null),
-    [activationVersion, view?.id],
-  );
+  const activeViewId = view?.id;
+  const onboardingActivation = useMemo(() => {
+    // The activation record lives in localStorage. This counter invalidates
+    // the memo after background setup updates that external store.
+    void activationVersion;
+    return activeViewId ? getOnboardingLiveViewActivation(activeViewId) : null;
+  }, [activationVersion, activeViewId]);
   const onboardingHasResult = Boolean(
     view?.slots.some((slot) => slot.value !== null),
   );

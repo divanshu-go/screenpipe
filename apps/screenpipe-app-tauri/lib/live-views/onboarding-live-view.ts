@@ -303,8 +303,8 @@ async function loadStoreCandidates(
 ): Promise<OnboardingPipeCandidate[]> {
   const preferredSlugs = preferredStorePipeSlugs(goalCategory);
   let rawPipes: StorePipeRecord[] = [];
-  try {
-    if (preferredSlugs.length > 0) {
+  if (preferredSlugs.length > 0) {
+    try {
       const detailResults = await Promise.allSettled(
         preferredSlugs.map(async (slug) => {
           const response = await localFetch(
@@ -325,28 +325,42 @@ async function loadStoreCandidates(
       rawPipes = detailResults.flatMap((result) =>
         result.status === "fulfilled" && result.value ? [result.value] : [],
       );
-    } else {
+    } catch {
+      // Fall through to the broader reviewed Store list below. A missing
+      // recommended Pipe should not make onboarding a dead end.
+    }
+  }
+
+  let candidates = selectOnboardingPipeCandidates(goal, goalCategory, rawPipes);
+  if (candidates.length === 0) {
+    try {
       const response = await localFetch("/pipes/store?sort=popular");
       if (!response.ok) throw new Error("store request failed");
       const body = await jsonBody(response);
-      rawPipes = Array.isArray(body.data)
+      const popularPipes = Array.isArray(body.data)
         ? (body.data as StorePipeRecord[])
         : Array.isArray(body.pipes)
           ? (body.pipes as StorePipeRecord[])
           : [];
+      const bySlug = new Map<string, StorePipeRecord>();
+      for (const pipe of [...rawPipes, ...popularPipes]) {
+        if (typeof pipe.slug === "string" && pipe.slug.trim()) {
+          bySlug.set(pipe.slug.trim(), pipe);
+        }
+      }
+      candidates = rankOnboardingPipeCandidates(
+        goal,
+        [...bySlug.values()],
+        preferredSlugs,
+      );
+    } catch {
+      throw new OnboardingLiveViewSetupError(
+        "store_unavailable",
+        "planning",
+        "The Pipe Store is unavailable. Check your connection and try again.",
+      );
     }
-  } catch {
-    throw new OnboardingLiveViewSetupError(
-      "store_unavailable",
-      "planning",
-      "The Pipe Store is unavailable. Check your connection and try again.",
-    );
   }
-  const candidates = selectOnboardingPipeCandidates(
-    goal,
-    goalCategory,
-    rawPipes,
-  );
   if (candidates.length === 0) {
     throw new OnboardingLiveViewSetupError(
       "no_store_candidates",

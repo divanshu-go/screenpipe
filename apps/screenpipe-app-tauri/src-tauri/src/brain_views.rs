@@ -436,15 +436,17 @@ impl From<SaveBrainViewRequest> for SaveLiveViewRequest {
     }
 }
 
-fn active_screenpipe_dir(app: &tauri::AppHandle) -> PathBuf {
-    let settings = SettingsStore::get(app).ok().flatten().unwrap_or_default();
-    crate::config::resolve_data_dir(&settings.data_dir).0
+fn active_screenpipe_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let settings = SettingsStore::get(app)
+        .map_err(|error| format!("failed to read Screenpipe settings: {error}"))?
+        .unwrap_or_default();
+    Ok(crate::config::resolve_data_dir(&settings.data_dir).0)
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn list_brain_views(app: tauri::AppHandle) -> Result<Vec<BrainViewDefinition>, String> {
-    list_live_views(&active_screenpipe_dir(&app))
+    list_live_views(&active_screenpipe_dir(&app)?)
         .map(|views| views.into_iter().map(Into::into).collect())
         .map_err(|error| error.to_string())
 }
@@ -468,7 +470,7 @@ pub async fn install_brain_view_template_kit(
         .into_iter()
         .find(|kit| kit.id == request.kit_id)
         .ok_or_else(|| format!("Live View template '{}' was not found", request.kit_id))?;
-    let screenpipe_dir = active_screenpipe_dir(&app);
+    let screenpipe_dir = active_screenpipe_dir(&app)?;
     let pipes_dir = screenpipe_dir.join("pipes");
     for pipe in &kit.pipes {
         install_bundled_pipe(&pipes_dir, &pipe.name).map_err(|error| {
@@ -500,7 +502,7 @@ pub async fn save_brain_view(
     app: tauri::AppHandle,
     request: SaveBrainViewRequest,
 ) -> Result<BrainViewDefinition, String> {
-    save_live_view(&active_screenpipe_dir(&app), request.into())
+    save_live_view(&active_screenpipe_dir(&app)?, request.into())
         .map(Into::into)
         .map_err(|error| error.to_string())
 }
@@ -508,7 +510,7 @@ pub async fn save_brain_view(
 #[tauri::command]
 #[specta::specta]
 pub async fn delete_brain_view(app: tauri::AppHandle, id: String) -> Result<(), String> {
-    delete_live_view(&active_screenpipe_dir(&app), &id).map_err(|error| error.to_string())
+    delete_live_view(&active_screenpipe_dir(&app)?, &id).map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

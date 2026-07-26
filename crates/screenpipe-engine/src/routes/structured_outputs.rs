@@ -110,6 +110,18 @@ pub(crate) async fn submit_structured_output_handler(
     Path(target_id): Path<String>,
     Json(payload): Json<SubmitStructuredOutputRequest>,
 ) -> Result<Json<SubmitStructuredOutputResponse>, ApiError> {
+    let artifact_id = stable_artifact_id(&target_id);
+    let submission_lock_path = state
+        .screenpipe_dir
+        .join("structured-outputs")
+        .join("locks")
+        .join(format!("{artifact_id}.lock"));
+    let _submission_lock =
+        tokio::task::spawn_blocking(move || crate::atomic_file::lock(&submission_lock_path))
+            .await
+            .map_err(|error| internal_error(format!("failed to acquire output lock: {error}")))?
+            .map_err(|error| internal_error(format!("failed to acquire output lock: {error}")))?;
+
     let source_pipe = permissions
         .as_ref()
         .map(|Extension(permissions)| permissions.pipe_name.as_str())
@@ -133,7 +145,6 @@ pub(crate) async fn submit_structured_output_handler(
     tokio::fs::create_dir_all(&values_dir)
         .await
         .map_err(|error| internal_error(format!("failed to create output directory: {error}")))?;
-    let artifact_id = stable_artifact_id(&prepared.target_id);
     let file_path = values_dir.join(format!("{artifact_id}.saf.json"));
     let now = chrono::Utc::now().to_rfc3339();
     let envelope = json!({
@@ -161,11 +172,19 @@ pub(crate) async fn submit_structured_output_handler(
             "failed to serialize structured output artifact: {error}"
         ))
     })?;
-    tokio::fs::write(&file_path, bytes).await.map_err(|error| {
-        internal_error(format!(
-            "failed to write structured output artifact: {error}"
-        ))
-    })?;
+    let write_path = file_path.clone();
+    tokio::task::spawn_blocking(move || crate::atomic_file::replace(&write_path, &bytes))
+        .await
+        .map_err(|error| {
+            internal_error(format!(
+                "failed to write structured output artifact: {error}"
+            ))
+        })?
+        .map_err(|error| {
+            internal_error(format!(
+                "failed to write structured output artifact: {error}"
+            ))
+        })?;
 
     let artifact = register_artifact_handler(
         State(state.clone()),

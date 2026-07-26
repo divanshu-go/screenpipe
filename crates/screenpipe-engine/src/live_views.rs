@@ -818,28 +818,9 @@ fn load_store_unlocked(screenpipe_dir: &Path) -> Result<(LiveViewStore, bool), L
 
 fn write_store_unlocked(screenpipe_dir: &Path, store: &LiveViewStore) -> Result<(), LiveViewError> {
     let path = store_path(screenpipe_dir);
-    let parent = path
-        .parent()
-        .ok_or_else(|| LiveViewError::io("Live View store path has no parent"))?;
-    std::fs::create_dir_all(parent).map_err(|error| {
-        LiveViewError::io(format!("failed to create {}: {error}", parent.display()))
-    })?;
     let bytes = serde_json::to_vec_pretty(store)
         .map_err(|error| LiveViewError::io(format!("failed to serialize Live Views: {error}")))?;
-    let temporary_path = path.with_extension("json.tmp");
-    std::fs::write(&temporary_path, bytes).map_err(|error| {
-        LiveViewError::io(format!(
-            "failed to write {}: {error}",
-            temporary_path.display()
-        ))
-    })?;
-    #[cfg(target_os = "windows")]
-    if path.exists() {
-        std::fs::remove_file(&path).map_err(|error| {
-            LiveViewError::io(format!("failed to replace {}: {error}", path.display()))
-        })?;
-    }
-    std::fs::rename(&temporary_path, &path).map_err(|error| {
+    crate::atomic_file::replace(&path, &bytes).map_err(|error| {
         LiveViewError::io(format!("failed to replace {}: {error}", path.display()))
     })?;
     Ok(())
@@ -852,11 +833,23 @@ fn with_store<T>(
     let _guard = store_lock()
         .lock()
         .map_err(|_| LiveViewError::io("Live View store lock was poisoned"))?;
+    let path = store_path(screenpipe_dir);
+    let _file_guard =
+        crate::atomic_file::lock(&path.with_extension("json.lock")).map_err(|error| {
+            LiveViewError::io(format!(
+                "failed to lock {} for update: {error}",
+                path.display()
+            ))
+        })?;
     let (mut store, migrated) = load_store_unlocked(screenpipe_dir)?;
     let (result, changed) = operation(&mut store)?;
     if changed || migrated {
         write_store_unlocked(screenpipe_dir, &store)?;
     }
+    // Keep the Live View definition lock until its renderer-agnostic Pipe
+    // targets match. Without this boundary, two desktop/CLI processes could
+    // persist revisions in order but publish their target sets out of order.
+    sync_targets(screenpipe_dir, &store.templates)?;
     Ok(result)
 }
 
@@ -922,7 +915,6 @@ fn hydrate(
     screenpipe_dir: &Path,
     templates: Vec<LiveViewTemplate>,
 ) -> Result<Vec<LiveView>, LiveViewError> {
-    sync_targets(screenpipe_dir, &templates)?;
     let targets: HashMap<String, OutputTarget> = list_output_targets(screenpipe_dir)
         .map_err(|error| LiveViewError::io(error.to_string()))?
         .into_iter()
@@ -965,9 +957,7 @@ fn hydrate(
 pub fn list_live_view_templates(
     screenpipe_dir: &Path,
 ) -> Result<Vec<LiveViewTemplate>, LiveViewError> {
-    let templates = with_store(screenpipe_dir, |store| Ok((store.templates.clone(), false)))?;
-    sync_targets(screenpipe_dir, &templates)?;
-    Ok(templates)
+    with_store(screenpipe_dir, |store| Ok((store.templates.clone(), false)))
 }
 
 pub fn list_live_views(screenpipe_dir: &Path) -> Result<Vec<LiveView>, LiveViewError> {
@@ -1081,7 +1071,7 @@ pub fn apply_live_view_template(
 
 pub fn delete_live_view(screenpipe_dir: &Path, id: &str) -> Result<(), LiveViewError> {
     validate_slug(id, "Live View id")?;
-    let templates = with_store(screenpipe_dir, |store| {
+    with_store(screenpipe_dir, |store| {
         let before = store.templates.len();
         store.templates.retain(|template| template.id != id);
         if before == store.templates.len() {
@@ -1089,9 +1079,8 @@ pub fn delete_live_view(screenpipe_dir: &Path, id: &str) -> Result<(), LiveViewE
                 "Live View '{id}' not found"
             )));
         }
-        Ok((store.templates.clone(), true))
-    })?;
-    sync_targets(screenpipe_dir, &templates)
+        Ok(((), true))
+    })
 }
 
 pub fn live_view_template_json_schema() -> Value {

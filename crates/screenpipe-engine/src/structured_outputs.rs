@@ -267,29 +267,10 @@ fn write_unlocked(
     store: &OutputTargetStore,
 ) -> Result<(), StructuredOutputError> {
     let path = store_path(screenpipe_dir);
-    let parent = path
-        .parent()
-        .ok_or_else(|| StructuredOutputError::io("output target store path has no parent"))?;
-    std::fs::create_dir_all(parent).map_err(|error| {
-        StructuredOutputError::io(format!("failed to create {}: {error}", parent.display()))
-    })?;
     let bytes = serde_json::to_vec_pretty(store).map_err(|error| {
         StructuredOutputError::io(format!("failed to serialize output targets: {error}"))
     })?;
-    let temporary_path = path.with_extension("json.tmp");
-    std::fs::write(&temporary_path, bytes).map_err(|error| {
-        StructuredOutputError::io(format!(
-            "failed to write {}: {error}",
-            temporary_path.display()
-        ))
-    })?;
-    #[cfg(target_os = "windows")]
-    if path.exists() {
-        std::fs::remove_file(&path).map_err(|error| {
-            StructuredOutputError::io(format!("failed to replace {}: {error}", path.display()))
-        })?;
-    }
-    std::fs::rename(&temporary_path, &path).map_err(|error| {
+    crate::atomic_file::replace(&path, &bytes).map_err(|error| {
         StructuredOutputError::io(format!("failed to replace {}: {error}", path.display()))
     })?;
     Ok(())
@@ -302,6 +283,14 @@ fn with_store<T>(
     let _guard = store_lock()
         .lock()
         .map_err(|_| StructuredOutputError::io("structured output store lock was poisoned"))?;
+    let path = store_path(screenpipe_dir);
+    let _file_guard =
+        crate::atomic_file::lock(&path.with_extension("json.lock")).map_err(|error| {
+            StructuredOutputError::io(format!(
+                "failed to lock {} for update: {error}",
+                path.display()
+            ))
+        })?;
     let mut store = load_unlocked(screenpipe_dir)?;
     let (result, changed) = operation(&mut store)?;
     if changed {
