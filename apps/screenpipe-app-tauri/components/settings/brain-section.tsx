@@ -1238,7 +1238,10 @@ export function BrainSection() {
 
   return (
     <div data-testid="section-brain" className="h-full overflow-hidden">
-    <div className="max-w-6xl mx-auto px-6 py-6 space-y-4 h-full flex flex-col">
+    <div
+      data-testid="brain-content"
+      className="max-w-6xl mx-auto px-3 pb-6 pt-10 sm:px-6 space-y-4 h-full flex flex-col"
+    >
       <p className="text-muted-foreground text-sm mb-4">
         what the AI has learned from your activity and what it has generated for you
       </p>

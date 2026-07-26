@@ -779,7 +779,7 @@ describe("BrainOverview", () => {
     expect(screen.queryByRole("img")).toBeNull();
   });
 
-  it("keeps manual creation available behind the AI-first empty state", async () => {
+  it("creates a usable starter dashboard on first open", async () => {
     mocks.listBrainViews.mockResolvedValue({ status: "ok", data: [] });
     mocks.saveBrainView.mockImplementation(async (request) => ({
       status: "ok",
@@ -796,13 +796,26 @@ describe("BrainOverview", () => {
     }));
     render(<BrainOverview />);
 
+    const dashboardSelector = await screen.findByTestId(
+      "overview-dashboard-selector",
+    );
+    expect(dashboardSelector).toHaveValue("my-dashboard");
+    expect(dashboardSelector).toHaveTextContent("My dashboard");
+    expect(mocks.saveBrainView).toHaveBeenNthCalledWith(1, {
+      id: "my-dashboard",
+      title: "My dashboard",
+      expectedRevision: null,
+      timeRange: "today",
+      periodPolicy: {
+        type: "selectable.v1",
+        values: ["today", "24h", "7d", "30d"],
+      },
+      slots: [],
+    });
     expect(
-      await screen.findByText("What should this Live View show?"),
+      screen.getByPlaceholderText(/Ask AI to create a dashboard/),
     ).toBeTruthy();
-    expect(
-      screen.getByPlaceholderText(/show how I spend my time/),
-    ).toBeTruthy();
-    fireEvent.click(await screen.findByTestId("overview-create"));
+    fireEvent.click(screen.getByText("add your first Block"));
     fireEvent.click(screen.getByTestId("overview-add-card"));
     expect(screen.getByText("Live View name")).toBeTruthy();
     expect(screen.getByText("Block title")).toBeTruthy();
@@ -824,9 +837,9 @@ describe("BrainOverview", () => {
     fireEvent.click(screen.getByTestId("overview-save"));
 
     await waitFor(() => {
-      expect(mocks.saveBrainView).toHaveBeenCalledTimes(1);
+      expect(mocks.saveBrainView).toHaveBeenCalledTimes(2);
     });
-    const request = mocks.saveBrainView.mock.calls[0][0];
+    const request = mocks.saveBrainView.mock.calls[1][0];
     expect(request.slots[0]).toEqual(
       expect.objectContaining({
         title: "Automation opportunities",
@@ -1118,8 +1131,8 @@ describe("BrainOverview", () => {
     );
 
     fireEvent.click(screen.getByTestId("overview-apply-ai"));
-    await waitFor(() => expect(mocks.saveBrainView).toHaveBeenCalledTimes(1));
-    expect(mocks.saveBrainView.mock.calls[0][0].slots).toEqual([
+    await waitFor(() => expect(mocks.saveBrainView).toHaveBeenCalledTimes(2));
+    expect(mocks.saveBrainView.mock.calls[1][0].slots).toEqual([
       expect.objectContaining({
         title: "Time by project",
         component: "bar-chart.v1",
