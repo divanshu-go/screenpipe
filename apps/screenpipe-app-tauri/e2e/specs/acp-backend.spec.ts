@@ -576,6 +576,7 @@ describe("ACP backend", function () {
       "claude-acp",
       "opencode",
       "cursor",
+      "github-copilot-cli",
       "kimi",
       "custom",
     ]);

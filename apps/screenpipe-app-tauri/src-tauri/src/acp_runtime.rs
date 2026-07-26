@@ -2497,7 +2497,7 @@ async fn run_protocol(
             // Log the agent's advertised capabilities (esp. MCP transports) so we
             // can see, per agent/version, whether it will honor the stdio MCP
             // servers we pass. stdio is the ACP baseline (never advertised); some
-            // agents (e.g. Cursor) only take http/sse and silently drop ours.
+            // agents (Cursor, Copilot) only take http/sse and silently drop ours.
             eprintln!(
                 "[acp:{}] agent capabilities: {}",
                 config.agent_id,

@@ -602,6 +602,8 @@ const STATIC_APP_ICONS: Record<string, string> = {
   safari: "/images/safari.svg",
   notion: "/images/notion.svg",
   github: "/images/github.png",
+  copilot: "/images/github.png",
+  "github copilot": "/images/github.png",
   linear: "/images/linear.svg",
   asana: "/images/asana.svg",
   jira: "/images/jira.png",
