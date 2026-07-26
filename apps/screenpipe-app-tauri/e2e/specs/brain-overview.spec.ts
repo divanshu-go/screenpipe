@@ -202,12 +202,18 @@ describe("Brain Live Views", function () {
     expect(renderedText).toContain("Live Views");
     expect(renderedText).toContain("DASHBOARDS");
     expect(renderedText).toContain("CUSTOMIZE");
-    expect(renderedText).toContain("How I worked today");
     expect(renderedText).toContain("Automation opportunities");
     const dashboardSelector = await $(
       "[data-testid='overview-dashboard-selector']",
     );
     expect(await dashboardSelector.getValue()).toBe("my-overview");
+    const selectedDashboardTitle = (await browser.execute(() => {
+      const selector = document.querySelector<HTMLSelectElement>(
+        "[data-testid='overview-dashboard-selector']",
+      );
+      return selector?.selectedOptions[0]?.textContent?.trim() ?? "";
+    })) as string;
+    expect(selectedDashboardTitle).toBe("How I worked today");
     const screenshot = await saveScreenshot("brain-overview-pipe-filled");
     expect(existsSync(screenshot)).toBe(true);
 
