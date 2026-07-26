@@ -23,6 +23,13 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   LiveViewAiComposer,
   type LiveViewGenerationIntent,
 } from "@/components/settings/live-view-ai-composer";
@@ -1859,22 +1866,28 @@ export function BrainOverview({
               {selectedPeriod.label}
             </div>
           ) : (
-            <select
-              data-testid="overview-time-range"
-              aria-label="Live View time range"
+            <Select
               value={view.timeRange}
               disabled={dashboardBusy}
-              className="h-9 min-w-36 flex-1 border border-border bg-background px-3 text-xs outline-none focus:border-foreground disabled:opacity-50 sm:flex-none"
-              onChange={(event) =>
-                void changeTimeRange(event.target.value as BrainViewTimeRange)
+              onValueChange={(value) =>
+                void changeTimeRange(value as BrainViewTimeRange)
               }
             >
-              {periodRanges.map((range) => (
-                <option key={range.value} value={range.value}>
-                  {range.label}
-                </option>
-              ))}
-            </select>
+              <SelectTrigger
+                data-testid="overview-time-range"
+                aria-label="Live View time range"
+                className="h-9 min-w-36 w-auto flex-1 text-xs sm:flex-none"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {periodRanges.map((range) => (
+                  <SelectItem key={range.value} value={range.value}>
+                    {range.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           )}
           {!onboardingColdStart && templateKits.length > 0 && (
             <Button
