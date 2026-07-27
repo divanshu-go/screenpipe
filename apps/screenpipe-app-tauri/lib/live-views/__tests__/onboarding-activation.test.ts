@@ -7,15 +7,16 @@ import {
   completeOnboardingLiveViewActivation,
   consumeOnboardingBrainHandoff,
   getOnboardingLiveViewActivation,
-  getHomeFocusCategory,
+  getUserGoalCategory,
   markOnboardingLiveViewFirstResult,
   markOnboardingLiveViewSetupNeedsRetry,
   markOnboardingLiveViewSetupReady,
   removeOnboardingLiveViewActivation,
   selectedLiveViewDashboardId,
-  setHomeFocusCategory,
+  setUserGoalCategory,
   setOnboardingLiveViewGuideStep,
   startOnboardingLiveViewActivation,
+  USER_GOAL_STORAGE_KEY,
 } from "../onboarding-activation";
 
 const localStorageMock = (() => {
@@ -48,7 +49,7 @@ describe("onboarding Live View activation", () => {
     });
 
     expect(selectedLiveViewDashboardId()).toBe("first-dashboard-1");
-    expect(getHomeFocusCategory()).toBe("work_memory");
+    expect(getUserGoalCategory()).toBe("work_memory");
     expect(consumeOnboardingBrainHandoff()).toBe("first-dashboard-1");
     expect(consumeOnboardingBrainHandoff()).toBeNull();
     expect(getOnboardingLiveViewActivation("first-dashboard-1")).toEqual(
@@ -63,17 +64,27 @@ describe("onboarding Live View activation", () => {
     );
   });
 
-  it("lets General Settings override the onboarding focus", () => {
+  it("lets General Settings override the onboarding goal", () => {
     startOnboardingLiveViewActivation("first-dashboard-4", "work_memory");
-    setHomeFocusCategory("process_automation");
+    setUserGoalCategory("process_automation");
 
-    expect(getHomeFocusCategory()).toBe("process_automation");
+    expect(getUserGoalCategory()).toBe("process_automation");
   });
 
   it("uses the default order for a custom onboarding goal", () => {
     startOnboardingLiveViewActivation("first-dashboard-5", "custom");
 
-    expect(getHomeFocusCategory()).toBe("default");
+    expect(getUserGoalCategory()).toBe("default");
+  });
+
+  it("migrates the briefly shipped Home focus preference into the user goal", () => {
+    window.localStorage.setItem("screenpipe.home.focus.v1", "work_patterns");
+
+    expect(getUserGoalCategory()).toBe("work_patterns");
+    expect(window.localStorage.getItem(USER_GOAL_STORAGE_KEY)).toBe(
+      "work_patterns",
+    );
+    expect(window.localStorage.getItem("screenpipe.home.focus.v1")).toBeNull();
   });
 
   it("keeps setup recovery and guide progress on the same activation", () => {

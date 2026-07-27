@@ -29,10 +29,10 @@ import {
 } from "@/lib/chat/response-feedback";
 import type { ChatEntryCard, ChatEntrySource } from "@/lib/chat/types";
 import {
-  getHomeFocusCategory,
-  HOME_FOCUS_CHANGED_EVENT,
-  HOME_FOCUS_STORAGE_KEY,
-  type HomeFocusCategory,
+  getUserGoalCategory,
+  USER_GOAL_CHANGED_EVENT,
+  USER_GOAL_STORAGE_KEY,
+  type UserGoalCategory,
 } from "@/lib/live-views/onboarding-activation";
 import { CustomSummaryBuilder } from "./custom-summary-builder";
 
@@ -59,7 +59,7 @@ export interface ConnectionSetupSuggestion {
   icon: string;
 }
 
-const HOME_CARD_SLUGS_BY_FOCUS: Record<HomeFocusCategory, string[]> = {
+const HOME_CARD_SLUGS_BY_GOAL: Record<UserGoalCategory, string[]> = {
   default: ["automate-my-work", "day-recap", "time-breakdown", "missed-todos"],
   process_automation: [
     "automate-my-work",
@@ -82,8 +82,8 @@ const HOME_CARD_SLUGS_BY_FOCUS: Record<HomeFocusCategory, string[]> = {
   ],
 };
 
-export function homeCardSlugsForFocus(category: HomeFocusCategory): string[] {
-  return HOME_CARD_SLUGS_BY_FOCUS[category];
+export function homeCardSlugsForGoal(category: UserGoalCategory): string[] {
+  return HOME_CARD_SLUGS_BY_GOAL[category];
 }
 
 function HomeCardIcon({ slug, className }: { slug: string; className: string }) {
@@ -109,19 +109,19 @@ export function SummaryCards({
   const [showAll, setShowAll] = useState(false);
   const [showBuilder, setShowBuilder] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<CustomTemplate | null>(null);
-  const [homeFocus, setHomeFocus] = useState<HomeFocusCategory>(() =>
-    getHomeFocusCategory(),
+  const [userGoal, setUserGoal] = useState<UserGoalCategory>(() =>
+    getUserGoalCategory(),
   );
 
   useEffect(() => {
-    const refresh = () => setHomeFocus(getHomeFocusCategory());
+    const refresh = () => setUserGoal(getUserGoalCategory());
     const handleStorage = (event: StorageEvent) => {
-      if (event.key === HOME_FOCUS_STORAGE_KEY) refresh();
+      if (event.key === USER_GOAL_STORAGE_KEY) refresh();
     };
-    window.addEventListener(HOME_FOCUS_CHANGED_EVENT, refresh);
+    window.addEventListener(USER_GOAL_CHANGED_EVENT, refresh);
     window.addEventListener("storage", handleStorage);
     return () => {
-      window.removeEventListener(HOME_FOCUS_CHANGED_EVENT, refresh);
+      window.removeEventListener(USER_GOAL_CHANGED_EVENT, refresh);
       window.removeEventListener("storage", handleStorage);
     };
   }, []);
@@ -133,7 +133,7 @@ export function SummaryCards({
   // (install_builtin_pipes never overwrites an existing pipe.md). The discover
   // tier is intentionally removed — the metrics showed it earned ~9% of clicks
   // across 6 cards while doubling the visible surface.
-  const homeCardSlugs = homeCardSlugsForFocus(homeFocus);
+  const homeCardSlugs = homeCardSlugsForGoal(userGoal);
   const byName = new Map<string, TemplatePipe>();
   for (const t of templatePipes) byName.set(t.name, t);
   for (const t of FALLBACK_TEMPLATES) byName.set(t.name, t);

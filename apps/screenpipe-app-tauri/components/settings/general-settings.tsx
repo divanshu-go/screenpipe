@@ -28,9 +28,9 @@ import { UpdateBanner } from "@/components/update-banner";
 import type { SettingsField } from "./settings-search";
 import { ONBOARDING_GOALS } from "@/lib/live-views/onboarding-goals";
 import {
-  getHomeFocusCategory,
-  setHomeFocusCategory,
-  type HomeFocusCategory,
+  getUserGoalCategory,
+  setUserGoalCategory,
+  type UserGoalCategory,
 } from "@/lib/live-views/onboarding-activation";
 import posthog from "posthog-js";
 
@@ -41,7 +41,7 @@ export const searchIndex: SettingsField[] = [
   { label: "Check for updates", keywords: ["version"] },
   { label: "Auto-Update Pipes" },
   { label: "Reset Onboarding", keywords: ["setup"] },
-  { label: "Home focus", keywords: ["goal", "cards", "personalization"] },
+  { label: "Your goal", keywords: ["onboarding", "purpose", "personalization"] },
   { label: "Headless", keywords: ["low resource", "tray only", "memory", "webview"] },
   { label: "Record only", keywords: ["headless", "pipes", "scheduler", "automation"] },
 ];
@@ -61,14 +61,14 @@ export default function GeneralSettings() {
   const [currentVersion, setCurrentVersion] = useState<string | null>(null);
   const [isCheckingForUpdate, setIsCheckingForUpdate] = useState(false);
   const [isResettingOnboarding, setIsResettingOnboarding] = useState(false);
-  const [homeFocus, setHomeFocus] = useState<HomeFocusCategory>(() =>
-    getHomeFocusCategory(),
+  const [userGoal, setUserGoal] = useState<UserGoalCategory>(() =>
+    getUserGoalCategory(),
   );
 
-  const handleHomeFocusChange = (category: HomeFocusCategory) => {
-    setHomeFocus(category);
-    setHomeFocusCategory(category);
-    posthog.capture("home_focus_changed", {
+  const handleUserGoalChange = (category: UserGoalCategory) => {
+    setUserGoal(category);
+    setUserGoalCategory(category);
+    posthog.capture("user_goal_changed", {
       goal_category: category,
       source: "general_settings",
     });
@@ -384,23 +384,23 @@ export default function GeneralSettings() {
             <div className="flex items-center space-x-2.5">
               <Layers className="h-4 w-4 shrink-0 text-muted-foreground" />
               <div>
-                <h3 className="text-sm font-medium text-foreground">Home focus</h3>
+                <h3 className="text-sm font-medium text-foreground">Your goal</h3>
                 <p className="text-xs text-muted-foreground">
-                  Put the most useful chat action first
+                  What you want screenpipe to help you accomplish
                 </p>
               </div>
             </div>
             <Select
-              value={homeFocus}
+              value={userGoal}
               onValueChange={(value) =>
-                handleHomeFocusChange(value as HomeFocusCategory)
+                handleUserGoalChange(value as UserGoalCategory)
               }
             >
               <SelectTrigger className="h-8 w-[230px] text-xs">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="default">Default</SelectItem>
+                <SelectItem value="default">No specific goal</SelectItem>
                 {ONBOARDING_GOALS.map((goal) => (
                   <SelectItem key={goal.category} value={goal.category}>
                     {goal.title}

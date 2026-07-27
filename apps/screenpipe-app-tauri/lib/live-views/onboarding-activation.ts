@@ -13,15 +13,16 @@ const ACTIVATIONS_STORAGE_KEY =
   "screenpipe.live-view.onboarding-activations.v1";
 const BRAIN_HANDOFF_STORAGE_KEY =
   "screenpipe.live-view.onboarding-brain-handoff.v1";
-export const HOME_FOCUS_STORAGE_KEY = "screenpipe.home.focus.v1";
-export const HOME_FOCUS_CHANGED_EVENT = "screenpipe:home-focus-changed";
+export const USER_GOAL_STORAGE_KEY = "screenpipe.user.goal-category.v1";
+export const USER_GOAL_CHANGED_EVENT = "screenpipe:user-goal-changed";
+const LEGACY_HOME_FOCUS_STORAGE_KEY = "screenpipe.home.focus.v1";
 const MAX_STORED_ACTIVATIONS = 12;
 
-export type HomeFocusCategory =
+export type UserGoalCategory =
   | Exclude<OnboardingGoalCategory, "custom">
   | "default";
 
-const HOME_FOCUS_CATEGORIES = new Set<HomeFocusCategory>([
+const USER_GOAL_CATEGORIES = new Set<UserGoalCategory>([
   "default",
   "work_memory",
   "meeting_follow_through",
@@ -115,20 +116,29 @@ function writeActivations(activations: ActivationMap): void {
   }
 }
 
-function normalizeHomeFocusCategory(value: unknown): HomeFocusCategory | null {
+function normalizeUserGoalCategory(value: unknown): UserGoalCategory | null {
   return typeof value === "string" &&
-    HOME_FOCUS_CATEGORIES.has(value as HomeFocusCategory)
-    ? (value as HomeFocusCategory)
+    USER_GOAL_CATEGORIES.has(value as UserGoalCategory)
+    ? (value as UserGoalCategory)
     : null;
 }
 
-export function getHomeFocusCategory(): HomeFocusCategory {
+export function getUserGoalCategory(): UserGoalCategory {
   if (typeof window === "undefined") return "default";
   try {
-    const stored = normalizeHomeFocusCategory(
-      window.localStorage.getItem(HOME_FOCUS_STORAGE_KEY),
+    const stored = normalizeUserGoalCategory(
+      window.localStorage.getItem(USER_GOAL_STORAGE_KEY),
     );
     if (stored) return stored;
+
+    const legacy = normalizeUserGoalCategory(
+      window.localStorage.getItem(LEGACY_HOME_FOCUS_STORAGE_KEY),
+    );
+    if (legacy) {
+      window.localStorage.setItem(USER_GOAL_STORAGE_KEY, legacy);
+      window.localStorage.removeItem(LEGACY_HOME_FOCUS_STORAGE_KEY);
+      return legacy;
+    }
 
     // Migrate existing onboarding activations without reading the free-text goal.
     const latest = Object.values(readActivations()).sort(
@@ -142,16 +152,17 @@ export function getHomeFocusCategory(): HomeFocusCategory {
   }
 }
 
-export function setHomeFocusCategory(category: HomeFocusCategory): void {
+export function setUserGoalCategory(category: UserGoalCategory): void {
   if (typeof window === "undefined") return;
-  const normalized = normalizeHomeFocusCategory(category) ?? "default";
+  const normalized = normalizeUserGoalCategory(category) ?? "default";
   try {
-    window.localStorage.setItem(HOME_FOCUS_STORAGE_KEY, normalized);
+    window.localStorage.setItem(USER_GOAL_STORAGE_KEY, normalized);
+    window.localStorage.removeItem(LEGACY_HOME_FOCUS_STORAGE_KEY);
   } catch {
     // Personalization is optional; the default card order remains usable.
   }
   window.dispatchEvent(
-    new CustomEvent<HomeFocusCategory>(HOME_FOCUS_CHANGED_EVENT, {
+    new CustomEvent<UserGoalCategory>(USER_GOAL_CHANGED_EVENT, {
       detail: normalized,
     }),
   );
@@ -210,7 +221,7 @@ export function startOnboardingLiveViewActivation(
   };
   activations[viewId] = activation;
   writeActivations(activations);
-  setHomeFocusCategory(
+  setUserGoalCategory(
     goalCategory === "custom" ? "default" : goalCategory,
   );
   rememberSelectedLiveViewDashboard(viewId);

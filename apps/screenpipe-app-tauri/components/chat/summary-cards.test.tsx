@@ -7,8 +7,8 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SummaryCards } from "./summary-cards";
 import {
-  HOME_FOCUS_STORAGE_KEY,
-  setHomeFocusCategory,
+  USER_GOAL_STORAGE_KEY,
+  setUserGoalCategory,
 } from "@/lib/live-views/onboarding-activation";
 
 const { captureMock } = vi.hoisted(() => ({ captureMock: vi.fn() }));
@@ -20,11 +20,11 @@ vi.mock("posthog-js", () => ({
 describe("SummaryCards", () => {
   afterEach(() => {
     vi.clearAllMocks();
-    window.localStorage.removeItem(HOME_FOCUS_STORAGE_KEY);
+    window.localStorage.removeItem(USER_GOAL_STORAGE_KEY);
   });
 
   it("prioritizes cards from the saved onboarding goal", () => {
-    setHomeFocusCategory("work_patterns");
+    setUserGoalCategory("work_patterns");
     render(
       <SummaryCards
         onSendMessage={vi.fn()}
@@ -52,7 +52,7 @@ describe("SummaryCards", () => {
     });
   });
 
-  it("reorders an open Home view when the General Settings focus changes", () => {
+  it("reorders an open Home view when the General Settings goal changes", () => {
     render(
       <SummaryCards
         onSendMessage={vi.fn()}
@@ -63,7 +63,7 @@ describe("SummaryCards", () => {
       />,
     );
 
-    act(() => setHomeFocusCategory("meeting_follow_through"));
+    act(() => setUserGoalCategory("meeting_follow_through"));
 
     const cards = screen.getAllByTestId(/^summary-card-/);
     expect(cards.slice(0, 4).map((card) => card.dataset.testid)).toEqual([
