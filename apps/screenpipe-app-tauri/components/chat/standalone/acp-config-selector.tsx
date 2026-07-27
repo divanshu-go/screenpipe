@@ -13,9 +13,28 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Switch } from "@/components/ui/switch";
-import { commands } from "@/lib/utils/tauri";
+import { commands, type AIPreset } from "@/lib/utils/tauri";
 import { dedupedModes, useAcpSessionConfig } from "@/lib/stores/acp-session-config";
 import { cn } from "@/lib/utils";
+
+// A live-session command fails this way before the first prompt spawns the ACP
+// runtime. That's expected on a fresh chat — the choice is persisted to the
+// preset and applied when the session starts — so it must not surface an error.
+function isAgentNotRunning(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("not running") ||
+    lower.includes("not initialized") ||
+    lower.includes("no acp session") ||
+    lower.includes("session not found")
+  );
+}
+
+/** A single config change to persist onto the active preset's ACP defaults, so
+ *  it is applied on the next session/new (apply_session_defaults). */
+export type AcpConfigDefaultChange =
+  | { optionId: string; value: string }
+  | { modeId: string };
 
 const FIELD_LABEL = "block text-[10px] font-medium uppercase tracking-wide text-muted-foreground";
 
@@ -33,12 +52,21 @@ const FIELD_SELECT =
 export function AcpConfigSelector({
   sessionId,
   agentId,
+  activePreset,
+  onPersistDefault,
 }: {
   sessionId: string | null | undefined;
   /** The preset's ACP adapter id, used to fall back to the session-agnostic
    *  advertisement cache so the composer shows the agent's choices right away
    *  (matching the preset editor) instead of waiting for a live event. */
   agentId?: string | null;
+  /** The active ACP preset. Its `acpAgent.config`/`modeId` hold the user's
+   *  chosen defaults, which win over the adapter's advertised default before a
+   *  live session exists (a fresh chat with no message yet). */
+  activePreset?: AIPreset | null;
+  /** Persist a chosen value onto the active preset's ACP defaults, so it is
+   *  applied on the next session start even before the first message. */
+  onPersistDefault?: (change: AcpConfigDefaultChange) => void;
 }) {
   const live = useAcpSessionConfig((state) =>
     sessionId ? state.sessions[sessionId] : undefined,
@@ -52,6 +80,11 @@ export function AcpConfigSelector({
   const liveHasChoices =
     !!live && ((live.options?.length ?? 0) > 0 || !!live.modes);
   const config = liveHasChoices ? live : (cached ?? live);
+  // Before a live session exists (fresh chat, no message yet), the user's saved
+  // preset defaults are the chosen values and win over the adapter's advertised
+  // default. Once a session is live, trust its current values instead.
+  const presetConfig = activePreset?.acpAgent?.config ?? {};
+  const presetModeId = activePreset?.acpAgent?.modeId ?? null;
   const [pendingId, setPendingId] = useState<string | null>(null);
   const selects = (config?.options ?? []).filter(
     (option) => option.type === "select" && option.values.length > 0,
@@ -73,6 +106,29 @@ export function AcpConfigSelector({
     } finally {
       setPendingId(null);
     }
+  };
+
+  // Persist the choice to the preset (source of truth, applied on the next
+  // session start), then apply it to the live session too. A "not running"
+  // failure means there's no session yet — expected on a fresh chat, so it's
+  // swallowed; the preset default carries the choice into the session.
+  const applyChange = (
+    key: string,
+    persist: AcpConfigDefaultChange,
+    live: () => Promise<{ status: string; error?: string }>,
+    label: string,
+  ) => {
+    onPersistDefault?.(persist);
+    void run(
+      key,
+      async () => {
+        const result = await live();
+        if (result.status === "error" && result.error && !isAgentNotRunning(result.error)) {
+          throw new Error(result.error);
+        }
+      },
+      label,
+    );
   };
 
   return (
@@ -101,17 +157,15 @@ export function AcpConfigSelector({
           <label className="block">
             <span className={FIELD_LABEL}>mode</span>
             <select
-              value={modes.currentModeId}
+              value={liveHasChoices ? modes.currentModeId : (presetModeId ?? modes.currentModeId)}
               disabled={pendingId === "__mode"}
               aria-label="Agent mode"
               onChange={(event) => {
                 const modeId = event.target.value;
-                void run(
+                applyChange(
                   "__mode",
-                  async () => {
-                    const result = await commands.piAcpSetMode(sessionId, modeId);
-                    if (result.status === "error") throw new Error(result.error);
-                  },
+                  { modeId },
+                  () => commands.piAcpSetMode(sessionId, modeId),
                   "mode",
                 );
               }}
@@ -129,23 +183,20 @@ export function AcpConfigSelector({
           <label key={option.id} className="block">
             <span className={FIELD_LABEL}>{option.name}</span>
             <select
-              value={String(option.currentValue ?? "")}
+              value={
+                liveHasChoices
+                  ? String(option.currentValue ?? "")
+                  : (presetConfig[option.id] ?? String(option.currentValue ?? ""))
+              }
               disabled={pendingId === option.id}
               title={option.description || option.name}
               aria-label={option.name}
               onChange={(event) => {
                 const value = event.target.value;
-                void run(
+                applyChange(
                   option.id,
-                  async () => {
-                    const result = await commands.piAcpSetConfigOption(
-                      sessionId,
-                      option.id,
-                      value,
-                      null,
-                    );
-                    if (result.status === "error") throw new Error(result.error);
-                  },
+                  { optionId: option.id, value },
+                  () => commands.piAcpSetConfigOption(sessionId, option.id, value, null),
                   option.name,
                 );
               }}
@@ -170,21 +221,26 @@ export function AcpConfigSelector({
           >
             <span className="truncate">{option.name}</span>
             <Switch
-              checked={option.currentValue === true}
+              checked={
+                liveHasChoices
+                  ? option.currentValue === true
+                  : presetConfig[option.id] !== undefined
+                    ? presetConfig[option.id] === "true"
+                    : option.currentValue === true
+              }
               disabled={pendingId === option.id}
               aria-label={option.name}
               onCheckedChange={(next) => {
-                void run(
+                applyChange(
                   option.id,
-                  async () => {
-                    const result = await commands.piAcpSetConfigOption(
+                  { optionId: option.id, value: next ? "true" : "false" },
+                  () =>
+                    commands.piAcpSetConfigOption(
                       sessionId,
                       option.id,
                       next ? "true" : "false",
                       true,
-                    );
-                    if (result.status === "error") throw new Error(result.error);
-                  },
+                    ),
                   option.name,
                 );
               }}

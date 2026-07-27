@@ -13,6 +13,7 @@ import { useAcpSessionConfig } from "@/lib/stores/acp-session-config";
 import { statusForEvent } from "@/lib/stores/pi-event-router";
 import { extractInjectedUserText } from "@/lib/chat-utils";
 import { imageDataUrlsFromPiContent } from "@/lib/chat/image-content";
+import { acpSpawnSignature } from "@/lib/chat/acp-spawn-signature";
 import { buildDailyLimitMessage, buildRateLimitMessage, classifyQuotaError, parseRateLimitWaitSeconds, PI_MAX_RATE_LIMIT_RETRIES } from "@/lib/chat/quota-errors";
 import { buildInvalidatedAuthTokenMessage, isInvalidatedAuthTokenError } from "@/lib/chat/auth-errors";
 import { buildNoResponseMessage, buildProviderErrorMessage } from "@/lib/chat/provider-errors";
@@ -1245,7 +1246,7 @@ export function usePiForegroundEvents({
                 if (providerConfig) {
                   piRunningConfigRef.current = {
                     backend: providerConfig.backend === "acp" ? "acp" : null,
-                    acpAgentSignature: providerConfig.acpAgent ? JSON.stringify(providerConfig.acpAgent) : null,
+                    acpAgentSignature: acpSpawnSignature(providerConfig.acpAgent),
                     provider: providerConfig.provider,
                     model: providerConfig.model,
                     url: providerConfig.url,

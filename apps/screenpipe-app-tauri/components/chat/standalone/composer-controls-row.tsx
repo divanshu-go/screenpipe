@@ -149,6 +149,8 @@ export function ComposerControlsRow({
         <AcpConfigSelector
           sessionId={modelControls.currentQueueSessionId}
           agentId={acpAgentId}
+          activePreset={modelControls.activePreset}
+          onPersistDefault={modelControls.onAcpConfigDefault}
         />
       ) : (
         <ThinkingLevelSelector

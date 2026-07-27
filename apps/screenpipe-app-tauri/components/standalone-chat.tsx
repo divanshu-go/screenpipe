@@ -245,6 +245,33 @@ export function StandaloneChat({
       }
     }
   }, []);
+
+  // Persist an ACP config choice (a select option value, or the mode) onto the
+  // active preset's acpAgent defaults, so `apply_session_defaults` applies it on
+  // the next session/new. This is what lets the config popover work on a fresh
+  // chat before any message: the live session (if one exists) is updated by the
+  // selector separately, and a not-yet-started session reads these defaults.
+  const handleAcpConfigDefault = useCallback(
+    (change: { optionId?: string; value?: string; modeId?: string }) => {
+      const preset = activePresetRef.current;
+      const agent = preset?.acpAgent;
+      if (!preset || !agent) return;
+      const nextAgent = { ...agent };
+      if (change.modeId !== undefined) {
+        nextAgent.modeId = change.modeId;
+      }
+      if (change.optionId !== undefined && change.value !== undefined) {
+        nextAgent.config = { ...(agent.config ?? {}), [change.optionId]: change.value };
+      }
+      const nextPreset = { ...preset, acpAgent: nextAgent };
+      const nextPresets = (settings?.aiPresets ?? []).map((entry) =>
+        entry.id === preset.id ? nextPreset : entry,
+      );
+      void updateSettings({ aiPresets: nextPresets });
+      handleSetActivePreset(nextPreset);
+    },
+    [settings, updateSettings, handleSetActivePreset],
+  );
   const isStreamingRef = useRef(false);
   // Mirrors of streaming-relevant state so the unmount-snapshot effect (which
   // runs with `[]` deps) can read the latest values instead of stale closures.
@@ -1908,6 +1935,7 @@ export function StandaloneChat({
           currentQueueSessionId,
           onPresetSaved: handlePiRestart,
           onSelectPreset: handleSetActivePreset,
+          onAcpConfigDefault: handleAcpConfigDefault,
         }}
         connectBanner={{
           show: showConnectBanner,
