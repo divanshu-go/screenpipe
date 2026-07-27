@@ -72,6 +72,12 @@ import { deriveFallbackConversationTitle } from "@/lib/utils/chat-title";
 import { isInternalTitleSession } from "@/lib/utils/internal-session";
 import { useAcpSessionConfig } from "@/lib/stores/acp-session-config";
 import {
+  agentActionMessage,
+  parseAgentActionRequest,
+  stripAgentActionBlocks,
+} from "@/lib/chat/agent-action-card";
+import type { Message } from "@/lib/chat/types";
+import {
   getPersistedViewedAt,
   useChatStore,
   isSessionForeground,
@@ -479,25 +485,15 @@ function removeAgentActionsFromSession(sid: string): void {
   const store = useChatStore.getState();
   const session = store.sessions[sid];
   if (!session?.messages) return;
-  const messages = (session.messages as MutableMessage[]).flatMap((message) => {
-    const blocks = message.contentBlocks;
-    if (!blocks?.some((block: any) => block?.type === "agent_action")) return [message];
-    const nextBlocks = blocks.filter((block: any) => block?.type !== "agent_action");
-    if (!message.content.trim() && nextBlocks.length === 0) return [];
-    return [{ ...message, contentBlocks: nextBlocks }];
-  });
-  store.actions.setMessages(sid, messages);
+  // A backgrounded session's messages all belong to it, so strip every
+  // agent-action block (predicate always true). Shared with the panel.
+  const next = stripAgentActionBlocks(session.messages as unknown as Message[], () => true);
+  store.actions.setMessages(sid, next as unknown as MutableMessage[]);
 }
 
 function appendAgentActionRequest(sid: string, payload: PiInnerEvent): boolean {
-  if (payload.type !== "extension_ui_request" || payload.method !== "select") return false;
-  const rawTitle = typeof payload.title === "string" ? payload.title : "";
-  const actionKind = rawTitle.startsWith("acp:permission:")
-    ? "permission"
-    : rawTitle.startsWith("acp:auth:")
-      ? "auth"
-      : null;
-  if (!actionKind || typeof payload.id !== "string" || !payload.id) return false;
+  const parsed = parseAgentActionRequest(payload);
+  if (!parsed) return false;
 
   const store = useChatStore.getState();
   const session = store.sessions[sid];
@@ -505,44 +501,15 @@ function appendAgentActionRequest(sid: string, payload: PiInnerEvent): boolean {
   const messages = (session.messages as MutableMessage[] | undefined) ?? [];
   const alreadyVisible = messages.some((message) =>
     message.contentBlocks?.some(
-      (block: any) => block?.type === "agent_action" && block.requestId === payload.id,
+      (block: any) => block?.type === "agent_action" && block.requestId === parsed.requestId,
     ),
   );
   if (alreadyVisible) return true;
 
-  const options = Array.isArray(payload.options)
-    ? payload.options.flatMap((candidate) => {
-        if (!candidate || typeof candidate !== "object") return [];
-        const option = candidate as Record<string, unknown>;
-        if (typeof option.optionId !== "string" || typeof option.name !== "string") return [];
-        return [{
-          optionId: option.optionId,
-          name: option.name,
-          ...(typeof option.kind === "string" ? { kind: option.kind } : {}),
-        }];
-      })
-    : [];
-  const suffix = rawTitle.split(":").slice(2).join(":").trim();
-  const title = suffix || (actionKind === "auth" ? "sign in to continue" : "permission needed");
-  const messageText = typeof payload.message === "string" ? payload.message : undefined;
-  store.actions.appendMessage(sid, {
-    id: `agent-action-${payload.id}`,
-    role: "assistant",
-    content: "",
-    timestamp: Date.now(),
-    contentBlocks: [{
-      type: "agent_action",
-      actionKind,
-      requestId: payload.id,
-      sessionId: sid,
-      title,
-      message: messageText,
-      options,
-    }],
-  } satisfies MutableMessage);
+  store.actions.appendMessage(sid, agentActionMessage(parsed, sid) as unknown as MutableMessage);
   store.actions.patch(sid, {
     status: "tool",
-    preview: actionKind === "auth" ? "sign-in needed" : "permission needed",
+    preview: parsed.actionKind === "auth" ? "sign-in needed" : "permission needed",
     lastContentAt: Date.now(),
   });
   return true;

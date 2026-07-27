@@ -84,6 +84,11 @@ import {
 } from "@/components/chat/standalone/hooks/use-chat-window-events";
 import type { ChatSendOptions, ContentBlock, Message } from "@/lib/chat/types";
 import { connectRequestBlock } from "@/lib/chat/connect-card";
+import {
+  agentActionMessage,
+  parseAgentActionRequest,
+  stripAgentActionBlocks,
+} from "@/lib/chat/agent-action-card";
 import { useChatStore } from "@/lib/stores/chat-store";
 import { AGENT_TOPICS, type AgentEventEnvelope } from "@/lib/events/types";
 import { listenTyped, TAURI_EVENTS } from "@/lib/events/tauri-events";
@@ -95,14 +100,6 @@ import { localFetch } from "@/lib/api";
 const APP_SUGGESTION_LIMIT = 10;
 const TAG_SUGGESTION_LIMIT = 10;
 const STREAM_RENDER_THROTTLE_MS = 80;
-
-function agentActionTitle(rawTitle: string, actionKind: "permission" | "auth"): string {
-  const prefix = `acp:${actionKind}:`;
-  const suffix = rawTitle.slice(prefix.length).trim();
-  if (!suffix) return actionKind === "auth" ? "sign in to continue" : "permission needed";
-  const humanized = suffix.replace(/[_-]+/g, " ").replace(/\s+/g, " ");
-  return humanized.charAt(0).toUpperCase() + humanized.slice(1);
-}
 
 const STATIC_MENTION_SUGGESTIONS: MentionSuggestion[] = [
   { tag: "@today", description: "today's activity", category: "time" },
@@ -1063,17 +1060,7 @@ export function StandaloneChat({
 
   const removeAgentActionByRequestId = useCallback((requestId: string, sessionId: string) => {
     const stripRequest = (rows: Message[]) =>
-      rows.flatMap((message) => {
-        const blocks = message.contentBlocks;
-        if (!blocks?.some((block) => block.type === "agent_action" && block.requestId === requestId)) {
-          return [message];
-        }
-        const nextBlocks = blocks.filter(
-          (block) => block.type !== "agent_action" || block.requestId !== requestId,
-        );
-        if (!message.content.trim() && nextBlocks.length === 0) return [];
-        return [{ ...message, contentBlocks: nextBlocks }];
-      });
+      stripAgentActionBlocks(rows, (block) => block.requestId === requestId);
     setMessages(stripRequest);
     // Auth prompts live in the sign-in dialog, not the message list — clear it
     // too when this request is answered/withdrawn.
@@ -1084,31 +1071,11 @@ export function StandaloneChat({
   }, [setMessages]);
 
   const removeAgentActionsForSession = useCallback((sessionId: string) => {
-    const hasActionForSession = (rows: Message[]) =>
-      rows.some((message) =>
-        message.contentBlocks?.some(
-          (block) => block.type === "agent_action" && block.sessionId === sessionId,
-        ),
-      );
-    // Runs on every turn end; the common case has no agent_action block. Return
-    // the same array reference when there's nothing to strip so React and the
-    // store both bail out of a full-transcript rebuild + re-render.
-    const stripSession = (rows: Message[]) => {
-      if (!hasActionForSession(rows)) return rows;
-      return rows.flatMap((message) => {
-        const blocks = message.contentBlocks;
-        if (!blocks?.some(
-          (block) => block.type === "agent_action" && block.sessionId === sessionId,
-        )) {
-          return [message];
-        }
-        const nextBlocks = blocks.filter(
-          (block) => block.type !== "agent_action" || block.sessionId !== sessionId,
-        );
-        if (!message.content.trim() && nextBlocks.length === 0) return [];
-        return [{ ...message, contentBlocks: nextBlocks }];
-      });
-    };
+    // Runs on every turn end; the common case has no agent_action block.
+    // stripAgentActionBlocks returns the same array reference when nothing
+    // matches, so React and the store both bail out of a rebuild + re-render.
+    const stripSession = (rows: Message[]) =>
+      stripAgentActionBlocks(rows, (block) => block.sessionId === sessionId);
     setMessages(stripSession);
     // acp_authenticated / acp_fatal / acp_auth_cancelled clear the session's
     // actions — dismiss any open sign-in dialog for it as well.
@@ -1347,34 +1314,13 @@ export function StandaloneChat({
       removeAgentActionsForSession(sessionId);
       return false;
     }
-    if (inner.type !== "extension_ui_request" || inner.method !== "select") return false;
-
-    const rawTitle = typeof inner.title === "string" ? inner.title : "";
-    const actionKind = rawTitle.startsWith("acp:permission:")
-      ? "permission"
-      : rawTitle.startsWith("acp:auth:")
-        ? "auth"
-        : null;
-    if (!actionKind) return false;
-
-    const requestId = typeof inner.id === "string" ? inner.id : "";
-    if (!requestId) return true;
+    // Shared parser (same as the background router) so a foreground- and a
+    // background-received prompt normalize identically.
+    const parsed = parseAgentActionRequest(inner);
+    if (!parsed) return false;
+    const { actionKind, requestId, title, message: messageText, options } = parsed;
     const requestKey = `${sessionId}:${requestId}`;
     if (answeredAgentRequestIdsRef.current.has(requestKey)) return true;
-
-    const options = Array.isArray(inner.options)
-      ? inner.options.flatMap((candidate) => {
-          if (!candidate || typeof candidate !== "object") return [];
-          const option = candidate as Record<string, unknown>;
-          if (typeof option.optionId !== "string" || typeof option.name !== "string") return [];
-          return [{
-            optionId: option.optionId,
-            name: option.name,
-            kind: typeof option.kind === "string" ? option.kind : undefined,
-          }];
-        })
-      : [];
-    const messageText = typeof inner.message === "string" ? inner.message : undefined;
 
     // Sign-in prompts go to the unified sign-in dialog, not an inline card, so
     // every ACP auth (CLI login and in-protocol method selection) looks the
@@ -1388,28 +1334,14 @@ export function StandaloneChat({
         agentId: activePresetRef.current?.acpAgent?.id,
         requestId,
         sessionId,
-        title: agentActionTitle(rawTitle, actionKind),
+        title,
         message: messageText,
         options,
       });
       return true;
     }
 
-    const message: Message = {
-      id: `agent-action-${requestId}`,
-      role: "assistant",
-      content: "",
-      timestamp: Date.now(),
-      contentBlocks: [{
-        type: "agent_action",
-        actionKind,
-        requestId,
-        sessionId,
-        title: agentActionTitle(rawTitle, actionKind),
-        message: messageText,
-        options,
-      }],
-    };
+    const message: Message = agentActionMessage(parsed, sessionId);
 
     setMessages((prev) => {
       const alreadyVisible = prev.some((row) =>

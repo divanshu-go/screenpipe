@@ -432,7 +432,7 @@ describe("pi-event-router: background ACP action requests", () => {
         actionKind: "permission",
         requestId: "permission-1",
         sessionId: "A",
-        title: "allow terminal command?",
+        title: "Allow terminal command?",
         message: "The agent wants to run a command.",
         options: [
           { optionId: "allow_once", name: "Allow once", kind: "allow_once" },
@@ -464,7 +464,7 @@ describe("pi-event-router: background ACP action requests", () => {
         actionKind: "auth",
         requestId: "auth-1",
         sessionId: "fresh-acp",
-        title: "sign in to Claude Code",
+        title: "Sign in to Claude Code",
       }),
     ]);
   });
