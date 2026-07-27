@@ -245,6 +245,11 @@ async checkPermission(permission: OSPermission) : Promise<OSPermissionStatus> {
  * clicked anything. It must use preflight directly: the broader core Tauri
  * check may perform a real capture probe in debug builds, which macOS treats
  * as a permission request.
+ *
+ * It honors the engine's enumeration verdict for the same reason
+ * `do_permissions_check` does — otherwise onboarding renders screen recording
+ * green in the exact lapsed-grant state where the permission banner and the
+ * recovery window say denied.
  */
 async checkScreenRecordingPermission() : Promise<OSPermissionStatus> {
     return await TAURI_INVOKE("check_screen_recording_permission");
@@ -1121,6 +1126,14 @@ async livetextSetGuardRect(key: string, x: number, y: number, w: number, h: numb
 async livetextUpdatePosition(frameId: string, x: number, y: number, w: number, h: number) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("livetext_update_position", { frameId, x, y, w, h }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async loadBrainViewCanvas(viewId: string) : Promise<Result<BrainViewCanvasDocument | null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("load_brain_view_canvas", { viewId }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -2008,6 +2021,14 @@ async saveBrainView(request: SaveBrainViewRequest) : Promise<Result<BrainViewDef
     else return { status: "error", error: e  as any };
 }
 },
+async saveBrainViewCanvas(request: SaveBrainViewCanvasRequest) : Promise<Result<BrainViewCanvasDocument, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("save_brain_view_canvas", { request }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Save the enterprise license key to `~/.screenpipe/enterprise.json`.
  * Used by the in-app prompt when enterprise.json is not deployed via MDM.
@@ -2609,8 +2630,16 @@ error: string | null;
  */
 sinceEpochSecs: number }
 export type BrainViewBinding = { pipeName: string }
+export type BrainViewCanvasArrow = { id: string; fromId: string; toId: string; label: string | null }
+export type BrainViewCanvasBlock = { slotId: string; x: number; y: number; width: number; height: number }
+export type BrainViewCanvasDocument = { schema: string; viewId: string; revision: number; mode: BrainViewDisplayMode; viewport: BrainViewCanvasViewport; blocks: BrainViewCanvasBlock[]; notes: BrainViewCanvasNote[]; arrows: BrainViewCanvasArrow[]; strokes: BrainViewCanvasStroke[]; updatedAt: string }
+export type BrainViewCanvasNote = { id: string; text: string; x: number; y: number; width: number; height: number }
+export type BrainViewCanvasPoint = { x: number; y: number }
+export type BrainViewCanvasStroke = { id: string; points: BrainViewCanvasPoint[] }
+export type BrainViewCanvasViewport = { x: number; y: number; zoom: number }
 export type BrainViewComponent = "metric.v1" | "list.v1" | "bar-chart.v1" | "line-chart.v1" | "table.v1" | "timeline.v1" | "markdown.v1"
 export type BrainViewDefinition = { id: string; title: string; revision: number; timeRange: BrainViewTimeRange; periodPolicy: BrainViewPeriodPolicy; slots: BrainViewSlot[]; createdAt: string; updatedAt: string }
+export type BrainViewDisplayMode = "dashboard" | "canvas"
 export type BrainViewEvidenceRef = { eventId: number | null; frameId: number | null; transcriptionId: number | null; ts: string | null; deviceId: string | null }
 export type BrainViewFeedback = { rating: BrainViewFeedbackRating; artifactOutputId: number; artifactVersion: number; correction: string | null; createdAt: string }
 export type BrainViewFeedbackRating = "up" | "down"
@@ -2876,6 +2905,7 @@ export type RemoteSyncConfig = { host: string; port: number; user: string; key_p
  * Result of a sync operation.
  */
 export type RemoteSyncResult = { ok: boolean; files_transferred: number; bytes_transferred: number; error: string | null }
+export type SaveBrainViewCanvasRequest = { viewId: string; expectedRevision: number | null; mode: BrainViewDisplayMode; viewport: BrainViewCanvasViewport; blocks: BrainViewCanvasBlock[]; notes: BrainViewCanvasNote[]; arrows: BrainViewCanvasArrow[]; strokes: BrainViewCanvasStroke[] }
 export type SaveBrainViewRequest = { id: string; title: string; expectedRevision: number | null; timeRange: BrainViewTimeRange; periodPolicy: BrainViewPeriodPolicy; slots: BrainViewSlotInput[] }
 /**
  * A single schedule rule: a day-of-week + time range + what to record.
