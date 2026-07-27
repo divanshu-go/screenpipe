@@ -48,48 +48,74 @@ const VISUAL_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 /// a synchronous WindowServer IPC that must never run unbounded on the loop).
 const EXCLUSION_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Last successfully resolved exclusion ids, shared across capture loops.
-/// Fallback when a refresh times out: the persistent SCK stream still has the
-/// previous filter applied at the OS level, so reusing the last-known ids
-/// keeps existing exclusions intact. A window opened *during* a WindowServer
-/// wedge is excluded on the first refresh after recovery — the same exposure
-/// window the 3s refresh cadence already has, just extended for the wedge's
-/// duration (when SCK is typically frozen and delivering no new pixels
-/// anyway).
-static LAST_EXCLUDED_IDS: OnceLock<Mutex<Vec<u32>>> = OnceLock::new();
+/// A storage capture may reuse a cached exclusion set at most this old when
+/// a live refresh can't complete in time. Beyond this, the exclusion state
+/// counts as UNKNOWN and the frame's pixels are skipped (fail closed) rather
+/// than risking storage of a window the user configured to ignore.
+const EXCLUSION_STORAGE_MAX_STALENESS: Duration = Duration::from_secs(60);
 
-/// Resolve the current SCK exclusion ids off the loop thread, bounded.
-///
-/// Runs `get_excluded_sck_window_ids` (WindowServer IPC) in `spawn_blocking`
-/// so the capture loop keeps iterating — and its idle-capture heartbeat keeps
-/// ticking — even when WindowServer stalls. Falls back to the last successful
-/// result on timeout.
-async fn bounded_excluded_sck_window_ids(window_filters: &WindowFilters) -> Vec<u32> {
-    let cache = LAST_EXCLUDED_IDS.get_or_init(|| Mutex::new(Vec::new()));
+/// Last successfully resolved exclusion ids + when that refresh completed.
+/// `None` timestamp = never refreshed successfully (a cold cache is NOT
+/// "last known good" — it must never satisfy a storage capture).
+struct ExclusionCache {
+    ids: Vec<u32>,
+    refreshed_at: Option<Instant>,
+}
+
+static EXCLUSION_CACHE: OnceLock<Mutex<ExclusionCache>> = OnceLock::new();
+
+/// Single-flight guard: while one (possibly WindowServer-wedged) refresh is
+/// in flight, no further blocking tasks are spawned. The flag is cleared by
+/// the blocking closure itself when it eventually completes, so a stall can
+/// pin at most ONE tokio blocking-pool thread instead of accumulating one
+/// per capture tick until the pool (512) starves.
+static EXCLUSION_REFRESH_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
+fn exclusion_cache() -> &'static Mutex<ExclusionCache> {
+    EXCLUSION_CACHE.get_or_init(|| {
+        Mutex::new(ExclusionCache {
+            ids: Vec::new(),
+            refreshed_at: None,
+        })
+    })
+}
+
+/// Kick (or join) one bounded exclusion refresh. Returns fresh ids when the
+/// refresh completed within `EXCLUSION_REFRESH_TIMEOUT`, `None` otherwise
+/// (in flight elsewhere, timed out, or task failure). The blocking closure
+/// always writes the cache and clears the in-flight flag on completion, even
+/// after its awaiting caller gave up.
+async fn refresh_excluded_sck_window_ids(window_filters: &WindowFilters) -> Option<Vec<u32>> {
+    if EXCLUSION_REFRESH_IN_FLIGHT.swap(true, Ordering::AcqRel) {
+        // A refresh (possibly stuck in CGWindowListCopyWindowInfo) is already
+        // running; don't pile another blocked thread behind it.
+        return None;
+    }
+
     let filters = window_filters.clone();
-    let refreshed = tokio::time::timeout(
-        EXCLUSION_REFRESH_TIMEOUT,
-        tokio::task::spawn_blocking(move || {
-            let mut ids = get_excluded_sck_window_ids(&filters);
-            ids.sort_unstable();
-            ids.dedup();
-            ids
-        }),
-    )
-    .await;
-
-    match refreshed {
-        Ok(Ok(ids)) => {
-            *cache.lock().unwrap_or_else(|e| e.into_inner()) = ids.clone();
-            ids
+    let handle = tokio::task::spawn_blocking(move || {
+        let mut ids = get_excluded_sck_window_ids(&filters);
+        ids.sort_unstable();
+        ids.dedup();
+        {
+            let mut cache = exclusion_cache().lock().unwrap_or_else(|e| e.into_inner());
+            cache.ids = ids.clone();
+            cache.refreshed_at = Some(Instant::now());
         }
+        EXCLUSION_REFRESH_IN_FLIGHT.store(false, Ordering::Release);
+        ids
+    });
+
+    match tokio::time::timeout(EXCLUSION_REFRESH_TIMEOUT, handle).await {
+        Ok(Ok(ids)) => Some(ids),
         Ok(Err(join_err)) => {
-            warn!(
-                "window exclusion refresh task failed ({join_err}); reusing last-known exclusions"
-            );
-            cache.lock().unwrap_or_else(|e| e.into_inner()).clone()
+            // The task never ran its closure tail — clear the flag here.
+            EXCLUSION_REFRESH_IN_FLIGHT.store(false, Ordering::Release);
+            warn!("window exclusion refresh task failed ({join_err})");
+            None
         }
         Err(_elapsed) => {
+            // Abandoned but still running; IT clears the flag on completion.
             // Throttle: WindowServer stalls fire this every capture tick.
             static LAST_TIMEOUT_LOG: AtomicU64 = AtomicU64::new(0);
             let now_secs = std::time::SystemTime::now()
@@ -100,12 +126,58 @@ async fn bounded_excluded_sck_window_ids(window_filters: &WindowFilters) -> Vec<
             if now_secs.saturating_sub(prev) >= 60 {
                 LAST_TIMEOUT_LOG.store(now_secs, Ordering::Relaxed);
                 warn!(
-                    "window exclusion refresh timed out after {:?} (WindowServer unresponsive); reusing last-known exclusions",
+                    "window exclusion refresh did not complete within {:?} (WindowServer unresponsive)",
                     EXCLUSION_REFRESH_TIMEOUT
                 );
             }
-            cache.lock().unwrap_or_else(|e| e.into_inner()).clone()
+            None
         }
+    }
+}
+
+/// Exclusion ids for the visual-change PROBE (frame diffing only — nothing is
+/// stored). Best effort: fresh ids when available, cached ids of any age
+/// otherwise. Over-inclusive probe pixels merely risk a spurious
+/// visual-change trigger; the storage capture applies its own stricter rule.
+async fn probe_excluded_sck_window_ids(window_filters: &WindowFilters) -> Vec<u32> {
+    if window_filters.is_empty() {
+        return Vec::new();
+    }
+    if let Some(ids) = refresh_excluded_sck_window_ids(window_filters).await {
+        return ids;
+    }
+    exclusion_cache()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .ids
+        .clone()
+}
+
+/// Exclusion ids for a STORAGE capture. Fail closed: `None` means the current
+/// exclusion state is unknown (no successful refresh within
+/// `EXCLUSION_STORAGE_MAX_STALENESS`) while exclusions ARE configured — the
+/// caller must skip the frame's pixels rather than store a frame that may
+/// contain a window the user asked to hide. Pre-fix behavior stored nothing
+/// during a WindowServer stall (the loop was frozen); this preserves that
+/// privacy property without freezing the loop.
+async fn storage_excluded_sck_window_ids(window_filters: &WindowFilters) -> Option<Vec<u32>> {
+    if window_filters.is_empty() {
+        return Some(Vec::new());
+    }
+    if let Some(ids) = refresh_excluded_sck_window_ids(window_filters).await {
+        return Some(ids);
+    }
+    let cache = exclusion_cache().lock().unwrap_or_else(|e| e.into_inner());
+    cache_ids_if_fresh(&cache, EXCLUSION_STORAGE_MAX_STALENESS)
+}
+
+/// Storage-tier cache rule: only a cache with a SUCCESSFUL refresh inside the
+/// staleness window may back a stored frame. A cold cache (never refreshed)
+/// is not "last known good" and must never satisfy a storage capture.
+fn cache_ids_if_fresh(cache: &ExclusionCache, max_staleness: Duration) -> Option<Vec<u32>> {
+    match cache.refreshed_at {
+        Some(at) if at.elapsed() <= max_staleness => Some(cache.ids.clone()),
+        _ => None,
     }
 }
 
@@ -1573,7 +1645,7 @@ pub async fn event_driven_capture_loop(
             // SCK screenshot may freeze the loop — a wedged probe previously
             // starved the idle-capture heartbeat and produced a false
             // "recording needs help" incident (see VISUAL_PROBE_TIMEOUT).
-            let fresh_ids = bounded_excluded_sck_window_ids(&capture_params.window_filters).await;
+            let fresh_ids = probe_excluded_sck_window_ids(&capture_params.window_filters).await;
             if fresh_ids != cached_excluded_ids {
                 cached_excluded_ids = fresh_ids;
             }
@@ -2509,7 +2581,40 @@ async fn do_capture(
     let captured_at = Utc::now();
     let bypass_capture_throttles = bypasses_capture_throttles(trigger);
 
-    let image = if screenshot_disabled {
+    // Resolve ignored windows to SCK window IDs so ScreenCaptureKit excludes
+    // them from the capture buffer (zero overhead, pixel-perfect). Sorted +
+    // deduped so the persistent stream isn't needlessly recreated when
+    // transient windows (tooltips, popups) cause ordering changes. Bounded
+    // and off-thread: the raw call is a synchronous WindowServer IPC that
+    // would otherwise block this async task in a way the outer
+    // CAPTURE_OPERATION_TIMEOUT cannot preempt. `None` = exclusion state
+    // UNKNOWN while filters are configured: fail closed by skipping this
+    // frame's pixels (like `screenshot_disabled`; the a11y walk continues and
+    // applies its own independent window filtering) rather than storing a
+    // frame that may contain a window the user asked to hide.
+    let storage_exclusions = if screenshot_disabled {
+        Some(Vec::new())
+    } else {
+        storage_excluded_sck_window_ids(&params.window_filters).await
+    };
+    let skip_pixels_for_unknown_exclusions = storage_exclusions.is_none();
+    if skip_pixels_for_unknown_exclusions {
+        static LAST_SKIP_LOG: AtomicU64 = AtomicU64::new(0);
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let prev = LAST_SKIP_LOG.load(Ordering::Relaxed);
+        if now_secs.saturating_sub(prev) >= 60 {
+            LAST_SKIP_LOG.store(now_secs, Ordering::Relaxed);
+            warn!(
+                "monitor {}: window-exclusion state unknown (WindowServer unresponsive); skipping frame pixels until a refresh succeeds",
+                params.monitor_id
+            );
+        }
+    }
+
+    let image = if screenshot_disabled || skip_pixels_for_unknown_exclusions {
         debug!(
             "screenshot capture skipped for monitor {} (trigger={})",
             params.monitor_id,
@@ -2517,14 +2622,7 @@ async fn do_capture(
         );
         image::DynamicImage::new_rgba8(1, 1)
     } else {
-        // Resolve ignored windows to SCK window IDs so ScreenCaptureKit
-        // excludes them from the capture buffer (zero overhead, pixel-perfect).
-        // Sorted + deduped so the persistent stream isn't needlessly recreated
-        // when transient windows (tooltips, popups) cause ordering changes.
-        // Bounded and off-thread: the raw call is a synchronous WindowServer
-        // IPC that would otherwise block this async task in a way the outer
-        // CAPTURE_OPERATION_TIMEOUT cannot preempt.
-        let excluded_ids = bounded_excluded_sck_window_ids(&params.window_filters).await;
+        let excluded_ids = storage_exclusions.unwrap_or_default();
 
         // Take screenshot (with ignored windows excluded at the OS level)
         let (image, capture_dur) = capture_monitor_image(params.monitor, &excluded_ids).await?;
@@ -2546,7 +2644,7 @@ async fn do_capture(
     // write, but still return the image so the frame comparer stays updated
     // (prevents re-triggering on the same bad frame). The caller records the
     // matching telemetry counter from `corrupt`.
-    if !screenshot_disabled {
+    if !screenshot_disabled && !skip_pixels_for_unknown_exclusions {
         if let Some(kind) = frame_corruption(&image) {
             match kind {
                 // Green is the notable, rarer signal — surface it at warn so it
@@ -2951,7 +3049,10 @@ async fn do_capture(
         use_pii_removal: params.use_pii_removal,
         languages: params.languages.to_vec(),
         elements_ref_frame_id,
-        screenshot_disabled,
+        // A frame whose pixels were skipped for unknown exclusion state is
+        // persisted exactly like a screenshot-disabled frame: text pipeline
+        // only, no snapshot written for the 1x1 placeholder.
+        screenshot_disabled: screenshot_disabled || skip_pixels_for_unknown_exclusions,
         in_meeting,
         monitor_hosts_focus,
         focused_window_bounds,
@@ -3908,6 +4009,43 @@ mod tests {
         // Actually, Instant::now() is the creation time, and 0ms have passed
         // so can_capture should be false (0 < 200)
         assert!(!state.can_capture());
+    }
+
+    /// Storage-tier exclusion rule: a cold cache (no successful refresh ever)
+    /// must NEVER back a stored frame — an empty Vec there means "unknown",
+    /// not "no exclusions". Regression for the fail-open found in review.
+    #[test]
+    fn storage_exclusion_cache_cold_or_stale_fails_closed() {
+        let cold = ExclusionCache {
+            ids: Vec::new(),
+            refreshed_at: None,
+        };
+        assert_eq!(cache_ids_if_fresh(&cold, Duration::from_secs(60)), None);
+
+        // Even non-empty ids without a refresh timestamp are unknown-state.
+        let cold_with_ids = ExclusionCache {
+            ids: vec![1, 2],
+            refreshed_at: None,
+        };
+        assert_eq!(
+            cache_ids_if_fresh(&cold_with_ids, Duration::from_secs(60)),
+            None
+        );
+
+        let fresh = ExclusionCache {
+            ids: vec![7],
+            refreshed_at: Some(Instant::now()),
+        };
+        assert_eq!(
+            cache_ids_if_fresh(&fresh, Duration::from_secs(60)),
+            Some(vec![7])
+        );
+
+        let stale = ExclusionCache {
+            ids: vec![7],
+            refreshed_at: Instant::now().checked_sub(Duration::from_secs(120)),
+        };
+        assert_eq!(cache_ids_if_fresh(&stale, Duration::from_secs(60)), None);
     }
 
     #[test]

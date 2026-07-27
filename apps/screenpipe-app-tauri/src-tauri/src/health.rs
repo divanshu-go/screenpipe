@@ -520,8 +520,52 @@ fn vision_frame_flow_stale(health: &HealthCheckResponse) -> bool {
     health.frame_status.as_deref() == Some("stale")
 }
 
+/// Seconds since the last OS-level user input (keyboard/mouse/scroll), where
+/// the platform can answer cheaply. `None` on platforms without a source or
+/// on FFI failure — callers treat unknown as idle, the conservative direction
+/// for an incident detector (longer debounce, never a false incident).
+///
+/// This is the PRIMARY user-presence signal for the stale tier: it needs no
+/// engine cooperation and reflects real input even when UI monitoring is
+/// disabled.
+fn seconds_since_last_os_input() -> Option<f64> {
+    #[cfg(target_os = "macos")]
+    {
+        // kCGEventSourceStateHIDSystemState = 1; u32::MAX = kCGAnyInputEventType.
+        #[link(name = "CoreGraphics", kind = "framework")]
+        extern "C" {
+            fn CGEventSourceSecondsSinceLastEventType(state_id: i32, event_type: u32) -> f64;
+        }
+        let secs = unsafe { CGEventSourceSecondsSinceLastEventType(1, u32::MAX) };
+        (secs.is_finite() && secs >= 0.0).then_some(secs)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::System::SystemInformation::GetTickCount;
+        use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
+        let mut info = LASTINPUTINFO {
+            cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
+            dwTime: 0,
+        };
+        if !unsafe { GetLastInputInfo(&mut info) }.as_bool() {
+            return None;
+        }
+        let now_ticks = unsafe { GetTickCount() };
+        Some(f64::from(now_ticks.wrapping_sub(info.dwTime)) / 1000.0)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        None
+    }
+}
+
 /// True when the engine saw UI activity (keystrokes, clicks, focus events)
 /// within `USER_ACTIVITY_FRESH_WINDOW` of `now`.
+///
+/// Secondary presence signal only: today's engine `/health` never emits
+/// `last_ui_timestamp` (the field deserializes to `None`), so this returns
+/// false until a future engine adds it. Kept so an engine-side emitter can
+/// tighten the tier without another app change.
 ///
 /// Unparseable or missing timestamps count as *idle*: the conservative
 /// direction for an incident detector is the longer debounce (no false
@@ -539,6 +583,30 @@ fn user_recently_active(
     let age = now.signed_duration_since(parsed.with_timezone(&chrono::Utc));
     age >= chrono::Duration::zero()
         && age <= chrono::Duration::from_std(USER_ACTIVITY_FRESH_WINDOW).unwrap_or_default()
+}
+
+/// Pure combination of the two presence signals; see the thin wrapper below.
+fn user_present_from(
+    os_input_idle_secs: Option<f64>,
+    last_ui_timestamp: Option<&str>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    if let Some(idle) = os_input_idle_secs {
+        if idle <= USER_ACTIVITY_FRESH_WINDOW.as_secs_f64() {
+            return true;
+        }
+    }
+    user_recently_active(last_ui_timestamp, now)
+}
+
+/// User presence for the stale tier: OS input idle time first (works
+/// everywhere, no engine dependency), engine-reported UI activity second.
+fn user_present_for_stale_tier(last_ui_timestamp: Option<&str>) -> bool {
+    user_present_from(
+        seconds_since_last_os_input(),
+        last_ui_timestamp,
+        chrono::Utc::now(),
+    )
 }
 
 /// Debounce threshold for the bare-"stale" signal, tiered by user presence.
@@ -1156,6 +1224,14 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
     // presence, so an exact `counter == threshold` firing condition would
     // never match when the user returns mid-run and the threshold drops.
     let mut vision_stale_notified = false;
+    // One notification per hard-failure run (see the `>=` + latch rationale
+    // at the notification site).
+    let mut vision_hard_notified = false;
+    // Whether the bare-"stale" run has crossed its user-presence tier. Loop-
+    // persistent (like the hard counter's confirmation) so a transient health
+    // request failure mid-incident can't flap the overlay with neutral ticks;
+    // updated on healthy-response ticks, cleared wherever the counter resets.
+    let mut vision_stale_confirmed = false;
     let mut vision_progress = VisionProgressTracker::default();
     let mut last_audio_notification: Option<Instant> = None;
     let mut last_vision_notification: Option<Instant> = None;
@@ -1536,6 +1612,8 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                         consecutive_vision_stall = 0;
                         consecutive_vision_stale = 0;
                         vision_stale_notified = false;
+                        vision_hard_notified = false;
+                        vision_stale_confirmed = false;
                     }
                     last_known_spawn_epoch = current_epoch;
                 }
@@ -1565,9 +1643,6 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                 Ok(health) => health_confirms_recording(health),
                 Err(_) => false,
             };
-            // Whether the bare-"stale" run crossed its user-presence tier this
-            // tick; feeds the overlay decision below alongside hard stalls.
-            let mut vision_stale_confirmed = false;
             if should_track_capture_stalls(status, start_time.elapsed(), in_restart_grace) {
                 if let Ok(ref health) = health_result {
                     // Only raw capture health drives the recording overlay.
@@ -1595,6 +1670,7 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                         &mut consecutive_vision_stall,
                         failure_signals.vision && !vision_excused,
                     ) {
+                        vision_hard_notified = false;
                         if stall_confirmed(recovered_after) {
                             info!(
                                 "vision capture recovered after {} stale checks",
@@ -1619,10 +1695,8 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                             );
                         }
                     }
-                    let user_active = user_recently_active(
-                        health.last_ui_timestamp.as_deref(),
-                        chrono::Utc::now(),
-                    );
+                    let user_active =
+                        user_present_for_stale_tier(health.last_ui_timestamp.as_deref());
                     vision_stale_confirmed =
                         consecutive_vision_stale >= stale_stall_threshold(user_active);
 
@@ -1637,6 +1711,7 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                         consecutive_vision_stall = 0;
                         consecutive_vision_stale = 0;
                         vision_stale_notified = false;
+                        vision_hard_notified = false;
                         vision_stale_confirmed = false;
                         last_audio_notification = None;
                         last_vision_notification = None;
@@ -1668,13 +1743,19 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                         let _ = show_capture_stall_notification(&app, "audio").await;
                     }
 
+                    // Hard vision path uses a per-run latch with `>=` rather
+                    // than exact counter equality: the stale tier below shares
+                    // the vision cooldown stamp, and an exact-equality check
+                    // whose single qualifying tick lands inside that cooldown
+                    // would lose its notification for the entire run.
                     let vision_cooldown_ok =
                         notification_cooldown_ok(last_vision_notification, now_instant);
-                    if should_notify_capture_stall(
-                        consecutive_vision_stall,
-                        notifications_enabled,
-                        vision_cooldown_ok,
-                    ) {
+                    if notifications_enabled
+                        && vision_cooldown_ok
+                        && stall_confirmed(consecutive_vision_stall)
+                        && !vision_hard_notified
+                    {
+                        vision_hard_notified = true;
                         let reason = if vision_db_stalled {
                             "db write stall"
                         } else {
@@ -1682,7 +1763,7 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                         };
                         warn!(
                             "vision {} for {}s, showing restart notification",
-                            reason, CAPTURE_STALL_THRESHOLD
+                            reason, consecutive_vision_stall
                         );
                         last_vision_notification = Some(now_instant);
                         let _ = show_capture_stall_notification(&app, "screen").await;
@@ -1712,6 +1793,8 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                 consecutive_vision_stall = 0;
                 consecutive_vision_stale = 0;
                 vision_stale_notified = false;
+                vision_hard_notified = false;
+                vision_stale_confirmed = false;
             }
 
             // ── Recording-health overlay (issue #5127) ──
@@ -2399,6 +2482,40 @@ mod tests {
             "unparseable timestamps fail toward the idle tier"
         );
         assert!(!user_recently_active(None, now));
+    }
+
+    /// OS input idle is the PRIMARY presence signal (the engine `/health`
+    /// response does not emit `last_ui_timestamp` today, so the engine-side
+    /// path alone would leave the attended tier dead).
+    #[test]
+    fn user_presence_prefers_os_input_idle_and_fails_toward_idle() {
+        let now = chrono::Utc::now();
+        let window = USER_ACTIVITY_FRESH_WINDOW.as_secs_f64();
+
+        // Fresh OS input alone proves presence, regardless of the engine field.
+        assert!(user_present_from(Some(5.0), None, now));
+        assert!(
+            user_present_from(Some(window), None, now),
+            "boundary inclusive"
+        );
+        // Stale OS input with no engine signal → idle tier.
+        assert!(!user_present_from(Some(window + 1.0), None, now));
+        // No OS source (Linux / FFI failure) + no engine signal → idle tier.
+        assert!(!user_present_from(None, None, now));
+        // Engine signal remains a secondary path when the OS source is absent.
+        let fresh = (now - chrono::Duration::seconds(30)).to_rfc3339();
+        assert!(user_present_from(None, Some(&fresh), now));
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[test]
+    fn os_input_idle_source_returns_sane_values() {
+        // Smoke: the FFI must return a finite non-negative idle time (or None
+        // on failure) — never panic, never a negative/NaN that could flip the
+        // tier unpredictably.
+        if let Some(idle) = seconds_since_last_os_input() {
+            assert!(idle.is_finite() && idle >= 0.0, "idle={idle}");
+        }
     }
 
     /// The incident that motivated the tier: engine wedged on an idle machine
