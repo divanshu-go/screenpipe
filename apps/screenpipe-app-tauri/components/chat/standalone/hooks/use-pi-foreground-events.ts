@@ -1128,6 +1128,9 @@ export function usePiForegroundEvents({
       // Ensure the bus's Tauri listener is up before any consumer
       // (router, panel, pipes hook) starts registering. Idempotent.
       await mountAgentEventBus();
+      // If the panel unmounted during the await, cleanup already ran (with
+      // nothing yet registered), so register nothing to leak.
+      if (!mounted) return;
 
       // Termination — broadcast event, filter by current session id.
       // Replaces the prior `listen("pi_terminated", ...)`. The bus
@@ -1263,12 +1266,16 @@ export function usePiForegroundEvents({
           }
         }, delay);
       }));
-      unlistenLog = await registerPiLogListener({
+      const offLog = await registerPiLogListener({
         isMounted: () => mounted,
         cancelStreamingMessageRender,
         piMessageIdRef,
         setMessages,
       });
+      // Release immediately if the panel unmounted while this was resolving;
+      // otherwise hand it to cleanup.
+      if (!mounted) offLog?.();
+      else unlistenLog = offLog;
     };
 
     setup();
@@ -1280,7 +1287,10 @@ export function usePiForegroundEvents({
       piSessionSyncedRef,
       setPiInfo,
       syncThinkingLevelAfterStart,
-    }).then(fn => { unlistenReauth = fn; });
+    }).then((fn) => {
+      if (!mounted) fn?.();
+      else unlistenReauth = fn;
+    });
 
     return () => {
       mounted = false;
