@@ -7,11 +7,13 @@ import {
   completeOnboardingLiveViewActivation,
   consumeOnboardingBrainHandoff,
   getOnboardingLiveViewActivation,
+  getHomeFocusCategory,
   markOnboardingLiveViewFirstResult,
   markOnboardingLiveViewSetupNeedsRetry,
   markOnboardingLiveViewSetupReady,
   removeOnboardingLiveViewActivation,
   selectedLiveViewDashboardId,
+  setHomeFocusCategory,
   setOnboardingLiveViewGuideStep,
   startOnboardingLiveViewActivation,
 } from "../onboarding-activation";
@@ -46,6 +48,7 @@ describe("onboarding Live View activation", () => {
     });
 
     expect(selectedLiveViewDashboardId()).toBe("first-dashboard-1");
+    expect(getHomeFocusCategory()).toBe("work_memory");
     expect(consumeOnboardingBrainHandoff()).toBe("first-dashboard-1");
     expect(consumeOnboardingBrainHandoff()).toBeNull();
     expect(getOnboardingLiveViewActivation("first-dashboard-1")).toEqual(
@@ -58,6 +61,19 @@ describe("onboarding Live View activation", () => {
         completedAt: null,
       }),
     );
+  });
+
+  it("lets General Settings override the onboarding focus", () => {
+    startOnboardingLiveViewActivation("first-dashboard-4", "work_memory");
+    setHomeFocusCategory("process_automation");
+
+    expect(getHomeFocusCategory()).toBe("process_automation");
+  });
+
+  it("uses the default order for a custom onboarding goal", () => {
+    startOnboardingLiveViewActivation("first-dashboard-5", "custom");
+
+    expect(getHomeFocusCategory()).toBe("default");
   });
 
   it("keeps setup recovery and guide progress on the same activation", () => {

@@ -5,7 +5,14 @@
 
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { ArrowRight, CalendarDays, Pin, Zap } from "lucide-react";
+import {
+  ArrowRight,
+  CalendarDays,
+  Clock3,
+  ListTodo,
+  Pin,
+  Zap,
+} from "lucide-react";
 import posthog from "posthog-js";
 import { PipeAIIconLarge } from "@/components/pipe-ai-icon";
 import { type TemplatePipe } from "@/lib/hooks/use-pipes";
@@ -21,6 +28,12 @@ import {
   homeCardImpressionProperties,
 } from "@/lib/chat/response-feedback";
 import type { ChatEntryCard, ChatEntrySource } from "@/lib/chat/types";
+import {
+  getHomeFocusCategory,
+  HOME_FOCUS_CHANGED_EVENT,
+  HOME_FOCUS_STORAGE_KEY,
+  type HomeFocusCategory,
+} from "@/lib/live-views/onboarding-activation";
 import { CustomSummaryBuilder } from "./custom-summary-builder";
 
 interface SummaryCardsProps {
@@ -46,6 +59,41 @@ export interface ConnectionSetupSuggestion {
   icon: string;
 }
 
+const HOME_CARD_SLUGS_BY_FOCUS: Record<HomeFocusCategory, string[]> = {
+  default: ["automate-my-work", "day-recap", "time-breakdown", "missed-todos"],
+  process_automation: [
+    "automate-my-work",
+    "day-recap",
+    "missed-todos",
+    "time-breakdown",
+  ],
+  work_memory: ["day-recap", "missed-todos", "time-breakdown", "automate-my-work"],
+  meeting_follow_through: [
+    "missed-todos",
+    "day-recap",
+    "automate-my-work",
+    "time-breakdown",
+  ],
+  work_patterns: [
+    "time-breakdown",
+    "day-recap",
+    "automate-my-work",
+    "missed-todos",
+  ],
+};
+
+export function homeCardSlugsForFocus(category: HomeFocusCategory): string[] {
+  return HOME_CARD_SLUGS_BY_FOCUS[category];
+}
+
+function HomeCardIcon({ slug, className }: { slug: string; className: string }) {
+  const props = { className, strokeWidth: 1.5 };
+  if (slug === "day-recap") return <CalendarDays {...props} />;
+  if (slug === "time-breakdown") return <Clock3 {...props} />;
+  if (slug === "missed-todos") return <ListTodo {...props} />;
+  return <Zap {...props} />;
+}
+
 // ─── Main component ──────────────────────────────────────────────────────────
 
 export function SummaryCards({
@@ -61,6 +109,22 @@ export function SummaryCards({
   const [showAll, setShowAll] = useState(false);
   const [showBuilder, setShowBuilder] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<CustomTemplate | null>(null);
+  const [homeFocus, setHomeFocus] = useState<HomeFocusCategory>(() =>
+    getHomeFocusCategory(),
+  );
+
+  useEffect(() => {
+    const refresh = () => setHomeFocus(getHomeFocusCategory());
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === HOME_FOCUS_STORAGE_KEY) refresh();
+    };
+    window.addEventListener(HOME_FOCUS_CHANGED_EVENT, refresh);
+    window.addEventListener("storage", handleStorage);
+    return () => {
+      window.removeEventListener(HOME_FOCUS_CHANGED_EVENT, refresh);
+      window.removeEventListener("storage", handleStorage);
+    };
+  }, []);
 
   // Curated home grid — kept deliberately small to reduce cognitive load.
   // Order matters. Definitions come from the app bundle (FALLBACK_TEMPLATES)
@@ -69,37 +133,29 @@ export function SummaryCards({
   // (install_builtin_pipes never overwrites an existing pipe.md). The discover
   // tier is intentionally removed — the metrics showed it earned ~9% of clicks
   // across 6 cards while doubling the visible surface.
-  const HOME_CARD_SLUGS = ["automate-my-work", "day-recap", "time-breakdown", "missed-todos"];
+  const homeCardSlugs = homeCardSlugsForFocus(homeFocus);
   const byName = new Map<string, TemplatePipe>();
   for (const t of templatePipes) byName.set(t.name, t);
   for (const t of FALLBACK_TEMPLATES) byName.set(t.name, t);
-  const featured = HOME_CARD_SLUGS.map((slug) => byName.get(slug)).filter(
+  const featured = homeCardSlugs.map((slug) => byName.get(slug)).filter(
     (t): t is TemplatePipe => Boolean(t),
   );
   const discover: TemplatePipe[] = [];
 
+  const impressionSignature = featured.map((pipe) => pipe.name).join(":");
   useEffect(() => {
-    const impressions: Array<{
-      card: ChatEntryCard;
-      position: number;
-      presentation: "hero" | "secondary" | "quick_action";
-    }> = [
-      { card: "automate_my_work", position: 1, presentation: "hero" },
-      { card: "day_recap", position: 2, presentation: "secondary" },
-      { card: "other_builtin", position: 3, presentation: "quick_action" },
-      { card: "other_builtin", position: 4, presentation: "quick_action" },
-    ];
-    for (const impression of impressions) {
+    const visibleSlugs = impressionSignature.split(":").filter(Boolean);
+    for (const [index, slug] of visibleSlugs.entries()) {
       posthog.capture(
         "home_card_impression",
         homeCardImpressionProperties(
-          impression.card,
-          impression.position,
-          impression.presentation,
+          entryCardForHomeTemplate(slug),
+          index + 1,
+          index === 0 ? "hero" : index === 1 ? "secondary" : "quick_action",
         ),
       );
     }
-  }, []);
+  }, [impressionSignature]);
 
   const handleCardClick = (pipe: TemplatePipe) => {
     const entryCard = entryCardForHomeTemplate(pipe.name);
@@ -142,15 +198,18 @@ export function SummaryCards({
         From everything you&apos;ve seen, said, or heard
       </p>
 
-      {/* Hero card — Automate My Work */}
-      {featured.length > 0 && featured[0].name === "automate-my-work" && (
+      {/* The onboarding goal or General Settings choice determines priority. */}
+      {featured[0] && (
         <button
           data-testid={`summary-card-${featured[0].name}`}
           onClick={() => handleCardClick(featured[0])}
           className="group w-full max-w-lg mb-1.5 text-left px-4 py-3.5 border border-border/40 bg-amber-500/[0.06] dark:bg-amber-400/[0.08] hover:!bg-foreground hover:text-background hover:border-foreground transition-all duration-150 cursor-pointer"
         >
           <div className="flex items-center gap-3">
-            <Zap className="h-5 w-5 shrink-0 text-foreground/70 group-hover:text-background" strokeWidth={1.5} />
+            <HomeCardIcon
+              slug={featured[0].name}
+              className="h-5 w-5 shrink-0 text-foreground/70 group-hover:text-background"
+            />
             <div className="flex-1">
               <div className="text-sm font-semibold group-hover:text-background leading-tight">
                 {featured[0].title}
@@ -164,29 +223,28 @@ export function SummaryCards({
         </button>
       )}
 
-      {/* Day Recap — secondary card */}
-      {featured.find((p) => p.name === "day-recap") && (() => {
-        const dayRecap = featured.find((p) => p.name === "day-recap")!;
-        return (
+      {featured[1] && (
           <button
-            data-testid={`summary-card-${dayRecap.name}`}
-            onClick={() => handleCardClick(dayRecap)}
+            data-testid={`summary-card-${featured[1].name}`}
+            onClick={() => handleCardClick(featured[1])}
             className="group w-full max-w-lg mb-1.5 text-left px-3 py-2.5 border border-border/20 hover:bg-foreground hover:text-background hover:border-foreground transition-all duration-150 cursor-pointer"
           >
             <div className="flex items-center gap-2">
-              <CalendarDays className="h-4 w-4 shrink-0 text-muted-foreground group-hover:text-background" strokeWidth={1.5} />
+              <HomeCardIcon
+                slug={featured[1].name}
+                className="h-4 w-4 shrink-0 text-muted-foreground group-hover:text-background"
+              />
               <div className="flex-1">
                 <div className="text-xs font-medium text-muted-foreground group-hover:text-background leading-tight">
-                  {dayRecap.title}
+                  {featured[1].title}
                 </div>
                 <div className="text-xs text-muted-foreground/60 group-hover:text-background/60 leading-tight mt-0.5">
-                  {dayRecap.description}
+                  {featured[1].description}
                 </div>
               </div>
             </div>
           </button>
-        );
-      })()}
+      )}
 
       {/* ─── Quick action chips ───────────────────────────────────────────── */}
       {/* One wrapping flow in the same 512px column as the cards: built-in
@@ -198,7 +256,7 @@ export function SummaryCards({
           column's edges (brick fill) instead of leaving a ragged right edge. */}
       <div className="w-full max-w-lg mb-4 flex flex-wrap items-center gap-1">
         {/* Template-backed chips (Time Breakdown, Missed To-Dos) */}
-        {featured.filter((p) => p.name === "time-breakdown" || p.name === "missed-todos").map((pipe) => (
+        {featured.slice(2).map((pipe) => (
           <button
             key={pipe.name}
             data-testid={`summary-card-${pipe.name}`}

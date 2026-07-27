@@ -13,7 +13,21 @@ const ACTIVATIONS_STORAGE_KEY =
   "screenpipe.live-view.onboarding-activations.v1";
 const BRAIN_HANDOFF_STORAGE_KEY =
   "screenpipe.live-view.onboarding-brain-handoff.v1";
+export const HOME_FOCUS_STORAGE_KEY = "screenpipe.home.focus.v1";
+export const HOME_FOCUS_CHANGED_EVENT = "screenpipe:home-focus-changed";
 const MAX_STORED_ACTIVATIONS = 12;
+
+export type HomeFocusCategory =
+  | Exclude<OnboardingGoalCategory, "custom">
+  | "default";
+
+const HOME_FOCUS_CATEGORIES = new Set<HomeFocusCategory>([
+  "default",
+  "work_memory",
+  "meeting_follow_through",
+  "work_patterns",
+  "process_automation",
+]);
 
 export type OnboardingLiveViewActivation = {
   viewId: string;
@@ -101,6 +115,48 @@ function writeActivations(activations: ActivationMap): void {
   }
 }
 
+function normalizeHomeFocusCategory(value: unknown): HomeFocusCategory | null {
+  return typeof value === "string" &&
+    HOME_FOCUS_CATEGORIES.has(value as HomeFocusCategory)
+    ? (value as HomeFocusCategory)
+    : null;
+}
+
+export function getHomeFocusCategory(): HomeFocusCategory {
+  if (typeof window === "undefined") return "default";
+  try {
+    const stored = normalizeHomeFocusCategory(
+      window.localStorage.getItem(HOME_FOCUS_STORAGE_KEY),
+    );
+    if (stored) return stored;
+
+    // Migrate existing onboarding activations without reading the free-text goal.
+    const latest = Object.values(readActivations()).sort(
+      (left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt),
+    )[0];
+    return latest && latest.goalCategory !== "custom"
+      ? latest.goalCategory
+      : "default";
+  } catch {
+    return "default";
+  }
+}
+
+export function setHomeFocusCategory(category: HomeFocusCategory): void {
+  if (typeof window === "undefined") return;
+  const normalized = normalizeHomeFocusCategory(category) ?? "default";
+  try {
+    window.localStorage.setItem(HOME_FOCUS_STORAGE_KEY, normalized);
+  } catch {
+    // Personalization is optional; the default card order remains usable.
+  }
+  window.dispatchEvent(
+    new CustomEvent<HomeFocusCategory>(HOME_FOCUS_CHANGED_EVENT, {
+      detail: normalized,
+    }),
+  );
+}
+
 export function rememberSelectedLiveViewDashboard(viewId: string | null): void {
   if (typeof window === "undefined") return;
   try {
@@ -154,6 +210,9 @@ export function startOnboardingLiveViewActivation(
   };
   activations[viewId] = activation;
   writeActivations(activations);
+  setHomeFocusCategory(
+    goalCategory === "custom" ? "default" : goalCategory,
+  );
   rememberSelectedLiveViewDashboard(viewId);
   requestOnboardingBrainHandoff(viewId);
   return activation;
