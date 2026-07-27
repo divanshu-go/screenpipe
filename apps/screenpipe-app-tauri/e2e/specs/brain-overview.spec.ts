@@ -26,6 +26,15 @@ interface BrainView {
   id: string;
 }
 
+interface CanvasDocument {
+  revision: number;
+  mode: "dashboard" | "canvas";
+  blocks: Array<{ slotId: string; x: number; y: number }>;
+  notes: Array<{ id: string; text: string }>;
+  arrows: Array<{ id: string; fromId: string; toId: string }>;
+  strokes: Array<{ id: string }>;
+}
+
 const SUPPORTED_WINDOW_SIZES = [
   { width: 800, height: 600, label: "minimum" },
   { width: 1024, height: 768, label: "compact" },
@@ -45,12 +54,140 @@ async function setCssWindowSize(width: number, height: number) {
   );
 }
 
+async function openHomeWithDiagnostics() {
+  try {
+    await openHomeWindow();
+  } catch (error) {
+    const diagnostic = await browser
+      .execute(() => ({
+        url: window.location.href,
+        title: document.title,
+        text: document.body?.innerText.slice(0, 2_000) ?? "",
+        html: document.body?.innerHTML.slice(0, 2_000) ?? "",
+      }))
+      .catch((executeError) => ({ executeError: String(executeError) }));
+    console.error("Home launch diagnostic", diagnostic);
+    await saveScreenshot("brain-home-launch-failure").catch(() => "");
+    throw error;
+  }
+}
+
+async function clickEmptyCanvasSpace() {
+  const surfaceElement = await waitForTestId(
+    "live-view-canvas-surface",
+    10_000,
+  );
+  await surfaceElement.scrollIntoView({ block: "center", inline: "center" });
+  const point = (await browser.execute(() => {
+    const surface = document.querySelector<HTMLElement>(
+      "[data-testid='live-view-canvas-surface']",
+    );
+    if (!surface) return null;
+    const surfaceRect = surface.getBoundingClientRect();
+    const obstacles = Array.from(
+      surface.querySelectorAll<HTMLElement>(
+        "[data-canvas-node], [data-canvas-toolbar]",
+      ),
+    ).map((element) => element.getBoundingClientRect());
+    const minX = Math.max(surfaceRect.left + 24, 24);
+    const maxX = Math.min(surfaceRect.right - 24, window.innerWidth - 24);
+    const minY = Math.max(surfaceRect.top + 56, 56);
+    const maxY = Math.min(surfaceRect.bottom - 24, window.innerHeight - 24);
+    for (let y = maxY; y >= minY; y -= 40) {
+      for (let x = maxX; x >= minX; x -= 40) {
+        const hit = document.elementFromPoint(x, y);
+        if (!hit || !surface.contains(hit)) continue;
+        const blocked = obstacles.some(
+          (rect) =>
+            x >= rect.left - 8 &&
+            x <= rect.right + 8 &&
+            y >= rect.top - 8 &&
+            y <= rect.bottom + 8,
+        );
+        if (!blocked) {
+          return {
+            x,
+            y,
+            hit: hit.getAttribute("data-testid") ?? hit.tagName,
+          };
+        }
+      }
+    }
+    return null;
+  })) as {
+    x: number;
+    y: number;
+    hit: string;
+  } | null;
+  expect(point).not.toBeNull();
+  console.log("Canvas empty-space click", point);
+  // The macOS Tauri WebDriver emits a legacy mouse click for element.click(),
+  // while the product intentionally uses Pointer Events for pen/touch support.
+  // Dispatch through the real rendered surface so this native-app run exercises
+  // the same React pointer path without reaching into component state.
+  await browser.execute(
+    ({ x, y }) => {
+      const target = document.elementFromPoint(x, y);
+      if (!(target instanceof HTMLElement)) {
+        throw new Error("canvas target is unavailable");
+      }
+      target.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          buttons: 1,
+          clientX: x,
+          clientY: y,
+          isPrimary: true,
+          pointerId: 1,
+          pointerType: "mouse",
+        }),
+      );
+      target.dispatchEvent(
+        new PointerEvent("pointerup", {
+          bubbles: true,
+          button: 0,
+          clientX: x,
+          clientY: y,
+          isPrimary: true,
+          pointerId: 1,
+          pointerType: "mouse",
+        }),
+      );
+    },
+    { x: point!.x, y: point!.y },
+  );
+}
+
+async function pointerPressTestId(testId: string) {
+  await waitForTestId(testId, 10_000);
+  await browser.execute((id) => {
+    const target = document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
+    if (!target) throw new Error(`missing pointer target: ${id}`);
+    const rect = target.getBoundingClientRect();
+    const init: PointerEventInit = {
+      bubbles: true,
+      button: 0,
+      buttons: 1,
+      clientX: rect.left + rect.width / 2,
+      clientY: rect.top + rect.height / 2,
+      isPrimary: true,
+      pointerId: 2,
+      pointerType: "mouse",
+    };
+    target.dispatchEvent(new PointerEvent("pointerdown", init));
+    target.dispatchEvent(
+      new PointerEvent("pointerup", { ...init, buttons: 0 }),
+    );
+  }, testId);
+}
+
 describe("Brain Live Views", function () {
   this.timeout(120_000);
 
   it("creates a starter dashboard on first open", async () => {
     await waitForAppReady();
-    await openHomeWindow();
+    await openHomeWithDiagnostics();
 
     const existingViews = await invokeOrThrow<BrainView[]>("list_brain_views");
     for (const existingView of existingViews) {
@@ -69,10 +206,7 @@ describe("Brain Live Views", function () {
     await brainNav.waitForExist({ timeout: t(10_000) });
     await brainNav.click();
     await waitForTestId("section-brain", 15_000);
-    const selector = await waitForTestId(
-      "overview-dashboard-selector",
-      15_000,
-    );
+    const selector = await waitForTestId("overview-dashboard-selector", 15_000);
     expect(await selector.getValue()).toBe("my-dashboard");
     expect(await selector.getText()).toContain("My dashboard");
 
@@ -86,7 +220,7 @@ describe("Brain Live Views", function () {
 
   it("renders a Pipe-filled Live View template", async () => {
     await waitForAppReady();
-    await openHomeWindow();
+    await openHomeWithDiagnostics();
     const config = await invokeOrThrow<LocalApiConfig>("get_local_api_config");
     const base = `http://127.0.0.1:${config.port}`;
     const headers: Record<string, string> = {
@@ -140,21 +274,22 @@ describe("Brain Live Views", function () {
       },
     ].map((slot) => ({ ...slot, binding: { pipe_name: "e2e-overview-pipe" } }));
 
-    await invokeOrThrow("save_brain_view", {
-      request: {
-        id: "my-overview",
-        title: "How I worked today",
-        expectedRevision: null,
-        timeRange: "today",
-        periodPolicy: {
-          type: "selectable.v1",
-          values: ["today", "24h", "7d", "30d"],
-        },
-        slots: slots.map((slot) => ({
-          ...slot,
-          binding: { pipeName: slot.binding.pipe_name },
-        })),
+    const viewRequest = {
+      id: "my-overview",
+      title: "How I worked today",
+      expectedRevision: null,
+      timeRange: "today",
+      periodPolicy: {
+        type: "selectable.v1",
+        values: ["today", "24h", "7d", "30d"],
       },
+      slots: slots.map((slot) => ({
+        ...slot,
+        binding: { pipeName: slot.binding.pipe_name },
+      })),
+    };
+    await invokeOrThrow("save_brain_view", {
+      request: viewRequest,
     });
     const targetResponse = await fetch(
       `${base}/outputs/targets?pipe=e2e-overview-pipe`,
@@ -351,7 +486,175 @@ describe("Brain Live Views", function () {
     const screenshot = await saveScreenshot("brain-overview-pipe-filled");
     expect(existsSync(screenshot)).toBe(true);
 
-    await customize.click();
+    const canvasMode = await $("[data-testid='overview-mode-canvas']");
+    await canvasMode.click();
+    const canvas = await waitForTestId("live-view-canvas", 10_000);
+    await waitForTestId("canvas-block-focus-time", 10_000);
+    expect(await canvas.getText()).toContain("4.5");
+    expect(await canvas.getText()).toContain("Automation opportunities");
+
+    const moveHandle = await $("[data-testid='canvas-move-focus-time']");
+    await moveHandle.click();
+    await browser.keys(["ArrowRight"]);
+    await browser.waitUntil(
+      async () => {
+        const saved = await invokeOrThrow<CanvasDocument | null>(
+          "load_brain_view_canvas",
+          { viewId: "my-overview" },
+        );
+        const block = saved?.blocks.find(
+          (candidate) => candidate.slotId === "focus-time",
+        );
+        return block?.x === 80 && block.y === 64;
+      },
+      {
+        timeout: t(10_000),
+        interval: 200,
+        timeoutMsg: "React Flow node movement was not durably saved",
+      },
+    );
+
+    const noteTool = await $("[data-testid='canvas-tool-note']");
+    await noteTool.click();
+    expect(await noteTool.getAttribute("aria-pressed")).toBe("true");
+    await clickEmptyCanvasSpace();
+    const surface = await waitForTestId("live-view-canvas-surface", 10_000);
+    const noteInput = await $("textarea[aria-label='Canvas note']");
+    await noteInput.waitForDisplayed({ timeout: t(10_000) });
+    await noteInput.setValue("Review the source evidence before automating.");
+    await $("[data-testid='canvas-fit']").click();
+
+    const arrowTool = await $("[data-testid='canvas-tool-arrow']");
+    await arrowTool.click();
+    await pointerPressTestId("canvas-move-focus-time");
+    await pointerPressTestId("canvas-move-time-by-app");
+    const arrow = await $("[data-testid^='canvas-arrow-']");
+    await arrow.waitForExist({ timeout: t(10_000) });
+
+    await pointerPressTestId("canvas-block-focus-time");
+    await browser.execute(() => {
+      document
+        .querySelector<HTMLElement>("[data-testid='live-view-canvas-surface']")
+        ?.focus();
+    });
+    await browser.keys(["ArrowRight"]);
+
+    await browser.waitUntil(
+      async () => {
+        const saved = await invokeOrThrow<CanvasDocument | null>(
+          "load_brain_view_canvas",
+          { viewId: "my-overview" },
+        );
+        return Boolean(
+          saved?.mode === "canvas" &&
+          saved.notes.some(
+            (note) =>
+              note.text === "Review the source evidence before automating.",
+          ) &&
+          saved.arrows.some(
+            (candidate) =>
+              candidate.fromId === "block:focus-time" &&
+              candidate.toId === "block:time-by-app",
+          ) &&
+          saved.blocks.find((block) => block.slotId === "focus-time")?.x ===
+            96,
+        );
+      },
+      {
+        timeout: t(10_000),
+        interval: 200,
+        timeoutMsg: "Canvas edits were not durably saved",
+      },
+    );
+
+    for (const size of [SUPPORTED_WINDOW_SIZES[0], SUPPORTED_WINDOW_SIZES[5]]) {
+      await setCssWindowSize(size.width, size.height);
+      await canvas.scrollIntoView();
+      await browser.pause(150);
+      const canvasLayout = (await browser.execute(() => {
+        const canvasElement = document.querySelector<HTMLElement>(
+          "[data-testid='live-view-canvas']",
+        );
+        const toolbar = document.querySelector<HTMLElement>(
+          "[data-canvas-toolbar]",
+        );
+        if (!canvasElement || !toolbar) return null;
+        const canvasRect = canvasElement.getBoundingClientRect();
+        const toolbarRect = toolbar.getBoundingClientRect();
+        return {
+          documentWidth: document.documentElement.scrollWidth,
+          viewportWidth: document.documentElement.clientWidth,
+          canvasLeft: canvasRect.left,
+          canvasRight: canvasRect.right,
+          toolbarLeft: toolbarRect.left,
+          toolbarRight: toolbarRect.right,
+          toolbarTop: toolbarRect.top,
+          toolbarBottom: toolbarRect.bottom,
+          canvasTop: canvasRect.top,
+          canvasBottom: canvasRect.bottom,
+        };
+      })) as {
+        documentWidth: number;
+        viewportWidth: number;
+        canvasLeft: number;
+        canvasRight: number;
+        toolbarLeft: number;
+        toolbarRight: number;
+        toolbarTop: number;
+        toolbarBottom: number;
+        canvasTop: number;
+        canvasBottom: number;
+      } | null;
+      expect(canvasLayout).not.toBeNull();
+      expect(canvasLayout!.documentWidth).toBeLessThanOrEqual(
+        canvasLayout!.viewportWidth + 1,
+      );
+      expect(canvasLayout!.canvasLeft).toBeGreaterThanOrEqual(-1);
+      expect(canvasLayout!.canvasRight).toBeLessThanOrEqual(
+        canvasLayout!.viewportWidth + 1,
+      );
+      expect(canvasLayout!.toolbarLeft).toBeGreaterThanOrEqual(
+        canvasLayout!.canvasLeft,
+      );
+      expect(canvasLayout!.toolbarRight).toBeLessThanOrEqual(
+        canvasLayout!.canvasRight,
+      );
+      expect(canvasLayout!.toolbarTop).toBeGreaterThanOrEqual(
+        canvasLayout!.canvasTop,
+      );
+      expect(canvasLayout!.toolbarBottom).toBeLessThanOrEqual(
+        canvasLayout!.canvasBottom,
+      );
+      await canvas.moveTo({ xOffset: 0, yOffset: 160 });
+      await browser.keys(["Escape"]);
+      await browser.pause(250);
+      const canvasScreenshot = await saveScreenshot(
+        `brain-overview-canvas-${size.label}`,
+      );
+      expect(existsSync(canvasScreenshot)).toBe(true);
+    }
+
+    const expandSidebar = await $("[aria-label='expand sidebar']");
+    if (await expandSidebar.isExisting()) {
+      await expandSidebar.click();
+    }
+    const pipesNav = await waitForTestId("nav-pipes", 10_000);
+    await pipesNav.click();
+    await waitForTestId("section-pipes", 15_000);
+    const restoredBrainNav = await waitForTestId("nav-brain", 10_000);
+    await restoredBrainNav.click();
+    await waitForTestId("section-brain", 15_000);
+    await waitForTestId("live-view-canvas", 15_000);
+    expect(await $("textarea[aria-label='Canvas note']").getValue()).toBe(
+      "Review the source evidence before automating.",
+    );
+    expect(await $("[data-testid^='canvas-arrow-']").isExisting()).toBe(true);
+
+    await setCssWindowSize(1440, 900);
+    await $("[data-testid='overview-mode-dashboard']").click();
+    await waitForTestId("brain-overview-grid", 10_000);
+
+    await $("[data-testid='overview-edit']").click();
     await waitForTestId("brain-overview-editor", 10_000);
     const editorText = (await browser.execute(
       () => document.body?.innerText || "",
@@ -371,6 +674,15 @@ describe("Brain Live Views", function () {
         headers,
       });
     }
+    await invokeOrThrow("delete_brain_view", { id: "my-overview" });
+    await invokeOrThrow("save_brain_view", { request: viewRequest });
+    const deletedCanvas = await invokeOrThrow<CanvasDocument | null>(
+      "load_brain_view_canvas",
+      {
+        viewId: "my-overview",
+      },
+    );
+    expect(deletedCanvas).toBeNull();
     await invokeOrThrow("delete_brain_view", { id: "my-overview" });
   });
 });

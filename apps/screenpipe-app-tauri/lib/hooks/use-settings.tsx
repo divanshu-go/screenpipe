@@ -733,6 +733,7 @@ let DEFAULT_SETTINGS: Settings = {
 			meetingSummaryPipeSlug: "meeting-summary",
 			filterMusic: false,
 			ignoreIncognitoWindows: true,
+			enhancedIncognitoDetection: false,
 			pauseOnDrmContent: false,
 			disableClipboardCapture: true,
 			disableKeyboardCapture: true,

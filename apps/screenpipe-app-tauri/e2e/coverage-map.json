@@ -1278,9 +1278,18 @@
     },
     {
       "spec": "timeline-daily-summary.spec.ts",
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["real-ui-e2e"],
-      "features": ["timeline", "settings-ai"],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "real-ui-e2e"
+      ],
+      "features": [
+        "timeline",
+        "settings-ai"
+      ],
       "criticality": "medium",
       "confidence": "strong",
       "ux": "real-user-flow",
@@ -1614,13 +1623,14 @@
       "features": [
         "brain",
         "brain-overview",
+        "brain-canvas",
         "artifacts",
         "pipes"
       ],
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "Creates the first-open starter dashboard, renders a Pipe-filled Live View, and checks top and horizontal bounds from the supported 800x600 minimum through 1920x1080."
+      "notes": "Creates the first-open starter dashboard, renders a source-backed Pipe-filled Live View, exercises durable Canvas notes, connections, keyboard movement, navigation restore, deletion cleanup, and checks layout bounds from the supported 800x600 minimum through 1920x1080."
     },
     {
       "spec": "html-artifact-render.spec.ts",
