@@ -41,4 +41,18 @@ describe("qualifiedValue", () => {
       }),
     );
   });
+
+  it("classifies accepted Live View results without accepting content", () => {
+    qualifiedValue.liveViewResultAccepted();
+
+    expect(capture).toHaveBeenCalledWith("qualified_value_event", {
+      metric_version: "repeat_value_d7_v1",
+      surface: "app",
+      action: "artifact",
+      value_strength: "accepted",
+      user_initiated: true,
+      success: true,
+      result_non_empty: true,
+    });
+  });
 });

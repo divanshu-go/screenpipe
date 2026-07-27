@@ -1286,6 +1286,9 @@ export function BrainOverview({
         onboarding_goal_category:
           onboardingActivation?.goalCategory ?? "unknown",
       });
+      if (rating === "up" && persistedFeedback.current?.rating === "up") {
+        qualifiedValue.liveViewResultAccepted();
+      }
       if (rating) finishOnboardingActivation("feedback");
       return true;
     } catch (feedbackError) {

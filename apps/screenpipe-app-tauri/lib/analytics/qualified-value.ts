@@ -29,5 +29,6 @@ export const qualifiedValue = {
   memoryOpened: () => capture("app", "memory", "consumed"),
   artifactOpened: (generatedByPipe: boolean) =>
     capture(generatedByPipe ? "pipe" : "app", "artifact", "consumed"),
+  liveViewResultAccepted: () => capture("app", "artifact", "accepted"),
   pipeOutputCopied: () => capture("pipe", "artifact", "accepted"),
 } as const;
