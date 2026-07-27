@@ -25,7 +25,15 @@ FROM debian:bookworm-slim AS base
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --system --no-create-home screenpipe \
+    # uid/gid PINNED, not left to useradd's "next free system id". The
+    # customer-facing Fargate template (website
+    # public/enterprise/aws-gateway-fargate.yaml) configures an EFS access point
+    # with PosixUser 999:999 to own /data. An access point's PosixUser overrides
+    # whatever uid the container presents, so a renumber here would not break
+    # the mount — but it would silently desync the two, and the next reader of
+    # either file would have no way to tell 999 was ever deliberate.
+    && groupadd --system --gid 999 screenpipe \
+    && useradd --system --no-create-home --uid 999 --gid 999 screenpipe \
     # Default data dir, owned by the service user so a fresh named volume
     # (which inherits the image directory's ownership) is writable. /policy is
     # the same story for the e2e's fixture-signed policy (SCR-288): a named
