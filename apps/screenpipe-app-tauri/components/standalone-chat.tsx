@@ -1615,8 +1615,13 @@ export function StandaloneChat({
     clearAcpSignInProbe();
     setAcpSignInError(null);
     setAcpSignIn(null);
+    // "Switch to default" must land on a NON-acp preset — otherwise it can
+    // resend to another agent that also needs sign-in, defeating the escape
+    // hatch. Prefer the default non-acp preset, then any non-acp preset.
+    const presets = settings?.aiPresets ?? [];
     const fallback =
-      settings?.aiPresets?.find((preset) => preset.defaultPreset) ?? settings?.aiPresets?.[0];
+      presets.find((preset) => preset.defaultPreset && preset.provider !== "acp") ??
+      presets.find((preset) => preset.provider !== "acp");
     // handleSetActivePreset updates activePresetRef synchronously, so the
     // resend below goes to the default provider, not the failed agent.
     if (fallback) handleSetActivePreset(fallback);
