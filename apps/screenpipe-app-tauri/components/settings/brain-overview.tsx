@@ -1075,7 +1075,9 @@ export function BrainOverview({
           (candidate) => candidate.id === dataRefresh.viewId,
         );
         if (!refreshedView) return;
-        setView(refreshedView);
+        setView((current) =>
+          current?.id === refreshedView.id ? refreshedView : current,
+        );
         const filled = refreshedView.slots.filter((slot) => {
           if (
             !dataRefresh.slotIds.includes(slot.id) ||
@@ -2434,6 +2436,7 @@ export function BrainOverview({
   const refreshingSlotIds = new Set(
     refreshIsActive ? (dataRefresh?.slotIds ?? []) : [],
   );
+  const dashboardSelectionDisabled = saving || generating;
   const showOnboardingActivation = Boolean(
     onboardingActivation && !onboardingActivation.completedAt,
   );
@@ -2449,6 +2452,7 @@ export function BrainOverview({
             views={views}
             current={view}
             busy={dashboardBusy}
+            selectionDisabled={dashboardSelectionDisabled}
             onSelect={selectDashboard}
             onCreate={beginCreate}
             onRename={renameDashboard}
@@ -2469,7 +2473,9 @@ export function BrainOverview({
           <p className="mt-2 text-xs text-muted-foreground">
             {onboardingColdStart
               ? "This view will appear when Screenpipe has enough real activity for your outcome."
-              : `Pipes fill these Blocks for ${selectedPeriod.label.toLowerCase()}. Data changes when you refresh or a connected Pipe runs.`}
+              : view.periodPolicy.type === "fixed.v1"
+                ? "Pipes update these Blocks when you refresh or a connected Pipe runs."
+                : `Pipes fill these Blocks for ${selectedPeriod.label.toLowerCase()}. Data changes when you refresh or a connected Pipe runs.`}
             {latestDataTimestamp !== null && (
               <span className="ml-1">
                 Last data {new Date(latestDataTimestamp).toLocaleString()}.
@@ -2530,15 +2536,7 @@ export function BrainOverview({
               </Button>
             </div>
           )}
-          {view.periodPolicy.type === "fixed.v1" ? (
-            <div
-              data-testid="overview-fixed-period"
-              aria-label={`Live View period: ${selectedPeriod.label}`}
-              className="inline-flex h-9 min-w-28 flex-1 items-center border border-border bg-muted/20 px-3 text-xs sm:flex-none"
-            >
-              {selectedPeriod.label}
-            </div>
-          ) : (
+          {view.periodPolicy.type !== "fixed.v1" && (
             <Select
               value={view.timeRange}
               disabled={dashboardBusy}
