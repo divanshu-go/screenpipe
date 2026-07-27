@@ -36,7 +36,9 @@ describe("InlineAgentActionCard", () => {
     fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
 
     await waitFor(() => expect(onRespond).toHaveBeenCalledWith("allow-once"));
-    expect(screen.queryByTestId("agent-action-card")).not.toBeInTheDocument();
+    // On a successful answer the card enters the pending state and stays until
+    // the parent strips it on the ACP terminal event; it does not self-remove.
+    expect(await screen.findByText("waiting for the agent…")).toBeInTheDocument();
   });
 
   it("returns a cancellation when the user chooses not now", async () => {
@@ -46,7 +48,9 @@ describe("InlineAgentActionCard", () => {
     fireEvent.click(screen.getByRole("button", { name: "not now" }));
 
     await waitFor(() => expect(onRespond).toHaveBeenCalledWith(undefined));
-    expect(screen.queryByTestId("agent-action-card")).not.toBeInTheDocument();
+    // Same as above: an accepted cancel enters the pending state; the parent
+    // removes the card when the ACP turn actually ends.
+    expect(await screen.findByText("waiting for the agent…")).toBeInTheDocument();
   });
 
   it("shows auth requests without protocol terminology and permits retry", async () => {
