@@ -22,7 +22,7 @@ import {
   type NotificationAction,
 } from "@/lib/notifications/actions";
 import { notificationAnalyticsProperties } from "@/lib/notification-analytics";
-import { captureQualifiedValue } from "@/lib/analytics/qualified-value";
+import { qualifiedValue } from "@/lib/analytics/qualified-value";
 
 interface NotificationPayload {
   id: string;
@@ -159,11 +159,7 @@ export default function NotificationPanelPage() {
                 ...notificationAnalyticsProperties(payload, "toast"),
               });
               if (payload?.pipe_name) {
-                captureQualifiedValue({
-                  surface: "pipe",
-                  action: "artifact",
-                  valueStrength: "accepted",
-                });
+                qualifiedValue.pipeOutputCopied();
               }
             }
             return;
@@ -307,11 +303,7 @@ export default function NotificationPanelPage() {
         ...notificationAnalyticsProperties(payload, "toast"),
       });
       if (payload.pipe_name) {
-        captureQualifiedValue({
-          surface: "pipe",
-          action: "artifact",
-          valueStrength: "accepted",
-        });
+        qualifiedValue.pipeOutputCopied();
       }
     } catch (e) {
       console.error("notification copy failed:", e);

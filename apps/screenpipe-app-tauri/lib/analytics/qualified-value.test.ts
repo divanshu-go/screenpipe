@@ -10,26 +10,35 @@ vi.mock("posthog-js", () => ({
   default: { capture },
 }));
 
-import { captureQualifiedValue } from "./qualified-value";
+import { qualifiedValue } from "./qualified-value";
 
-describe("captureQualifiedValue", () => {
+describe("qualifiedValue", () => {
   beforeEach(() => capture.mockReset());
 
-  it("emits only the fixed privacy-safe v1 contract", () => {
-    captureQualifiedValue({
-      surface: "pipe",
-      action: "artifact",
-      valueStrength: "accepted",
-    });
+  it("owns the fixed privacy-safe contract", () => {
+    qualifiedValue.chatResponseCopied();
 
     expect(capture).toHaveBeenCalledWith("qualified_value_event", {
       metric_version: "repeat_value_d7_v1",
-      surface: "pipe",
-      action: "artifact",
+      surface: "app",
+      action: "chat",
       value_strength: "accepted",
       user_initiated: true,
       success: true,
       result_non_empty: true,
     });
+  });
+
+  it("classifies pipe artifacts without accepting content", () => {
+    qualifiedValue.artifactOpened(true);
+
+    expect(capture).toHaveBeenCalledWith(
+      "qualified_value_event",
+      expect.objectContaining({
+        surface: "pipe",
+        action: "artifact",
+        value_strength: "consumed",
+      }),
+    );
   });
 });

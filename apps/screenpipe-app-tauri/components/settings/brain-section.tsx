@@ -80,7 +80,7 @@ import {
 } from "@/lib/utils/memory-display";
 import { useChatStore } from "@/lib/stores/chat-store";
 import posthog from "posthog-js";
-import { captureQualifiedValue } from "@/lib/analytics/qualified-value";
+import { qualifiedValue } from "@/lib/analytics/qualified-value";
 import {
   consumeOnboardingBrainHandoff,
   ONBOARDING_BRAIN_HANDOFF_EVENT,
@@ -451,14 +451,9 @@ export function BrainSection() {
         registered: artifact.registered,
         surface,
       });
-      captureQualifiedValue({
-        surface:
-          artifact.source_type === "pipe" || artifact.source_type === "pipe-run"
-            ? "pipe"
-            : "app",
-        action: "artifact",
-        valueStrength: "consumed",
-      });
+      qualifiedValue.artifactOpened(
+        artifact.source_type === "pipe" || artifact.source_type === "pipe-run",
+      );
       if (target.mode === "artifact-only") {
         void commands.openViewerWindow(filePreviewPath);
         return;
@@ -480,14 +475,9 @@ export function BrainSection() {
         registered: artifact.registered,
         surface,
       });
-      captureQualifiedValue({
-        surface:
-          artifact.source_type === "pipe" || artifact.source_type === "pipe-run"
-            ? "pipe"
-            : "app",
-        action: "artifact",
-        valueStrength: "consumed",
-      });
+      qualifiedValue.artifactOpened(
+        artifact.source_type === "pipe" || artifact.source_type === "pipe-run",
+      );
       void commands.openViewerWindow(artifact.path);
     },
     [],
@@ -499,11 +489,7 @@ export function BrainSection() {
         ...memoryAnalyticsProperties(memory),
         surface: "list",
       });
-      captureQualifiedValue({
-        surface: "app",
-        action: "memory",
-        valueStrength: "consumed",
-      });
+      qualifiedValue.memoryOpened();
       setSelectedItem({ kind: "memory", key });
     },
     [],

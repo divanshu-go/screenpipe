@@ -15,7 +15,7 @@ import {
   chatResponseValueActionProperties,
   chatTelemetryContextForResponse,
 } from "@/lib/chat/response-feedback";
-import { captureQualifiedValue } from "@/lib/analytics/qualified-value";
+import { qualifiedValue } from "@/lib/analytics/qualified-value";
 import {
   GridDissolveLoader,
   MessageContent,
@@ -423,11 +423,7 @@ export function ChatMessageList({
                                     ),
                                   ),
                                 );
-                                captureQualifiedValue({
-                                  surface: "app",
-                                  action: "chat",
-                                  valueStrength: "accepted",
-                                });
+                                qualifiedValue.chatResponseCopied();
                               }
                             }}
                             className="p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"

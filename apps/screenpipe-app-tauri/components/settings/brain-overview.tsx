@@ -11,7 +11,7 @@ import React, {
   useState,
 } from "react";
 import posthog from "posthog-js";
-import { captureQualifiedValue } from "@/lib/analytics/qualified-value";
+import { qualifiedValue } from "@/lib/analytics/qualified-value";
 import {
   AlertCircle,
   CheckCircle2,
@@ -589,11 +589,7 @@ export function BrainOverview({
         onboarding_goal_category:
           onboardingActivation?.goalCategory ?? "unknown",
       });
-      captureQualifiedValue({
-        surface: "app",
-        action: "artifact",
-        valueStrength: "consumed",
-      });
+      qualifiedValue.artifactOpened(false);
     };
 
     captureVisibleResult();

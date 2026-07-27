@@ -4,40 +4,30 @@
 
 import posthog from "posthog-js";
 
-export type QualifiedValueSurface = "app" | "mcp" | "api" | "pipe";
-export type QualifiedValueAction =
-  | "search"
-  | "chat"
-  | "meeting"
-  | "memory"
-  | "artifact"
-  | "workflow";
-export type QualifiedValueStrength =
-  | "retrieved"
-  | "consumed"
-  | "accepted"
-  | "completed";
+type Surface = "app" | "pipe";
+type Action = "search" | "chat" | "meeting" | "memory" | "artifact";
+type Strength = "retrieved" | "consumed" | "accepted";
 
-export type QualifiedValueInput = {
-  surface: QualifiedValueSurface;
-  action: QualifiedValueAction;
-  valueStrength: QualifiedValueStrength;
-};
-
-/**
- * Emit the stable Repeat Value by D7 v1 outcome event.
- *
- * The narrow typed input is deliberate: callers cannot attach prompts,
- * responses, titles, paths, identifiers, or other user content.
- */
-export function captureQualifiedValue(input: QualifiedValueInput): void {
+function capture(surface: Surface, action: Action, strength: Strength): void {
   posthog.capture("qualified_value_event", {
     metric_version: "repeat_value_d7_v1",
-    surface: input.surface,
-    action: input.action,
-    value_strength: input.valueStrength,
+    surface,
+    action,
+    value_strength: strength,
     user_initiated: true,
     success: true,
     result_non_empty: true,
   });
 }
+
+/** Semantic product outcomes; metric fields never leak into feature code. */
+export const qualifiedValue = {
+  chatResponseReceived: () => capture("app", "chat", "retrieved"),
+  chatResponseCopied: () => capture("app", "chat", "accepted"),
+  searchResultOpened: () => capture("app", "search", "consumed"),
+  meetingNoteOpened: () => capture("app", "meeting", "consumed"),
+  memoryOpened: () => capture("app", "memory", "consumed"),
+  artifactOpened: (generatedByPipe: boolean) =>
+    capture(generatedByPipe ? "pipe" : "app", "artifact", "consumed"),
+  pipeOutputCopied: () => capture("pipe", "artifact", "accepted"),
+} as const;

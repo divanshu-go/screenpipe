@@ -35,7 +35,7 @@ import { open as openExternal } from "@tauri-apps/plugin-shell";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
 import posthog from "posthog-js";
-import { captureQualifiedValue } from "@/lib/analytics/qualified-value";
+import { qualifiedValue } from "@/lib/analytics/qualified-value";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -379,11 +379,7 @@ export function NoteView({
       has_note: !!meeting.note,
     });
     if (meeting.note?.trim()) {
-      captureQualifiedValue({
-        surface: "app",
-        action: "meeting",
-        valueStrength: "consumed",
-      });
+      qualifiedValue.meetingNoteOpened();
     }
   }, [meeting.id]);
 

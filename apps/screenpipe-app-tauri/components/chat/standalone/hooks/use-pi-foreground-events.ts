@@ -16,7 +16,7 @@ import { buildDailyLimitMessage, buildRateLimitMessage, classifyQuotaError, pars
 import { buildInvalidatedAuthTokenMessage, isInvalidatedAuthTokenError } from "@/lib/chat/auth-errors";
 import { buildNoResponseMessage, buildProviderErrorMessage } from "@/lib/chat/provider-errors";
 import { chatTelemetryContextForResponse } from "@/lib/chat/response-feedback";
-import { captureQualifiedValue } from "@/lib/analytics/qualified-value";
+import { qualifiedValue } from "@/lib/analytics/qualified-value";
 import { registerPiLogListener } from "@/components/chat/standalone/hooks/pi-log-listener";
 import { registerPiReauthListener } from "@/components/chat/standalone/hooks/pi-reauth-listener";
 import {
@@ -782,11 +782,7 @@ export function usePiForegroundEvents({
               setTimeout(() => {
                 posthog.capture("chat_response_received", analyticsPayload);
                 if (isQualifiedChatResult) {
-                  captureQualifiedValue({
-                    surface: "app",
-                    action: "chat",
-                    valueStrength: "retrieved",
-                  });
+                  qualifiedValue.chatResponseReceived();
                 }
               }, POST_STREAM_SIDE_EFFECT_DELAY_MS);
             }
