@@ -425,12 +425,14 @@ export function usePiForegroundEvents({
           if (piMessageIdRef.current) {
             const msgId = piMessageIdRef.current;
             const parentToolCallId = stringValue(data.parentToolCallId);
+            const toolKind = stringValue(data.kind);
             const toolCall: ToolCall = {
               id: stringValue(data.toolCallId, Date.now().toString()),
               toolName: stringValue(data.toolName, "unknown"),
               args: isRecord(data.args) ? data.args : {},
               isRunning: true,
               startedAtMs: Date.now(),
+              ...(toolKind ? { kind: toolKind } : {}),
               ...(parentToolCallId ? { parentToolCallId } : {}),
             };
             // Add tool block (text before it is already its own block)

@@ -23,6 +23,7 @@ import {
   sanitizeCommand,
   presentToolActivity,
   presentToolActivityStatus,
+  mcpScreenpipeCommand,
 } from "../tool-presentation";
 
 const LOCAL = "http://localhost:3030";
@@ -237,20 +238,28 @@ describe("presentToolActivity", () => {
   });
 
   it("uses a safe fallback for arbitrary commands and unknown tools", () => {
+    // An unrecognized bash command stays fully generic — never echoes command text.
     const command = presentToolActivity({
       toolName: "bash",
       args: { command: "mystery-binary --token SUPER_SECRET_VALUE" },
     });
-    const tool = presentToolActivity({
-      toolName: "unfamiliar_internal_tool",
-      args: { payload: "SUPER_SECRET_VALUE" },
-    });
-
     expect(command).toEqual({
       runningLabel: "Working on your request",
       completedLabel: "Completed a background step",
     });
-    expect(tool).toEqual(command);
+
+    // An unknown non-bash tool surfaces its humanized NAME (more useful than a
+    // generic step for ACP agents) but never its args.
+    const tool = presentToolActivity({
+      toolName: "unfamiliar_internal_tool",
+      args: { payload: "SUPER_SECRET_VALUE" },
+    });
+    expect(tool).toEqual({
+      runningLabel: "Unfamiliar internal tool",
+      completedLabel: "Unfamiliar internal tool",
+    });
+
+    // Neither path leaks the args into the label.
     expect(JSON.stringify([command, tool])).not.toContain("SUPER_SECRET_VALUE");
   });
 
@@ -333,5 +342,85 @@ describe("presentToolActivityStatus", () => {
   it("uses the preparation label only before any tool activity exists", () => {
     expect(presentToolActivityStatus([], true)).toBe("Preparing your answer");
     expect(presentToolActivityStatus([], false)).toBe("Working on your request");
+  });
+});
+
+describe("mcpScreenpipeCommand", () => {
+  it("maps a screenpipe MCP read tool to the equivalent local GET curl", () => {
+    const cmd = mcpScreenpipeCommand("mcp__screenpipe__activity-summary", {
+      start_time: "today",
+      end_time: "now",
+    });
+    expect(cmd).toContain("http://localhost:3030/activity-summary");
+    expect(cmd).toContain("start_time=today");
+    expect(cmd).not.toContain("-X"); // GET
+  });
+
+  it("maps search args to the /search query shape", () => {
+    const cmd = mcpScreenpipeCommand("mcp__screenpipe__search-content", {
+      query: "invoice",
+      app_name: "Safari",
+    });
+    expect(cmd).toContain("/search?");
+    expect(cmd).toContain("q=invoice");
+    expect(cmd).toContain("app_name=Safari");
+  });
+
+  it("uses -X and a body for write tools", () => {
+    const cmd = mcpScreenpipeCommand("mcp__screenpipe__update-memory", { id: "1", note: "x" });
+    expect(cmd).toContain("-X POST");
+    expect(cmd).toContain("/memories");
+    expect(cmd).toContain("-d");
+  });
+
+  it("recognizes a known screenpipe tool name even without the mcp__ prefix", () => {
+    expect(mcpScreenpipeCommand("list-pipes", {})).toContain("/pipes");
+  });
+
+  it("returns null for non-screenpipe tools", () => {
+    expect(mcpScreenpipeCommand("bash", { command: "ls" })).toBeNull();
+    expect(mcpScreenpipeCommand("mcp__notion__search", { q: "x" })).toBeNull();
+    expect(mcpScreenpipeCommand("Read", { path: "/a.ts" })).toBeNull();
+  });
+});
+
+describe("presentToolActivity — ACP tool calls", () => {
+  it("labels screenpipe MCP tools like their curl equivalents", () => {
+    expect(
+      presentToolActivity({ toolName: "mcp__screenpipe__activity-summary", args: {} }).completedLabel,
+    ).toBe("Reviewed your activity");
+    expect(
+      presentToolActivity({ toolName: "mcp__screenpipe__list-pipes", args: {} }).completedLabel,
+    ).toBe("Checked available automations");
+  });
+
+  it("falls back to the ACP kind for native tools whose title isn't a known name", () => {
+    expect(
+      presentToolActivity({ toolName: "Read /repo/a.ts", kind: "read", args: {} }).completedLabel,
+    ).toBe("Reviewed a file");
+    expect(
+      presentToolActivity({ toolName: "Edit config", kind: "edit", args: {} }).completedLabel,
+    ).toBe("Updated files");
+    expect(
+      presentToolActivity({ toolName: "Fetch docs", kind: "fetch", args: {} }).completedLabel,
+    ).toBe("Fetched content");
+  });
+
+  it("detects a skill read via kind", () => {
+    expect(
+      presentToolActivity({ toolName: "Read", kind: "read", args: { path: "/x/SKILL.md" } }).completedLabel,
+    ).toBe("Reviewed instructions");
+  });
+
+  it("humanizes an unknown tool name instead of a generic step", () => {
+    expect(
+      presentToolActivity({ toolName: "mcp__acme__do-a-thing", args: {} }).completedLabel,
+    ).toBe("Do a thing");
+  });
+
+  it("still uses the generic label when there is nothing to go on", () => {
+    expect(presentToolActivity({ toolName: "tool", args: {} }).completedLabel).toBe(
+      "Completed a background step",
+    );
   });
 });

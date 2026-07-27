@@ -33,6 +33,7 @@ import {
   firstExternalWebTarget,
   presentToolActivity,
   presentToolActivityStatus,
+  mcpScreenpipeCommand,
   type WebTargetPresentation,
 } from "@/lib/chat/tool-presentation";
 import {
@@ -158,25 +159,30 @@ export function GridDissolveLoader({
 // can show "Searched ChatGPT 'foo'" instead of the raw curl URL. Pi's pipes
 // emit these as plain bash tool calls (no MCP), with the app name encoded as
 // app_name=X in the query string — see crates/screenpipe-core/assets/pipes/.
-function extractAppFromToolCall(toolCall: ToolCall): string | undefined {
+// The endpoint/method card and its rich metadata are curl-based. Raw pi sends a
+// bash `curl`; ACP screenpipe MCP tools send a name + structured args, which we
+// map to the equivalent curl so the SAME classifier drives both. Any other tool
+// (a native ACP Read/Edit, a non-screenpipe MCP call) has no curl and no card.
+function effectiveCommand(toolCall: ToolCall): string | null {
   if (toolCall.toolName === "bash") {
-    return classifyCurl(String(toolCall.args?.command ?? ""))?.appName;
+    return String(toolCall.args?.command ?? "") || null;
   }
-  return undefined;
+  return mcpScreenpipeCommand(toolCall.toolName, (toolCall.args ?? {}) as Record<string, unknown>);
+}
+
+function extractAppFromToolCall(toolCall: ToolCall): string | undefined {
+  const command = effectiveCommand(toolCall);
+  return command ? classifyCurl(command)?.appName : undefined;
 }
 
 function extractConnectionIconFromToolCall(toolCall: ToolCall): string | undefined {
-  if (toolCall.toolName === "bash") {
-    return classifyCurl(String(toolCall.args?.command ?? ""))?.connectionIconName;
-  }
-  return undefined;
+  const command = effectiveCommand(toolCall);
+  return command ? classifyCurl(command)?.connectionIconName : undefined;
 }
 
 function extractWebTargetFromToolCall(toolCall: ToolCall): WebTargetPresentation | undefined {
-  if (toolCall.toolName === "bash") {
-    return classifyCurl(String(toolCall.args?.command ?? ""))?.webTarget;
-  }
-  return undefined;
+  const command = effectiveCommand(toolCall);
+  return command ? classifyCurl(command)?.webTarget : undefined;
 }
 
 interface ToolDetailField {
@@ -194,7 +200,7 @@ interface BashToolDetailsPresentation {
 }
 
 function bashToolDetailsPresentation(toolCall: ToolCall): BashToolDetailsPresentation | null {
-  const command = String(toolCall.args.command ?? "");
+  const command = effectiveCommand(toolCall);
   if (!command) return null;
 
   const classified = classifyCurl(command);
@@ -259,7 +265,7 @@ function BashToolDetails({ toolCall }: { toolCall: ToolCall }) {
   if (!details) {
     return (
       <div className="py-1.5">
-        <ToolCodeBlock code={sanitizeCommand(String(toolCall.args.command ?? ""))} language="shell" />
+        <ToolCodeBlock code={sanitizeCommand(effectiveCommand(toolCall) ?? "")} language="shell" />
       </div>
     );
   }
@@ -381,7 +387,9 @@ function FriendlyToolDetails({ toolCall }: { toolCall: ToolCall }) {
       </div>
     );
   }
-  if (toolCall.toolName === "bash" && toolCall.args.command) {
+  // Raw pi's bash curl AND screenpipe MCP tool calls both resolve to a local
+  // request, so both render the endpoint/method card.
+  if (effectiveCommand(toolCall)) {
     return <BashToolDetails toolCall={toolCall} />;
   }
   const entries = Object.entries(toolCall.args).filter(([k]) => k !== "path" && k !== "command");

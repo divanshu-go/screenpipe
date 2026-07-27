@@ -1095,6 +1095,10 @@ impl RuntimeState {
                     "type": "tool_execution_start",
                     "toolCallId": id,
                     "toolName": tool_name(&update),
+                    // The ACP category (read/edit/execute/fetch/search/...) lets
+                    // the desktop label native agent tools whose human title
+                    // doesn't match a known tool name.
+                    "kind": tool_kind(&update),
                     "args": update.get("rawInput").filter(|value| value.is_object()).cloned().unwrap_or_else(|| json!({}))
                 });
                 // Subagent child calls arrive flat; the parent linkage lets
@@ -1395,6 +1399,16 @@ fn tool_name(update: &Value) -> String {
         .or_else(|| update.get("kind").and_then(Value::as_str))
         .unwrap_or("tool")
         .to_owned()
+}
+
+// The ACP tool-call `kind` category, forwarded so the desktop can label native
+// agent tools by kind when their title isn't a recognized tool name.
+fn tool_kind(update: &Value) -> Option<String> {
+    update
+        .get("kind")
+        .and_then(Value::as_str)
+        .filter(|kind| !kind.trim().is_empty())
+        .map(str::to_owned)
 }
 
 fn update_status_finished(update: &Value) -> bool {
@@ -3389,6 +3403,18 @@ mod tests {
         );
         assert_eq!(tool_name(&json!({ "kind": "execute", "title": "" })), "execute");
         assert_eq!(tool_name(&json!({})), "tool");
+    }
+
+    #[test]
+    fn tool_kind_forwards_the_acp_category_or_none() {
+        // Forwarded distinctly from the name so the desktop can label a native
+        // tool by kind when its title isn't a recognized tool name.
+        assert_eq!(
+            tool_kind(&json!({ "kind": "read", "title": "Read /a/b.ts" })),
+            Some("read".to_owned())
+        );
+        assert_eq!(tool_kind(&json!({ "title": "Grep" })), None);
+        assert_eq!(tool_kind(&json!({ "kind": "  " })), None);
     }
 
     #[cfg(windows)]
