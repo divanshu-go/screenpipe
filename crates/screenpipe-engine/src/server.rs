@@ -43,7 +43,6 @@ use crate::{
             api_list_monitors, api_vision_status, audio_metrics_handler, health_check,
             vision_metrics_handler,
         },
-        internal_telemetry::record_mcp_value,
         meetings::{
             bulk_delete_meetings_handler, delete_meeting_handler, export_handler,
             get_meeting_handler, get_meeting_transcript_handler, list_meetings_handler,
@@ -795,7 +794,6 @@ impl SCServer {
             .get("/frames/:frame_id/metadata", get_frame_metadata)
             .get("/frames/next-valid", get_next_valid_frame)
             .get("/health", health_check)
-            .post("/internal/telemetry/mcp-value", record_mcp_value)
             .post("/raw_sql", execute_raw_sql)
             .post("/add", add_to_database)
             .get("/speakers/unnamed", get_unnamed_speakers_handler)
@@ -909,6 +907,14 @@ impl SCServer {
             // Renderer-agnostic structured outputs are deliberately outside
             // the public OpenAPI surface for now. Consumers define targets;
             // authenticated pipes can discover and fill only their bindings.
+            // Private MCP transport adapter (not in OpenAPI spec — a plain
+            // axum handler; registering an un-#[oasgen] handler on the oasgen
+            // Server panics at startup with "Operation ... not found in
+            // OpenAPI spec", which broke the engine test suite on main).
+            .route(
+                "/internal/telemetry/mcp-value",
+                axum::routing::post(crate::routes::internal_telemetry::record_mcp_value),
+            )
             .route(
                 "/outputs/targets",
                 get(crate::routes::structured_outputs::assigned_targets_handler),
