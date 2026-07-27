@@ -11002,7 +11002,7 @@ dependencies = [
 [[package]]
 name = "sck-rs"
 version = "0.1.0"
-source = "git+https://github.com/screenpipe/sck-rs?rev=4a0d05c8a177986b848aac7803670befa886f2a3#4a0d05c8a177986b848aac7803670befa886f2a3"
+source = "git+https://github.com/screenpipe/sck-rs?rev=cea2347b92960e072b78814d224238aa3be48366#cea2347b92960e072b78814d224238aa3be48366"
 dependencies = [
  "cidre 0.15.1 (git+https://github.com/yury/cidre.git)",
  "image 0.25.10",

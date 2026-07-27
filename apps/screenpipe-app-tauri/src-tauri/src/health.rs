@@ -489,13 +489,18 @@ fn capture_failure_signals(
             | Some("capture_stalled")
             | Some("error")
     );
+    // NOTE: bare "stale" is deliberately NOT a hard failure. It means the
+    // engine saw neither a unique frame nor a capture attempt for 60s — which
+    // a starved-but-recoverable capture loop produces on an idle machine
+    // (wedged ScreenCaptureKit call during a static screen). That signature
+    // self-heals the moment the user interacts, so it gets its own
+    // user-presence-tiered debounce in the polling loop instead of the fast
+    // 90s incident path. The engine never emits permission_denied /
+    // capture_stalled / error for frame_status today; the arms are kept so a
+    // future engine that does gets the fast path automatically.
     let vision_status_failed = matches!(
         health.frame_status.as_deref(),
-        Some("stale")
-            | Some("not_started")
-            | Some("permission_denied")
-            | Some("capture_stalled")
-            | Some("error")
+        Some("not_started") | Some("permission_denied") | Some("capture_stalled") | Some("error")
     );
     let unrecovered_vision_failure = vision_progress.observe(health.pipeline.as_ref());
 
@@ -509,12 +514,61 @@ fn capture_failure_signals(
     }
 }
 
+/// Bare `frame_status == "stale"` — no unique frame AND no capture attempt for
+/// 60s. Debounced separately from hard failures; see `stale_stall_threshold`.
+fn vision_frame_flow_stale(health: &HealthCheckResponse) -> bool {
+    health.frame_status.as_deref() == Some("stale")
+}
+
+/// True when the engine saw UI activity (keystrokes, clicks, focus events)
+/// within `USER_ACTIVITY_FRESH_WINDOW` of `now`.
+///
+/// Unparseable or missing timestamps count as *idle*: the conservative
+/// direction for an incident detector is the longer debounce (no false
+/// incident), accepting slower detection on installs without UI monitoring.
+fn user_recently_active(
+    last_ui_timestamp: Option<&str>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    let Some(raw) = last_ui_timestamp else {
+        return false;
+    };
+    let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(raw) else {
+        return false;
+    };
+    let age = now.signed_duration_since(parsed.with_timezone(&chrono::Utc));
+    age >= chrono::Duration::zero()
+        && age <= chrono::Duration::from_std(USER_ACTIVITY_FRESH_WINDOW).unwrap_or_default()
+}
+
+/// Debounce threshold for the bare-"stale" signal, tiered by user presence.
+///
+/// - User present (UI activity flowing while no frames land): real recording
+///   loss happening right now — alert on the same 90s cadence as hard
+///   failures.
+/// - User idle: nothing on screen is changing, so nothing is being missed;
+///   the engine's own gone-silent watchdog restarts the VisionManager at
+///   ~240s. Only alert if staleness survives all of that (15 min). When the
+///   user returns while the wedge persists, the threshold drops to 90 and the
+///   already-accumulated counter crosses it immediately — the incident
+///   surfaces exactly when someone is present to act on it.
+fn stale_stall_threshold(user_active: bool) -> u32 {
+    if user_active {
+        CAPTURE_STALL_THRESHOLD
+    } else {
+        IDLE_STALE_STALL_THRESHOLD
+    }
+}
+
 /// Recovery requires positive proof that both enabled raw-capture paths are
 /// healthy. A merely parseable `/health` response is not enough: the endpoint's
 /// timeout fallback reports `unknown`, and a first stale tick has not yet
 /// reached the user-visible failure debounce.
 fn health_confirms_recording(health: &HealthCheckResponse) -> bool {
-    let vision_healthy = matches!(health.frame_status.as_deref(), Some("ok") | Some("disabled"));
+    let vision_healthy = matches!(
+        health.frame_status.as_deref(),
+        Some("ok") | Some("disabled")
+    );
     let audio_healthy = matches!(
         health.audio_status.as_deref(),
         Some("ok") | Some("disabled") | Some("no_input_device")
@@ -1058,9 +1112,19 @@ fn parse_devices_from_health(health_result: &Result<HealthCheckResponse>) -> Vec
     devices
 }
 
-/// How many consecutive stale/not_started checks before showing a notification.
+/// How many consecutive failed checks before showing a notification.
 /// At 1-second polling, 90 = 90 seconds of sustained failure.
 const CAPTURE_STALL_THRESHOLD: u32 = 90;
+
+/// Idle-tier debounce for the bare `frame_status == "stale"` signal: 900
+/// one-second checks = 15 minutes. See `stale_stall_threshold` for why bare
+/// staleness on an idle machine must not use the fast incident path.
+const IDLE_STALE_STALL_THRESHOLD: u32 = 900;
+
+/// A user counts as present when the engine recorded UI activity this
+/// recently. Sized to bridge short reading pauses without letting a long-idle
+/// machine count as attended.
+const USER_ACTIVITY_FRESH_WINDOW: Duration = Duration::from_secs(120);
 
 /// A single failed shared-queue batch is data loss, but not proof that ongoing
 /// recording is broken. Match the queue's three-batch fatal threshold and use
@@ -1085,6 +1149,13 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
     // Capture stall detection state
     let mut consecutive_audio_stall: u32 = 0;
     let mut consecutive_vision_stall: u32 = 0;
+    // Bare-"stale" frame flow, debounced on its own user-presence tier —
+    // see `stale_stall_threshold`.
+    let mut consecutive_vision_stale: u32 = 0;
+    // One notification per stale run: the tier threshold moves with user
+    // presence, so an exact `counter == threshold` firing condition would
+    // never match when the user returns mid-run and the threshold drops.
+    let mut vision_stale_notified = false;
     let mut vision_progress = VisionProgressTracker::default();
     let mut last_audio_notification: Option<Instant> = None;
     let mut last_vision_notification: Option<Instant> = None;
@@ -1463,6 +1534,8 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                         last_restart_triggered = Some(Instant::now());
                         consecutive_audio_stall = 0;
                         consecutive_vision_stall = 0;
+                        consecutive_vision_stale = 0;
+                        vision_stale_notified = false;
                     }
                     last_known_spawn_epoch = current_epoch;
                 }
@@ -1492,6 +1565,9 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                 Ok(health) => health_confirms_recording(health),
                 Err(_) => false,
             };
+            // Whether the bare-"stale" run crossed its user-presence tier this
+            // tick; feeds the overlay decision below alongside hard stalls.
+            let mut vision_stale_confirmed = false;
             if should_track_capture_stalls(status, start_time.elapsed(), in_restart_grace) {
                 if let Ok(ref health) = health_result {
                     // Only raw capture health drives the recording overlay.
@@ -1527,6 +1603,29 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                         }
                     }
 
+                    // Bare "stale" runs on its own user-presence tier: fast
+                    // when UI activity proves someone is losing recording
+                    // right now, slow when the machine is idle and the
+                    // engine's gone-silent watchdog should self-heal first.
+                    if let Some(recovered_after) = advance_stall_counter(
+                        &mut consecutive_vision_stale,
+                        vision_frame_flow_stale(health) && !vision_excused,
+                    ) {
+                        vision_stale_notified = false;
+                        if recovered_after >= CAPTURE_STALL_THRESHOLD {
+                            info!(
+                                "vision frame flow recovered after {} stale checks",
+                                recovered_after
+                            );
+                        }
+                    }
+                    let user_active = user_recently_active(
+                        health.last_ui_timestamp.as_deref(),
+                        chrono::Utc::now(),
+                    );
+                    vision_stale_confirmed =
+                        consecutive_vision_stale >= stale_stall_threshold(user_active);
+
                     // After wake from sleep, reset stall counters and notification
                     // cooldowns once so degraded recording is re-detected from scratch.
                     // Only reset once per wake event to avoid suppressing the counter
@@ -1536,6 +1635,9 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                         wake_reset_done = true;
                         consecutive_audio_stall = 0;
                         consecutive_vision_stall = 0;
+                        consecutive_vision_stale = 0;
+                        vision_stale_notified = false;
+                        vision_stale_confirmed = false;
                         last_audio_notification = None;
                         last_vision_notification = None;
                     }
@@ -1585,11 +1687,31 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                         last_vision_notification = Some(now_instant);
                         let _ = show_capture_stall_notification(&app, "screen").await;
                     }
+
+                    // Stale tier fires with a per-run latch instead of exact
+                    // counter equality: the threshold moves with user
+                    // presence, so a run can cross it at any counter value.
+                    if notifications_enabled
+                        && vision_stale_confirmed
+                        && !vision_stale_notified
+                        && notification_cooldown_ok(last_vision_notification, now_instant)
+                    {
+                        vision_stale_notified = true;
+                        warn!(
+                            "vision frame flow stale for {}s (user {}), showing restart notification",
+                            consecutive_vision_stale,
+                            if user_active { "active" } else { "idle" }
+                        );
+                        last_vision_notification = Some(now_instant);
+                        let _ = show_capture_stall_notification(&app, "screen").await;
+                    }
                 }
             } else {
                 // Reset stall counters when server is not in Recording state
                 consecutive_audio_stall = 0;
                 consecutive_vision_stall = 0;
+                consecutive_vision_stale = 0;
+                vision_stale_notified = false;
             }
 
             // ── Recording-health overlay (issue #5127) ──
@@ -1623,7 +1745,7 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                 intentionally_paused,
                 CaptureFailureSignals {
                     audio: stall_confirmed(consecutive_audio_stall),
-                    vision: stall_confirmed(consecutive_vision_stall),
+                    vision: stall_confirmed(consecutive_vision_stall) || vision_stale_confirmed,
                     persistence: failure_signals.persistence,
                 },
                 sim_break,
@@ -1916,11 +2038,7 @@ mod tests {
         ] {
             for enabled in [false, true] {
                 for cooldown_ok in [false, true] {
-                    assert!(!should_notify_capture_stall(
-                        counter,
-                        enabled,
-                        cooldown_ok,
-                    ));
+                    assert!(!should_notify_capture_stall(counter, enabled, cooldown_ok,));
                 }
             }
         }
@@ -2071,8 +2189,7 @@ mod tests {
         health.audio_status = Some("ok".to_string());
         health.audio_db_write_stalled = true;
 
-        let signals =
-            capture_failure_signals(&health, &mut VisionProgressTracker::default());
+        let signals = capture_failure_signals(&health, &mut VisionProgressTracker::default());
 
         assert_eq!(signals, CaptureFailureSignals::default());
     }
@@ -2198,7 +2315,6 @@ mod tests {
     #[test]
     fn explicit_vision_capture_failures_are_detected() {
         for status in [
-            "stale",
             "not_started",
             "permission_denied",
             "capture_stalled",
@@ -2212,14 +2328,111 @@ mod tests {
             );
         }
 
-        for status in ["ok", "disabled"] {
+        // BEHAVIOR CHANGE (starved-loop false positive): bare "stale" left the
+        // fast 90s incident set. A starved-but-recoverable capture loop on an
+        // idle machine produces exactly this signature and self-heals on user
+        // input; it now flows through the user-presence-tiered stale path.
+        for status in ["ok", "disabled", "stale"] {
             let mut health = healthy_health();
             health.frame_status = Some(status.to_string());
             assert!(
                 !capture_failure_signals(&health, &mut VisionProgressTracker::default()).vision,
-                "{status} must not be treated as a capture failure"
+                "{status} must not be treated as a fast-path capture failure"
             );
         }
+    }
+
+    #[test]
+    fn bare_stale_feeds_the_tiered_path_not_the_fast_path() {
+        for (status, expect_stale) in [
+            ("stale", true),
+            ("ok", false),
+            ("disabled", false),
+            ("not_started", false),
+            ("error", false),
+        ] {
+            let mut health = healthy_health();
+            health.frame_status = Some(status.to_string());
+            assert_eq!(
+                vision_frame_flow_stale(&health),
+                expect_stale,
+                "frame_status={status}"
+            );
+        }
+        let mut health = healthy_health();
+        health.frame_status = None;
+        assert!(!vision_frame_flow_stale(&health));
+    }
+
+    #[test]
+    fn stale_threshold_is_fast_when_user_present_slow_when_idle() {
+        assert_eq!(stale_stall_threshold(true), CAPTURE_STALL_THRESHOLD);
+        assert_eq!(stale_stall_threshold(false), IDLE_STALE_STALL_THRESHOLD);
+        assert!(
+            IDLE_STALE_STALL_THRESHOLD as u64 > 240 + CAPTURE_STALL_THRESHOLD as u64,
+            "idle tier must outlast the engine's ~240s gone-silent watchdog so \
+             self-healing restarts run before the user is alarmed"
+        );
+    }
+
+    #[test]
+    fn user_presence_parses_ui_timestamp_conservatively() {
+        let now = chrono::Utc::now();
+        let fresh = (now - chrono::Duration::seconds(30)).to_rfc3339();
+        let boundary =
+            (now - chrono::Duration::from_std(USER_ACTIVITY_FRESH_WINDOW).unwrap()).to_rfc3339();
+        let stale = (now - chrono::Duration::seconds(600)).to_rfc3339();
+        let future = (now + chrono::Duration::seconds(60)).to_rfc3339();
+
+        assert!(user_recently_active(Some(&fresh), now));
+        assert!(
+            user_recently_active(Some(&boundary), now),
+            "the window boundary is inclusive"
+        );
+        assert!(!user_recently_active(Some(&stale), now));
+        assert!(
+            !user_recently_active(Some(&future), now),
+            "a clock anomaly must fail toward the idle (long-debounce) tier"
+        );
+        assert!(
+            !user_recently_active(Some("not-a-timestamp"), now),
+            "unparseable timestamps fail toward the idle tier"
+        );
+        assert!(!user_recently_active(None, now));
+    }
+
+    /// The incident that motivated the tier: engine wedged on an idle machine
+    /// (bare "stale", no UI events). The old detector fired the incident at 90
+    /// ticks; the tiered detector must stay quiet through the engine
+    /// watchdog's self-heal window, then still alert an *attended* wedge fast.
+    #[test]
+    fn idle_stale_run_stays_quiet_then_alerts_promptly_when_user_returns() {
+        let mut counter = 0u32;
+
+        // 160 seconds of idle staleness — the observed false-positive window.
+        for _ in 0..160 {
+            advance_stall_counter(&mut counter, true);
+        }
+        assert!(
+            counter < stale_stall_threshold(false),
+            "an idle stale run must not confirm before the idle tier"
+        );
+
+        // User returns while the wedge persists: the threshold drops to the
+        // attended tier and the accumulated run crosses it immediately.
+        assert!(counter >= stale_stall_threshold(true));
+
+        // Recovery (frames flow again) resets the run.
+        assert_eq!(advance_stall_counter(&mut counter, false), Some(160));
+        assert_eq!(counter, 0);
+
+        // Attended wedge from scratch: alerts on the same cadence as hard
+        // failures.
+        for _ in 0..CAPTURE_STALL_THRESHOLD {
+            advance_stall_counter(&mut counter, true);
+        }
+        assert!(counter >= stale_stall_threshold(true));
+        assert!(counter < stale_stall_threshold(false));
     }
 
     #[test]
@@ -2428,8 +2641,7 @@ mod tests {
                     simulated_break,
                 );
 
-                let failure_suppressed =
-                    start_in_progress || recently_woke || intentionally_paused;
+                let failure_suppressed = start_in_progress || recently_woke || intentionally_paused;
                 let confirmed_failure = failures.audio || failures.vision || failures.persistence;
                 let engine_down = capture_intended
                     && !start_in_progress

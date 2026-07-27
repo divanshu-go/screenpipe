@@ -6,9 +6,9 @@ and layer declared in the manifest, weighted by confidence and criticality.
 
 - Manifest: `e2e/coverage-map.json`
 - Specs directory: `e2e/specs`
-- Mapped specs: 73
-- Declared test blocks: 223
-- Weighted coverage points: 173.0
+- Mapped specs: 74
+- Declared test blocks: 224
+- Weighted coverage points: 173.4
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -20,7 +20,7 @@ can execute more runtime cases than this number shows.
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
 | windows | 62 | 208 | 167.3 | 15 | 67 | 93% |
-| macos | 69 | 187 | 144.3 | 17 | 68 | 89% |
+| macos | 70 | 188 | 144.7 | 17 | 68 | 89% |
 | linux | 53 | 170 | 137.9 | 13 | 63 | 87% |
 
 ## Runtime Results
@@ -36,13 +36,13 @@ pass/fail/skip counts.
 | audio-device | 2 specs / 27 tests / 19.8 pts | 2 specs / 2 tests / 1.3 pts | - |
 | auth | - | 1 specs / 1 tests / 1.0 pts | - |
 | billing | 4 specs / 6 tests / 5.7 pts | 4 specs / 6 tests / 5.7 pts | 4 specs / 6 tests / 5.7 pts |
-| capture-ocr | 2 specs / 15 tests / 6.0 pts | 4 specs / 6 tests / 2.4 pts | 1 specs / 3 tests / 1.2 pts |
+| capture-ocr | 2 specs / 15 tests / 6.0 pts | 5 specs / 7 tests / 2.8 pts | 1 specs / 3 tests / 1.2 pts |
 | chat-ai | 18 specs / 31 tests / 22.4 pts | 21 specs / 35 tests / 23.7 pts | 17 specs / 30 tests / 21.9 pts |
 | entitlement | - | 1 specs / 1 tests / 1.0 pts | - |
-| local-api | 15 specs / 96 tests / 80.0 pts | 15 specs / 71 tests / 61.0 pts | 12 specs / 69 tests / 60.2 pts |
+| local-api | 15 specs / 96 tests / 80.0 pts | 16 specs / 72 tests / 61.4 pts | 12 specs / 69 tests / 60.2 pts |
 | notifications | 2 specs / 11 tests / 10.1 pts | 2 specs / 4 tests / 2.4 pts | 1 specs / 3 tests / 2.1 pts |
 | onboarding | 2 specs / 7 tests / 4.6 pts | 2 specs / 7 tests / 4.6 pts | 2 specs / 7 tests / 4.6 pts |
-| os-integration | 5 specs / 17 tests / 16.1 pts | 5 specs / 4 tests / 1.3 pts | - |
+| os-integration | 5 specs / 17 tests / 16.1 pts | 6 specs / 5 tests / 1.7 pts | - |
 | performance | 2 specs / 44 tests / 44.0 pts | 4 specs / 34 tests / 30.5 pts | 1 specs / 29 tests / 29.0 pts |
 | pipes | 4 specs / 14 tests / 14.0 pts | 4 specs / 14 tests / 14.0 pts | 4 specs / 14 tests / 14.0 pts |
 | real-ui-e2e | 40 specs / 126 tests / 101.1 pts | 42 specs / 113 tests / 90.6 pts | 37 specs / 106 tests / 88.3 pts |
@@ -103,6 +103,7 @@ pass/fail/skip counts.
 | brain-overview.spec.ts | windows, macos, linux | real-ui-e2e, local-api, pipes | brain, brain-overview, artifacts, pipes | high | strong | real-user-flow | 2 | Creates the first-open starter dashboard, renders a Pipe-filled Live View, and checks top and horizontal bounds from the supported 800x600 minimum through 1920x1080. |
 | brain-section.spec.ts | windows, macos, linux | real-ui-e2e | brain, artifacts, memories, viewer-deeplink | medium | strong | real-user-flow | 10 | Brain coverage for filters, search, delete flows, selection pruning, add memory, and inline artifact markdown preview. |
 | capture-frequency-floor.spec.ts | macos | capture-ocr, settings, real-ui-e2e | capture-ocr, settings-recording, restart-flow | high | conditional | real-user-flow | 1 | macOS fixed screenshot cadence regression: persists the 1s setting before immediate Apply & Restart, then verifies real capture attempts and frame writes. |
+| capture-loop-liveness.spec.ts | macos | capture-ocr, local-api, os-integration | app-launch, capture-ocr | high | conditional | api | 1 | Opt-in macOS fault injection wedges a visual-change probe; asserts the bounded probe keeps the capture loop and its /health heartbeat live (no false stale/incident). |
 | chat-ask-user-tool-card.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat, chat-tools, pi-ask-user | medium | partial | mixed | 1 | Synthetic assistant tool block renders the Pi ask_user dropdown and sends the selected answer through the normal chat reply path. |
 | chat-automation-card-duplicate.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat, chat-sidebar-dedupe | medium | partial | real-user-flow | 1 | Home automation card clicks must create exactly one persisted conversation per card, guarding the #4719 duplicate-row path. |
 | chat-composer-isolation.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat, chat-drafts | medium | partial | mixed | 1 | Composer draft isolation across conversations. |

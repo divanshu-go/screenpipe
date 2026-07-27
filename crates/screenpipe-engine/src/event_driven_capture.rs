@@ -24,7 +24,7 @@ use screenpipe_screen::monitor::{list_monitors, SafeMonitor};
 use screenpipe_screen::snapshot_writer::SnapshotWriter;
 use screenpipe_screen::utils::capture_monitor_image;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, watch};
@@ -33,6 +33,169 @@ use tracing::{debug, error, info, warn};
 const CAPTURE_OPERATION_TIMEOUT: Duration = Duration::from_secs(15);
 const WARM_VISUAL_CHECK_INTERVAL: Duration = Duration::from_secs(5);
 const WARM_FOCUS_BACKSTOP_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Bound on the visual-change probe screenshot (Active visual check and Warm
+/// focus probe). These probes previously awaited ScreenCaptureKit with no
+/// timeout; when the SCK daemon's completion callbacks wedge (observed live:
+/// threads parked forever under `fetch_shareable_content`), an unbounded
+/// probe froze the whole capture loop — no idle snapshots, no capture-attempt
+/// heartbeat — until user input happened to unwedge the daemon. `/health`
+/// then reported `frame_status="stale"` and the desktop app raised a false
+/// "recording needs help" incident on an idle, healthy machine.
+const VISUAL_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Bound on one SCK window-exclusion refresh (`CGWindowListCopyWindowInfo`,
+/// a synchronous WindowServer IPC that must never run unbounded on the loop).
+const EXCLUSION_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Last successfully resolved exclusion ids, shared across capture loops.
+/// Fallback when a refresh times out: the persistent SCK stream still has the
+/// previous filter applied at the OS level, so reusing the last-known ids
+/// keeps existing exclusions intact. A window opened *during* a WindowServer
+/// wedge is excluded on the first refresh after recovery — the same exposure
+/// window the 3s refresh cadence already has, just extended for the wedge's
+/// duration (when SCK is typically frozen and delivering no new pixels
+/// anyway).
+static LAST_EXCLUDED_IDS: OnceLock<Mutex<Vec<u32>>> = OnceLock::new();
+
+/// Resolve the current SCK exclusion ids off the loop thread, bounded.
+///
+/// Runs `get_excluded_sck_window_ids` (WindowServer IPC) in `spawn_blocking`
+/// so the capture loop keeps iterating — and its idle-capture heartbeat keeps
+/// ticking — even when WindowServer stalls. Falls back to the last successful
+/// result on timeout.
+async fn bounded_excluded_sck_window_ids(window_filters: &WindowFilters) -> Vec<u32> {
+    let cache = LAST_EXCLUDED_IDS.get_or_init(|| Mutex::new(Vec::new()));
+    let filters = window_filters.clone();
+    let refreshed = tokio::time::timeout(
+        EXCLUSION_REFRESH_TIMEOUT,
+        tokio::task::spawn_blocking(move || {
+            let mut ids = get_excluded_sck_window_ids(&filters);
+            ids.sort_unstable();
+            ids.dedup();
+            ids
+        }),
+    )
+    .await;
+
+    match refreshed {
+        Ok(Ok(ids)) => {
+            *cache.lock().unwrap_or_else(|e| e.into_inner()) = ids.clone();
+            ids
+        }
+        Ok(Err(join_err)) => {
+            warn!(
+                "window exclusion refresh task failed ({join_err}); reusing last-known exclusions"
+            );
+            cache.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        }
+        Err(_elapsed) => {
+            // Throttle: WindowServer stalls fire this every capture tick.
+            static LAST_TIMEOUT_LOG: AtomicU64 = AtomicU64::new(0);
+            let now_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let prev = LAST_TIMEOUT_LOG.load(Ordering::Relaxed);
+            if now_secs.saturating_sub(prev) >= 60 {
+                LAST_TIMEOUT_LOG.store(now_secs, Ordering::Relaxed);
+                warn!(
+                    "window exclusion refresh timed out after {:?} (WindowServer unresponsive); reusing last-known exclusions",
+                    EXCLUSION_REFRESH_TIMEOUT
+                );
+            }
+            cache.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        }
+    }
+}
+
+/// E2E fault injection: `SCREENPIPE_E2E_SEED=visual-check-hang-once` makes the
+/// next visual-change probe hang far past `VISUAL_PROBE_TIMEOUT`, simulating a
+/// wedged ScreenCaptureKit call. The e2e spec asserts the loop survives:
+/// `/health` keeps `frame_status="ok"` and `capture_attempts` keeps advancing
+/// while the probe is stuck.
+#[cfg(debug_assertions)]
+static E2E_VISUAL_HANG_FIRED: AtomicBool = AtomicBool::new(false);
+
+/// Whether the visual-check hang seed is armed and has not fired yet.
+///
+/// Also used to FORCE one visual-check tick past the keyboard-idle gate:
+/// the injection must fire deterministically even when someone is typing on
+/// the e2e host, otherwise the spec passes vacuously without ever exercising
+/// the hang.
+#[cfg(debug_assertions)]
+fn e2e_visual_check_hang_armed() -> bool {
+    !E2E_VISUAL_HANG_FIRED.load(Ordering::SeqCst)
+        && std::env::var("SCREENPIPE_E2E_SEED")
+            .ok()
+            .is_some_and(|seeds| {
+                seeds
+                    .split(',')
+                    .any(|seed| seed.trim() == "visual-check-hang-once")
+            })
+}
+
+#[cfg(debug_assertions)]
+fn e2e_take_visual_check_hang() -> bool {
+    e2e_visual_check_hang_armed() && !E2E_VISUAL_HANG_FIRED.swap(true, Ordering::SeqCst)
+}
+
+/// Visual-change probe bounded by `VISUAL_PROBE_TIMEOUT`. `Ok(None)` means the
+/// probe timed out (SCK unresponsive) — callers skip this tick and keep the
+/// loop alive rather than freezing capture supervision.
+async fn bounded_visual_probe(
+    monitor: &SafeMonitor,
+    excluded_ids: &[u32],
+    monitor_id: u32,
+) -> Result<Option<(image::DynamicImage, Duration)>, anyhow::Error> {
+    #[cfg(debug_assertions)]
+    if e2e_take_visual_check_hang() {
+        warn!("e2e: injecting one hung visual-change probe (visual-check-hang-once)");
+        // Marker file so the e2e spec can prove the injection actually fired
+        // (a spec that never exercises the hang must fail, not pass).
+        if let Ok(dir) = std::env::var("SCREENPIPE_DATA_DIR") {
+            let _ = std::fs::write(
+                std::path::Path::new(&dir).join("e2e-visual-check-hang-fired"),
+                b"1",
+            );
+        }
+        match tokio::time::timeout(VISUAL_PROBE_TIMEOUT, async {
+            tokio::time::sleep(Duration::from_secs(120)).await;
+            capture_monitor_image(monitor, excluded_ids).await
+        })
+        .await
+        {
+            Ok(result) => return result.map(Some),
+            Err(_elapsed) => return Ok(None),
+        }
+    }
+
+    match tokio::time::timeout(
+        VISUAL_PROBE_TIMEOUT,
+        capture_monitor_image(monitor, excluded_ids),
+    )
+    .await
+    {
+        Ok(result) => result.map(Some),
+        Err(_elapsed) => {
+            // Throttled: a wedged SCK daemon would otherwise log every ~3s.
+            static LAST_TIMEOUT_LOG: AtomicU64 = AtomicU64::new(0);
+            let now_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let prev = LAST_TIMEOUT_LOG.load(Ordering::Relaxed);
+            if now_secs.saturating_sub(prev) >= 60 {
+                LAST_TIMEOUT_LOG.store(now_secs, Ordering::Relaxed);
+                warn!(
+                    "visual-change probe timed out after {:?} on monitor {} (ScreenCaptureKit unresponsive) — skipping check, capture loop stays live",
+                    VISUAL_PROBE_TIMEOUT, monitor_id
+                );
+            }
+            Ok(None)
+        }
+    }
+}
 
 fn warm_visual_wait_duration(elapsed: Duration) -> Duration {
     WARM_VISUAL_CHECK_INTERVAL
@@ -986,9 +1149,23 @@ pub async fn event_driven_capture_loop(
                     // seeded yet (Active path fills it), this snapshot pass
                     // is still correct — it just might include pixels from
                     // soon-to-be-excluded transient windows.
-                    let snap = capture_monitor_image(&monitor, &cached_excluded_ids).await;
+                    // Bounded: an unbounded await here froze the whole loop
+                    // when ScreenCaptureKit wedged (see VISUAL_PROBE_TIMEOUT).
+                    let snap =
+                        bounded_visual_probe(&monitor, &cached_excluded_ids, monitor_id).await;
                     match snap {
-                        Ok((image, _)) => {
+                        Ok(None) => {
+                            // Probe timed out — treat like a failed check and
+                            // keep the Warm cadence (loop stays live).
+                            wait_for_warm_focus_or_timeout(
+                                &focus_controller,
+                                monitor_id,
+                                warm_visual_wait_duration(Duration::ZERO),
+                            )
+                            .await;
+                            continue;
+                        }
+                        Ok(Some((image, _))) => {
                             let diff = comparer.compare(&image);
                             if diff > visual_change_threshold {
                                 debug!(
@@ -1369,6 +1546,17 @@ pub async fn event_driven_capture_loop(
         // Use the same window exclusions as the full capture so the diff image
         // matches what we'd actually store — avoids triggering on excluded
         // windows and seeing phantom "visual changes" from their pixels.
+        //
+        // The armed e2e hang seed forces one check past the keyboard-idle
+        // gate so the fault injection fires deterministically even while
+        // someone is typing on the e2e host (debug builds only).
+        #[cfg(debug_assertions)]
+        let force_visual_check_for_e2e = trigger.is_none()
+            && visual_check_enabled
+            && frame_comparer.is_some()
+            && e2e_visual_check_hang_armed();
+        #[cfg(not(debug_assertions))]
+        let force_visual_check_for_e2e = false;
         if should_run_visual_check(
             &trigger,
             visual_check_enabled,
@@ -1378,17 +1566,20 @@ pub async fn event_driven_capture_loop(
             last_visual_check.elapsed(),
             visual_check_interval,
             activity_feed.keyboard_idle_ms(),
-        ) {
+        ) || force_visual_check_for_e2e
+        {
             last_visual_check = Instant::now();
-            let mut fresh_ids = get_excluded_sck_window_ids(&capture_params.window_filters);
-            fresh_ids.sort_unstable();
-            fresh_ids.dedup();
+            // Bounded refresh + probe: neither the WindowServer IPC nor the
+            // SCK screenshot may freeze the loop — a wedged probe previously
+            // starved the idle-capture heartbeat and produced a false
+            // "recording needs help" incident (see VISUAL_PROBE_TIMEOUT).
+            let fresh_ids = bounded_excluded_sck_window_ids(&capture_params.window_filters).await;
             if fresh_ids != cached_excluded_ids {
                 cached_excluded_ids = fresh_ids;
             }
             if let Some(ref mut comparer) = frame_comparer {
-                match capture_monitor_image(&monitor, &cached_excluded_ids).await {
-                    Ok((image, _dur)) => {
+                match bounded_visual_probe(&monitor, &cached_excluded_ids, monitor_id).await {
+                    Ok(Some((image, _dur))) => {
                         let diff = comparer.compare(&image);
                         if diff > visual_change_threshold {
                             debug!(
@@ -1397,6 +1588,10 @@ pub async fn event_driven_capture_loop(
                             );
                             trigger = Some(CaptureTrigger::VisualChange);
                         }
+                    }
+                    Ok(None) => {
+                        // Probe timed out — skip this check; the idle fallback
+                        // still fires and keeps the capture heartbeat honest.
                     }
                     Err(e) => {
                         debug!(
@@ -2324,11 +2519,12 @@ async fn do_capture(
     } else {
         // Resolve ignored windows to SCK window IDs so ScreenCaptureKit
         // excludes them from the capture buffer (zero overhead, pixel-perfect).
-        // Sort + dedup so the persistent stream isn't needlessly recreated when
-        // transient windows (tooltips, popups) cause ordering changes.
-        let mut excluded_ids = get_excluded_sck_window_ids(&params.window_filters);
-        excluded_ids.sort_unstable();
-        excluded_ids.dedup();
+        // Sorted + deduped so the persistent stream isn't needlessly recreated
+        // when transient windows (tooltips, popups) cause ordering changes.
+        // Bounded and off-thread: the raw call is a synchronous WindowServer
+        // IPC that would otherwise block this async task in a way the outer
+        // CAPTURE_OPERATION_TIMEOUT cannot preempt.
+        let excluded_ids = bounded_excluded_sck_window_ids(&params.window_filters).await;
 
         // Take screenshot (with ignored windows excluded at the OS level)
         let (image, capture_dur) = capture_monitor_image(params.monitor, &excluded_ids).await?;

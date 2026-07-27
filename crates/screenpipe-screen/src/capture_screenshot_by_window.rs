@@ -219,6 +219,7 @@ pub struct CapturedWindow {
     pub window_height: u32,
 }
 
+#[derive(Debug, Clone)]
 pub struct WindowFilters {
     ignore_patterns: Vec<WindowPattern>,
     include_patterns: Vec<WindowPattern>,
