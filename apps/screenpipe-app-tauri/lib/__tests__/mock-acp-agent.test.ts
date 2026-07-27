@@ -46,7 +46,21 @@ class MockAcpClient {
   private readonly waiters: MessageWaiter[] = [];
   private exitError: Error | undefined;
 
-  constructor(scenario: "normal" | "malformed" | "exit" | "auth" | "mcp") {
+  constructor(
+    // Keep in sync with the Scenario union in e2e/fixtures/mock-acp-agent.ts
+    // (kept local rather than imported so the side-effectful fixture module
+    // isn't pulled into this unit test).
+    scenario:
+      | "normal"
+      | "malformed"
+      | "exit"
+      | "auth"
+      | "mcp"
+      | "tree"
+      | "terminal"
+      | "subagent"
+      | "resume",
+  ) {
     this.child = spawn(nodeExecutable, [fixturePath, `--scenario=${scenario}`], {
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
