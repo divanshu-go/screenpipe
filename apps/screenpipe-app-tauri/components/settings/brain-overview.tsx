@@ -102,14 +102,28 @@ export type ViewDefinition = BrainViewDefinition;
 
 type DataRefreshState = {
   status: "starting" | "running" | "complete" | "partial" | "error";
+  trigger: LiveViewRefreshTrigger;
   viewId: string;
+  timeRange: BrainViewTimeRange;
   pipeNames: string[];
   slotIds: string[];
   startedAt: number;
+  startFailureCount: number;
   filled: number;
   total: number;
   message?: string;
 };
+
+type LiveViewRefreshTrigger =
+  | "manual"
+  | "onboarding"
+  | "time_range"
+  | "dashboard_saved"
+  | "template_applied"
+  | "dashboard_duplicated"
+  | "undo"
+  | "card_regenerated"
+  | "card_ai_edit";
 
 type PreviewSource =
   | { kind: "ai"; scope: LiveViewGenerationScope }
@@ -120,6 +134,60 @@ type PreviewDestination = "new" | "replace";
 const MAX_DASHBOARDS = 12;
 const STARTER_DASHBOARD_ID = "my-dashboard";
 const STARTER_DASHBOARD_TITLE = "My dashboard";
+const LIVE_VIEW_ANALYTICS_SCHEMA_VERSION = 2;
+
+function analyticsErrorType(error: unknown): string {
+  return error instanceof Error ? error.name : "unknown";
+}
+
+function liveViewAnalyticsProperties(
+  targetView: ViewDefinition,
+  dashboardCount: number,
+) {
+  const boundSlots = targetView.slots.filter((slot) => slot.binding);
+  const resultSlots = targetView.slots.filter((slot) => slot.value !== null);
+  const positiveFeedbackBlockCount = targetView.slots.filter(
+    (slot) => slot.feedback?.current?.rating === "up",
+  ).length;
+  const negativeFeedbackBlockCount = targetView.slots.filter(
+    (slot) => slot.feedback?.current?.rating === "down",
+  ).length;
+  return {
+    analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
+    dashboard_count: dashboardCount,
+    block_count: targetView.slots.length,
+    bound_block_count: boundSlots.length,
+    result_block_count: resultSlots.length,
+    source_pipe_count: new Set(
+      boundSlots
+        .map((slot) => slot.binding?.pipeName)
+        .filter((name): name is string => Boolean(name)),
+    ).size,
+    time_range: targetView.timeRange,
+    has_result: resultSlots.length > 0,
+    all_bound_blocks_have_results:
+      boundSlots.length > 0 &&
+      boundSlots.every((slot) => slot.value !== null),
+    reviewed_block_count:
+      positiveFeedbackBlockCount + negativeFeedbackBlockCount,
+    positive_feedback_block_count: positiveFeedbackBlockCount,
+    negative_feedback_block_count: negativeFeedbackBlockCount,
+    is_starter_dashboard: targetView.id === STARTER_DASHBOARD_ID,
+  };
+}
+
+function liveViewResultSignature(targetView: ViewDefinition): string | null {
+  const resultVersions = targetView.slots
+    .flatMap((slot) =>
+      slot.value
+        ? [
+            `${slot.id}:${slot.value.artifactOutputId}:${slot.value.artifactVersion}`,
+          ]
+        : [],
+    )
+    .sort();
+  return resultVersions.length > 0 ? resultVersions.join("|") : null;
+}
 
 const COMPONENTS: Array<{
   value: ViewComponent;
@@ -331,6 +399,12 @@ export function BrainOverview({
     readActiveAiPresetId,
   );
   const activationViewedRef = useRef(new Set<string>());
+  const lastViewedDashboardRef = useRef<string | null>(null);
+  const lastViewedResultRef = useRef<{
+    viewId: string;
+    signature: string;
+  } | null>(null);
+  const lastRefreshOutcomeRef = useRef<number | null>(null);
   const refreshOnboardingActivation = useCallback(
     () => setActivationVersion((version) => version + 1),
     [],
@@ -413,6 +487,12 @@ export function BrainOverview({
           });
           if (starter.status === "ok") {
             loadedViews = [starter.data];
+            posthog.capture("live_view_dashboard_saved", {
+              ...liveViewAnalyticsProperties(starter.data, 1),
+              action: "created",
+              source: "starter",
+              refresh_requested: false,
+            });
           } else {
             // A second mount can win the create race in development or after
             // a fast route change. Read back before treating that as a failure.
@@ -438,6 +518,10 @@ export function BrainOverview({
         });
       } catch (loadError) {
         if (!silent) {
+          posthog.capture("live_view_load_failed", {
+            analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
+            failure_type: analyticsErrorType(loadError),
+          });
           setError(
             loadError instanceof Error
               ? loadError.message
@@ -462,6 +546,55 @@ export function BrainOverview({
       return next;
     });
   }, [view]);
+
+  useEffect(() => {
+    if (!view || lastViewedDashboardRef.current === view.id) return;
+    const entry_method =
+      lastViewedDashboardRef.current === null ? "initial" : "selection";
+    lastViewedDashboardRef.current = view.id;
+    posthog.capture("live_view_viewed", {
+      ...liveViewAnalyticsProperties(view, views.length),
+      entry_method,
+      is_onboarding: Boolean(onboardingActivation),
+      onboarding_goal_category:
+        onboardingActivation?.goalCategory ?? "unknown",
+    });
+  }, [onboardingActivation, view, views.length]);
+
+  useEffect(() => {
+    if (!view) return;
+    const signature = liveViewResultSignature(view);
+    if (!signature) return;
+
+    const captureVisibleResult = () => {
+      if (document.visibilityState === "hidden") return;
+      const previous = lastViewedResultRef.current;
+      if (
+        previous?.viewId === view.id &&
+        previous.signature === signature
+      ) {
+        return;
+      }
+      const entryMethod = !previous
+        ? "initial"
+        : previous.viewId === view.id
+          ? "result_updated"
+          : "selection";
+      lastViewedResultRef.current = { viewId: view.id, signature };
+      posthog.capture("live_view_result_viewed", {
+        ...liveViewAnalyticsProperties(view, views.length),
+        entry_method: entryMethod,
+        is_onboarding: Boolean(onboardingActivation),
+        onboarding_goal_category:
+          onboardingActivation?.goalCategory ?? "unknown",
+      });
+    };
+
+    captureVisibleResult();
+    document.addEventListener("visibilitychange", captureVisibleResult);
+    return () =>
+      document.removeEventListener("visibilitychange", captureVisibleResult);
+  }, [onboardingActivation, view, views.length]);
 
   useEffect(() => {
     onViewCountChange?.(views.length);
@@ -502,7 +635,11 @@ export function BrainOverview({
   }, []);
 
   const refreshConnectedPipes = useCallback(
-    async (targetView: ViewDefinition, requestedSlots?: ViewSlot[]) => {
+    async (
+      targetView: ViewDefinition,
+      requestedSlots?: ViewSlot[],
+      trigger: LiveViewRefreshTrigger = "manual",
+    ) => {
       const boundSlots = (requestedSlots ?? targetView.slots).filter(
         (slot) => slot.binding,
       );
@@ -513,15 +650,37 @@ export function BrainOverview({
             .filter((name): name is string => Boolean(name)),
         ),
       );
-      if (pipeNames.length === 0) return;
+      const analyticsProperties = {
+        ...liveViewAnalyticsProperties(targetView, views.length),
+        trigger,
+        requested_block_count: boundSlots.length,
+        requested_pipe_count: pipeNames.length,
+        is_onboarding: Boolean(
+          getOnboardingLiveViewActivation(targetView.id),
+        ),
+      };
+      posthog.capture("live_view_refresh_requested", analyticsProperties);
+      if (pipeNames.length === 0) {
+        posthog.capture("live_view_refresh_completed", {
+          ...analyticsProperties,
+          status: "not_configured",
+          duration_ms: 0,
+          refreshed_block_count: 0,
+          pipe_start_failure_count: 0,
+        });
+        return;
+      }
 
       const startedAt = Date.now();
       setDataRefresh({
         status: "starting",
+        trigger,
         viewId: targetView.id,
+        timeRange: targetView.timeRange,
         pipeNames,
         slotIds: boundSlots.map((slot) => slot.id),
         startedAt,
+        startFailureCount: 0,
         filled: 0,
         total: boundSlots.length,
       });
@@ -575,6 +734,7 @@ export function BrainOverview({
               ...current,
               status:
                 failures.length === pipeNames.length ? "error" : "running",
+              startFailureCount: failures.length,
               message:
                 failures.length > 0
                   ? `Could not start ${failures.join(", ")}`
@@ -583,7 +743,7 @@ export function BrainOverview({
           : current,
       );
     },
-    [],
+    [views.length],
   );
 
   useEffect(() => {
@@ -784,6 +944,32 @@ export function BrainOverview({
     };
   }, [dataRefresh]);
 
+  useEffect(() => {
+    if (
+      !dataRefresh ||
+      !["complete", "partial", "error"].includes(dataRefresh.status) ||
+      lastRefreshOutcomeRef.current === dataRefresh.startedAt
+    ) {
+      return;
+    }
+    lastRefreshOutcomeRef.current = dataRefresh.startedAt;
+    posthog.capture("live_view_refresh_completed", {
+      analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
+      trigger: dataRefresh.trigger,
+      status: dataRefresh.status,
+      time_range: dataRefresh.timeRange,
+      duration_ms: Math.max(0, Date.now() - dataRefresh.startedAt),
+      requested_block_count: dataRefresh.total,
+      requested_pipe_count: dataRefresh.pipeNames.length,
+      refreshed_block_count: dataRefresh.filled,
+      pipe_start_failure_count: dataRefresh.startFailureCount,
+      produced_result: dataRefresh.filled > 0,
+      all_requested_blocks_refreshed:
+        dataRefresh.total > 0 && dataRefresh.filled === dataRefresh.total,
+      is_onboarding: dataRefresh.trigger === "onboarding",
+    });
+  }, [dataRefresh]);
+
   const clearTransientState = () => {
     setDraft(null);
     setEditing(false);
@@ -806,6 +992,12 @@ export function BrainOverview({
 
   const beginCreate = () => {
     if (views.length >= MAX_DASHBOARDS) {
+      posthog.capture("live_view_action_blocked", {
+        analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
+        action: "create",
+        reason: "dashboard_limit",
+        dashboard_count: views.length,
+      });
       toast({
         title: "dashboard limit reached",
         description: `Delete a dashboard before creating another. You can keep up to ${MAX_DASHBOARDS}.`,
@@ -813,10 +1005,20 @@ export function BrainOverview({
       });
       return;
     }
+    posthog.capture("live_view_creation_started", {
+      analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
+      source: "ai",
+      dashboard_count: views.length,
+    });
     setCreateDashboardOpen(true);
   };
 
   const beginManualCreate = () => {
+    posthog.capture("live_view_creation_started", {
+      analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
+      source: "manual",
+      dashboard_count: views.length,
+    });
     const now = new Date().toISOString();
     setCreateDashboardOpen(false);
     setDraft({
@@ -838,6 +1040,9 @@ export function BrainOverview({
 
   const beginEdit = () => {
     if (!view) return;
+    posthog.capture("live_view_customize_started", {
+      ...liveViewAnalyticsProperties(view, views.length),
+    });
     setDraft(copyViewDefinition(view));
     setAiPreview(false);
     setPreviewSource(null);
@@ -846,6 +1051,14 @@ export function BrainOverview({
   };
 
   const previewTemplate = (kit: BrainViewTemplateKit) => {
+    posthog.capture("live_view_template_previewed", {
+      analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
+      template_id: kit.id,
+      template_block_count: kit.slots.length,
+      template_pipe_count: kit.pipes.length,
+      dashboard_count: views.length,
+      has_current_view: Boolean(view),
+    });
     const now = new Date().toISOString();
     setDraft({
       id: view?.id ?? "my-overview",
@@ -873,6 +1086,17 @@ export function BrainOverview({
     preset: AIPreset,
     intent: LiveViewGenerationIntent,
   ) => {
+    const startedAt = Date.now();
+    const analyticsProperties = {
+      analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
+      scope,
+      intent,
+      prompt_length: prompt.length,
+      has_current_view: Boolean(view),
+      current_block_count: view?.slots.length ?? 0,
+      dashboard_count: views.length,
+    };
+    posthog.capture("live_view_generation_started", analyticsProperties);
     setTemplateGalleryOpen(false);
     setGenerating(true);
     try {
@@ -947,8 +1171,21 @@ export function BrainOverview({
       );
       setEditing(false);
       setAiPreview(true);
+      posthog.capture("live_view_generation_completed", {
+        ...analyticsProperties,
+        duration_ms: Math.max(0, Date.now() - startedAt),
+        generated_block_count: generated.blocks.length,
+        generated_bound_block_count: generated.blocks.filter(
+          (block) => block.pipeName,
+        ).length,
+      });
       return true;
     } catch (generateError) {
+      posthog.capture("live_view_generation_failed", {
+        ...analyticsProperties,
+        duration_ms: Math.max(0, Date.now() - startedAt),
+        failure_type: analyticsErrorType(generateError),
+      });
       toast({
         title: "failed to generate Live View",
         description:
@@ -1036,14 +1273,28 @@ export function BrainOverview({
           : current,
       );
       posthog.capture("live_view_card_feedback", {
+        ...liveViewAnalyticsProperties(view, views.length),
         action: rating ?? "clear",
+        previous_action: slot.feedback?.current?.rating ?? "none",
+        is_first_feedback: !slot.feedback?.current,
         component: slot.component,
-        pipe: slot.binding?.pipeName ?? null,
+        has_pipe: Boolean(slot.binding),
         has_correction: Boolean(correction?.trim()),
+        is_onboarding: Boolean(onboardingActivation),
+        onboarding_goal_category:
+          onboardingActivation?.goalCategory ?? "unknown",
       });
       if (rating) finishOnboardingActivation("feedback");
       return true;
     } catch (feedbackError) {
+      posthog.capture("live_view_card_feedback_failed", {
+        analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
+        action: rating ?? "clear",
+        component: slot.component,
+        has_pipe: Boolean(slot.binding),
+        has_correction: Boolean(correction?.trim()),
+        failure_type: analyticsErrorType(feedbackError),
+      });
       toast({
         title: "failed to save feedback",
         description:
@@ -1069,6 +1320,15 @@ export function BrainOverview({
       return false;
     }
 
+    const startedAt = Date.now();
+    const analyticsProperties = {
+      analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
+      prompt_length: prompt.length,
+      component: slot.component,
+      has_pipe: Boolean(slot.binding),
+      time_range: view.timeRange,
+    };
+    posthog.capture("live_view_card_ai_edit_started", analyticsProperties);
     setAiEditingSlotId(slot.id);
     try {
       const previousView = copyViewDefinition(view);
@@ -1129,11 +1389,26 @@ export function BrainOverview({
         (candidate) => candidate.id === slot.id,
       );
       if (refreshedSlot?.binding) {
-        void refreshConnectedPipes(result.data, [refreshedSlot]);
+        void refreshConnectedPipes(
+          result.data,
+          [refreshedSlot],
+          "card_ai_edit",
+        );
       }
+      posthog.capture("live_view_card_ai_edit_completed", {
+        ...analyticsProperties,
+        duration_ms: Math.max(0, Date.now() - startedAt),
+        next_component: replacement.component,
+        next_has_pipe: Boolean(replacement.pipeName),
+      });
       toast({ title: `${replacement.title} updated` });
       return true;
     } catch (editError) {
+      posthog.capture("live_view_card_ai_edit_failed", {
+        ...analyticsProperties,
+        duration_ms: Math.max(0, Date.now() - startedAt),
+        failure_type: analyticsErrorType(editError),
+      });
       toast({
         title: "failed to edit this section",
         description:
@@ -1151,6 +1426,9 @@ export function BrainOverview({
     destination: PreviewDestination = draft?.revision === 0 ? "new" : "replace",
   ) => {
     if (!draft || !draft.title.trim()) return;
+    const saveSource = previewSource?.kind ?? "manual";
+    const intendedAction =
+      destination === "new" || draft.revision === 0 ? "created" : "replaced";
     setSaving(true);
     try {
       const creatingNew = destination === "new" || draft.revision === 0;
@@ -1188,6 +1466,7 @@ export function BrainOverview({
       toast({
         title: creatingNew ? `${result.data.title} created` : "dashboard saved",
       });
+      let slotsToRefresh: ViewSlot[] = [];
       if (refreshData) {
         const previousSlots = new Map(
           previousView?.slots.map((slot) => [slot.id, slot]) ?? [],
@@ -1206,10 +1485,34 @@ export function BrainOverview({
           );
         });
         if (changedSlots.length > 0) {
-          void refreshConnectedPipes(result.data, changedSlots);
+          slotsToRefresh = changedSlots;
         }
       }
+      posthog.capture("live_view_dashboard_saved", {
+        ...liveViewAnalyticsProperties(
+          result.data,
+          creatingNew ? views.length + 1 : views.length,
+        ),
+        action: creatingNew ? "created" : "replaced",
+        source: saveSource,
+        refresh_requested: slotsToRefresh.length > 0,
+      });
+      if (slotsToRefresh.length > 0) {
+        void refreshConnectedPipes(
+          result.data,
+          slotsToRefresh,
+          "dashboard_saved",
+        );
+      }
     } catch (saveError) {
+      posthog.capture("live_view_dashboard_save_failed", {
+        analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
+        action: intendedAction,
+        source: saveSource,
+        block_count: draft.slots.length,
+        dashboard_count: views.length,
+        failure_type: analyticsErrorType(saveError),
+      });
       toast({
         title: "failed to save Live View",
         description:
@@ -1275,8 +1578,31 @@ export function BrainOverview({
           ? `${installedView.title} created`
           : `${installedView.title} replaced`,
       });
-      void refreshConnectedPipes(installedView);
+      posthog.capture("live_view_dashboard_saved", {
+        ...liveViewAnalyticsProperties(
+          installedView,
+          creatingNew ? views.length + 1 : views.length,
+        ),
+        action: creatingNew ? "created" : "replaced",
+        source: "template",
+        template_id: kit.id,
+        refresh_requested: true,
+      });
+      void refreshConnectedPipes(
+        installedView,
+        undefined,
+        "template_applied",
+      );
     } catch (installError) {
+      posthog.capture("live_view_dashboard_save_failed", {
+        analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
+        action: creatingNew ? "created" : "replaced",
+        source: "template",
+        template_id: kit.id,
+        block_count: kit.slots.length,
+        dashboard_count: views.length,
+        failure_type: analyticsErrorType(installError),
+      });
       toast({
         title: "template was not installed",
         description:
@@ -1308,8 +1634,17 @@ export function BrainOverview({
       });
       if (result.status === "error") throw new Error(result.error);
       setView(result.data);
+      posthog.capture("live_view_dashboard_action", {
+        ...liveViewAnalyticsProperties(result.data, views.length),
+        action: "renamed",
+      });
       toast({ title: `renamed to ${result.data.title}` });
     } catch (renameError) {
+      posthog.capture("live_view_dashboard_action_failed", {
+        analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
+        action: "renamed",
+        failure_type: analyticsErrorType(renameError),
+      });
       toast({
         title: "could not rename dashboard",
         description:
@@ -1348,9 +1683,27 @@ export function BrainOverview({
       if (result.status === "error") throw new Error(result.error);
       clearTransientState();
       setView(result.data);
+      posthog.capture("live_view_dashboard_saved", {
+        ...liveViewAnalyticsProperties(result.data, views.length + 1),
+        action: "created",
+        source: "duplicate",
+        refresh_requested: true,
+      });
       toast({ title: `${result.data.title} created` });
-      void refreshConnectedPipes(result.data);
+      void refreshConnectedPipes(
+        result.data,
+        undefined,
+        "dashboard_duplicated",
+      );
     } catch (duplicateError) {
+      posthog.capture("live_view_dashboard_save_failed", {
+        analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
+        action: "created",
+        source: "duplicate",
+        block_count: view.slots.length,
+        dashboard_count: views.length,
+        failure_type: analyticsErrorType(duplicateError),
+      });
       toast({
         title: "could not duplicate dashboard",
         description:
@@ -1378,8 +1731,17 @@ export function BrainOverview({
       setView(next);
       rememberSelectedLiveViewDashboard(next?.id ?? null);
       removeOnboardingLiveViewActivation(deletingId);
+      posthog.capture("live_view_dashboard_deleted", {
+        ...liveViewAnalyticsProperties(view, views.length),
+        dashboard_count_after: nextViews.length,
+      });
       toast({ title: "dashboard deleted" });
     } catch (deleteError) {
+      posthog.capture("live_view_dashboard_action_failed", {
+        analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
+        action: "deleted",
+        failure_type: analyticsErrorType(deleteError),
+      });
       toast({
         title: "could not delete dashboard",
         description:
@@ -1410,9 +1772,20 @@ export function BrainOverview({
       setView(result.data);
       setUndoView(null);
       setUndoRevision(null);
+      posthog.capture("live_view_dashboard_saved", {
+        ...liveViewAnalyticsProperties(result.data, views.length),
+        action: "restored",
+        source: "undo",
+        refresh_requested: true,
+      });
       toast({ title: "previous dashboard restored" });
-      void refreshConnectedPipes(result.data);
+      void refreshConnectedPipes(result.data, undefined, "undo");
     } catch (restoreError) {
+      posthog.capture("live_view_dashboard_action_failed", {
+        analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
+        action: "restored",
+        failure_type: analyticsErrorType(restoreError),
+      });
       toast({
         title: "could not restore the previous dashboard",
         description:
@@ -1457,11 +1830,20 @@ export function BrainOverview({
       setView(result.data);
       setUndoView(previousView);
       setUndoRevision(result.data.revision);
+      posthog.capture("live_view_time_range_changed", {
+        ...liveViewAnalyticsProperties(result.data, views.length),
+        previous_time_range: previousView.timeRange,
+      });
       toast({
         title: `showing ${getLiveViewTimeRangeOption(timeRange).label.toLowerCase()}`,
       });
-      void refreshConnectedPipes(result.data);
+      void refreshConnectedPipes(result.data, undefined, "time_range");
     } catch (rangeError) {
+      posthog.capture("live_view_dashboard_action_failed", {
+        analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
+        action: "time_range_changed",
+        failure_type: analyticsErrorType(rangeError),
+      });
       toast({
         title: "could not change the time range",
         description:
@@ -2032,7 +2414,7 @@ export function BrainOverview({
               goal_category: onboardingActivation.goalCategory,
               pipe_count: onboardingPipeNames.length,
             });
-            void refreshConnectedPipes(view);
+            void refreshConnectedPipes(view, undefined, "onboarding");
           }}
           onComplete={() => finishOnboardingActivation("confirmed")}
         />
@@ -2076,7 +2458,13 @@ export function BrainOverview({
               onFeedback={(rating, correction) =>
                 recordCardFeedback(slot, rating, correction)
               }
-              onRegenerate={() => void refreshConnectedPipes(view, [slot])}
+              onRegenerate={() =>
+                void refreshConnectedPipes(
+                  view,
+                  [slot],
+                  "card_regenerated",
+                )
+              }
               onAiEdit={(prompt) => editSlotWithAi(slot, prompt)}
             />
           ))}

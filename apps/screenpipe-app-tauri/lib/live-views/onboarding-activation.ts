@@ -13,7 +13,22 @@ const ACTIVATIONS_STORAGE_KEY =
   "screenpipe.live-view.onboarding-activations.v1";
 const BRAIN_HANDOFF_STORAGE_KEY =
   "screenpipe.live-view.onboarding-brain-handoff.v1";
+export const USER_GOAL_STORAGE_KEY = "screenpipe.user.goal-category.v1";
+export const USER_GOAL_CHANGED_EVENT = "screenpipe:user-goal-changed";
+const LEGACY_HOME_FOCUS_STORAGE_KEY = "screenpipe.home.focus.v1";
 const MAX_STORED_ACTIVATIONS = 12;
+
+export type UserGoalCategory =
+  | Exclude<OnboardingGoalCategory, "custom">
+  | "default";
+
+const USER_GOAL_CATEGORIES = new Set<UserGoalCategory>([
+  "default",
+  "work_memory",
+  "meeting_follow_through",
+  "work_patterns",
+  "process_automation",
+]);
 
 export type OnboardingLiveViewActivation = {
   viewId: string;
@@ -101,6 +116,58 @@ function writeActivations(activations: ActivationMap): void {
   }
 }
 
+function normalizeUserGoalCategory(value: unknown): UserGoalCategory | null {
+  return typeof value === "string" &&
+    USER_GOAL_CATEGORIES.has(value as UserGoalCategory)
+    ? (value as UserGoalCategory)
+    : null;
+}
+
+export function getUserGoalCategory(): UserGoalCategory {
+  if (typeof window === "undefined") return "default";
+  try {
+    const stored = normalizeUserGoalCategory(
+      window.localStorage.getItem(USER_GOAL_STORAGE_KEY),
+    );
+    if (stored) return stored;
+
+    const legacy = normalizeUserGoalCategory(
+      window.localStorage.getItem(LEGACY_HOME_FOCUS_STORAGE_KEY),
+    );
+    if (legacy) {
+      window.localStorage.setItem(USER_GOAL_STORAGE_KEY, legacy);
+      window.localStorage.removeItem(LEGACY_HOME_FOCUS_STORAGE_KEY);
+      return legacy;
+    }
+
+    // Migrate existing onboarding activations without reading the free-text goal.
+    const latest = Object.values(readActivations()).sort(
+      (left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt),
+    )[0];
+    return latest && latest.goalCategory !== "custom"
+      ? latest.goalCategory
+      : "default";
+  } catch {
+    return "default";
+  }
+}
+
+export function setUserGoalCategory(category: UserGoalCategory): void {
+  if (typeof window === "undefined") return;
+  const normalized = normalizeUserGoalCategory(category) ?? "default";
+  try {
+    window.localStorage.setItem(USER_GOAL_STORAGE_KEY, normalized);
+    window.localStorage.removeItem(LEGACY_HOME_FOCUS_STORAGE_KEY);
+  } catch {
+    // Personalization is optional; the default card order remains usable.
+  }
+  window.dispatchEvent(
+    new CustomEvent<UserGoalCategory>(USER_GOAL_CHANGED_EVENT, {
+      detail: normalized,
+    }),
+  );
+}
+
 export function rememberSelectedLiveViewDashboard(viewId: string | null): void {
   if (typeof window === "undefined") return;
   try {
@@ -154,6 +221,9 @@ export function startOnboardingLiveViewActivation(
   };
   activations[viewId] = activation;
   writeActivations(activations);
+  setUserGoalCategory(
+    goalCategory === "custom" ? "default" : goalCategory,
+  );
   rememberSelectedLiveViewDashboard(viewId);
   requestOnboardingBrainHandoff(viewId);
   return activation;

@@ -1277,6 +1277,16 @@
       "notes": "Per-app meeting-detection ignore picker: open, toggle, count badge, persistence across reopen (#3882 / #3847)."
     },
     {
+      "spec": "timeline-daily-summary.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["real-ui-e2e"],
+      "features": ["timeline", "settings-ai"],
+      "criticality": "medium",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Opens a cached Pi-generated daily summary in Timeline, checks its bounded scrolling layout, captures a screenshot, and closes it."
+    },
+    {
       "spec": "timeline.spec.ts",
       "platforms": [
         "windows",
