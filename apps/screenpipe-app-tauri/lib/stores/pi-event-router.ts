@@ -187,8 +187,11 @@ export async function handlePiEvent(envelope: AgentEventEnvelope) {
     useAcpSessionConfig.getState().setFromEvent(sid, inner);
     return;
   }
-  // Mode/option changes stream as generic acp_update notifications; mirror
-  // them into the config store and keep routing the event as before.
+  // Mode/option changes stream as generic acp_update notifications. Like
+  // acp_session_config above, this is pure runtime metadata: capture it for the
+  // composer picker and stop — it must not fall through to the lazy-create
+  // upsert and materialize a phantom "untitled" chat row for a session that has
+  // no content yet.
   if ((inner as { type?: string }).type === "acp_update") {
     const update = (inner as { update?: { sessionUpdate?: string } }).update;
     if (
@@ -196,6 +199,7 @@ export async function handlePiEvent(envelope: AgentEventEnvelope) {
       update?.sessionUpdate === "config_option_update"
     ) {
       useAcpSessionConfig.getState().applyUpdate(sid, update);
+      return;
     }
   }
   // Pipe sessions are only routed when chat-store already has a record
