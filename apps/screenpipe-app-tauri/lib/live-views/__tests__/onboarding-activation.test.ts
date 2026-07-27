@@ -71,6 +71,19 @@ describe("onboarding Live View activation", () => {
     expect(getUserGoalCategory()).toBe("process_automation");
   });
 
+  it("defaults an untouched existing user to work memory", () => {
+    expect(getUserGoalCategory()).toBe("work_memory");
+    expect(window.localStorage.getItem(USER_GOAL_STORAGE_KEY)).toBe(
+      "work_memory",
+    );
+  });
+
+  it("preserves an explicit No specific goal choice", () => {
+    setUserGoalCategory("default");
+
+    expect(getUserGoalCategory()).toBe("default");
+  });
+
   it("uses the default order for a custom onboarding goal", () => {
     startOnboardingLiveViewActivation("first-dashboard-5", "custom");
 

@@ -30,6 +30,8 @@ const USER_GOAL_CATEGORIES = new Set<UserGoalCategory>([
   "process_automation",
 ]);
 
+const DEFAULT_USER_GOAL_CATEGORY: UserGoalCategory = "work_memory";
+
 export type OnboardingLiveViewActivation = {
   viewId: string;
   goalCategory: OnboardingGoalCategory;
@@ -124,7 +126,7 @@ function normalizeUserGoalCategory(value: unknown): UserGoalCategory | null {
 }
 
 export function getUserGoalCategory(): UserGoalCategory {
-  if (typeof window === "undefined") return "default";
+  if (typeof window === "undefined") return DEFAULT_USER_GOAL_CATEGORY;
   try {
     const stored = normalizeUserGoalCategory(
       window.localStorage.getItem(USER_GOAL_STORAGE_KEY),
@@ -144,11 +146,15 @@ export function getUserGoalCategory(): UserGoalCategory {
     const latest = Object.values(readActivations()).sort(
       (left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt),
     )[0];
-    return latest && latest.goalCategory !== "custom"
-      ? latest.goalCategory
-      : "default";
+    const migratedGoal = latest
+      ? latest.goalCategory === "custom"
+        ? "default"
+        : latest.goalCategory
+      : DEFAULT_USER_GOAL_CATEGORY;
+    window.localStorage.setItem(USER_GOAL_STORAGE_KEY, migratedGoal);
+    return migratedGoal;
   } catch {
-    return "default";
+    return DEFAULT_USER_GOAL_CATEGORY;
   }
 }
 
