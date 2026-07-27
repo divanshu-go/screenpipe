@@ -123,7 +123,12 @@ async fn run_connect_request(body: ConnectRequestBody, grace: Duration, wait: Du
         .filter(|s| !s.is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| format!("Connect {name} to continue this task."));
-    let message = match body.required_for.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    let message = match body
+        .required_for
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         Some(required_for) => {
             format!("{reason}\n\nAfter connecting, I will continue: {required_for}")
         }
@@ -148,7 +153,8 @@ async fn run_connect_request(body: ConnectRequestBody, grace: Duration, wait: Du
     }
 
     // Phase 1: has any window shown the card (or answered outright) in time?
-    let acked = tokio::time::timeout(grace, next_response(&mut responses, &request_id, false)).await;
+    let acked =
+        tokio::time::timeout(grace, next_response(&mut responses, &request_id, false)).await;
     let status = match acked {
         // No ack within the grace window: the chat isn't open anywhere, so give
         // up fast — the tool falls back to the async, tool-result-driven card.
@@ -157,7 +163,8 @@ async fn run_connect_request(body: ConnectRequestBody, grace: Duration, wait: Du
         Ok(Some(status)) if status == "declined" => "declined",
         // "shown": the card is up. Phase 2 — wait for the user's real answer.
         Ok(Some(_)) => {
-            match tokio::time::timeout(wait, next_response(&mut responses, &request_id, true)).await {
+            match tokio::time::timeout(wait, next_response(&mut responses, &request_id, true)).await
+            {
                 Ok(Some(status)) if status == "connected" => "connected",
                 Ok(Some(_)) => "declined",
                 Ok(None) | Err(_) => "timeout",
@@ -243,7 +250,8 @@ mod tests {
         //    window, resolves to connected (phase 2 keeps waiting once acked).
         let responder = answer_next_request(&["shown", "connected"], Duration::from_millis(120));
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let result = run_connect_request(request_body("notion"), grace, Duration::from_secs(5)).await;
+        let result =
+            run_connect_request(request_body("notion"), grace, Duration::from_secs(5)).await;
         assert_eq!(result["status"], "connected");
         assert_eq!(result["connectionId"], "notion");
         responder.await.unwrap();
@@ -251,7 +259,8 @@ mod tests {
         // 2. Shown, then a non-connected answer is a decline.
         let responder = answer_next_request(&["shown", "dismissed"], Duration::from_millis(120));
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let result = run_connect_request(request_body("gmail"), grace, Duration::from_secs(5)).await;
+        let result =
+            run_connect_request(request_body("gmail"), grace, Duration::from_secs(5)).await;
         assert_eq!(result["status"], "declined");
         responder.await.unwrap();
 
@@ -259,20 +268,23 @@ mod tests {
         //    still resolves to connected.
         let responder = answer_next_request(&["connected"], Duration::ZERO);
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let result = run_connect_request(request_body("slack"), grace, Duration::from_secs(5)).await;
+        let result =
+            run_connect_request(request_body("slack"), grace, Duration::from_secs(5)).await;
         assert_eq!(result["status"], "connected");
         responder.await.unwrap();
 
         // 4. No ack at all → fast timeout after the grace window (chat not open
         //    anywhere; the tool falls back to the async card).
-        let result = run_connect_request(request_body("linear"), grace, Duration::from_secs(5)).await;
+        let result =
+            run_connect_request(request_body("linear"), grace, Duration::from_secs(5)).await;
         assert_eq!(result["status"], "timeout");
         assert_eq!(result["connectionId"], "linear");
 
         // 5. Shown but never answered → timeout after the (short) wait phase.
         let responder = answer_next_request(&["shown"], Duration::ZERO);
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let result = run_connect_request(request_body("asana"), grace, Duration::from_millis(200)).await;
+        let result =
+            run_connect_request(request_body("asana"), grace, Duration::from_millis(200)).await;
         assert_eq!(result["status"], "timeout");
         responder.await.unwrap();
     }
