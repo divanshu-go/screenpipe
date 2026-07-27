@@ -54,6 +54,7 @@ use crate::{
             list_memories_handler, list_memory_tags_handler, sync_external_memories_handler,
             update_memory_handler,
         },
+        qualified_value::qualified_value_handler,
         retranscribe::retranscribe_meeting_handler,
         search::{keyword_search_handler, search},
         speakers::{
@@ -794,6 +795,7 @@ impl SCServer {
             .get("/frames/:frame_id/metadata", get_frame_metadata)
             .get("/frames/next-valid", get_next_valid_frame)
             .get("/health", health_check)
+            .post("/analytics/qualified-value", qualified_value_handler)
             .post("/raw_sql", execute_raw_sql)
             .post("/add", add_to_database)
             .get("/speakers/unnamed", get_unnamed_speakers_handler)

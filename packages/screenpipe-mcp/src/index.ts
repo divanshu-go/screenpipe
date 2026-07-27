@@ -26,6 +26,11 @@ import {
   flushMcpTelemetry,
   initMcpTelemetry,
 } from "./telemetry";
+import {
+  buildMcpQualifiedValuePayload,
+  type McpQualifiedValueAction,
+  type McpQualifiedValueStrength,
+} from "./qualified-value";
 
 initMcpTelemetry({ transport: "stdio" });
 
@@ -1240,6 +1245,18 @@ async function callAPI(endpoint: string, options: RequestInit = {}): Promise<Res
   return response;
 }
 
+function reportQualifiedMcpValue(
+  action: McpQualifiedValueAction,
+  valueStrength: McpQualifiedValueStrength,
+): void {
+  // Best-effort and backward-compatible with older engines that do not expose
+  // this endpoint yet. A telemetry failure must never fail the user's tool call.
+  void callAPI("/analytics/qualified-value", {
+    method: "POST",
+    body: JSON.stringify(buildMcpQualifiedValuePayload(action, valueStrength)),
+  }).catch(() => {});
+}
+
 // Server's deserialize_flexible_datetime accepts ISO 8601 + "Nh ago" / "Nd ago"
 // / "Nw ago" / "now". Models also try "yesterday", "today", and bare dates
 // ("2026-05-17") — normalize those here so the request doesn't 400.
@@ -1490,6 +1507,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
+        reportQualifiedMcpValue("search", "retrieved");
+
         const contentItems: Array<
           | { type: "text"; text: string }
           | { type: "image"; data: string; mimeType: string }
@@ -1604,6 +1623,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
+        reportQualifiedMcpValue("meeting", "retrieved");
+
         const formatted = meetings.map((m: Record<string, unknown>) => {
           const start = m.meeting_start as string;
           const end = (m.meeting_end as string) || "ongoing";
@@ -1636,6 +1657,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const response = await callAPI(`/activity-summary?${params.toString()}`);
 
         const data = await response.json();
+
+        if (
+          (data.total_frames ?? 0) > 0 ||
+          (data.audio_summary?.segment_count ?? 0) > 0 ||
+          (data.apps?.length ?? 0) > 0
+        ) {
+          reportQualifiedMcpValue("artifact", "retrieved");
+        }
 
         const appsLines = (data.apps || []).map(
           (a: {
@@ -1725,6 +1754,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const response = await callAPI(`/elements?${params.toString()}`);
         const text = (await response.text()).trim();
 
+        if (text.length && !text.startsWith("No elements")) {
+          reportQualifiedMcpValue("search", "retrieved");
+        }
+
         return {
           content: [
             {
@@ -1747,6 +1780,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         const data = await response.json();
         const lines = [`Frame ${data.frame_id} (source: ${data.text_source})`];
+
+        if (data.text || data.nodes?.length || data.urls?.length) {
+          reportQualifiedMcpValue("search", "retrieved");
+        }
 
         if (data.urls?.length) {
           lines.push("", "URLs:", ...data.urls.map((u: string) => `  ${u}`));
@@ -1805,6 +1842,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           const sizeMb = data.file_size_bytes
             ? (data.file_size_bytes / (1024 * 1024)).toFixed(1)
             : null;
+          if ((data.frame_count ?? 0) > 0 || (data.audio_chunk_count ?? 0) > 0) {
+            reportQualifiedMcpValue("artifact", "completed");
+          }
           return {
             content: [
               {
@@ -2101,6 +2141,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
         }
 
+        if (meeting && Object.keys(meeting).length > 0) {
+          reportQualifiedMcpValue("meeting", "retrieved");
+        }
+
         return {
           content: [{ type: "text", text }],
         };
@@ -2173,6 +2217,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (results.length === 0) {
           return { content: [{ type: "text", text: "No keyword search results found." }] };
         }
+        reportQualifiedMcpValue("search", "retrieved");
         const formatted = results.map((r) => {
           // Flat shape from search_with_text_positions: { app_name, frame_id,
           // timestamp, text, text_source, ... }. Truncate to keep responses
@@ -2201,6 +2246,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // "no elements".
         const response = await callAPI(`/frames/${frameId}/elements?format=outline`);
         const text = (await response.text()).trim();
+        if (text.length && !text.startsWith("No elements")) {
+          reportQualifiedMcpValue("search", "retrieved");
+        }
         return {
           content: [
             {
