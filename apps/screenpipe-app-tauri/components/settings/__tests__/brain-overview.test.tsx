@@ -152,6 +152,25 @@ beforeAll(() => {
   Element.prototype.scrollIntoView ||= () => {};
 });
 
+function setDocumentVisibility(state: "visible" | "hidden"): () => void {
+  const original = Object.getOwnPropertyDescriptor(
+    Document.prototype,
+    "visibilityState",
+  );
+  Object.defineProperty(document, "visibilityState", {
+    configurable: true,
+    get: () => state,
+  });
+  return () => {
+    if (original) {
+      Object.defineProperty(document, "visibilityState", original);
+    } else {
+      delete (document as { visibilityState?: DocumentVisibilityState })
+        .visibilityState;
+    }
+  };
+}
+
 const populatedView: ViewDefinition = {
   id: "my-overview",
   title: "How I worked today",
@@ -457,7 +476,7 @@ describe("BrainOverview", () => {
       expect(mocks.capture).toHaveBeenCalledWith(
         "live_view_viewed",
         expect.objectContaining({
-          analytics_schema_version: 1,
+          analytics_schema_version: 2,
           entry_method: "initial",
           dashboard_count: 1,
           block_count: 1,
@@ -466,7 +485,10 @@ describe("BrainOverview", () => {
           source_pipe_count: 1,
           time_range: "today",
           has_result: true,
+          all_bound_blocks_have_results: true,
+          reviewed_block_count: 0,
           is_onboarding: false,
+          onboarding_goal_category: "unknown",
         }),
       ),
     );
@@ -476,6 +498,64 @@ describe("BrainOverview", () => {
     expect(JSON.stringify(properties)).not.toContain("my-overview");
     expect(JSON.stringify(properties)).not.toContain("How I worked today");
     expect(JSON.stringify(properties)).not.toContain("daily-summary");
+  });
+
+  it("captures a visible source-backed result separately from a dashboard view", async () => {
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [populatedView],
+    });
+    render(<BrainOverview />);
+
+    await screen.findByText("How I worked today");
+    await waitFor(() =>
+      expect(mocks.capture).toHaveBeenCalledWith(
+        "live_view_result_viewed",
+        expect.objectContaining({
+          analytics_schema_version: 2,
+          entry_method: "initial",
+          result_block_count: 1,
+          all_bound_blocks_have_results: true,
+          positive_feedback_block_count: 0,
+          negative_feedback_block_count: 0,
+        }),
+      ),
+    );
+    const properties = mocks.capture.mock.calls.find(
+      ([event]) => event === "live_view_result_viewed",
+    )?.[1];
+    expect(JSON.stringify(properties)).not.toContain("my-overview");
+    expect(JSON.stringify(properties)).not.toContain("How I worked today");
+    expect(JSON.stringify(properties)).not.toContain("daily-summary");
+    expect(JSON.stringify(properties)).not.toContain("88");
+  });
+
+  it("does not count a result as viewed until the app is visible", async () => {
+    const restoreVisibility = setDocumentVisibility("hidden");
+    try {
+      mocks.listBrainViews.mockResolvedValue({
+        status: "ok",
+        data: [populatedView],
+      });
+      render(<BrainOverview />);
+
+      await screen.findByText("How I worked today");
+      expect(
+        mocks.capture.mock.calls.some(
+          ([event]) => event === "live_view_result_viewed",
+        ),
+      ).toBe(false);
+    } finally {
+      restoreVisibility();
+    }
+
+    fireEvent(document, new Event("visibilitychange"));
+    await waitFor(() =>
+      expect(mocks.capture).toHaveBeenCalledWith(
+        "live_view_result_viewed",
+        expect.objectContaining({ entry_method: "initial" }),
+      ),
+    );
   });
 
   it("switches between named dashboards without changing either one", async () => {
@@ -619,7 +699,7 @@ describe("BrainOverview", () => {
     expect(mocks.capture).toHaveBeenCalledWith(
       "live_view_generation_started",
       expect.objectContaining({
-        analytics_schema_version: 1,
+        analytics_schema_version: 2,
         scope: "dashboard",
         intent: "new-dashboard",
         prompt_length: "show my GTM progress this week".length,
@@ -674,13 +754,15 @@ describe("BrainOverview", () => {
       expect(mocks.capture).toHaveBeenCalledWith(
         "live_view_refresh_completed",
         expect.objectContaining({
-          analytics_schema_version: 1,
+          analytics_schema_version: 2,
           trigger: "manual",
           status: "error",
           requested_block_count: 1,
           requested_pipe_count: 1,
           refreshed_block_count: 0,
           pipe_start_failure_count: 1,
+          produced_result: false,
+          all_requested_blocks_refreshed: false,
         }),
       ),
     );
@@ -1595,6 +1677,17 @@ describe("BrainOverview", () => {
       rating: "up",
       correction: null,
     });
+    expect(mocks.capture).toHaveBeenCalledWith(
+      "live_view_card_feedback",
+      expect.objectContaining({
+        analytics_schema_version: 2,
+        action: "up",
+        previous_action: "none",
+        is_first_feedback: true,
+        result_block_count: 1,
+        is_onboarding: false,
+      }),
+    );
 
     fireEvent.click(
       screen.getByRole("button", { name: "regenerate Focus time" }),

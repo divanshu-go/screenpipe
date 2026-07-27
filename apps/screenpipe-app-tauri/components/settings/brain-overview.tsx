@@ -134,7 +134,7 @@ type PreviewDestination = "new" | "replace";
 const MAX_DASHBOARDS = 12;
 const STARTER_DASHBOARD_ID = "my-dashboard";
 const STARTER_DASHBOARD_TITLE = "My dashboard";
-const LIVE_VIEW_ANALYTICS_SCHEMA_VERSION = 1;
+const LIVE_VIEW_ANALYTICS_SCHEMA_VERSION = 2;
 
 function analyticsErrorType(error: unknown): string {
   return error instanceof Error ? error.name : "unknown";
@@ -145,22 +145,48 @@ function liveViewAnalyticsProperties(
   dashboardCount: number,
 ) {
   const boundSlots = targetView.slots.filter((slot) => slot.binding);
+  const resultSlots = targetView.slots.filter((slot) => slot.value !== null);
+  const positiveFeedbackBlockCount = targetView.slots.filter(
+    (slot) => slot.feedback?.current?.rating === "up",
+  ).length;
+  const negativeFeedbackBlockCount = targetView.slots.filter(
+    (slot) => slot.feedback?.current?.rating === "down",
+  ).length;
   return {
     analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
     dashboard_count: dashboardCount,
     block_count: targetView.slots.length,
     bound_block_count: boundSlots.length,
-    result_block_count: targetView.slots.filter((slot) => slot.value !== null)
-      .length,
+    result_block_count: resultSlots.length,
     source_pipe_count: new Set(
       boundSlots
         .map((slot) => slot.binding?.pipeName)
         .filter((name): name is string => Boolean(name)),
     ).size,
     time_range: targetView.timeRange,
-    has_result: targetView.slots.some((slot) => slot.value !== null),
+    has_result: resultSlots.length > 0,
+    all_bound_blocks_have_results:
+      boundSlots.length > 0 &&
+      boundSlots.every((slot) => slot.value !== null),
+    reviewed_block_count:
+      positiveFeedbackBlockCount + negativeFeedbackBlockCount,
+    positive_feedback_block_count: positiveFeedbackBlockCount,
+    negative_feedback_block_count: negativeFeedbackBlockCount,
     is_starter_dashboard: targetView.id === STARTER_DASHBOARD_ID,
   };
+}
+
+function liveViewResultSignature(targetView: ViewDefinition): string | null {
+  const resultVersions = targetView.slots
+    .flatMap((slot) =>
+      slot.value
+        ? [
+            `${slot.id}:${slot.value.artifactOutputId}:${slot.value.artifactVersion}`,
+          ]
+        : [],
+    )
+    .sort();
+  return resultVersions.length > 0 ? resultVersions.join("|") : null;
 }
 
 const COMPONENTS: Array<{
@@ -374,6 +400,10 @@ export function BrainOverview({
   );
   const activationViewedRef = useRef(new Set<string>());
   const lastViewedDashboardRef = useRef<string | null>(null);
+  const lastViewedResultRef = useRef<{
+    viewId: string;
+    signature: string;
+  } | null>(null);
   const lastRefreshOutcomeRef = useRef<number | null>(null);
   const refreshOnboardingActivation = useCallback(
     () => setActivationVersion((version) => version + 1),
@@ -526,7 +556,44 @@ export function BrainOverview({
       ...liveViewAnalyticsProperties(view, views.length),
       entry_method,
       is_onboarding: Boolean(onboardingActivation),
+      onboarding_goal_category:
+        onboardingActivation?.goalCategory ?? "unknown",
     });
+  }, [onboardingActivation, view, views.length]);
+
+  useEffect(() => {
+    if (!view) return;
+    const signature = liveViewResultSignature(view);
+    if (!signature) return;
+
+    const captureVisibleResult = () => {
+      if (document.visibilityState === "hidden") return;
+      const previous = lastViewedResultRef.current;
+      if (
+        previous?.viewId === view.id &&
+        previous.signature === signature
+      ) {
+        return;
+      }
+      const entryMethod = !previous
+        ? "initial"
+        : previous.viewId === view.id
+          ? "result_updated"
+          : "selection";
+      lastViewedResultRef.current = { viewId: view.id, signature };
+      posthog.capture("live_view_result_viewed", {
+        ...liveViewAnalyticsProperties(view, views.length),
+        entry_method: entryMethod,
+        is_onboarding: Boolean(onboardingActivation),
+        onboarding_goal_category:
+          onboardingActivation?.goalCategory ?? "unknown",
+      });
+    };
+
+    captureVisibleResult();
+    document.addEventListener("visibilitychange", captureVisibleResult);
+    return () =>
+      document.removeEventListener("visibilitychange", captureVisibleResult);
   }, [onboardingActivation, view, views.length]);
 
   useEffect(() => {
@@ -896,6 +963,9 @@ export function BrainOverview({
       requested_pipe_count: dataRefresh.pipeNames.length,
       refreshed_block_count: dataRefresh.filled,
       pipe_start_failure_count: dataRefresh.startFailureCount,
+      produced_result: dataRefresh.filled > 0,
+      all_requested_blocks_refreshed:
+        dataRefresh.total > 0 && dataRefresh.filled === dataRefresh.total,
       is_onboarding: dataRefresh.trigger === "onboarding",
     });
   }, [dataRefresh]);
@@ -1203,11 +1273,16 @@ export function BrainOverview({
           : current,
       );
       posthog.capture("live_view_card_feedback", {
-        analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
+        ...liveViewAnalyticsProperties(view, views.length),
         action: rating ?? "clear",
+        previous_action: slot.feedback?.current?.rating ?? "none",
+        is_first_feedback: !slot.feedback?.current,
         component: slot.component,
         has_pipe: Boolean(slot.binding),
         has_correction: Boolean(correction?.trim()),
+        is_onboarding: Boolean(onboardingActivation),
+        onboarding_goal_category:
+          onboardingActivation?.goalCategory ?? "unknown",
       });
       if (rating) finishOnboardingActivation("feedback");
       return true;
