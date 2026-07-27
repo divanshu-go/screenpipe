@@ -216,6 +216,16 @@ export async function handlePiEvent(envelope: AgentEventEnvelope) {
   const store = useChatStore.getState();
   let existing = store.sessions[sid];
 
+  // ACP lifecycle/metadata events (acp_status / acp_ready / acp_fatal /
+  // acp_external_auth_required / acp_auth_cancelled / acp_authenticated) carry
+  // no chat content. For a session the store hasn't hydrated yet they must not
+  // fall through to the lazy-create below and materialize a phantom "untitled"
+  // row pinned to "streaming" (mirrors the acp_session_config / acp_update
+  // guards above). If the row already exists they proceed to normal handling.
+  if (!existing && (inner as { type?: string }).type?.startsWith("acp_")) {
+    return;
+  }
+
   const nextStatus = statusForEvent(inner);
   const snippet = previewSnippet(inner);
   const err = errorMessage(inner);
