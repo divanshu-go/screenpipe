@@ -608,6 +608,12 @@ Refresh the assigned Live View output targets from source-backed activity.
     expect(await $("[data-testid='overview-time-range']").isExisting()).toBe(
       false,
     );
+    const fixedDashboardText = (await browser.execute(
+      () => document.body?.innerText || "",
+    )) as string;
+    expect(fixedDashboardText).toContain(
+      "Pipes fill these Blocks for today. Data changes when you refresh or a connected Pipe runs.",
+    );
     const fixedScreenshot = await saveScreenshot(
       "brain-overview-fixed-range-hidden",
     );

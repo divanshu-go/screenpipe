@@ -830,7 +830,7 @@ describe("BrainOverview", () => {
     expect(screen.queryByTestId("overview-time-range")).toBeNull();
     expect(
       screen.getByText(
-        "Pipes update these Blocks when you refresh or a connected Pipe runs.",
+        /Pipes fill these Blocks for today\. Data changes when you refresh or a connected Pipe runs\./,
       ),
     ).toBeTruthy();
 
@@ -1317,6 +1317,10 @@ describe("BrainOverview", () => {
     mocks.generateLiveViewWithPi.mockResolvedValue({
       title: "My working week",
       timeRange: "7d",
+      periodPolicy: {
+        type: "selectable.v1",
+        values: ["today", "24h", "7d", "30d"],
+      },
       note: "A time overview with automation opportunities.",
       blocks: [
         {
@@ -1368,6 +1372,10 @@ describe("BrainOverview", () => {
 
     fireEvent.click(screen.getByTestId("overview-apply-ai"));
     await waitFor(() => expect(mocks.saveBrainView).toHaveBeenCalledTimes(2));
+    expect(mocks.saveBrainView.mock.calls[1][0].periodPolicy).toEqual({
+      type: "selectable.v1",
+      values: ["today", "24h", "7d", "30d"],
+    });
     expect(mocks.saveBrainView.mock.calls[1][0].slots).toEqual([
       expect.objectContaining({
         title: "Time by project",

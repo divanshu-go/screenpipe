@@ -1317,7 +1317,8 @@ export function BrainOverview({
               title: generated.title,
               revision: 0,
               timeRange: generated.timeRange,
-              periodPolicy: DEFAULT_LIVE_VIEW_PERIOD_POLICY,
+              periodPolicy:
+                generated.periodPolicy ?? DEFAULT_LIVE_VIEW_PERIOD_POLICY,
               slots: [],
               createdAt: now,
               updatedAt: now,
@@ -2473,9 +2474,7 @@ export function BrainOverview({
           <p className="mt-2 text-xs text-muted-foreground">
             {onboardingColdStart
               ? "This view will appear when Screenpipe has enough real activity for your outcome."
-              : view.periodPolicy.type === "fixed.v1"
-                ? "Pipes update these Blocks when you refresh or a connected Pipe runs."
-                : `Pipes fill these Blocks for ${selectedPeriod.label.toLowerCase()}. Data changes when you refresh or a connected Pipe runs.`}
+              : `Pipes fill these Blocks for ${selectedPeriod.label.toLowerCase()}. Data changes when you refresh or a connected Pipe runs.`}
             {latestDataTimestamp !== null && (
               <span className="ml-1">
                 Last data {new Date(latestDataTimestamp).toLocaleString()}.
