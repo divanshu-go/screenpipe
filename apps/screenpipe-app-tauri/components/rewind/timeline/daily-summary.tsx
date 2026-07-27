@@ -39,6 +39,7 @@ import { localFetch } from "@/lib/api";
 import {
 	type ActivitySummaryBundle,
 	buildDailySummaryMessages,
+	DAILY_SUMMARY_MAX_TOKENS,
 	DAILY_SUMMARY_PROMPT_VERSION,
 	evaluateDailySummaryFormat,
 	hasDailySummaryEvidence,
@@ -48,7 +49,7 @@ import { cn } from "@/lib/utils";
 import { commands } from "@/lib/utils/tauri";
 
 const CLOUD_CHAT_URL = "https://api.screenpipe.com/v1/chat/completions";
-const SUMMARY_CACHE_PREFIX = "screenpipe:timeline-daily-summary:v2:";
+const SUMMARY_CACHE_PREFIX = "screenpipe:timeline-daily-summary:v3:";
 
 type SummaryStatus = "idle" | "gathering" | "streaming" | "complete" | "error";
 
@@ -281,7 +282,7 @@ export function TimelineDailySummary({
 						stream: true,
 						store: false,
 						temperature: 0.1,
-						max_tokens: 800,
+						max_tokens: DAILY_SUMMARY_MAX_TOKENS,
 						messages: buildDailySummaryMessages(activity, requestedDate),
 					}),
 				});

@@ -10,6 +10,7 @@ import {
 } from "../lib/daily-summary-prompt-evals";
 import {
 	buildDailySummaryMessages,
+	DAILY_SUMMARY_MAX_TOKENS,
 	DAILY_SUMMARY_PROMPT_VERSION,
 } from "../lib/daily-summary-prompt";
 
@@ -73,7 +74,7 @@ for (const evalCase of DAILY_SUMMARY_EVAL_CASES) {
 				stream: false,
 				store: false,
 				temperature: 0.1,
-				max_tokens: 800,
+				max_tokens: DAILY_SUMMARY_MAX_TOKENS,
 				messages: buildDailySummaryMessages(evalCase.bundle, evalCase.date),
 			}),
 		});
