@@ -115,6 +115,14 @@ function componentValue(value: unknown): BrainViewComponent | null {
   return COMPONENT_ALIASES[value.toLowerCase()] ?? null;
 }
 
+function nestedPipeName(block: Record<string, unknown>): string | null {
+  for (const value of [block.source, block.binding]) {
+    const source = asRecord(value);
+    if (typeof source?.pipeName === "string") return source.pipeName;
+  }
+  return null;
+}
+
 function widthValue(value: unknown): 3 | 6 | 12 {
   if (value === 3 || value === "3" || value === "quarter") return 3;
   if (value === 12 || value === "12" || value === "full") return 12;
@@ -141,7 +149,10 @@ export function parseGeneratedLiveView(
   allowedPipeNames: string[],
   scope: LiveViewGenerationScope,
 ): GeneratedLiveView {
-  const parsed = firstJsonObject(raw);
+  const response = firstJsonObject(raw);
+  const wrappedView = asRecord(response.view);
+  const parsed =
+    wrappedView && Array.isArray(wrappedView.blocks) ? wrappedView : response;
   const rawBlocks = Array.isArray(parsed.blocks)
     ? parsed.blocks
     : parsed.block
@@ -154,7 +165,9 @@ export function parseGeneratedLiveView(
     .map(asRecord)
     .filter((block): block is Record<string, unknown> => Boolean(block))
     .map((block) => {
-      const component = componentValue(block.component ?? block.type);
+      const component = componentValue(
+        block.component ?? block.kind ?? block.type,
+      );
       const title = typeof block.title === "string" ? block.title.trim() : "";
       if (!component || !title) return null;
       const intent =
@@ -166,7 +179,7 @@ export function parseGeneratedLiveView(
           ? block.pipeName
           : typeof block.pipe === "string"
             ? block.pipe
-            : null;
+            : nestedPipeName(block);
       return {
         title: title.slice(0, 120),
         intent,
@@ -210,6 +223,7 @@ function generationSystemPrompt(): string {
 
 Return exactly one JSON object. Do not use markdown fences, prose outside JSON, HTML, JavaScript, or SQL.
 When the request names a current Live View reference, first call screenpipe_live_view with action "get" and that exact id. Use no other tools and never call action "save"; the app validates and previews your proposed edit before it persists anything.
+The get tool returns native Blocks with kind and source.pipeName. In your final JSON, convert kind to component and source.pipeName to pipeName. Do not wrap the final dashboard in a view property.
 
 Allowed components:
 - metric.v1: one important number
