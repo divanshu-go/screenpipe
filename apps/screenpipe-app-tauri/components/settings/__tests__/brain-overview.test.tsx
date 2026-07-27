@@ -812,7 +812,7 @@ describe("BrainOverview", () => {
     );
   });
 
-  it("shows a fixed period without offering a misleading range selector", async () => {
+  it("hides time-range UI when the dashboard owns a fixed period", async () => {
     mocks.listBrainViews.mockResolvedValue({
       status: "ok",
       data: [
@@ -825,11 +825,17 @@ describe("BrainOverview", () => {
     });
     render(<BrainOverview />);
 
-    expect(
-      await screen.findByTestId("overview-fixed-period"),
-    ).toHaveTextContent("Today");
+    await screen.findByTestId("overview-dashboard-selector");
+    expect(screen.queryByTestId("overview-fixed-period")).toBeNull();
     expect(screen.queryByTestId("overview-time-range")).toBeNull();
-    expect(screen.getByText(/Data changes when you refresh/)).toBeTruthy();
+    expect(
+      screen.getByText(
+        /Pipes fill these Blocks for today\. Data changes when you refresh or a connected Pipe runs\./,
+      ),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("overview-edit"));
+    expect(screen.queryByText("Time window")).toBeNull();
   });
 
   it("persists a time window and sends its exact bounds to connected Pipes", async () => {
@@ -874,6 +880,51 @@ describe("BrainOverview", () => {
         end: expect.any(String),
       }),
     );
+  });
+
+  it("keeps dashboard switching available while a time-range refresh runs", async () => {
+    const otherView: ViewDefinition = {
+      ...populatedView,
+      id: "weekly-overview",
+      title: "Weekly overview",
+      revision: 1,
+      timeRange: "30d",
+      slots: [],
+    };
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [populatedView, otherView],
+    });
+    mocks.saveBrainView.mockImplementation(async (request) => ({
+      status: "ok",
+      data: {
+        ...populatedView,
+        ...request,
+        revision: 4,
+        slots: populatedView.slots,
+      },
+    }));
+    render(<BrainOverview />);
+
+    fireEvent.click(await screen.findByTestId("overview-time-range"));
+    fireEvent.click(
+      await screen.findByRole("option", { name: "Last 7 days" }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("overview-refresh-data")).toBeDisabled(),
+    );
+    const selector = screen.getByTestId(
+      "overview-dashboard-selector",
+    ) as HTMLSelectElement;
+    expect(selector).not.toBeDisabled();
+
+    fireEvent.change(selector, { target: { value: otherView.id } });
+
+    await waitFor(() => expect(selector.value).toBe(otherView.id));
+    expect(
+      screen.getByText(/Pipes fill these Blocks for last 30 days/),
+    ).toBeTruthy();
   });
 
   it("keeps vertical scrolling on the dashboard while dense tables can scroll sideways", async () => {
@@ -1266,6 +1317,10 @@ describe("BrainOverview", () => {
     mocks.generateLiveViewWithPi.mockResolvedValue({
       title: "My working week",
       timeRange: "7d",
+      periodPolicy: {
+        type: "selectable.v1",
+        values: ["today", "24h", "7d", "30d"],
+      },
       note: "A time overview with automation opportunities.",
       blocks: [
         {
@@ -1317,6 +1372,10 @@ describe("BrainOverview", () => {
 
     fireEvent.click(screen.getByTestId("overview-apply-ai"));
     await waitFor(() => expect(mocks.saveBrainView).toHaveBeenCalledTimes(2));
+    expect(mocks.saveBrainView.mock.calls[1][0].periodPolicy).toEqual({
+      type: "selectable.v1",
+      values: ["today", "24h", "7d", "30d"],
+    });
     expect(mocks.saveBrainView.mock.calls[1][0].slots).toEqual([
       expect.objectContaining({
         title: "Time by project",

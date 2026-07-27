@@ -1075,7 +1075,9 @@ export function BrainOverview({
           (candidate) => candidate.id === dataRefresh.viewId,
         );
         if (!refreshedView) return;
-        setView(refreshedView);
+        setView((current) =>
+          current?.id === refreshedView.id ? refreshedView : current,
+        );
         const filled = refreshedView.slots.filter((slot) => {
           if (
             !dataRefresh.slotIds.includes(slot.id) ||
@@ -1315,7 +1317,8 @@ export function BrainOverview({
               title: generated.title,
               revision: 0,
               timeRange: generated.timeRange,
-              periodPolicy: DEFAULT_LIVE_VIEW_PERIOD_POLICY,
+              periodPolicy:
+                generated.periodPolicy ?? DEFAULT_LIVE_VIEW_PERIOD_POLICY,
               slots: [],
               createdAt: now,
               updatedAt: now,
@@ -2434,6 +2437,7 @@ export function BrainOverview({
   const refreshingSlotIds = new Set(
     refreshIsActive ? (dataRefresh?.slotIds ?? []) : [],
   );
+  const dashboardSelectionDisabled = saving || generating;
   const showOnboardingActivation = Boolean(
     onboardingActivation && !onboardingActivation.completedAt,
   );
@@ -2449,6 +2453,7 @@ export function BrainOverview({
             views={views}
             current={view}
             busy={dashboardBusy}
+            selectionDisabled={dashboardSelectionDisabled}
             onSelect={selectDashboard}
             onCreate={beginCreate}
             onRename={renameDashboard}
@@ -2530,15 +2535,7 @@ export function BrainOverview({
               </Button>
             </div>
           )}
-          {view.periodPolicy.type === "fixed.v1" ? (
-            <div
-              data-testid="overview-fixed-period"
-              aria-label={`Live View period: ${selectedPeriod.label}`}
-              className="inline-flex h-9 min-w-28 flex-1 items-center border border-border bg-muted/20 px-3 text-xs sm:flex-none"
-            >
-              {selectedPeriod.label}
-            </div>
-          ) : (
+          {view.periodPolicy.type !== "fixed.v1" && (
             <Select
               value={view.timeRange}
               disabled={dashboardBusy}
