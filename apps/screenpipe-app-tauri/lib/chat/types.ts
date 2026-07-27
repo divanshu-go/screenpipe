@@ -4,6 +4,12 @@
 
 import type { SourceCitation } from "@/lib/source-citations";
 
+export type ChatEntrySource = "home_card" | "normal_chat";
+
+export type ChatSendOptions = {
+  entrySource?: ChatEntrySource;
+};
+
 // Per-message attachment metadata. The extracted text lives inside the message
 // content; this metadata only drives attachment cards in the chat UI.
 export type ChatAttachment = {
@@ -59,6 +65,8 @@ export interface Message {
   steeredResponse?: boolean;
   workDurationMs?: number;
   stoppedByUser?: boolean;
+  /** Coarse local-only origin marker used for privacy-safe feedback segmentation. */
+  entrySource?: ChatEntrySource;
 }
 
 export type QueuedDisplayPayload = {
