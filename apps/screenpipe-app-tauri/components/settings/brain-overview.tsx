@@ -10,6 +10,7 @@ import React, {
   useRef,
   useState,
 } from "react";
+import dynamic from "next/dynamic";
 import posthog from "posthog-js";
 import { qualifiedValue } from "@/lib/analytics/qualified-value";
 import {
@@ -36,7 +37,6 @@ import {
   LiveViewAiComposer,
   type LiveViewGenerationIntent,
 } from "@/components/settings/live-view-ai-composer";
-import { LiveViewCanvas } from "@/components/settings/live-view-canvas";
 import { LiveViewCard as OverviewCard } from "@/components/settings/live-view-card";
 import { LiveViewCreateDashboardDialog } from "@/components/settings/live-view-create-dashboard-dialog";
 import { LiveViewDashboardSwitcher } from "@/components/settings/live-view-dashboard-switcher";
@@ -110,6 +110,24 @@ import {
 export type ViewComponent = BrainViewComponent;
 export type ViewSlot = BrainViewSlot;
 export type ViewDefinition = BrainViewDefinition;
+
+const LiveViewCanvas = dynamic(
+  () =>
+    import("@/components/settings/live-view-canvas").then(
+      (module) => module.LiveViewCanvas,
+    ),
+  {
+    ssr: false,
+    loading: () => (
+      <div
+        data-testid="live-view-canvas-loading"
+        className="flex min-h-[480px] items-center justify-center border border-border font-mono text-[10px] uppercase tracking-wide text-muted-foreground"
+      >
+        loading process map
+      </div>
+    ),
+  },
+);
 
 type DataRefreshState = {
   status: "starting" | "running" | "complete" | "partial" | "error";

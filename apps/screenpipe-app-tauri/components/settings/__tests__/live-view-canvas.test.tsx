@@ -134,6 +134,7 @@ describe("LiveViewCanvas", () => {
     render(<CanvasHarness />);
 
     expect(screen.getByTestId("canvas-block-focus-time")).toBeTruthy();
+    expect(screen.getByTestId("rf__wrapper")).toBeTruthy();
     expect(screen.getByText("4.5")).toBeTruthy();
     expect(screen.getByText("hours")).toBeTruthy();
     expect(screen.getByText("Canvas review")).toBeTruthy();
@@ -142,6 +143,14 @@ describe("LiveViewCanvas", () => {
         "Whiteboard canvas. Use the toolbar to select, pan, add notes, connect Blocks, or draw.",
       ),
     ).toBeTruthy();
+  });
+
+  it("does not persist React Flow's programmatic mount viewport", async () => {
+    const onPersist = vi.fn();
+    render(<CanvasHarness onPersist={onPersist} />);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(onPersist).not.toHaveBeenCalled();
   });
 
   it("adds, edits, persists, and deletes a note", async () => {
@@ -220,42 +229,18 @@ describe("LiveViewCanvas", () => {
     );
   });
 
-  it("persists drag, keyboard movement, drawing, and bounded zoom", async () => {
+  it("persists keyboard movement, drawing, and bounded zoom", () => {
     const onPersist = vi.fn();
     render(<CanvasHarness onPersist={onPersist} />);
     const surface = screen.getByTestId("live-view-canvas-surface");
     const moveHandle = screen.getByTestId("canvas-move-focus-time");
 
-    fireEvent.pointerDown(moveHandle, {
-      pointerId: 9,
-      clientX: 100,
-      clientY: 100,
-    });
-    fireEvent.pointerMove(surface, {
-      pointerId: 9,
-      clientX: 240,
-      clientY: 180,
-    });
-    fireEvent.pointerUp(surface, {
-      pointerId: 9,
-      clientX: 240,
-      clientY: 180,
-    });
-    await waitFor(() => {
-      expect(onPersist).toHaveBeenCalledWith(
-        expect.objectContaining({
-          blocks: expect.arrayContaining([
-            expect.objectContaining({ slotId: "focus-time", x: 208, y: 144 }),
-          ]),
-        }),
-      );
-    });
-
-    fireEvent.keyDown(surface, { key: "ArrowRight" });
+    fireEvent.focus(moveHandle);
+    fireEvent.keyDown(moveHandle, { key: "ArrowRight" });
     expect(onPersist).toHaveBeenLastCalledWith(
       expect.objectContaining({
         blocks: expect.arrayContaining([
-          expect.objectContaining({ slotId: "focus-time", x: 224, y: 144 }),
+          expect.objectContaining({ slotId: "focus-time", x: 80, y: 64 }),
         ]),
       }),
     );

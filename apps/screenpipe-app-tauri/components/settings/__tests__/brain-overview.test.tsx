@@ -1994,8 +1994,10 @@ describe("BrainOverview", () => {
     render(<BrainOverview />);
 
     const block = await screen.findByTestId("canvas-block-focus-time");
-    expect(block.style.left).toBe("912px");
-    expect(block.style.top).toBe("528px");
+    const flowNode = block.closest<HTMLElement>('[data-id="block:focus-time"]');
+    expect(flowNode?.style.transform).toBe("translate(912px,528px)");
+    expect(flowNode?.style.width).toBe("520px");
+    expect(flowNode?.style.height).toBe("360px");
     expect(
       screen.getByDisplayValue("Keep this beside the evidence."),
     ).toBeTruthy();

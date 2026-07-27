@@ -493,6 +493,27 @@ describe("Brain Live Views", function () {
     expect(await canvas.getText()).toContain("4.5");
     expect(await canvas.getText()).toContain("Automation opportunities");
 
+    const moveHandle = await $("[data-testid='canvas-move-focus-time']");
+    await moveHandle.click();
+    await browser.keys(["ArrowRight"]);
+    await browser.waitUntil(
+      async () => {
+        const saved = await invokeOrThrow<CanvasDocument | null>(
+          "load_brain_view_canvas",
+          { viewId: "my-overview" },
+        );
+        const block = saved?.blocks.find(
+          (candidate) => candidate.slotId === "focus-time",
+        );
+        return block?.x === 80 && block.y === 64;
+      },
+      {
+        timeout: t(10_000),
+        interval: 200,
+        timeoutMsg: "React Flow node movement was not durably saved",
+      },
+    );
+
     const noteTool = await $("[data-testid='canvas-tool-note']");
     await noteTool.click();
     expect(await noteTool.getAttribute("aria-pressed")).toBe("true");
@@ -535,7 +556,8 @@ describe("Brain Live Views", function () {
               candidate.fromId === "block:focus-time" &&
               candidate.toId === "block:time-by-app",
           ) &&
-          saved.blocks.find((block) => block.slotId === "focus-time")?.x === 80,
+          saved.blocks.find((block) => block.slotId === "focus-time")?.x ===
+            96,
         );
       },
       {
