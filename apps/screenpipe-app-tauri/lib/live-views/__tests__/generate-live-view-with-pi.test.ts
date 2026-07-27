@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  buildLiveViewGenerationPrompt,
   parseGeneratedLiveView,
   relevantPipes,
 } from "../generate-live-view-with-pi";
@@ -141,5 +142,21 @@ describe("parseGeneratedLiveView", () => {
 
     expect(selected).toHaveLength(16);
     expect(selected[0].name).toBe("chronos-time-tracker");
+  });
+
+  it("references an existing Live View lazily instead of injecting its Blocks", () => {
+    const prompt = buildLiveViewGenerationPrompt({
+      prompt: "add meetings and keep everything else",
+      scope: "dashboard",
+      preset: {} as any,
+      userToken: null,
+      pipes: [],
+      currentViewRef: { id: "daily", revision: 7 },
+    });
+
+    expect(prompt).toContain('"id":"daily","revision":7');
+    expect(prompt).toContain("Preserve every existing section");
+    expect(prompt).not.toContain("Current Live View:\n{");
+    expect(prompt).not.toContain("Focus time");
   });
 });

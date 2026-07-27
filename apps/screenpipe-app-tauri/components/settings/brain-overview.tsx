@@ -1291,18 +1291,11 @@ export function BrainOverview({
             pipe.prompt_body?.trim().slice(0, 500) ||
             `${pipe.config.name} Screenpipe Pipe`,
         })),
-        currentView:
+        currentViewRef:
           view && intent !== "new-dashboard"
             ? {
-                title: view.title,
-                timeRange: view.timeRange,
-                blocks: normalizedSlots(view.slots).map((slot) => ({
-                  title: slot.title,
-                  intent: slot.intent ?? slot.title,
-                  component: slot.component,
-                  width: slot.width === 3 || slot.width === 12 ? slot.width : 6,
-                  pipeName: slot.binding?.pipeName ?? null,
-                })),
+                id: view.id,
+                revision: view.revision,
               }
             : null,
       });

@@ -943,9 +943,17 @@ impl SCServer {
                 get(crate::routes::live_views::live_view_schema_handler),
             )
             .route(
+                "/live-views/catalog",
+                get(crate::routes::live_views::live_view_catalog_handler),
+            )
+            .route(
                 "/live-views/:id",
                 axum::routing::put(crate::routes::live_views::save_live_view_handler)
                     .delete(crate::routes::live_views::delete_live_view_handler),
+            )
+            .route(
+                "/live-views/:id/template",
+                get(crate::routes::live_views::get_live_view_template_handler),
             )
             .route(
                 "/speakers/sample/:audio_chunk_id",
