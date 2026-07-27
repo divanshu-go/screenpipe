@@ -561,6 +561,25 @@ pub enum TreeWalkResult {
     NotFound,
 }
 
+/// Result of evaluating privacy filters against focused-window metadata only.
+///
+/// Unlike [`TreeWalkResult`], this never traverses the accessibility tree. It
+/// is intended for high-frequency capture gates that only need app/title and
+/// incognito decisions. URL filters still require a full tree walk because
+/// browser URLs are not exposed consistently by lightweight platform APIs.
+#[derive(Debug, Clone)]
+pub enum FocusedWindowFilterResult {
+    /// The focused window passed the configured app/title privacy filters.
+    Allowed {
+        app_name: String,
+        window_name: String,
+    },
+    /// The focused window matched a privacy filter.
+    Skipped(SkipReason),
+    /// No reliable focused-window metadata was available.
+    NotFound,
+}
+
 /// Reason a window was skipped during tree walk.
 #[derive(Debug, Clone)]
 pub enum SkipReason {
@@ -592,6 +611,79 @@ impl std::fmt::Display for SkipReason {
 pub trait TreeWalkerPlatform: Send {
     /// Walk the focused window's accessibility tree.
     fn walk_focused_window(&self) -> Result<TreeWalkResult>;
+}
+
+/// Evaluate app, title, and incognito filters without walking the focused
+/// window's accessibility subtree.
+///
+/// This is the appropriate API for screenshot/video pause gates. Callers with
+/// configured URL filters must use [`create_tree_walker`] so the browser URL
+/// can be resolved from the resulting snapshot.
+pub fn check_focused_window_filters(
+    mut config: TreeWalkerConfig,
+) -> Result<FocusedWindowFilterResult> {
+    config.compile_patterns();
+
+    #[cfg(target_os = "macos")]
+    return macos::check_focused_window_filters(&config);
+
+    #[cfg(target_os = "windows")]
+    return windows::check_focused_window_filters(&config);
+
+    #[cfg(target_os = "linux")]
+    return linux::check_focused_window_filters(&config);
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        let _ = config;
+        Ok(FocusedWindowFilterResult::NotFound)
+    }
+}
+
+/// Apply the cross-platform app/title portion of the focused-window privacy
+/// gate. Platform modules resolve metadata and any native incognito signal,
+/// then delegate here so matching semantics cannot drift from one OS to
+/// another.
+fn apply_focused_window_filters(
+    config: &TreeWalkerConfig,
+    app_name: String,
+    window_name: String,
+    native_incognito: bool,
+    excluded_app: bool,
+) -> FocusedWindowFilterResult {
+    if excluded_app {
+        return FocusedWindowFilterResult::Skipped(SkipReason::ExcludedApp);
+    }
+
+    let app_lower = app_name.to_lowercase();
+    let window_lower = window_name.to_lowercase();
+
+    if native_incognito
+        || (config.ignore_incognito_windows && crate::incognito::is_title_private(&window_name))
+    {
+        return FocusedWindowFilterResult::Skipped(SkipReason::Incognito);
+    }
+
+    if screenpipe_core::window_pattern::matches_any(
+        config.resolved_ignored().as_ref(),
+        &app_lower,
+        &window_lower,
+    ) {
+        return FocusedWindowFilterResult::Skipped(SkipReason::UserIgnored);
+    }
+
+    if !screenpipe_core::window_pattern::passes_includes(
+        config.resolved_included().as_ref(),
+        &app_lower,
+        &window_lower,
+    ) {
+        return FocusedWindowFilterResult::Skipped(SkipReason::NotInIncludeList);
+    }
+
+    FocusedWindowFilterResult::Allowed {
+        app_name,
+        window_name,
+    }
 }
 
 /// Create a platform-appropriate tree walker.
@@ -696,6 +788,44 @@ mod tests {
         fn walk_focused_window(&self) -> Result<TreeWalkResult> {
             Ok(TreeWalkResult::Found(snapshot_with_url(self.0.as_deref())))
         }
+    }
+
+    #[test]
+    fn focused_window_filter_allows_normal_window_without_walking() {
+        let mut config = TreeWalkerConfig::default();
+        config.ignore_incognito_windows = true;
+        assert!(matches!(
+            apply_focused_window_filters(
+                &config,
+                "Google Chrome".into(),
+                "screenpipe docs".into(),
+                false,
+                false,
+            ),
+            FocusedWindowFilterResult::Allowed { .. }
+        ));
+    }
+
+    #[test]
+    fn focused_window_filter_applies_native_incognito_signal() {
+        let config = TreeWalkerConfig::default();
+        assert!(matches!(
+            apply_focused_window_filters(&config, "Arc".into(), "Untitled".into(), true, false,),
+            FocusedWindowFilterResult::Skipped(SkipReason::Incognito)
+        ));
+    }
+
+    #[test]
+    fn focused_window_filter_applies_scoped_window_patterns() {
+        let mut config = TreeWalkerConfig::default();
+        config.ignore_incognito_windows = false;
+        config.ignored_windows = vec!["Slack::Finance".into()];
+        config.compile_patterns();
+
+        assert!(matches!(
+            apply_focused_window_filters(&config, "Slack".into(), "Finance".into(), false, false,),
+            FocusedWindowFilterResult::Skipped(SkipReason::UserIgnored)
+        ));
     }
 
     #[test]

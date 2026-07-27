@@ -60,6 +60,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { useSqlAutocomplete } from "@/lib/hooks/use-sql-autocomplete";
 import { useInstalledApps } from "@/lib/hooks/use-installed-apps";
 import { commands } from "@/lib/utils/tauri";
+import { planEnhancedIncognitoPermission } from "@/lib/utils/incognito-permission";
 import posthog from "posthog-js";
 import * as Sentry from "@sentry/react";
 import { defaultOptions } from "tauri-plugin-sentry-api";
@@ -888,35 +889,45 @@ export function PrivacySection() {
     try {
       // Arc exposes private-window state through Accessibility already, so it
       // never needs Automation access for this feature.
-      const installedBrowsers = await commands.getBrowsersAutomationStatus();
-      const browsers = installedBrowsers.filter(
-        (browser) => browser.name !== "Arc",
-      );
-      if (browsers.length === 0) {
-        const hasArc = installedBrowsers.some((browser) => browser.name === "Arc");
+      let browserStatuses = await commands.getBrowsersAutomationStatus();
+      let permissionPlan = planEnhancedIncognitoPermission(browserStatuses);
+
+      if (permissionPlan.kind === "prompt") {
+        for (const browserName of permissionPlan.browserNames) {
+          await commands.requestSingleBrowserAutomation(browserName);
+        }
+        // Read TCC again instead of trusting an individual prompt result. This
+        // handles browsers closing mid-flow and permission changes made in
+        // System Settings while a prompt is visible.
+        browserStatuses = await commands.getBrowsersAutomationStatus();
+        permissionPlan = planEnhancedIncognitoPermission(browserStatuses);
+      }
+
+      if (permissionPlan.kind === "arc-only") {
         toast({
-          title: hasArc ? "basic detection is enough" : "open a supported browser first",
-          description: hasArc
-            ? "Arc private windows are already detected without extra access"
-            : "open Chrome, Edge, Brave, or another Chromium browser, then try again",
+          title: "basic detection is enough",
+          description: "Arc private windows are already detected without extra access",
         });
         return;
       }
 
-      const granted = browsers.filter((browser) => browser.status === "granted");
-      const promptable = browsers.filter(
-        (browser) => browser.running && browser.status !== "granted",
-      );
-      const newlyGranted: string[] = [];
-      for (const browser of promptable) {
-        const status = await commands.requestSingleBrowserAutomation(browser.name);
-        if (status === "granted") newlyGranted.push(browser.name);
+      if (permissionPlan.kind === "open-browser") {
+        toast({
+          title: "open a supported browser first",
+          description: "open Chrome, Edge, Brave, or another Chromium browser, then try again",
+        });
+        return;
       }
 
-      if (granted.length === 0 && newlyGranted.length === 0) {
+      if (
+        permissionPlan.kind === "settings" ||
+        permissionPlan.kind === "prompt"
+      ) {
+        await commands.openPermissionSettings("automation");
         toast({
           title: "browser access needed",
-          description: "open Chrome, Edge, Brave, or another Chromium browser, then try again",
+          description: "allow screenpipe to control your browser in macOS Automation settings",
+          variant: "destructive",
         });
         return;
       }

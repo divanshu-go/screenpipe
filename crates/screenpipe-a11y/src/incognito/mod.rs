@@ -41,6 +41,97 @@ mod titles;
 
 pub use titles::is_title_private;
 
+/// One macOS browser Screenpipe knows how to address through Automation.
+/// This catalog is shared by detection and the desktop permission UI so a
+/// browser cannot silently be supported by one side but omitted by the other.
+#[cfg(target_os = "macos")]
+#[derive(Debug, Clone, Copy)]
+pub struct MacOSBrowserAutomationTarget {
+    pub name: &'static str,
+    pub aliases: &'static [&'static str],
+    pub bundle_id: &'static str,
+    pub app_path: &'static str,
+    pub process_name: &'static str,
+    pub applescript_name: Option<&'static str>,
+}
+
+#[cfg(target_os = "macos")]
+pub const MACOS_BROWSER_AUTOMATION_TARGETS: &[MacOSBrowserAutomationTarget] = &[
+    MacOSBrowserAutomationTarget {
+        name: "Arc",
+        aliases: &["arc"],
+        bundle_id: "company.thebrowser.Browser",
+        app_path: "/Applications/Arc.app",
+        process_name: "Arc",
+        // Arc private windows use AXIdentifier; its AppleScript bridge is not reliable.
+        applescript_name: None,
+    },
+    MacOSBrowserAutomationTarget {
+        name: "Google Chrome",
+        aliases: &["google chrome", "chrome"],
+        bundle_id: "com.google.Chrome",
+        app_path: "/Applications/Google Chrome.app",
+        process_name: "Google Chrome",
+        applescript_name: Some("Google Chrome"),
+    },
+    MacOSBrowserAutomationTarget {
+        name: "Brave Browser",
+        aliases: &["brave browser", "brave"],
+        bundle_id: "com.brave.Browser",
+        app_path: "/Applications/Brave Browser.app",
+        process_name: "Brave Browser",
+        applescript_name: Some("Brave Browser"),
+    },
+    MacOSBrowserAutomationTarget {
+        name: "Microsoft Edge",
+        aliases: &["microsoft edge", "edge"],
+        bundle_id: "com.microsoft.edgemac",
+        app_path: "/Applications/Microsoft Edge.app",
+        process_name: "Microsoft Edge",
+        applescript_name: Some("Microsoft Edge"),
+    },
+    MacOSBrowserAutomationTarget {
+        name: "Vivaldi",
+        aliases: &["vivaldi"],
+        bundle_id: "com.vivaldi.Vivaldi",
+        app_path: "/Applications/Vivaldi.app",
+        process_name: "Vivaldi",
+        applescript_name: Some("Vivaldi"),
+    },
+    MacOSBrowserAutomationTarget {
+        name: "Opera",
+        aliases: &["opera"],
+        bundle_id: "com.operasoftware.Opera",
+        app_path: "/Applications/Opera.app",
+        process_name: "Opera",
+        applescript_name: Some("Opera"),
+    },
+    MacOSBrowserAutomationTarget {
+        name: "Chromium",
+        aliases: &["chromium"],
+        bundle_id: "org.chromium.Chromium",
+        app_path: "/Applications/Chromium.app",
+        process_name: "Chromium",
+        applescript_name: Some("Chromium"),
+    },
+];
+
+#[cfg(target_os = "macos")]
+pub fn macos_automation_target_for_app(
+    app_name: &str,
+) -> Option<&'static MacOSBrowserAutomationTarget> {
+    let lower = app_name.to_lowercase();
+    MACOS_BROWSER_AUTOMATION_TARGETS.iter().find(|target| {
+        target.aliases.iter().any(|alias| {
+            let alias = *alias;
+            lower == alias
+                || lower
+                    .strip_prefix(alias)
+                    .is_some_and(|suffix| suffix.starts_with(' '))
+        })
+    })
+}
+
 /// Trait for platform-specific incognito detection.
 ///
 /// Each platform implements this to provide native detection capabilities

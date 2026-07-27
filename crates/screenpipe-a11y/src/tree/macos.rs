@@ -5,8 +5,8 @@
 //! macOS accessibility tree walker using cidre AX APIs.
 
 use super::{
-    AccessibilityTreeNode, LineBudget, SkipReason, TreeSnapshot, TreeWalkResult, TreeWalkerConfig,
-    TreeWalkerPlatform,
+    apply_focused_window_filters, AccessibilityTreeNode, FocusedWindowFilterResult, LineBudget,
+    SkipReason, TreeSnapshot, TreeWalkResult, TreeWalkerConfig, TreeWalkerPlatform,
 };
 use crate::tree::macos_lines::{self, NormalizeRefs};
 use anyhow::Result;
@@ -17,6 +17,17 @@ use objc2_foundation::{NSAppleScript, NSString};
 use screenpipe_core::window_pattern::{self, WindowPattern};
 use std::time::{Duration, Instant};
 use tracing::debug;
+
+const EXCLUDED_APPS: &[&str] = &[
+    "1password",
+    "bitwarden",
+    "lastpass",
+    "dashlane",
+    "keepassxc",
+    "keychain access",
+    "screenpipe",
+    "loginwindow",
+];
 
 /// Known browser app names (lowercase). Matches vision crate's list.
 const BROWSER_NAMES: &[&str] = &[
@@ -637,6 +648,59 @@ impl TreeWalkerPlatform for MacosTreeWalker {
     }
 }
 
+pub(super) fn check_focused_window_filters(
+    config: &TreeWalkerConfig,
+) -> Result<FocusedWindowFilterResult> {
+    cidre::objc::ar_pool(|| -> Result<FocusedWindowFilterResult, String> {
+        check_focused_window_filters_inner(config).map_err(|error| error.to_string())
+    })
+    .map_err(anyhow::Error::msg)
+}
+
+fn check_focused_window_filters_inner(
+    config: &TreeWalkerConfig,
+) -> Result<FocusedWindowFilterResult> {
+    let (focused_app, pid, app_name) = match resolve_focused_ax_app() {
+        Some(focused) => focused,
+        None => return Ok(FocusedWindowFilterResult::NotFound),
+    };
+    let _ = focused_app.set_messaging_timeout_secs(config.element_timeout_secs);
+
+    let window = match resolve_focused_window(&focused_app, &app_name, pid) {
+        Some(window) => window,
+        None => return Ok(FocusedWindowFilterResult::NotFound),
+    };
+    let window_name = get_string_attr(&window, ax::attr::title()).unwrap_or_default();
+    let app_lower = app_name.to_lowercase();
+    let excluded = EXCLUDED_APPS
+        .iter()
+        .any(|excluded| app_lower.contains(excluded));
+
+    let native_incognito =
+        if config.ignore_incognito_windows {
+            let identifier_is_private = get_string_attr(&window, ax::attr::id())
+                .map(|identifier| {
+                    let lower = identifier.to_lowercase();
+                    lower.contains("incognito") || lower.contains("private")
+                })
+                .unwrap_or(false);
+
+            identifier_is_private
+                || crate::incognito::create_detector(config.enhanced_incognito_detection)
+                    .is_incognito(&app_name, pid, &window_name)
+        } else {
+            false
+        };
+
+    Ok(apply_focused_window_filters(
+        config,
+        app_name,
+        window_name,
+        native_incognito,
+        excluded,
+    ))
+}
+
 impl MacosTreeWalker {
     fn walk_focused_window_inner(&self) -> Result<TreeWalkResult> {
         let start = Instant::now();
@@ -651,16 +715,6 @@ impl MacosTreeWalker {
 
         // Skip excluded apps (password managers, etc.)
         let app_lower = app_name.to_lowercase();
-        const EXCLUDED_APPS: &[&str] = &[
-            "1password",
-            "bitwarden",
-            "lastpass",
-            "dashlane",
-            "keepassxc",
-            "keychain access",
-            "screenpipe",
-            "loginwindow",
-        ];
         if EXCLUDED_APPS.iter().any(|ex| app_lower.contains(ex)) {
             return Ok(TreeWalkResult::Skipped(SkipReason::ExcludedApp));
         }
