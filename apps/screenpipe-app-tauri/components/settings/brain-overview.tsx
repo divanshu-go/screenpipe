@@ -1405,11 +1405,12 @@ ${prompt}
 Use the screenpipe-cli skill for Pipe creation or editing and the screenpipe_live_view tool for Live View work.
 - Read the screenpipe-cli skill before changing a Pipe.
 - Load the current Live View lazily by id. Do not ask the app to inject its contents into chat context.
+- Treat this submitted request as explicit authorization to make the requested Pipe and Live View changes. Do not ask the user to approve those requested actions again.
 - It is okay to create a new disabled/manual Pipe draft and run it once for testing.
-- Ask for explicit confirmation before overwriting or deleting an existing Pipe, enabling or scheduling automatic runs, installing anything, or replacing Live View Blocks.
-- Use ask_user when it is available; otherwise ask one short question in chat and wait.
 - Test a changed Pipe with pipe run before binding it to the Live View.
-- Preserve unchanged Live View Blocks and bind only the relevant Blocks after the Pipe works.
+- After the Pipe works, save the smallest relevant Live View Block additions or edits directly. Preserve every unrelated Block; do not replace the whole dashboard, show a preview, or ask whether to replace it.
+- Ask one short question only when essential ambiguity remains or an action goes beyond the request: deleting a Pipe, overwriting a name collision when the user asked for a new Pipe, installing external code or a connection, or enabling a schedule the user did not request.
+- Use ask_user for that exceptional question when it is available; otherwise ask in chat and wait.
 - Do not publish anything to the Pipe Store.`;
 
       try {

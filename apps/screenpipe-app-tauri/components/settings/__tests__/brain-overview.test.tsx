@@ -1441,8 +1441,16 @@ describe("BrainOverview", () => {
     const agentPrompt = mocks.showChatWithPrefill.mock.calls[0][0].prompt;
     expect(agentPrompt).toContain("screenpipe-cli skill");
     expect(agentPrompt).toContain("screenpipe_live_view tool");
-    expect(agentPrompt).toContain("Ask for explicit confirmation");
-    expect(agentPrompt).toContain("Use ask_user when it is available");
+    expect(agentPrompt).toContain(
+      "Do not ask the user to approve those requested actions again",
+    );
+    expect(agentPrompt).toContain(
+      "do not replace the whole dashboard, show a preview, or ask whether to replace it",
+    );
+    expect(agentPrompt).toContain(
+      "Ask one short question only when essential ambiguity remains",
+    );
+    expect(agentPrompt).not.toContain("replacing Live View Blocks");
     expect(mocks.generateLiveViewWithPi).not.toHaveBeenCalled();
     expect(mocks.capture).toHaveBeenCalledWith(
       "live_view_pipe_agent_handoff",

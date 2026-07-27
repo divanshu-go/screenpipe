@@ -7,6 +7,7 @@ import registerLiveViews from "../live-views";
 
 type ToolDef = {
   name: string;
+  promptGuidelines?: string[];
   execute: (
     toolCallId: string,
     params: Record<string, unknown>,
@@ -43,6 +44,13 @@ afterEach(() => {
 });
 
 describe("screenpipe_live_view", () => {
+  it("does not reconfirm targeted edits the user already requested", () => {
+    const guidance = getTool().promptGuidelines?.join(" ") ?? "";
+
+    expect(guidance).toContain("without a second confirmation");
+    expect(guidance).toContain("unrequested broad removals");
+  });
+
   it("lists compact summaries without leaking hydrated Block values", async () => {
     globalThis.fetch = vi.fn(async () =>
       response([

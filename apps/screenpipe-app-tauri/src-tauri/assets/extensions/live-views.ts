@@ -113,7 +113,7 @@ export default function (pi: ExtensionAPI) {
       "Use action=list when the user did not identify a Live View, then action=get for the selected id.",
       "Before action=save, get the latest definition and preserve every Block the user did not ask to change.",
       "Pass the full edited object from get back to save; its revision prevents overwriting a newer edit.",
-      "Only save when the user explicitly asked to create or change a Live View. Ask before broad removals or replacement.",
+      "Only save when the user explicitly asked to create or change a Live View. Apply requested targeted additions or edits without a second confirmation; ask only before unrequested broad removals or whole-dashboard replacement.",
     ],
     executionMode: "sequential",
     parameters,
