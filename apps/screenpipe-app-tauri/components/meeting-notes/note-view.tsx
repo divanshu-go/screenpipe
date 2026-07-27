@@ -70,6 +70,7 @@ import { isLiveCaptureDegraded } from "@/lib/utils/live-capture-state";
 import {
   buildEnrichedSummarizePrompt,
   extractImageDataUrlsFromMarkdown,
+  extractPipePromptBody,
   buildMeetingSummarizeDisplayLabel,
   buildMeetingMarkdown,
   fetchMeetingAudio,
@@ -619,10 +620,14 @@ export function NoteView({
       try {
         const res = await localFetch(`/pipes/${pipeSlug}`);
         if (res.ok) {
-          const json = await res.json();
-          const body: string | undefined = json.data?.body || json.body;
+          const json: unknown = await res.json();
+          const body = extractPipePromptBody(json);
           if (body && body.trim().length > 0) {
             directiveOverride = body;
+          } else {
+            console.warn(
+              `summary pipe ${pipeSlug} response did not include prompt_body; falling back`,
+            );
           }
         }
       } catch (err) {
