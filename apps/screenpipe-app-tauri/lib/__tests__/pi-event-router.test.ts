@@ -33,6 +33,7 @@ import {
   handleTerminated,
 } from "../stores/pi-event-router";
 import { useChatStore, type SessionRecord } from "../stores/chat-store";
+import { useAcpSessionConfig } from "../stores/acp-session-config";
 import type { AgentEventEnvelope, AgentInnerEvent } from "../events/types";
 
 /** Helper — every router test passes a Pi-source envelope; this keeps
@@ -46,6 +47,11 @@ function reset() {
   vi.clearAllMocks();
   deleteCachedBrowserState("A");
   useChatStore.setState({ sessions: {}, currentId: null, panelSessionId: null });
+  // The ACP config store is a module singleton; without resetting it (and the
+  // localStorage it persists to) its sessions/byAgent leak across the acp
+  // describe blocks and make the suite order-dependent.
+  useAcpSessionConfig.setState({ sessions: {}, byAgent: {} });
+  if (typeof localStorage !== "undefined") localStorage.clear();
 }
 
 function seed(id: string, overrides: Partial<SessionRecord> = {}) {
