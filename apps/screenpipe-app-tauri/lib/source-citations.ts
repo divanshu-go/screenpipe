@@ -179,6 +179,22 @@ function sourceCitationsFromToolCall(toolCall: ToolCallLike | undefined): Source
     return [screenpipeToolCitation(args)];
   }
 
+  // screenpipe MCP tools (ACP agents surface them as mcp__screenpipe__<name>,
+  // normalized above) mirror the local screen/audio search + activity endpoints.
+  if (
+    toolName === "search-content" ||
+    toolName === "keyword-search" ||
+    toolName === "search" ||
+    toolName === "screenpipe" ||
+    toolName === "team-search" ||
+    toolName === "activity-summary" ||
+    toolName === "search-elements" ||
+    toolName === "get-frame-elements" ||
+    toolName === "frame-context"
+  ) {
+    return [screenpipeToolCitation(args)];
+  }
+
   if (toolName === "read") {
     const path = stringArg(args, "path");
     return path ? [fileCitation(path, "Read")] : [];
@@ -468,8 +484,13 @@ function normalizeExplicitCitations(value: unknown): SourceCitation[] {
 
 function normalizeToolName(toolName: string): string {
   return toolName
+    // ACP agents surface tools as `mcp__<server>__<name>` (e.g.
+    // mcp__screenpipe__search-content) or a human title ("Grep"); strip the MCP
+    // server prefix and lowercase so both match the same branches raw pi hits.
+    .replace(/^mcp__[a-z0-9_-]+__/i, "")
     .replace(/^tool_functions[._-]?/, "")
-    .replace(/^toolfunctions[._-]?/, "");
+    .replace(/^toolfunctions[._-]?/, "")
+    .toLowerCase();
 }
 
 function extractScreenpipeApiCalls(command: string): string[] {
