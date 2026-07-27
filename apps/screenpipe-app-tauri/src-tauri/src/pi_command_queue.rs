@@ -968,6 +968,16 @@ pub fn spawn_queue(
                                     .send(Err("missing prompt response waiter".to_string()));
                                 continue;
                             };
+                            // Leave the queued rail NOW, before the up-to-30s
+                            // acceptance wait. The prompt is written to stdin and
+                            // in-flight, not waiting. Keeping it visible during the
+                            // wait let a concurrent steer re-send the same prompt
+                            // via take_queued_payload (duplicate execution) or a
+                            // cancel tombstone a command already past both rechecks
+                            // (silent cancel-fail). Mirrors the WaitDone branch.
+                            if let Some(pid) = &prompt_id {
+                                state.dequeue_prompt(pid);
+                            }
                             let (accepted, remaining_response) = wait_for_prompt_acceptance(
                                 &state,
                                 &mut alive_rx,
@@ -975,11 +985,6 @@ pub fn spawn_queue(
                                 response_rx,
                             )
                             .await;
-                            // The prompt has now left the waiting queue and
-                            // either entered the transcript or was rejected.
-                            if let Some(pid) = &prompt_id {
-                                state.dequeue_prompt(pid);
-                            }
                             let rejected = accepted.is_err();
                             let _ = cmd.reply.send(accepted);
                             if rejected {
