@@ -3221,6 +3221,11 @@ ignoredUrls?: string[];
  */
 ignoreIncognitoWindows: boolean;
 /**
+ * Use browser-native APIs for more reliable incognito detection on macOS.
+ * This requires Automation permission for supported Chromium browsers.
+ */
+enhancedIncognitoDetection?: boolean;
+/**
  * Experimental: pause screen capture when a DRM-protected streaming app
  * (Netflix, Disney+, etc.) or a remote-desktop client (Omnissa/VMware
  * Horizon) is focused. These apps blank their windows while screen
