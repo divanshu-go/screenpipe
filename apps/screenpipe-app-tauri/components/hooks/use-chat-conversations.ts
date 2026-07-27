@@ -691,6 +691,17 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     ) {
       aiTitleAttempted.add(convId);
 
+      // ACP presets can't generate a title (no model/cloud creds, and spawning
+      // a second ACP harness could reopen interactive auth), so route ACP chats
+      // through a non-acp preset (the default first) — they still get a smart
+      // title instead of the truncated first message.
+      const titlePreset =
+        currentPreset?.provider === "acp"
+          ? (settings?.aiPresets?.find((p: AIPreset) => p.provider !== "acp" && p.defaultPreset) ??
+             settings?.aiPresets?.find((p: AIPreset) => p.provider !== "acp") ??
+             null)
+          : currentPreset;
+
       // Generate title in background (non-blocking)
       // Pass the full raw user message — the AI can parse wrapper tags
       // and extract intent better than the simple regex stripper.
@@ -698,7 +709,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
         try {
           const aiTitle = await titleCreatedByAI(
             rawContent,
-            currentPreset,
+            titlePreset,
             settings?.user?.token ?? null,
             async (partial) => {
               try {
