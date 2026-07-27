@@ -504,6 +504,12 @@ function startStdioServer() {
   process.stdin.setEncoding("utf-8");
   process.stdin.on("data", (chunk) => {
     buffer += chunk;
+    // Bound the buffer the same way the HTTP transport bounds request bodies:
+    // a peer that streams without a newline must not grow it without limit.
+    if (buffer.length > 4_000_000) {
+      process.stderr.write("screenpipe-tools: stdin line exceeded 4MB, exiting\n");
+      process.exit(1);
+    }
     let index;
     while ((index = buffer.indexOf("\n")) >= 0) {
       const line = buffer.slice(0, index).trim();
