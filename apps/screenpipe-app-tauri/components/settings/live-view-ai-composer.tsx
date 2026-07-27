@@ -40,12 +40,22 @@ type LiveViewAiComposerProps = {
   ) => void | Promise<void>;
 };
 
-export type LiveViewGenerationIntent = "new-dashboard" | "replace-dashboard";
+export type LiveViewGenerationIntent =
+  "new-dashboard" | "replace-dashboard" | "pipe-agent";
+
+const PIPE_NOUN = /\b(?:pipe|pipes|piep|pieps)\b/i;
+const PIPE_AUTHORING_ACTION =
+  /\b(?:create|make|build|add|new|edit|change|modify|update|fix|improve|optimi[sz]e|customi[sz]e|fork|remix)\b/i;
+
+export function isPipeAuthoringRequest(prompt: string): boolean {
+  return PIPE_NOUN.test(prompt) && PIPE_AUTHORING_ACTION.test(prompt);
+}
 
 export function inferLiveViewGenerationIntent(
-  _prompt: string,
+  prompt: string,
   hasCurrentView: boolean,
 ): LiveViewGenerationIntent {
+  if (isPipeAuthoringRequest(prompt)) return "pipe-agent";
   return hasCurrentView ? "replace-dashboard" : "new-dashboard";
 }
 
@@ -86,9 +96,13 @@ export function LiveViewAiComposer({
   );
   const scope: LiveViewGenerationScope = "dashboard";
   const intentLabel =
-    intent === "replace-dashboard"
-      ? `will edit “${currentViewTitle}”`
-      : "will create a new dashboard";
+    intent === "pipe-agent"
+      ? currentViewTitle
+        ? `will open the agent for “${currentViewTitle}”`
+        : "will open the Pipe agent"
+      : intent === "replace-dashboard"
+        ? `will edit “${currentViewTitle}”`
+        : "will create a new dashboard";
 
   const submit = () => {
     if (!canSubmit || !selectedPreset) return;
@@ -169,7 +183,9 @@ export function LiveViewAiComposer({
             </>
           ) : (
             <>
-              <span className="mr-1.5">generate</span>
+              <span className="mr-1.5">
+                {intent === "pipe-agent" ? "open agent" : "generate"}
+              </span>
               <ArrowUp className="h-3.5 w-3.5" />
             </>
           )}

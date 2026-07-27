@@ -62,6 +62,7 @@ import { useSettings } from "@/lib/hooks/use-settings";
 import { useHealthCheck } from "@/lib/hooks/use-health-check";
 import { useToast } from "@/components/ui/use-toast";
 import { localFetch } from "@/lib/api";
+import { showChatWithPrefill } from "@/lib/chat-utils";
 import {
   readActiveAiPresetId,
   resolveActiveAiPreset,
@@ -1379,6 +1380,61 @@ export function BrainOverview({
     preset: AIPreset,
     intent: LiveViewGenerationIntent,
   ) => {
+    if (intent === "pipe-agent") {
+      posthog.capture("live_view_pipe_agent_handoff", {
+        analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
+        has_current_view: Boolean(view),
+        current_block_count: view?.slots.length ?? 0,
+        prompt_length: prompt.length,
+      });
+
+      const liveViewReference = view
+        ? JSON.stringify({
+            id: view.id,
+            title: view.title,
+            revision: view.revision,
+          })
+        : "none; the user has not created a Live View yet";
+      const agentPrompt = `The user started this request from Brain > Live Views.
+
+Current Live View reference: ${liveViewReference}
+
+User request:
+${prompt}
+
+Use the screenpipe-cli skill for Pipe creation or editing and the screenpipe_live_view tool for Live View work.
+- Read the screenpipe-cli skill before changing a Pipe.
+- Load the current Live View lazily by id. Do not ask the app to inject its contents into chat context.
+- It is okay to create a new disabled/manual Pipe draft and run it once for testing.
+- Ask for explicit confirmation before overwriting or deleting an existing Pipe, enabling or scheduling automatic runs, installing anything, or replacing Live View Blocks.
+- Use ask_user when it is available; otherwise ask one short question in chat and wait.
+- Test a changed Pipe with pipe run before binding it to the Live View.
+- Preserve unchanged Live View Blocks and bind only the relevant Blocks after the Pipe works.
+- Do not publish anything to the Pipe Store.`;
+
+      try {
+        await showChatWithPrefill({
+          context: view
+            ? `Live View “${view.title}” (revision ${view.revision})`
+            : "Create a Pipe for a new Live View",
+          prompt: agentPrompt,
+          displayLabel: prompt,
+          autoSend: true,
+          source: "live-view-pipe-agent",
+          useHomeChat: true,
+        });
+      } catch (handoffError) {
+        toast({
+          title: "could not open the Pipe agent",
+          description:
+            handoffError instanceof Error
+              ? handoffError.message
+              : String(handoffError),
+          variant: "destructive",
+        });
+      }
+      return;
+    }
     await generate(prompt, scope, preset, intent);
   };
 

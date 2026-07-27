@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   loadBrainViewCanvas: vi.fn(),
   saveBrainViewCanvas: vi.fn(),
   generateLiveViewWithPi: vi.fn(),
+  showChatWithPrefill: vi.fn(),
   createOnboardingLiveView: vi.fn(),
   localFetch: vi.fn(),
   toast: vi.fn(),
@@ -138,6 +139,9 @@ vi.mock("@/components/rewind/ai-presets-selector", () => ({
 }));
 vi.mock("@/lib/live-views/generate-live-view-with-pi", () => ({
   generateLiveViewWithPi: mocks.generateLiveViewWithPi,
+}));
+vi.mock("@/lib/chat-utils", () => ({
+  showChatWithPrefill: mocks.showChatWithPrefill,
 }));
 vi.mock("@/lib/live-views/onboarding-live-view", () => ({
   createOnboardingLiveView: mocks.createOnboardingLiveView,
@@ -261,6 +265,7 @@ beforeEach(() => {
     data: [],
   });
   mocks.refetchPipes.mockResolvedValue(undefined);
+  mocks.showChatWithPrefill.mockResolvedValue(undefined);
   mocks.deleteBrainView.mockResolvedValue({ status: "ok", data: null });
   mocks.loadBrainViewCanvas.mockResolvedValue({ status: "ok", data: null });
   mocks.saveBrainViewCanvas.mockImplementation(async (request) => ({
@@ -295,6 +300,10 @@ describe("inferLiveViewGenerationIntent", () => {
     ["make a sales dashboard", true, "replace-dashboard"],
     ["rebuild this around projects", true, "replace-dashboard"],
     ["remove the focus chart", true, "replace-dashboard"],
+    ["create a Pipe for project switches", true, "pipe-agent"],
+    ["edit the daily-summary pipe schedule", true, "pipe-agent"],
+    ["fix my weekly piep", false, "pipe-agent"],
+    ["show results from the daily-summary pipe", true, "replace-dashboard"],
     ["add time by app", false, "new-dashboard"],
   ] as const)(
     "maps %s with current view=%s",
@@ -1393,6 +1402,60 @@ describe("BrainOverview", () => {
         currentViewRef: { id: "my-overview", revision: 3 },
       }),
     );
+  });
+
+  it("hands explicit Pipe authoring requests to the full agent with a bounded Live View reference", async () => {
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [populatedView],
+    });
+    render(<BrainOverview />);
+
+    const request = "create a Pipe that tracks project switches";
+    fireEvent.change(
+      await screen.findByPlaceholderText(/Ask AI to change this Live View/),
+      { target: { value: request } },
+    );
+
+    expect(screen.getByTestId("live-view-generation-intent").textContent).toBe(
+      "will open the agent for “How I worked today”",
+    );
+    const button = screen.getByTestId("live-view-ai-generate");
+    expect(button.textContent).toContain("open agent");
+    fireEvent.click(button);
+
+    await waitFor(() =>
+      expect(mocks.showChatWithPrefill).toHaveBeenCalledWith(
+        expect.objectContaining({
+          context: "Live View “How I worked today” (revision 3)",
+          displayLabel: request,
+          autoSend: true,
+          source: "live-view-pipe-agent",
+          useHomeChat: true,
+          prompt: expect.stringContaining(
+            'Current Live View reference: {"id":"my-overview","title":"How I worked today","revision":3}',
+          ),
+        }),
+      ),
+    );
+    const agentPrompt = mocks.showChatWithPrefill.mock.calls[0][0].prompt;
+    expect(agentPrompt).toContain("screenpipe-cli skill");
+    expect(agentPrompt).toContain("screenpipe_live_view tool");
+    expect(agentPrompt).toContain("Ask for explicit confirmation");
+    expect(agentPrompt).toContain("Use ask_user when it is available");
+    expect(mocks.generateLiveViewWithPi).not.toHaveBeenCalled();
+    expect(mocks.capture).toHaveBeenCalledWith(
+      "live_view_pipe_agent_handoff",
+      expect.objectContaining({
+        has_current_view: true,
+        current_block_count: 1,
+        prompt_length: request.length,
+      }),
+    );
+    const analyticsProperties = mocks.capture.mock.calls.find(
+      ([event]) => event === "live_view_pipe_agent_handoff",
+    )?.[1];
+    expect(analyticsProperties).not.toHaveProperty("prompt");
   });
 
   it("locks dashboard navigation while AI generation is in progress", async () => {
