@@ -22,6 +22,7 @@ export const searchIndex: SettingsField[] = [
 ];
 import { LockedSetting, ManagedSwitch } from "@/components/enterprise-locked-setting";
 import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
+import { screenpipeWebUrl } from "@/lib/web-url";
 import {
   Eye,
   EyeOff,
@@ -2075,7 +2076,7 @@ function AdminTeamTokenCard() {
     }
     setSaving(true);
     try {
-      const res = await commands.saveEnterpriseTeamConfig(null, null, trimmed);
+      const res = await commands.saveEnterpriseTeamConfig(null, null, trimmed, null);
       if (res.status === "error") throw new Error(res.error);
       setLiveToken(trimmed);
       setPendingToken(null);
@@ -2097,7 +2098,7 @@ function AdminTeamTokenCard() {
   const handleClear = useCallback(async () => {
     setSaving(true);
     try {
-      const res = await commands.saveEnterpriseTeamConfig(null, null, "");
+      const res = await commands.saveEnterpriseTeamConfig(null, null, "", null);
       if (res.status === "error") throw new Error(res.error);
       setLiveToken(null);
       setPendingToken(null);
@@ -2140,7 +2141,7 @@ function AdminTeamTokenCard() {
                 <button
                   className="underline text-foreground hover:text-foreground/80"
                   onClick={() =>
-                    openUrl("https://screenpipe.com/enterprise?tab=tokens")
+                    openUrl(screenpipeWebUrl("/enterprise?tab=tokens", "https://screenpipe.com"))
                   }
                 >
                   screenpipe.com/enterprise → api tokens

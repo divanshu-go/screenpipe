@@ -27,6 +27,8 @@ import {
   initMcpTelemetry,
 } from "./telemetry";
 import { createMcpQualifiedValueReporter } from "./qualified-value";
+import { discoverTeamApiBase, discoverTeamToken } from "./team-config";
+import { PKG_VERSION } from "./version";
 
 initMcpTelemetry({ transport: "stdio" });
 
@@ -35,6 +37,7 @@ const args = process.argv.slice(2);
 let port = 3030;
 let host = "localhost";
 let baseOverride: string | undefined;
+let teamApiOverride: string | undefined;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === "--port" && args[i + 1]) {
     port = parseInt(args[i + 1], 10);
@@ -45,6 +48,8 @@ for (let i = 0; i < args.length; i++) {
     args[i + 1]
   ) {
     baseOverride = args[i + 1];
+  } else if (args[i] === "--team-api-url" && args[i + 1]) {
+    teamApiOverride = args[i + 1];
   }
 }
 
@@ -312,37 +317,33 @@ function ensureApiKey(): Promise<string> {
 }
 
 // Enterprise team token — when present, this MCP additionally registers
-// `team-*` tools that query the org-wide telemetry control plane
-// (https://screenpi.pe/api/enterprise/v1/*) instead of just the local
-// recordings. Same audience: an enterprise admin running screenpipe-mcp
-// inside Claude Desktop / Cursor / Windsurf wants to ask "what did MY
-// machine do" AND "what did MY TEAM do" without juggling two MCPs.
+// `team-*` tools that query the org-wide telemetry control plane instead of
+// just the local recordings. Same audience: an enterprise admin running
+// screenpipe-mcp inside Claude Desktop / Cursor / Windsurf wants to ask "what
+// did MY machine do" AND "what did MY TEAM do" without juggling two MCPs.
 //
-// Resolution order matches discoverApiKey() in spirit:
-//   1. SCREENPIPE_ENTERPRISE_TOKEN env var (Claude config, terminal)
-//   2. team_api_token field in ~/.screenpipe/enterprise.json (written by
-//      the desktop app's Settings → Privacy → Admin Team API Token)
+// TWO independent things get resolved here, both in ./team-config:
 //
-// Token format is `sk_ent_…`. Empty / missing → team tools are not
-// registered; non-admin users of screenpipe-mcp see exactly what they
-// see today.
-function discoverTeamToken(): string {
-  const envTok = process.env.SCREENPIPE_ENTERPRISE_TOKEN;
-  if (envTok && envTok.startsWith("sk_ent_")) return envTok;
-  try {
-    const entPath = path.join(os.homedir(), ".screenpipe", "enterprise.json");
-    if (fs.existsSync(entPath)) {
-      const raw = fs.readFileSync(entPath, "utf-8");
-      const parsed = JSON.parse(raw);
-      const tok = typeof parsed?.team_api_token === "string" ? parsed.team_api_token : "";
-      if (tok && tok.startsWith("sk_ent_")) return tok;
-    }
-  } catch {}
-  return "";
-}
-
+//   TOKEN (discoverTeamToken) — `sk_ent_…`:
+//     1. SCREENPIPE_ENTERPRISE_TOKEN env var (Claude config, terminal)
+//     2. team_api_token in ~/.screenpipe/enterprise.json (written by the
+//        desktop app's Settings → Privacy → Admin Team API Token)
+//
+//   BASE URL (discoverTeamApiBase) — where those tools send their requests:
+//     1. --team-api-url flag
+//     2. SCREENPIPE_TEAM_API_URL env var
+//     3. gateway_url in ~/.screenpipe/enterprise.json
+//     4. the hosted default, https://screenpi.pe/api/enterprise/v1
+//
+// The base is NOT always the hosted API: orgs on the write-only archive tier
+// run their own query gateway inside their network, and the hosted API has no
+// read path to their data — pointing there returns 401. The bearer token is
+// the same `sk_ent_` either way; only the base moves.
+//
+// Empty / missing token → team tools are not registered; non-admin users of
+// screenpipe-mcp see exactly what they see today.
 const TEAM_TOKEN = discoverTeamToken();
-const TEAM_API = "https://screenpi.pe/api/enterprise/v1";
+const TEAM_API = discoverTeamApiBase(teamApiOverride);
 
 async function fetchTeam(p: string, init: RequestInit = {}): Promise<Response> {
   return fetch(`${TEAM_API}${p}`, {
@@ -353,10 +354,6 @@ async function fetchTeam(p: string, init: RequestInit = {}): Promise<Response> {
     },
   });
 }
-
-// Read version from package.json (single source of truth)
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const PKG_VERSION: string = require("../package.json").version;
 
 // Initialize server
 const server = new Server(
@@ -888,7 +885,8 @@ const TOOLS: Tool[] = [
 // ---------------------------------------------------------------------------
 // Enterprise team tools — registered only when a team API token is present.
 // Same endpoint surface as the desktop `screenpipe-team` pi-agent skill:
-// proxy GETs to https://screenpi.pe/api/enterprise/v1/* with Bearer auth.
+// proxy GETs to `${TEAM_API}/*` with Bearer auth, where TEAM_API is the hosted
+// control plane OR the org's own query gateway (see discoverTeamApiBase above).
 //
 // Naming convention: every team tool is `team-*` so it's obvious at a glance
 // which scope (just-me vs the-whole-org) any given call is hitting.
@@ -2282,11 +2280,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               {
                 type: "text",
                 text:
-                  `team-* tools require an enterprise admin token. Set ` +
-                  `SCREENPIPE_ENTERPRISE_TOKEN in your MCP env, or mint one ` +
-                  `at https://screenpi.pe/enterprise → API Tokens and paste ` +
-                  `it into Settings → Privacy → Admin Team API Token in the ` +
-                  `screenpipe desktop app.`,
+                  `team-* tools require an enterprise admin token (sk_ent_…). ` +
+                  `Set SCREENPIPE_ENTERPRISE_TOKEN in your MCP env, or paste ` +
+                  `the token into Settings → Privacy → Admin Team API Token in ` +
+                  `the screenpipe desktop app.\n` +
+                  `Where to get it: hosted orgs mint one at ` +
+                  `https://screenpi.pe/enterprise → API Tokens. Orgs running ` +
+                  `their own query gateway use the token their gateway accepts, ` +
+                  `and must ALSO point this MCP at that gateway — ` +
+                  `SCREENPIPE_TEAM_API_URL=https://<gateway>/api/enterprise/v1 ` +
+                  `(or --team-api-url). Requests currently go to ${TEAM_API}.`,
               },
             ],
           };
