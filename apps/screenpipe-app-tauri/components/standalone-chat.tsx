@@ -1382,8 +1382,8 @@ export function StandaloneChat({
           await commands.showWindow({ Home: { page: null } });
         }}
         summaryCardsProps={{
-          onSendMessage: (message, displayLabel, entrySource) =>
-            sendMessage(message, displayLabel, undefined, { entrySource }),
+          onSendMessage: (message, displayLabel, entrySource, entryCard) =>
+            sendMessage(message, displayLabel, undefined, { entrySource, entryCard }),
           customTemplates,
           onSaveCustomTemplate: saveCustomTemplate,
           onUpdateCustomTemplate: updateCustomTemplate,

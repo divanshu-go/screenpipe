@@ -46,20 +46,32 @@ describe("SummaryCards", () => {
       expect.stringContaining("Focus Pulse (focus-pulse; enabled; every 1h)"),
       "⚡ Automate My Work",
       "home_card",
+      "automate_my_work",
     );
     expect(onSendMessage).toHaveBeenCalledWith(
       expect.stringContaining("Recommend exactly one next action"),
       expect.any(String),
       "home_card",
+      "automate_my_work",
     );
     expect(onSendMessage).toHaveBeenCalledWith(
       expect.stringContaining("Create and test this one?"),
       expect.any(String),
       "home_card",
+      "automate_my_work",
     );
     expect(captureMock).toHaveBeenCalledWith("home_card_clicked", {
       kind: "template_featured",
       template_name: "automate-my-work",
+      card: "automate_my_work",
+    });
+    expect(captureMock).toHaveBeenCalledWith("home_card_impression", {
+      schema_version: 1,
+      surface: "chat_home",
+      layout_version: "home_v2",
+      card: "automate_my_work",
+      position: 1,
+      presentation: "hero",
     });
     expect(screen.getByRole("button", { name: /automate my work/i }).closest(".ph-no-capture"))
       .not.toBeNull();
@@ -124,6 +136,7 @@ describe("SummaryCards", () => {
         expect.stringContaining("Summarize my day focusing on issue triage"),
         "📌 Daily Recap",
         "home_card",
+        "custom",
       );
       expect(onUpdateCustomTemplate).not.toHaveBeenCalled();
 
