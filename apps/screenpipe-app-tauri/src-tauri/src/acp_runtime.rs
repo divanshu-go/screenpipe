@@ -259,8 +259,12 @@ impl RuntimeConfig {
 /// the bundled server registers (see assets/mcp/screenpipe-tools.mjs) plus the
 /// core screenpipe search server.
 const SCREENPIPE_TOOLS_HINT: &str = "\
-You are running inside screenpipe. Prefer its MCP tools over shell/curl:
-- the `screenpipe` server has search/query tools over the user's screen, audio, and UI history.
+You are running inside screenpipe. Prefer its MCP tools over shell/curl (third-party \
+agents do not get screenpipe's `.pi/skills`, so this is your usage guide):
+- the `screenpipe` server searches and summarizes the user's screen, audio, and UI history.
+  - `activity-summary` for broad questions (\"what was I doing?\", \"which apps?\", \"how long on X?\"): it pre-summarizes apps, windows, and transcripts and owns the time math — pass natural-language times (\"today\", \"2h ago\") and never sum minutes yourself.
+  - `search-content` for specific lookups; filter by content_type, app_name, window_name, and a time range.
+  - `update-memory` (and search with content_type=memory) to persist and recall facts across sessions.
 - `list_connections` shows the user's connected apps; `screenpipe_connect_app` connects one and waits for the user when a task needs it.
 - `sp_web_search` searches the public web; `save_artifact` saves a finished, user-facing deliverable (text or, with encoding=base64, an image) to the Artifacts library.
 Do not curl localhost for these; call the tools.";
@@ -1099,7 +1103,7 @@ impl RuntimeState {
                     // the desktop label native agent tools whose human title
                     // doesn't match a known tool name.
                     "kind": tool_kind(&update),
-                    "args": update.get("rawInput").filter(|value| value.is_object()).cloned().unwrap_or_else(|| json!({}))
+                    "args": tool_args(&update)
                 });
                 // Subagent child calls arrive flat; the parent linkage lets
                 // the chat group them under their spawning Task row.
@@ -1411,6 +1415,18 @@ fn tool_kind(update: &Value) -> Option<String> {
         .map(str::to_owned)
 }
 
+// The tool-call input object. `rawInput` is the ACP-standard field, but some
+// adapters omit it and carry the invocation under `input`/`arguments`. Falling
+// back keeps the desktop tool card (and its citations) from rendering empty.
+fn tool_args(update: &Value) -> Value {
+    for key in ["rawInput", "input", "arguments"] {
+        if let Some(object) = update.get(key).filter(|value| value.is_object()) {
+            return object.clone();
+        }
+    }
+    json!({})
+}
+
 fn update_status_finished(update: &Value) -> bool {
     matches!(
         update.get("status").and_then(Value::as_str),
@@ -1419,12 +1435,21 @@ fn update_status_finished(update: &Value) -> bool {
 }
 
 fn finish_tool(output: &ParentOutput, id: &str, update: &Value) {
-    let result = update
+    let is_error = update.get("status").and_then(Value::as_str) == Some("failed");
+    let mut result = update
         .get("content")
         .filter(|value| value.as_array().is_some_and(|items| !items.is_empty()))
         .or_else(|| update.get("rawOutput"))
         .and_then(|value| content_text(Some(value)))
         .unwrap_or_default();
+    if result.trim().is_empty() {
+        // Some adapters report completion with neither content nor rawOutput; a
+        // minimal summary reads better than an empty result card.
+        let label = tool_name(update);
+        if label != "tool" {
+            result = format!("{label} {}", if is_error { "failed" } else { "completed" });
+        }
+    }
     output.send(json!({
         "type": "tool_execution_end",
         "toolCallId": id,
@@ -1432,7 +1457,7 @@ fn finish_tool(output: &ParentOutput, id: &str, update: &Value) {
         // The desktop event router reads the raw-Pi result shape
         // ({content: [{text}]}), not a bare string.
         "result": { "content": [{ "type": "text", "text": result }] },
-        "isError": update.get("status").and_then(Value::as_str) == Some("failed")
+        "isError": is_error
     }));
 }
 
@@ -1719,7 +1744,10 @@ fn ensure_tools_mcp_server(config: &RuntimeConfig) -> Option<PathBuf> {
 /// screenpipe's tools over loopback Streamable-HTTP instead (see
 /// `spawn_http_mcp_servers`).
 fn agent_needs_http_mcp(agent_id: &str) -> bool {
-    matches!(agent_id, "cursor")
+    // Cursor and GitHub Copilot both reject client stdio MCP servers, so the
+    // runtime serves them the screenpipe tools over loopback http instead.
+    // Without this, Copilot (a shipped preset) gets no screenpipe tools at all.
+    matches!(agent_id, "cursor" | "github-copilot-cli")
 }
 
 /// (name, url) of the loopback http MCP servers the runtime stood up for an
@@ -2253,6 +2281,20 @@ fn start_prompt(
     if let Some(context) = state.take_system_context() {
         message = format!(
             "<screenpipe-system-context>\n{context}\n</screenpipe-system-context>\n\n{message}"
+        );
+    }
+    let image_count = command
+        .get("images")
+        .and_then(Value::as_array)
+        .map(|images| images.len())
+        .unwrap_or(0);
+    // If the agent can't receive images, they'd otherwise be dropped silently.
+    // Tell the agent so it can tell the user, instead of appearing to ignore an
+    // attachment the user clearly meant to include.
+    if !image_supported && image_count > 0 {
+        let plural = if image_count == 1 { "image" } else { "images" };
+        message = format!(
+            "[system note: the user attached {image_count} {plural}, but this coding agent cannot receive images, so they were not included. If the request depends on the attachment, tell the user their selected agent does not support images.]\n\n{message}"
         );
     }
     let mut content = vec![ContentBlock::Text(TextContent::new(message))];
@@ -3415,6 +3457,25 @@ mod tests {
         );
         assert_eq!(tool_kind(&json!({ "title": "Grep" })), None);
         assert_eq!(tool_kind(&json!({ "kind": "  " })), None);
+    }
+
+    #[test]
+    fn tool_args_falls_back_past_missing_raw_input() {
+        assert_eq!(tool_args(&json!({ "rawInput": { "q": "x" } })), json!({ "q": "x" }));
+        assert_eq!(tool_args(&json!({ "input": { "q": "y" } })), json!({ "q": "y" }));
+        assert_eq!(tool_args(&json!({ "arguments": { "q": "z" } })), json!({ "q": "z" }));
+        // Nothing input-bearing → empty object, never a non-object value.
+        assert_eq!(tool_args(&json!({ "title": "T", "rawInput": "nope" })), json!({}));
+    }
+
+    #[test]
+    fn http_mcp_fallback_covers_the_stdio_hostile_agents() {
+        // Both reject client stdio MCP servers, so both need the loopback-http
+        // fallback; every other agent keeps stdio.
+        assert!(agent_needs_http_mcp("cursor"));
+        assert!(agent_needs_http_mcp("github-copilot-cli"));
+        assert!(!agent_needs_http_mcp("claude-acp"));
+        assert!(!agent_needs_http_mcp("pi-acp"));
     }
 
     #[cfg(windows)]
