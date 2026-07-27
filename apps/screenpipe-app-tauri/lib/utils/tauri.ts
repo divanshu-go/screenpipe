@@ -245,6 +245,11 @@ async checkPermission(permission: OSPermission) : Promise<OSPermissionStatus> {
  * clicked anything. It must use preflight directly: the broader core Tauri
  * check may perform a real capture probe in debug builds, which macOS treats
  * as a permission request.
+ *
+ * It honors the engine's enumeration verdict for the same reason
+ * `do_permissions_check` does — otherwise onboarding renders screen recording
+ * green in the exact lapsed-grant state where the permission banner and the
+ * recovery window say denied.
  */
 async checkScreenRecordingPermission() : Promise<OSPermissionStatus> {
     return await TAURI_INVOKE("check_screen_recording_permission");
@@ -3190,6 +3195,11 @@ ignoredUrls?: string[];
  * Automatically detect and skip incognito / private browsing windows.
  */
 ignoreIncognitoWindows: boolean;
+/**
+ * Use browser-native APIs for more reliable incognito detection on macOS.
+ * This requires Automation permission for supported Chromium browsers.
+ */
+enhancedIncognitoDetection?: boolean;
 /**
  * Experimental: pause screen capture when a DRM-protected streaming app
  * (Netflix, Disney+, etc.) or a remote-desktop client (Omnissa/VMware

@@ -455,6 +455,9 @@ pub struct TreeWalkerConfig {
     pub monitor_height: f64,
     /// Automatically detect and skip incognito / private browsing windows.
     pub ignore_incognito_windows: bool,
+    /// Use browser-native APIs for more reliable incognito detection where
+    /// available. On macOS this requires browser Automation permission.
+    pub enhanced_incognito_detection: bool,
     /// Per-walk override for `max_nodes` (set by adaptive budget, takes precedence).
     pub max_nodes_override: Option<usize>,
     /// Per-walk override for `walk_timeout` (set by adaptive budget, takes precedence).
@@ -498,6 +501,7 @@ impl Default for TreeWalkerConfig {
             monitor_width: 0.0,
             monitor_height: 0.0,
             ignore_incognito_windows: true,
+            enhanced_incognito_detection: false,
             max_nodes_override: None,
             walk_timeout_override: None,
             enable_line_bounds: true,

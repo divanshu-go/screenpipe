@@ -9,6 +9,10 @@ import type { SettingsField } from "./settings-search";
 /** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
 export const searchIndex: SettingsField[] = [
   { label: "Blocklist", keywords: ["ignore", "exclude", "block"] },
+  {
+    label: "Ignore incognito windows",
+    keywords: ["private", "browser", "enhanced", "automation"],
+  },
   { label: "PII masking", keywords: ["mask", "redact", "columns", "url", "fields"] },
   {
     label: "Remote support logs",
@@ -500,6 +504,7 @@ export function PrivacySection() {
 
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [isEnhancingIncognito, setIsEnhancingIncognito] = useState(false);
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
   const [picker, setPicker] = useState<"ignored" | "included" | null>(null);
 
@@ -858,7 +863,79 @@ export function PrivacySection() {
   };
 
   const handleIncognitoToggle = (checked: boolean) => {
-    handleSettingsChange({ ignoreIncognitoWindows: checked }, true);
+    handleSettingsChange(
+      checked
+        ? { ignoreIncognitoWindows: true }
+        : {
+            ignoreIncognitoWindows: false,
+            enhancedIncognitoDetection: false,
+          },
+      true,
+    );
+  };
+
+  const enhancedIncognitoDetection = Boolean(
+    settings.enhancedIncognitoDetection ?? false,
+  );
+
+  const handleEnhancedIncognitoDetection = async () => {
+    if (enhancedIncognitoDetection) {
+      handleSettingsChange({ enhancedIncognitoDetection: false }, true);
+      return;
+    }
+
+    setIsEnhancingIncognito(true);
+    try {
+      // Arc exposes private-window state through Accessibility already, so it
+      // never needs Automation access for this feature.
+      const installedBrowsers = await commands.getBrowsersAutomationStatus();
+      const browsers = installedBrowsers.filter(
+        (browser) => browser.name !== "Arc",
+      );
+      if (browsers.length === 0) {
+        const hasArc = installedBrowsers.some((browser) => browser.name === "Arc");
+        toast({
+          title: hasArc ? "basic detection is enough" : "open a supported browser first",
+          description: hasArc
+            ? "Arc private windows are already detected without extra access"
+            : "open Chrome, Edge, Brave, or another Chromium browser, then try again",
+        });
+        return;
+      }
+
+      const granted = browsers.filter((browser) => browser.status === "granted");
+      const promptable = browsers.filter(
+        (browser) => browser.running && browser.status !== "granted",
+      );
+      const newlyGranted: string[] = [];
+      for (const browser of promptable) {
+        const status = await commands.requestSingleBrowserAutomation(browser.name);
+        if (status === "granted") newlyGranted.push(browser.name);
+      }
+
+      if (granted.length === 0 && newlyGranted.length === 0) {
+        toast({
+          title: "browser access needed",
+          description: "open Chrome, Edge, Brave, or another Chromium browser, then try again",
+        });
+        return;
+      }
+
+      handleSettingsChange({ enhancedIncognitoDetection: true }, true);
+      toast({
+        title: "enhanced detection ready",
+        description: "apply changes to use browser-native incognito detection",
+      });
+    } catch (error) {
+      console.error("Failed to enable enhanced incognito detection:", error);
+      toast({
+        title: "couldn't enable enhanced detection",
+        description: "check macOS Automation settings and try again",
+        variant: "destructive",
+      });
+    } finally {
+      setIsEnhancingIncognito(false);
+    }
   };
 
   const handleDrmPauseToggle = (checked: boolean) => {
@@ -1250,18 +1327,39 @@ export function PrivacySection() {
               <div>
                 <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
                   Ignore Incognito Windows
-                  <HelpTooltip text="automatically detects and skips private/incognito browser windows in 20+ languages. on macos, uses native browser APIs for chromium browsers (chrome, edge, brave, arc)." />
+                  <HelpTooltip text="automatically detects and skips private/incognito browser windows in 20+ languages without extra access. on macOS, enhance enables browser-native detection for supported Chromium browsers." />
                 </h3>
                 <p className="text-xs text-muted-foreground">
-                  Skip all private browsing sessions
+                  Skip private browsing sessions
                 </p>
               </div>
             </div>
-            <Switch
-              id="ignoreIncognitoWindows"
-              checked={Boolean(settings.ignoreIncognitoWindows ?? true)}
-              onCheckedChange={handleIncognitoToggle}
-            />
+            <div className="flex items-center gap-1.5">
+              {isMacOS && Boolean(settings.ignoreIncognitoWindows ?? true) && (
+                <Button
+                  type="button"
+                  variant={enhancedIncognitoDetection ? "outline" : "ghost"}
+                  size="sm"
+                  className="h-7 px-2 text-[10px] uppercase tracking-wide"
+                  onClick={handleEnhancedIncognitoDetection}
+                  disabled={isEnhancingIncognito}
+                  aria-pressed={enhancedIncognitoDetection}
+                  title="use browser-native detection; requires macOS Automation access"
+                >
+                  {isEnhancingIncognito ? (
+                    <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                  ) : (
+                    <Shield className="mr-1 h-3 w-3" />
+                  )}
+                  {enhancedIncognitoDetection ? "enhanced" : "enhance"}
+                </Button>
+              )}
+              <Switch
+                id="ignoreIncognitoWindows"
+                checked={Boolean(settings.ignoreIncognitoWindows ?? true)}
+                onCheckedChange={handleIncognitoToggle}
+              />
+            </div>
           </div>
         </CardContent>
       </Card>

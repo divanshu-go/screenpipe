@@ -4,13 +4,12 @@
 
 //! Incognito / private-browsing window detection.
 //!
-//! This module provides a reliable, cross-platform way to detect whether a
-//! browser window is in incognito (or private) mode. Two detection strategies
-//! are combined:
+//! This module provides a cross-platform way to detect whether a browser window
+//! is in incognito (or private) mode. Two detection strategies are available:
 //!
-//! 1. **Platform-native queries** (macOS only, Chromium browsers): uses
-//!    AppleScript `get mode of window` which is locale-independent and 100 %
-//!    reliable.
+//! 1. **Platform-native queries** (optional, macOS only, Chromium browsers):
+//!    uses AppleScript window properties for locale-independent detection. This
+//!    enhanced mode can require Automation permission.
 //!
 //! 2. **Localized title matching**: a comprehensive set of known incognito /
 //!    private-browsing title strings across 20+ locales, covering Chrome,
@@ -26,8 +25,8 @@
 //! assert!(is_title_private("Neuer Tab — Firefox (Privater Modus)"));
 //! assert!(!is_title_private("GitHub - Google Chrome"));
 //!
-//! // Full detection (title + platform-native query)
-//! let detector = create_detector();
+//! // Basic detection (title + permission-free platform signals)
+//! let detector = create_detector(false);
 //! let is_private = detector.is_incognito("Google Chrome", 12345, "New Tab");
 //! ```
 
@@ -56,15 +55,24 @@ pub trait IncognitoDetector: Send + Sync {
 }
 
 /// Create the platform-appropriate incognito detector.
-pub fn create_detector() -> Box<dyn IncognitoDetector> {
+///
+/// `enhanced_detection` opts into browser-native APIs where available. Basic
+/// detection never requests extra OS permissions.
+pub fn create_detector(enhanced_detection: bool) -> Box<dyn IncognitoDetector> {
     #[cfg(target_os = "macos")]
-    return Box::new(macos::MacOSIncognitoDetector::new());
+    return Box::new(macos::MacOSIncognitoDetector::new(enhanced_detection));
 
     #[cfg(target_os = "windows")]
-    return Box::new(windows::WindowsIncognitoDetector);
+    {
+        let _ = enhanced_detection;
+        return Box::new(windows::WindowsIncognitoDetector);
+    }
 
     #[cfg(target_os = "linux")]
-    return Box::new(linux::LinuxIncognitoDetector);
+    {
+        let _ = enhanced_detection;
+        return Box::new(linux::LinuxIncognitoDetector);
+    }
 }
 
 #[cfg(test)]
@@ -73,7 +81,7 @@ mod tests {
 
     #[test]
     fn test_create_detector_returns_something() {
-        let _ = create_detector();
+        let _ = create_detector(false);
     }
 
     // These tests use `is_title_private` directly to avoid platform-specific

@@ -757,8 +757,8 @@ pub fn do_permissions_check(initial_check: bool) -> OSPermissionsCheck {
     }
 }
 
-/// Known Chromium-based browsers that use AppleScript for incognito detection
-/// and (in Arc's case) URL capture. Each needs its own Automation permission.
+/// Known Chromium-based browsers used for URL capture and enhanced incognito
+/// detection. Arc private windows are detected through Accessibility instead.
 #[cfg(target_os = "macos")]
 #[allow(dead_code)]
 struct ChromiumBrowserInfo {

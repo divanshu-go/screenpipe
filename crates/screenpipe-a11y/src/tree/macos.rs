@@ -613,9 +613,10 @@ pub struct MacosTreeWalker {
 impl MacosTreeWalker {
     pub fn new(mut config: TreeWalkerConfig) -> Self {
         config.compile_patterns();
+        let enhanced_incognito_detection = config.enhanced_incognito_detection;
         Self {
             config,
-            incognito_detector: crate::incognito::create_detector(),
+            incognito_detector: crate::incognito::create_detector(enhanced_incognito_detection),
         }
     }
 }
@@ -753,9 +754,10 @@ impl MacosTreeWalker {
             }
         }
 
-        // Skip incognito / private browsing windows.  Uses the full detector
-        // which checks AppleScript window properties for Chromium browsers
-        // (Chrome, Edge, etc.) and falls back to localized title matching.
+        // Skip incognito / private browsing windows. Basic mode uses
+        // accessibility identifiers and localized title matching without any
+        // additional permission. Enhanced mode also checks browser-native
+        // window properties for Chromium browsers.
         if self.config.ignore_incognito_windows
             && self
                 .incognito_detector
