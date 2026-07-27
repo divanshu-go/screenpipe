@@ -15,6 +15,7 @@ describe("parseGeneratedLiveView", () => {
       JSON.stringify({
         title: "How I worked",
         timeRange: "7d",
+        timeRangeBehavior: "selectable",
         note: "A useful overview.",
         blocks: [
           {
@@ -54,6 +55,10 @@ describe("parseGeneratedLiveView", () => {
     expect(result).toEqual({
       title: "How I worked",
       timeRange: "7d",
+      periodPolicy: {
+        type: "selectable.v1",
+        values: ["today", "24h", "7d", "30d"],
+      },
       note: "A useful overview.",
       blocks: [
         {
@@ -85,6 +90,29 @@ describe("parseGeneratedLiveView", () => {
           pipeName: "daily-summary",
         },
       ],
+    });
+  });
+
+  it("automatically fixes the period only when the generated view requires it", () => {
+    const result = parseGeneratedLiveView(
+      JSON.stringify({
+        title: "Daily memory",
+        timeRange: "today",
+        timeRangeBehavior: "fixed",
+        blocks: [
+          {
+            title: "Daily brief",
+            component: "markdown.v1",
+          },
+        ],
+      }),
+      [],
+      "dashboard",
+    );
+
+    expect(result.periodPolicy).toEqual({
+      type: "fixed.v1",
+      value: "today",
     });
   });
 

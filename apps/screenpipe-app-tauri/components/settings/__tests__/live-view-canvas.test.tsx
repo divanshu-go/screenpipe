@@ -4,13 +4,28 @@
 
 import React, { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { LiveViewCanvas } from "../live-view-canvas";
 import { createCanvasDocument } from "@/lib/live-views/canvas-layout";
 import type {
   BrainViewCanvasDocument,
   BrainViewDefinition,
 } from "@/lib/utils/tauri";
+
+const eventMocks = vi.hoisted(() => ({
+  listeners: new Map<string, (event: { payload: unknown }) => void>(),
+  listen: vi.fn(),
+}));
+
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: eventMocks.listen,
+}));
 
 const view: BrainViewDefinition = {
   id: "canvas-component-view",
@@ -107,6 +122,17 @@ function CanvasHarness({
 }
 
 beforeEach(() => {
+  eventMocks.listeners.clear();
+  eventMocks.listen.mockClear();
+  eventMocks.listen.mockImplementation(
+    async (
+      event: string,
+      handler: (event: { payload: unknown }) => void,
+    ) => {
+      eventMocks.listeners.set(event, handler);
+      return () => eventMocks.listeners.delete(event);
+    },
+  );
   vi.stubGlobal("PointerEvent", PointerEventMock);
   HTMLElement.prototype.setPointerCapture = vi.fn();
   HTMLElement.prototype.releasePointerCapture = vi.fn();
@@ -267,5 +293,24 @@ describe("LiveViewCanvas", () => {
       fireEvent.click(screen.getByLabelText("zoom out"));
     }
     expect(screen.getByText("25%")).toBeTruthy();
+  });
+
+  it("zooms in and out around the trackpad pinch point", async () => {
+    render(<CanvasHarness />);
+    const surface = screen.getByTestId("live-view-canvas-surface");
+    fireEvent.pointerEnter(surface, { clientX: 250, clientY: 200 });
+    await waitFor(() =>
+      expect(eventMocks.listeners.has("native-magnify")).toBe(true),
+    );
+
+    act(() => {
+      eventMocks.listeners.get("native-magnify")?.({ payload: 0.1 });
+    });
+    expect(screen.getByText("165%")).toBeTruthy();
+
+    act(() => {
+      eventMocks.listeners.get("native-magnify")?.({ payload: -0.1 });
+    });
+    expect(screen.getByText("100%")).toBeTruthy();
   });
 });
