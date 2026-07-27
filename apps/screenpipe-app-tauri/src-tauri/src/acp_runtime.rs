@@ -39,6 +39,41 @@ use tokio::sync::{mpsc, oneshot};
 pub const RUNTIME_ARG: &str = "--screenpipe-acp-runtime";
 const PROCESS_GUARD_ARG: &str = "--screenpipe-acp-process-guard";
 pub(crate) const CLOUD_API_KEY_ENV: &str = "SCREENPIPE_API_KEY";
+
+/// Environment carried into the runtime process by `pi.rs` that belongs to the
+/// runtime alone and must never be inherited by any child it spawns — neither
+/// the agent adapter nor a client-requested terminal. These blobs hold resolved
+/// provider API keys (`SCREENPIPE_ACP_ENV_JSON`), third-party MCP secret headers
+/// (`SCREENPIPE_ACP_USER_MCP_JSON`), the system prompt, and session config.
+/// Children receive what they legitimately need through CLI args, the resolved
+/// per-process `env`, and the structured ACP protocol — never as raw inherited
+/// env. A single list keeps the two spawn sites from drifting (a terminal that
+/// forgot one of these was a secret-exfiltration path — an agent could `env` it
+/// out). `CLOUD_API_KEY_ENV` is the signed-in user's cloud JWT.
+const RUNTIME_ONLY_ENV: &[&str] = &[
+    CLOUD_API_KEY_ENV,
+    "SCREENPIPE_ACP_ENV_JSON",
+    "SCREENPIPE_ACP_USER_MCP_JSON",
+    "SCREENPIPE_ACP_SESSION_CONFIG_JSON",
+    "SCREENPIPE_ACP_SYSTEM_PROMPT",
+    "SCREENPIPE_ACP_AUTH_METHOD",
+    "SCREENPIPE_ACP_COMMAND",
+    "SCREENPIPE_ACP_ARGS_JSON",
+    "SCREENPIPE_ACP_CWD",
+    "SCREENPIPE_ACP_ID",
+    "SCREENPIPE_ACP_RESUME_SESSION_ID",
+];
+
+/// Strip every [`RUNTIME_ONLY_ENV`] var from a child command's inherited
+/// environment. Call at every spawn site so secrets can't leak into a
+/// subprocess. Apply AFTER any `.envs(...)` so an explicit entry can't re-add a
+/// scrubbed name.
+fn scrub_runtime_env(command: &mut std::process::Command) {
+    for key in RUNTIME_ONLY_ENV {
+        command.env_remove(key);
+    }
+}
+
 #[cfg(windows)]
 const WRAPPED_COMMAND_ENV: &str = "SCREENPIPE_INTERNAL_ACP_WRAPPED_COMMAND";
 #[cfg(windows)]
@@ -1541,8 +1576,11 @@ fn spawn_terminal(state: &RuntimeState, request: CreateTerminalRequest) -> Resul
         .current_dir(cwd)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .stdin(Stdio::null())
-        .env_remove(CLOUD_API_KEY_ENV);
+        .stdin(Stdio::null());
+    // The terminal runs an agent-chosen command and must not inherit the
+    // runtime's secrets (provider keys, MCP headers). Same scrub as the agent
+    // spawn — a prompt-injected agent could otherwise `env` them out.
+    scrub_runtime_env(&mut command);
     for variable in request.env {
         if !is_process_guard_env(&variable.name) && !is_forbidden_acp_env(&variable.name) {
             command.env(variable.name, variable.value);
@@ -2821,16 +2859,17 @@ pub async fn run_from_env() -> Result<(), String> {
         let _ = parent_closed_tx.send(());
     });
 
-    let command = supervised_command(&config.command, &config.args)?;
+    let mut command = supervised_command(&config.command, &config.args)?;
+    // Scrub runtime-only secrets from the inherited env before the adapter
+    // starts. The adapter gets provider keys through `.envs(&config.env)` and
+    // MCP config through the structured session/new declaration, never as raw
+    // inherited blobs. `config.env` never contains a scrubbed name (pi.rs
+    // filters the cloud JWT out), so scrubbing before `.envs` is safe.
+    scrub_runtime_env(&mut command);
     let mut command = tokio::process::Command::from(command);
     command
         .current_dir(&config.project_dir)
         .envs(&config.env)
-        .env_remove(CLOUD_API_KEY_ENV)
-        // The resolved user-MCP blob carries secret header values; it reaches
-        // the adapter only through the structured session/new declaration,
-        // never as a raw inherited env var.
-        .env_remove("SCREENPIPE_ACP_USER_MCP_JSON")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -3065,6 +3104,25 @@ mod tests {
         assert!(is_forbidden_acp_env("screenpipe_api_key"));
         assert!(!is_forbidden_acp_env("SCREENPIPE_LOCAL_API_KEY"));
         assert!(!is_forbidden_acp_env("ANTHROPIC_API_KEY"));
+    }
+
+    #[test]
+    fn runtime_only_env_scrubs_every_secret_blob() {
+        // Both spawn sites (adapter + client terminal) scrub RUNTIME_ONLY_ENV.
+        // Guard the list so a future edit can't silently drop one of these
+        // secret-bearing vars — a missing entry was an exfiltration path (a
+        // terminal could `env` the value out).
+        for required in [
+            CLOUD_API_KEY_ENV,
+            "SCREENPIPE_ACP_ENV_JSON",
+            "SCREENPIPE_ACP_USER_MCP_JSON",
+            "SCREENPIPE_ACP_SESSION_CONFIG_JSON",
+        ] {
+            assert!(
+                RUNTIME_ONLY_ENV.contains(&required),
+                "{required} must be scrubbed from spawned child environments"
+            );
+        }
     }
 
     #[test]
