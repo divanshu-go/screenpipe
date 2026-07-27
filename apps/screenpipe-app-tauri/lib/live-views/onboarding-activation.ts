@@ -14,7 +14,6 @@ const ACTIVATIONS_STORAGE_KEY =
 const BRAIN_HANDOFF_STORAGE_KEY =
   "screenpipe.live-view.onboarding-brain-handoff.v1";
 export const USER_GOAL_STORAGE_KEY = "screenpipe.user.goal-category.v1";
-export const USER_GOAL_CHANGED_EVENT = "screenpipe:user-goal-changed";
 const LEGACY_HOME_FOCUS_STORAGE_KEY = "screenpipe.home.focus.v1";
 const MAX_STORED_ACTIVATIONS = 12;
 
@@ -30,7 +29,7 @@ const USER_GOAL_CATEGORIES = new Set<UserGoalCategory>([
   "process_automation",
 ]);
 
-const DEFAULT_USER_GOAL_CATEGORY: UserGoalCategory = "work_memory";
+export const DEFAULT_USER_GOAL_CATEGORY: UserGoalCategory = "work_memory";
 
 export type OnboardingLiveViewActivation = {
   viewId: string;
@@ -118,14 +117,21 @@ function writeActivations(activations: ActivationMap): void {
   }
 }
 
-function normalizeUserGoalCategory(value: unknown): UserGoalCategory | null {
+export function normalizeUserGoalCategory(
+  value: unknown,
+): UserGoalCategory | null {
   return typeof value === "string" &&
     USER_GOAL_CATEGORIES.has(value as UserGoalCategory)
     ? (value as UserGoalCategory)
     : null;
 }
 
-export function getUserGoalCategory(): UserGoalCategory {
+/**
+ * Read the pre-settings-store goal once during migration. This deliberately
+ * does not write or delete anything: the caller clears the legacy keys only
+ * after store.bin has been saved successfully.
+ */
+export function readLegacyUserGoalCategory(): UserGoalCategory {
   if (typeof window === "undefined") return DEFAULT_USER_GOAL_CATEGORY;
   try {
     const stored = normalizeUserGoalCategory(
@@ -136,11 +142,7 @@ export function getUserGoalCategory(): UserGoalCategory {
     const legacy = normalizeUserGoalCategory(
       window.localStorage.getItem(LEGACY_HOME_FOCUS_STORAGE_KEY),
     );
-    if (legacy) {
-      window.localStorage.setItem(USER_GOAL_STORAGE_KEY, legacy);
-      window.localStorage.removeItem(LEGACY_HOME_FOCUS_STORAGE_KEY);
-      return legacy;
-    }
+    if (legacy) return legacy;
 
     // Migrate existing onboarding activations without reading the free-text goal.
     const latest = Object.values(readActivations()).sort(
@@ -151,27 +153,20 @@ export function getUserGoalCategory(): UserGoalCategory {
         ? "default"
         : latest.goalCategory
       : DEFAULT_USER_GOAL_CATEGORY;
-    window.localStorage.setItem(USER_GOAL_STORAGE_KEY, migratedGoal);
     return migratedGoal;
   } catch {
     return DEFAULT_USER_GOAL_CATEGORY;
   }
 }
 
-export function setUserGoalCategory(category: UserGoalCategory): void {
+export function clearLegacyUserGoalCategory(): void {
   if (typeof window === "undefined") return;
-  const normalized = normalizeUserGoalCategory(category) ?? "default";
   try {
-    window.localStorage.setItem(USER_GOAL_STORAGE_KEY, normalized);
+    window.localStorage.removeItem(USER_GOAL_STORAGE_KEY);
     window.localStorage.removeItem(LEGACY_HOME_FOCUS_STORAGE_KEY);
   } catch {
-    // Personalization is optional; the default card order remains usable.
+    // The durable settings value already won; stale legacy state is harmless.
   }
-  window.dispatchEvent(
-    new CustomEvent<UserGoalCategory>(USER_GOAL_CHANGED_EVENT, {
-      detail: normalized,
-    }),
-  );
 }
 
 export function rememberSelectedLiveViewDashboard(viewId: string | null): void {
@@ -227,9 +222,6 @@ export function startOnboardingLiveViewActivation(
   };
   activations[viewId] = activation;
   writeActivations(activations);
-  setUserGoalCategory(
-    goalCategory === "custom" ? "default" : goalCategory,
-  );
   rememberSelectedLiveViewDashboard(viewId);
   requestOnboardingBrainHandoff(viewId);
   return activation;
