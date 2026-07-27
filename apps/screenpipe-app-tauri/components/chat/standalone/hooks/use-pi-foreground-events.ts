@@ -1134,11 +1134,20 @@ export function usePiForegroundEvents({
         const terminatedPid = payload.pid;
         const termKey = `${payload.sessionId}:${typeof terminatedPid === "number" ? terminatedPid : "unknown"}`;
         const nowMs = Date.now();
+        const TERMINATION_DEDUP_WINDOW_MS = 4000;
         const lastSeen = piTerminationDedupRef.current[termKey] ?? 0;
-        if (nowMs - lastSeen < 4000) {
+        if (nowMs - lastSeen < TERMINATION_DEDUP_WINDOW_MS) {
           return;
         }
         piTerminationDedupRef.current[termKey] = nowMs;
+        // termKey includes the pid, which changes on every restart, so prune
+        // entries older than the dedup window to keep the map from growing
+        // for the panel's lifetime.
+        for (const [key, seen] of Object.entries(piTerminationDedupRef.current)) {
+          if (nowMs - seen >= TERMINATION_DEDUP_WINDOW_MS) {
+            delete piTerminationDedupRef.current[key];
+          }
+        }
         if (typeof terminatedPid === "number" && piIntentionallyStoppedPidsRef.current.delete(terminatedPid)) {
           return;
         }
