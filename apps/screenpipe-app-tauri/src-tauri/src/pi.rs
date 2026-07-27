@@ -1462,6 +1462,24 @@ fn ensure_web_search_extension(
     Ok(())
 }
 
+/// Install the local-proxy web-search extension for pi-acp. Writes the same
+/// `web-search.ts` slot as the cloud variant but with a body that hits the
+/// local engine's `/v1/web-search` proxy (which holds the cloud JWT) using only
+/// the local API key, so "Pi over ACP" keeps web search without the cloud JWT.
+fn ensure_web_search_local_extension(project_dir: &str) -> Result<(), String> {
+    let ext_dir = std::path::Path::new(project_dir)
+        .join(".pi")
+        .join("extensions");
+    std::fs::create_dir_all(&ext_dir)
+        .map_err(|e| format!("Failed to create extensions dir: {}", e))?;
+    let ext_path = ext_dir.join("web-search.ts");
+    let ext_content = include_str!("../assets/extensions/web-search-local.ts");
+    std::fs::write(&ext_path, ext_content)
+        .map_err(|e| format!("Failed to write local web-search extension: {}", e))?;
+    debug!("Local web search extension installed at {:?}", ext_path);
+    Ok(())
+}
+
 /// Install the MCP bridge extension. Registers proxy tools that route
 /// `sp_mcp_call` / `sp_mcp_list_tools` requests through the local
 /// `/mcp-servers/*` API. Always installed — does nothing when zero
@@ -2235,10 +2253,11 @@ pub async fn pi_start_inner(
         ensure_required_pi_extension_package().await?;
     } else if is_pi_acp {
         // Same pi as native — seed the project-local extensions so its tools
-        // reach the model. web-search is intentionally omitted: it needs the
-        // screenpipe-cloud JWT, which ACP sessions deliberately do not receive.
-        // (Core search + save/connect already work via the seeded skills and
-        // the local API, both authenticated by the local key in the env.)
+        // reach the model. web-search uses the LOCAL-proxy variant: the cloud
+        // extension needs the screenpipe-cloud JWT (which ACP sessions never
+        // receive), but the local engine proxy at /v1/web-search injects the JWT
+        // server-side, so pi-acp keeps web search with only the local API key.
+        ensure_web_search_local_extension(&project_dir)?;
         ensure_mcp_bridge_extension(&project_dir)?;
         ensure_save_artifact_extension(&project_dir)?;
         ensure_connection_gate_extension(&project_dir)?;
@@ -2462,7 +2481,7 @@ pub async fn pi_start_inner(
             .and_then(|config| config.acp_agent.as_ref())
             .ok_or("ACP backend requires an acpAgent configuration")?;
         let agent_id = acp.id.trim();
-        let resolved_env = acp
+        let mut resolved_env = acp
             .env
             .iter()
             .filter(|(name, _)| !crate::acp_runtime::is_forbidden_acp_env(name))
@@ -2475,6 +2494,15 @@ pub async fn pi_start_inner(
                 Some((name.clone(), resolved))
             })
             .collect::<HashMap<_, _>>();
+        // Codex drops client-supplied MCP servers whose name collides with an
+        // entry in the user's ~/.codex config unless this is set, which would
+        // silently strip screenpipe's tools for a user who has a `screenpipe`
+        // config entry. Default it on; a user's explicit value still wins.
+        if agent_id == "codex-acp" {
+            resolved_env
+                .entry("DISABLE_MCP_CONFIG_FILTERING".to_string())
+                .or_insert_with(|| "true".to_string());
+        }
         cmd.env("SCREENPIPE_ACP_ID", agent_id)
             .env("SCREENPIPE_ACP_CWD", &project_dir)
             .env("SCREENPIPE_BUN_PATH", &bun_path)
