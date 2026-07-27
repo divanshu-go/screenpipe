@@ -8,14 +8,12 @@ import { useModelUpsellGating } from "@/lib/hooks/use-model-upsell-gating";
 import { usePiModels } from "@/lib/hooks/use-pi-models";
 import { useMemo, useState, useEffect, useCallback, useRef } from "react";
 import {
-  ACP_ADAPTERS,
   acpAdapterInfo,
   generatePresetName,
   presetImageClass,
   presetImageSrc,
 } from "@/lib/utils/preset-appearance";
-import { AcpPresetDefaults } from "@/components/settings/acp-preset-defaults";
-import { AcpInstallGate } from "@/components/settings/acp-install-gate";
+import { AcpAgentPicker } from "@/components/settings/acp-agent-picker";
 import {
   Command,
   CommandEmpty,
@@ -661,142 +659,14 @@ export function AIProviderConfig({
         </div>
 
         {selectedProvider === "acp" && (
-          <div className="space-y-2">
-            <Label className="text-xs">agent</Label>
-            <div
-              role="listbox"
-              aria-label="agent"
-              className="grid grid-cols-2 gap-1.5"
-            >
-              {ACP_ADAPTERS.map((adapter) => {
-                const isSelected =
-                  (formData.acpAgent?.id || "pi-acp") === adapter.id;
-                return (
-                  <button
-                    key={adapter.id}
-                    type="button"
-                    role="option"
-                    aria-selected={isSelected}
-                    data-acp-agent-option={adapter.id}
-                    onClick={() =>
-                      setFormData({
-                        ...formData,
-                        provider: "acp",
-                        model: adapter.id,
-                        acpAgent: {
-                          id: adapter.id,
-                          command:
-                            adapter.id === "custom"
-                              ? formData.acpAgent?.command || ""
-                              : undefined,
-                          args:
-                            adapter.id === "custom"
-                              ? formData.acpAgent?.args || []
-                              : undefined,
-                          env: formData.acpAgent?.env || {},
-                        },
-                      })
-                    }
-                    className={cn(
-                      "flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-xs text-left transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-                      isSelected ? "border-primary ring-1 ring-primary" : "border-input",
-                    )}
-                  >
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={adapter.imageSrc}
-                      alt=""
-                      className={cn(
-                        "h-3.5 w-3.5 rounded-sm shrink-0",
-                        adapter.invertInDark && "dark:invert",
-                      )}
-                    />
-                    <span className="truncate">{adapter.name}</span>
-                  </button>
-                );
-              })}
-            </div>
-            <p className="text-[10px] text-muted-foreground">
-              {acpAdapterInfo(formData.acpAgent?.id || "pi-acp").description}
-            </p>
-            <AcpInstallGate
-              compact
-              agentId={formData.acpAgent?.id || "pi-acp"}
-              agentName={acpAdapterInfo(formData.acpAgent?.id || "pi-acp").name}
-              onBlockedChange={setAcpInstallBlocked}
-            />
-            {!acpInstallBlocked && (
-              <AcpPresetDefaults
-                compact
-                agent={{
-                  id: formData.acpAgent?.id || "pi-acp",
-                  command: formData.acpAgent?.command,
-                  args: formData.acpAgent?.args,
-                  env: formData.acpAgent?.env,
-                }}
-                config={formData.acpAgent?.config}
-                modeId={formData.acpAgent?.modeId}
-                onChange={(change) =>
-                  setFormData({
-                    ...formData,
-                    acpAgent: {
-                      ...(formData.acpAgent || { id: "pi-acp" }),
-                      ...change,
-                    },
-                  })
-                }
-              />
-            )}
-            {(formData.acpAgent?.id || "pi-acp") === "custom" && (
-              <div className="space-y-1">
-                <Label htmlFor="acpCommandQuick" className="text-xs">
-                  agent command
-                </Label>
-                <Input
-                  id="acpCommandQuick"
-                  value={formData.acpAgent?.command || ""}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      acpAgent: {
-                        ...(formData.acpAgent || { id: "custom" }),
-                        command: e.target.value,
-                      },
-                    })
-                  }
-                  placeholder="path or command that starts an ACP agent"
-                  className="h-8 font-mono text-xs"
-                  spellCheck={false}
-                  autoCorrect="off"
-                  autoCapitalize="off"
-                />
-                <Label htmlFor="acpArgsQuick" className="text-xs">
-                  startup options
-                </Label>
-                <Input
-                  id="acpArgsQuick"
-                  value={(formData.acpAgent?.args || []).join(" ")}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      acpAgent: {
-                        ...(formData.acpAgent || { id: "custom" }),
-                        args: e.target.value.split(/\s+/).filter(Boolean),
-                      },
-                    })
-                  }
-                  placeholder="--acp"
-                  className="h-8 font-mono text-xs"
-                  spellCheck={false}
-                  autoCorrect="off"
-                  autoCapitalize="off"
-                />
-                <p className="text-[10px] text-muted-foreground">
-                  environment variables and per-line options live in settings → ai presets
-                </p>
-              </div>
-            )}
-          </div>
+          <AcpAgentPicker
+            compact
+            agent={formData.acpAgent}
+            onChange={(next) =>
+              setFormData({ ...formData, provider: "acp", model: next.id, acpAgent: next })
+            }
+            onInstallBlockedChange={setAcpInstallBlocked}
+          />
         )}
 
         {selectedProvider === "openai" && (

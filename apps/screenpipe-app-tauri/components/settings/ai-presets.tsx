@@ -36,13 +36,11 @@ import { Label } from "../ui/label";
 import { Input } from "../ui/input";
 import {
   ACP_ADAPTERS,
-  acpAdapterInfo,
   generatePresetName,
   presetImageClass,
   presetImageSrc,
 } from "@/lib/utils/preset-appearance";
-import { AcpPresetDefaults } from "@/components/settings/acp-preset-defaults";
-import { AcpInstallGate } from "@/components/settings/acp-install-gate";
+import { AcpAgentPicker } from "@/components/settings/acp-agent-picker";
 import { ValidatedInput } from "../ui/validated-input";
 import { ValidatedTextarea } from "../ui/validated-textarea";
 import {
@@ -87,7 +85,6 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { aiEndpointUrl } from "@/lib/utils/ai-endpoint-url";
-import { Textarea } from "../ui/textarea";
 import {
   Tooltip,
   TooltipContent,
@@ -189,15 +186,6 @@ export interface AIProviderCardProps {
   warningText?: string;
   imageClassName?: string;
 }
-
-const inheritedEnvFromText = (value: string): Record<string, string> =>
-  Object.fromEntries(
-    value
-      .split(/[,\n]/)
-      .map((name) => name.trim())
-      .filter((name) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name))
-      .map((name) => [name, ""]),
-  );
 
 export interface OllamaModel {
   name: string;
@@ -1416,136 +1404,11 @@ const AISection = ({
       />
 
       {settingsPreset?.provider === "acp" && (
-        <div className="w-full space-y-4 rounded-lg border p-4">
-          <div className="space-y-1">
-            <Label htmlFor="acpAgent">Agent</Label>
-            <p className="text-xs text-muted-foreground">
-              Choose the coding agent Screenpipe should run. Your existing sign-in and agent settings stay in that app.
-            </p>
-          </div>
-          {/* Inline listbox instead of a native select or portal dropdown:
-              options can carry each agent's icon, and portal-based menus are
-              painted over by the native webview on Windows. */}
-          <div
-            id="acpAgent"
-            role="listbox"
-            aria-label="Agent"
-            className="grid grid-cols-2 gap-2 sm:grid-cols-3"
-          >
-            {ACP_ADAPTERS.map((adapter) => {
-              const selectedAgent = settingsPreset.acpAgent?.id || "pi-acp";
-              const isSelected = selectedAgent === adapter.id;
-              return (
-                <button
-                  key={adapter.id}
-                  type="button"
-                  role="option"
-                  aria-selected={isSelected}
-                  data-acp-agent-option={adapter.id}
-                  onClick={() =>
-                    updateAcpAgent({
-                      id: adapter.id,
-                      command: adapter.id === "custom" ? settingsPreset.acpAgent?.command || "" : undefined,
-                      args: adapter.id === "custom" ? settingsPreset.acpAgent?.args || [] : undefined,
-                      env: settingsPreset.acpAgent?.env || {},
-                    })
-                  }
-                  className={cn(
-                    "flex items-center gap-2 rounded-md border border-input bg-background px-3 py-2 text-sm text-left transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                    isSelected && "border-primary ring-1 ring-primary",
-                  )}
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={adapter.imageSrc}
-                    alt=""
-                    className={cn(
-                      "size-5 rounded shrink-0",
-                      adapter.invertInDark && "dark:invert",
-                    )}
-                  />
-                  <span className="truncate">{adapter.name}</span>
-                </button>
-              );
-            })}
-          </div>
-          <p className="text-xs text-muted-foreground">
-            {acpAdapterInfo(settingsPreset.acpAgent?.id || "pi-acp").description}
-          </p>
-
-          <AcpInstallGate
-            agentId={settingsPreset.acpAgent?.id || "pi-acp"}
-            agentName={acpAdapterInfo(settingsPreset.acpAgent?.id || "pi-acp").name}
-            onBlockedChange={setAcpInstallBlocked}
-          />
-
-          {!acpInstallBlocked && (
-            <AcpPresetDefaults
-              agent={{
-                id: settingsPreset.acpAgent?.id || "pi-acp",
-                command: settingsPreset.acpAgent?.command,
-                args: settingsPreset.acpAgent?.args,
-                env: settingsPreset.acpAgent?.env,
-              }}
-              config={settingsPreset.acpAgent?.config}
-              modeId={settingsPreset.acpAgent?.modeId}
-              onChange={(change) => updateAcpAgent(change)}
-            />
-          )}
-
-
-          {settingsPreset.acpAgent?.id === "custom" && (
-            <div className="space-y-4 border-t pt-4">
-              <div className="space-y-2">
-                <Label htmlFor="acpCommand" className="flex items-center gap-1">
-                  Agent command <span className="text-destructive">*</span>
-                </Label>
-                <Input
-                  id="acpCommand"
-                  value={settingsPreset.acpAgent.command || ""}
-                  onChange={(event) => updateAcpAgent({ command: event.target.value })}
-                  placeholder="Path or command used to start your agent"
-                  spellCheck={false}
-                  autoCorrect="off"
-                />
-                <p className="text-xs text-muted-foreground">
-                  This command must start an ACP-compatible agent on this computer.
-                </p>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="acpArgs">Startup options</Label>
-                <Textarea
-                  id="acpArgs"
-                  value={(settingsPreset.acpAgent.args || []).join("\n")}
-                  onChange={(event) => updateAcpAgent({
-                    args: event.target.value.split("\n").map((arg) => arg.trim()).filter(Boolean),
-                  })}
-                  placeholder={"One option per line\n--acp"}
-                  className="min-h-[80px] font-mono text-xs"
-                  spellCheck={false}
-                />
-                <p className="text-xs text-muted-foreground">Add one command-line option per line.</p>
-              </div>
-            </div>
-          )}
-
-          <div className="space-y-2 border-t pt-4">
-            <Label htmlFor="acpEnv">Additional environment variables</Label>
-            <Textarea
-              id="acpEnv"
-              value={Object.keys(settingsPreset.acpAgent?.env || {}).join("\n")}
-              onChange={(event) => updateAcpAgent({ env: inheritedEnvFromText(event.target.value) })}
-              placeholder={"Optional variable names, one per line\nOPENAI_API_KEY"}
-              className="min-h-[80px] font-mono text-xs"
-              spellCheck={false}
-            />
-            <p className="text-xs text-muted-foreground">
-              Only variable names are saved. Their values are inherited at launch and never stored
-              in this preset. ACP adapters run locally with your account permissions, so use agents
-              you trust.
-            </p>
-          </div>
-        </div>
+        <AcpAgentPicker
+          agent={settingsPreset.acpAgent}
+          onChange={updateAcpAgent}
+          onInstallBlockedChange={setAcpInstallBlocked}
+        />
       )}
 
       {settingsPreset?.provider === "custom" && (
