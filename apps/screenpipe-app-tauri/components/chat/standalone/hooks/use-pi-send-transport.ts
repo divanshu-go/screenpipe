@@ -20,7 +20,7 @@ import {
   piImageFromFrameId,
   promptWithConversationHistory,
 } from "@/components/chat/standalone/hooks/pi-message-preparation";
-import type { Message } from "@/lib/chat/types";
+import type { ChatSendOptions, Message } from "@/lib/chat/types";
 import type { PiSendTransportOptions } from "@/components/chat/standalone/hooks/pi-types";
 
 export function usePiSendTransport(options: PiSendTransportOptions) {
@@ -162,7 +162,12 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     clearActivePiTurnState();
   }
 
-  async function sendPiMessage(userMessage: string, displayLabel?: string, imageDataUrls?: string[]) {
+  async function sendPiMessage(
+    userMessage: string,
+    displayLabel?: string,
+    imageDataUrls?: string[],
+    sendOptions?: ChatSendOptions,
+  ) {
     clearPendingSteerTransportState();
 
     // Auto-start Pi if it's not running yet (new session or crash recovery)
@@ -300,6 +305,7 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
       ...(displayLabel ? { displayContent: displayLabel } : {}),
       ...(outgoingImages.length > 0 ? { images: [...outgoingImages] } : {}),
       ...(consumedAttachments ? { attachments: consumedAttachments } : {}),
+      ...(sendOptions?.entrySource ? { entrySource: sendOptions.entrySource } : {}),
       timestamp: Date.now(),
     };
 
@@ -626,7 +632,12 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     }
   }
 
-  async function sendMessage(userMessage: string, displayLabel?: string, imageDataUrls?: string[]) {
+  async function sendMessage(
+    userMessage: string,
+    displayLabel?: string,
+    imageDataUrls?: string[],
+    sendOptions?: ChatSendOptions,
+  ) {
     if ((!canChat && !autoSendBypassRef.current) || (!getActivePreset() && !autoSendBypassRef.current)) return;
     const trimmed = userMessage.trim();
     const outgoingImages = imageDataUrls ?? pastedImages;
@@ -706,7 +717,7 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     sendDispatchInFlightRef.current = true;
     try {
       // All providers route through Pi agent
-      return await sendPiMessage(outgoingMessage, outgoingDisplay, imageDataUrls);
+      return await sendPiMessage(outgoingMessage, outgoingDisplay, imageDataUrls, sendOptions);
     } catch (e) {
       restoreDocsOnError(e);
     } finally {

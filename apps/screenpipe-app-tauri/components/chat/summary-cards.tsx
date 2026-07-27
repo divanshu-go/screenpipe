@@ -16,10 +16,15 @@ import {
   type CustomTemplate,
 } from "@/lib/summary-templates";
 import { type AutomationPipeInventory } from "@/lib/automation-pipe-evals";
+import type { ChatEntrySource } from "@/lib/chat/types";
 import { CustomSummaryBuilder } from "./custom-summary-builder";
 
 interface SummaryCardsProps {
-  onSendMessage: (message: string, displayLabel?: string) => void;
+  onSendMessage: (
+    message: string,
+    displayLabel?: string,
+    entrySource?: ChatEntrySource,
+  ) => void;
   customTemplates: CustomTemplate[];
   onSaveCustomTemplate: (template: CustomTemplate) => void;
   onUpdateCustomTemplate: (template: CustomTemplate) => void;
@@ -72,13 +77,12 @@ export function SummaryCards({
     posthog.capture("home_card_clicked", {
       kind: pipe.featured ? "template_featured" : "template_discover",
       template_name: pipe.name,
-      template_title: pipe.title,
     });
     const prompt =
       pipe.name === AUTOMATE_MY_WORK_TEMPLATE_NAME
         ? buildAutomateMyWorkPrompt(existingPipes)
         : pipe.prompt;
-    onSendMessage(prompt, `${pipe.icon} ${pipe.title}`);
+    onSendMessage(prompt, `${pipe.icon} ${pipe.title}`, "home_card");
   };
 
   // Opens the builder pre-filled for review/editing instead of running
@@ -87,8 +91,6 @@ export function SummaryCards({
   const handleCustomTemplateClick = (template: CustomTemplate) => {
     posthog.capture("home_card_clicked", {
       kind: "custom_template",
-      template_id: template.id,
-      template_title: template.title,
     });
     setEditingTemplate(template);
   };
@@ -96,7 +98,7 @@ export function SummaryCards({
   // Connection suggestions are shown as an inline nudge bar, not grid cards.
 
   return (
-    <div className="relative flex flex-col items-center pt-6 pb-2 px-4">
+    <div className="ph-no-capture relative flex flex-col items-center pt-6 pb-2 px-4">
       {/* Header */}
       <div className="relative mx-auto mb-2 w-fit">
         <div className="absolute -inset-4 border border-dashed border-border/50" />
@@ -107,7 +109,7 @@ export function SummaryCards({
         {userName ? `How can I help, ${userName}?` : "How can I help today?"}
       </h3>
       <p className="text-xs text-muted-foreground mb-2">
-        From everything you've seen, said, or heard
+        From everything you&apos;ve seen, said, or heard
       </p>
 
       {/* Hero card — Automate My Work */}
@@ -186,10 +188,9 @@ export function SummaryCards({
             onClick={() => {
               posthog.capture("home_card_clicked", {
                 kind: "quick_summary_chip",
-                chip_label: qt.label,
               });
               const prompt = `Analyze my screen and audio recordings from today.\n\nUser instructions: ${qt.prompt}\n\nOnly report activities you can verify from the recordings. If uncertain, say so. Format with clear headings and bullet points.`;
-              onSendMessage(prompt, `\u2728 ${qt.label} \u2014 Today`);
+              onSendMessage(prompt, `\u2728 ${qt.label} \u2014 Today`, "home_card");
             }}
             className="grow px-2 py-0.5 text-[11px] bg-muted/20 hover:bg-foreground hover:text-background border border-border/30 hover:border-foreground text-muted-foreground transition-all duration-150 cursor-pointer"
           >
@@ -255,10 +256,9 @@ export function SummaryCards({
           onGenerate={(prompt, timeRange) => {
             posthog.capture("home_card_clicked", {
               kind: "custom_summary_generate",
-              time_range: timeRange,
             });
             setShowBuilder(false);
-            onSendMessage(prompt, `\u2728 Custom Summary \u2014 ${timeRange}`);
+            onSendMessage(prompt, `\u2728 Custom Summary \u2014 ${timeRange}`, "home_card");
           }}
           onSaveTemplate={onSaveCustomTemplate}
         />
@@ -280,11 +280,9 @@ export function SummaryCards({
           onGenerate={(prompt) => {
             posthog.capture("home_card_clicked", {
               kind: "custom_template_run",
-              template_id: editingTemplate.id,
-              template_title: editingTemplate.title,
             });
             setEditingTemplate(null);
-            onSendMessage(prompt, `\u{1F4CC} ${editingTemplate.title}`);
+            onSendMessage(prompt, `\u{1F4CC} ${editingTemplate.title}`, "home_card");
           }}
           onSaveTemplate={onSaveCustomTemplate}
         />

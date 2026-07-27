@@ -11,14 +11,15 @@ import {
   chatResponseFeedbackProperties,
   type ChatResponseFeedbackRating,
 } from "@/lib/chat/response-feedback";
-import type { Message } from "@/lib/chat/types";
+import type { ChatEntrySource, Message } from "@/lib/chat/types";
 import { cn } from "@/lib/utils";
 
 interface ChatResponseFeedbackProps {
   message: Message;
+  entrySource: ChatEntrySource;
 }
 
-export function ChatResponseFeedback({ message }: ChatResponseFeedbackProps) {
+export function ChatResponseFeedback({ message, entrySource }: ChatResponseFeedbackProps) {
   const [rating, setRating] = useState<ChatResponseFeedbackRating | null>(null);
 
   const submitFeedback = (nextRating: ChatResponseFeedbackRating) => {
@@ -30,6 +31,7 @@ export function ChatResponseFeedback({ message }: ChatResponseFeedbackProps) {
         message,
         nextRating,
         rating === null ? "submitted" : "changed",
+        entrySource,
       ),
     );
     setRating(nextRating);

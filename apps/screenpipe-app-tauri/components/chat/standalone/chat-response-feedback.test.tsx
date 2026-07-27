@@ -5,6 +5,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatResponseFeedback } from "./chat-response-feedback";
+import { chatEntrySourceFromMessages } from "@/lib/chat/response-feedback";
 import type { Message } from "@/lib/chat/types";
 
 const { captureMock } = vi.hoisted(() => ({ captureMock: vi.fn() }));
@@ -48,7 +49,7 @@ describe("ChatResponseFeedback", () => {
   });
 
   it("captures only coarse, content-free positive feedback", () => {
-    render(<ChatResponseFeedback message={privateMessage} />);
+    render(<ChatResponseFeedback message={privateMessage} entrySource="home_card" />);
 
     const goodButton = screen.getByRole("button", { name: "Good response" });
     fireEvent.click(goodButton);
@@ -56,8 +57,9 @@ describe("ChatResponseFeedback", () => {
     expect(goodButton).toHaveClass("ph-no-capture");
     expect(goodButton).toHaveAttribute("aria-pressed", "true");
     expect(captureMock).toHaveBeenCalledWith("chat_response_feedback", {
-      schema_version: 1,
+      schema_version: 2,
       surface: "chat_message",
+      entry_source: "home_card",
       rating: "positive",
       action: "submitted",
       has_tool_use: true,
@@ -73,7 +75,7 @@ describe("ChatResponseFeedback", () => {
   });
 
   it("does not duplicate the same rating and records a changed rating", () => {
-    render(<ChatResponseFeedback message={privateMessage} />);
+    render(<ChatResponseFeedback message={privateMessage} entrySource="normal_chat" />);
 
     const goodButton = screen.getByRole("button", { name: "Good response" });
     const badButton = screen.getByRole("button", { name: "Bad response" });
@@ -88,5 +90,28 @@ describe("ChatResponseFeedback", () => {
     );
     expect(goodButton).toHaveAttribute("aria-pressed", "false");
     expect(badButton).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("classifies only the first-turn origin enum without reading chat content", () => {
+    expect(chatEntrySourceFromMessages([
+      {
+        id: "private-user-id",
+        role: "user",
+        content: "Alice's private chat content",
+        timestamp: 0,
+        entrySource: "home_card",
+      },
+      privateMessage,
+    ])).toBe("home_card");
+
+    expect(chatEntrySourceFromMessages([
+      {
+        id: "another-private-user-id",
+        role: "user",
+        content: "A normal private question",
+        timestamp: 0,
+      },
+      privateMessage,
+    ])).toBe("normal_chat");
   });
 });

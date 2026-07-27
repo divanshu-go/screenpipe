@@ -4,14 +4,20 @@
 
 import React from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SummaryCards } from "./summary-cards";
 
+const { captureMock } = vi.hoisted(() => ({ captureMock: vi.fn() }));
+
 vi.mock("posthog-js", () => ({
-  default: { capture: vi.fn() },
+  default: { capture: captureMock },
 }));
 
 describe("SummaryCards", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("gives Automate My Work the installed pipe inventory instead of the static fallback prompt", () => {
     const onSendMessage = vi.fn();
 
@@ -39,15 +45,24 @@ describe("SummaryCards", () => {
     expect(onSendMessage).toHaveBeenCalledWith(
       expect.stringContaining("Focus Pulse (focus-pulse; enabled; every 1h)"),
       "⚡ Automate My Work",
+      "home_card",
     );
     expect(onSendMessage).toHaveBeenCalledWith(
       expect.stringContaining("Recommend exactly one next action"),
       expect.any(String),
+      "home_card",
     );
     expect(onSendMessage).toHaveBeenCalledWith(
       expect.stringContaining("Create and test this one?"),
       expect.any(String),
+      "home_card",
     );
+    expect(captureMock).toHaveBeenCalledWith("home_card_clicked", {
+      kind: "template_featured",
+      template_name: "automate-my-work",
+    });
+    expect(screen.getByRole("button", { name: /automate my work/i }).closest(".ph-no-capture"))
+      .not.toBeNull();
   });
 
   describe("saved template edit-before-run (#5239)", () => {
@@ -108,8 +123,20 @@ describe("SummaryCards", () => {
       expect(onSendMessage).toHaveBeenCalledWith(
         expect.stringContaining("Summarize my day focusing on issue triage"),
         "📌 Daily Recap",
+        "home_card",
       );
       expect(onUpdateCustomTemplate).not.toHaveBeenCalled();
+
+      const customRunEvent = captureMock.mock.calls.find(
+        ([event, properties]) =>
+          event === "home_card_clicked" && properties.kind === "custom_template_run",
+      );
+      expect(customRunEvent).toEqual([
+        "home_card_clicked",
+        { kind: "custom_template_run" },
+      ]);
+      expect(JSON.stringify(customRunEvent)).not.toContain("Daily Recap");
+      expect(JSON.stringify(customRunEvent)).not.toContain("custom-123");
     });
 
     it("persists edits only via the explicit Update Template action", () => {

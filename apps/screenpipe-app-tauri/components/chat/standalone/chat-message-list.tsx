@@ -10,6 +10,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { SourceCitationFooter } from "@/components/chat/source-citation-footer";
 import { CollapsedSteerWorkRow } from "@/components/chat/standalone/collapsed-steer-work-row";
 import { ChatResponseFeedback } from "@/components/chat/standalone/chat-response-feedback";
+import { chatEntrySourceFromMessages } from "@/lib/chat/response-feedback";
 import {
   GridDissolveLoader,
   MessageContent,
@@ -137,6 +138,7 @@ export function ChatMessageList({
             if (!hasRenderableAssistantBody(m) && !isSteeredAssistantMessage(m)) return false;
             return true;
           });
+          const feedbackEntrySource = chatEntrySourceFromMessages(visibleMessages);
 
           const renderItems = buildCollapsedSteerRenderItems(visibleMessages, {
             canCollapseSteerWork: !isLoading && !isStreaming && !activeSourceFooterMessageId,
@@ -429,7 +431,10 @@ export function ChatMessageList({
                             </button>
                           )}
                           {message.role === "assistant" && !hasFollowingSteeredAssistant && (
-                            <ChatResponseFeedback message={message} />
+                            <ChatResponseFeedback
+                              message={message}
+                              entrySource={feedbackEntrySource}
+                            />
                           )}
                           {message.role === "assistant" && !isLoading && !hasFollowingSteeredAssistant && (
                             <button
