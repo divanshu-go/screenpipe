@@ -967,8 +967,10 @@ export function usePiForegroundEvents({
             console.warn("[Pi] first-call bug hit, auto-retrying prompt:", errorStr);
             if (piMessageIdRef.current && !piFirstCallRetried.current) {
               piFirstCallRetried.current = true;
-              // Re-send the last prompt
-              const lastUserMsg = messages.findLast(m => m.role === "user");
+              // Re-send the last prompt. Read the live ref, not the `messages`
+              // prop frozen by this effect's []-deps closure — on a fresh chat
+              // that snapshot is empty, so the retry would never fire.
+              const lastUserMsg = messagesRef.current.findLast((m) => m.role === "user");
               if (lastUserMsg?.content) {
                 commands.piPrompt(piSessionIdRef.current, lastUserMsg.content, null, null).catch(() => {});
               }
