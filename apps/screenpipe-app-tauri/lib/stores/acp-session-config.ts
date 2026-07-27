@@ -160,11 +160,19 @@ export const useAcpSessionConfig = create<AcpSessionConfigState>()((set) => ({
       };
       const agentId = typeof raw?.agentId === "string" ? raw.agentId : null;
       // The per-adapter cache is session-agnostic; never persist a session id.
-      const byAgent =
-        agentId && (next.options.length > 0 || next.modes)
-          ? { ...state.byAgent, [agentId]: { options: next.options, modes: next.modes } }
-          : state.byAgent;
-      if (byAgent !== state.byAgent) saveByAgent(byAgent);
+      // Only rebuild + persist when the advertised options/modes actually
+      // changed — ACP sessions re-advertise identical config repeatedly, and
+      // each write is a synchronous JSON.stringify + localStorage set on the
+      // render thread.
+      let byAgent = state.byAgent;
+      if (agentId && (next.options.length > 0 || next.modes)) {
+        const entry = { options: next.options, modes: next.modes };
+        const prevEntry = state.byAgent[agentId];
+        if (!prevEntry || JSON.stringify(prevEntry) !== JSON.stringify(entry)) {
+          byAgent = { ...state.byAgent, [agentId]: entry };
+          saveByAgent(byAgent);
+        }
+      }
       return { sessions: { ...state.sessions, [sessionId]: next }, byAgent };
     });
   },
