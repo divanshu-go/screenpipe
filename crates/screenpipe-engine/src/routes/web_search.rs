@@ -15,27 +15,44 @@ use axum::{
     extract::State,
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
+    Json,
 };
+use once_cell::sync::Lazy;
+use serde_json::json;
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::warn;
 
 use crate::server::AppState;
 
 const CLOUD_BASE_URL: &str = "https://api.screenpipe.com";
 
+/// Shared, timeout-bounded client. Without an explicit timeout reqwest waits
+/// forever, so a stalled/half-open upstream would hang the agent's tool call —
+/// and thus its whole turn — with no recovery. Built once and reused.
+static WEB_SEARCH_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(30))
+        .build()
+        .expect("web_search reqwest client")
+});
+
 pub async fn web_search(State(state): State<Arc<AppState>>, body: axum::body::Bytes) -> Response {
     let token = state.cloud_token.load();
     let Some(token) = (**token).clone().filter(|t| !t.is_empty()) else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
-            r#"{"error":"cloud_token_missing","message":"sign in to screenpipe to use web search"}"#,
+            Json(json!({
+                "error": "cloud_token_missing",
+                "message": "sign in to screenpipe to use web search",
+            })),
         )
             .into_response();
     };
 
     let url = format!("{}/v1/web-search", CLOUD_BASE_URL);
-    let client = reqwest::Client::new();
-    let resp = match client
+    let resp = match WEB_SEARCH_CLIENT
         .post(&url)
         .header("Authorization", format!("Bearer {}", token))
         .header("Content-Type", "application/json")
@@ -46,9 +63,21 @@ pub async fn web_search(State(state): State<Arc<AppState>>, body: axum::body::By
         Ok(r) => r,
         Err(e) => {
             warn!("web_search proxy: upstream send failed: {}", e);
+            // A timed-out upstream is distinct from an unreachable one; the tool
+            // surfaces the status. Build the body via serde so the reqwest
+            // error string is escaped (it can contain quotes/newlines) rather
+            // than interpolated into a hand-built JSON literal.
+            let status = if e.is_timeout() {
+                StatusCode::GATEWAY_TIMEOUT
+            } else {
+                StatusCode::BAD_GATEWAY
+            };
             return (
-                StatusCode::BAD_GATEWAY,
-                format!(r#"{{"error":"upstream_unreachable","message":"{}"}}"#, e),
+                status,
+                Json(json!({
+                    "error": if e.is_timeout() { "upstream_timeout" } else { "upstream_unreachable" },
+                    "message": e.to_string(),
+                })),
             )
                 .into_response();
         }
