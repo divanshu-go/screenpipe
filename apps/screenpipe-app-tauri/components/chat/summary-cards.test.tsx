@@ -76,6 +76,7 @@ describe("SummaryCards", () => {
 
   it("gives Automate My Work the installed pipe inventory instead of the static fallback prompt", () => {
     const onSendMessage = vi.fn();
+    setUserGoalCategory("default");
 
     render(
       <SummaryCards
