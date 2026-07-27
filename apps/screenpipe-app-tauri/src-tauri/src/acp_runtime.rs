@@ -1246,6 +1246,17 @@ impl RuntimeState {
             let _ = wait_for_terminal_record_exit(&record);
         }
     }
+
+    /// Look up a live terminal by id, cloning the Arc. None if the id is unknown
+    /// or the lock is poisoned. Shared by the output/wait/kill request handlers.
+    fn get_terminal(&self, id: &str) -> Option<Arc<TerminalRecord>> {
+        self.terminals.lock().ok().and_then(|map| map.get(id).cloned())
+    }
+
+    /// Remove and return a terminal by id (release drops it from the map).
+    fn take_terminal(&self, id: &str) -> Option<Arc<TerminalRecord>> {
+        self.terminals.lock().ok().and_then(|mut map| map.remove(id))
+    }
 }
 
 fn merge_json(prior: Option<&Value>, update: &Value) -> Value {
@@ -2195,14 +2206,21 @@ async fn open_or_resume_session(
         .map(|session| (session, false))
 }
 
-fn start_prompt(
-    connection: &ConnectionTo<Agent>,
-    state: &Arc<RuntimeState>,
-    session_id: &SessionId,
+/// The stable per-session inputs to [`start_prompt`]; only the payload varies
+/// per call, so bundling these keeps the dispatch sites to two arguments.
+struct PromptDispatch<'a> {
+    connection: &'a ConnectionTo<Agent>,
+    state: &'a Arc<RuntimeState>,
+    session_id: &'a SessionId,
     image_supported: bool,
+    completed: &'a mpsc::UnboundedSender<(String, String, Result<StopReason, Error>)>,
+}
+
+fn start_prompt(
+    dispatch: &PromptDispatch<'_>,
     command: Value,
-    completed: mpsc::UnboundedSender<(String, String, Result<StopReason, Error>)>,
 ) -> Result<(), String> {
+    let &PromptDispatch { connection, state, session_id, image_supported, completed } = dispatch;
     let command_type = command
         .get("type")
         .and_then(Value::as_str)
@@ -2242,6 +2260,7 @@ fn start_prompt(
     state.begin_prompt(command.get("displayPreview").and_then(Value::as_str));
     let connection = connection.clone();
     let session_id = session_id.clone();
+    let completed = completed.clone();
     connection
         .clone()
         .spawn(async move {
@@ -2409,11 +2428,7 @@ async fn run_protocol(
             async move |request: TerminalOutputRequest, responder, connection| {
                 let state = output_terminal_state.clone();
                 connection.spawn(async move {
-                    let record = state
-                        .terminals
-                        .lock()
-                        .ok()
-                        .and_then(|map| map.get(&request.terminal_id.to_string()).cloned());
+                    let record = state.get_terminal(&request.terminal_id.to_string());
                     let Some(record) = record else {
                         return responder.respond_with_error(acp_invalid_params("unknown terminal"));
                     };
@@ -2432,11 +2447,7 @@ async fn run_protocol(
             async move |request: WaitForTerminalExitRequest, responder, connection| {
                 let state = wait_terminal_state.clone();
                 connection.spawn(async move {
-                    let record = state
-                        .terminals
-                        .lock()
-                        .ok()
-                        .and_then(|map| map.get(&request.terminal_id.to_string()).cloned());
+                    let record = state.get_terminal(&request.terminal_id.to_string());
                     let Some(record) = record else {
                         return responder.respond_with_error(acp_invalid_params("unknown terminal"));
                     };
@@ -2456,11 +2467,7 @@ async fn run_protocol(
             async move |request: KillTerminalRequest, responder, connection| {
                 let state = kill_terminal_state.clone();
                 connection.spawn(async move {
-                    let record = state
-                        .terminals
-                        .lock()
-                        .ok()
-                        .and_then(|map| map.get(&request.terminal_id.to_string()).cloned());
+                    let record = state.get_terminal(&request.terminal_id.to_string());
                     let Some(record) = record else {
                         return responder.respond_with_error(acp_invalid_params("unknown terminal"));
                     };
@@ -2475,11 +2482,7 @@ async fn run_protocol(
             async move |request: ReleaseTerminalRequest, responder, connection| {
                 let state = release_terminal_state.clone();
                 connection.spawn(async move {
-                    let record = state
-                        .terminals
-                        .lock()
-                        .ok()
-                        .and_then(|mut map| map.remove(&request.terminal_id.to_string()));
+                    let record = state.take_terminal(&request.terminal_id.to_string());
                     if let Some(record) = record {
                         tokio::task::spawn_blocking(move || {
                             terminate_terminal_process_tree(&record);
@@ -2584,14 +2587,18 @@ async fn run_protocol(
                             if close_supported {
                                 let _ = connection.send_request(CloseSessionRequest::new(session.session_id.clone())).block_task().await;
                             }
-                            state.shutdown_terminals();
+                            // Offload the blocking terminal teardown (it waits on each
+                            // child's exit) to a blocking thread so it can't stall the
+                            // async runtime; await it so cleanup finishes before return.
+                            let cleanup_state = state.clone();
+                            let _ = tokio::task::spawn_blocking(move || cleanup_state.shutdown_terminals()).await;
                             return Ok(());
                         };
                         let command_type = command.get("type").and_then(Value::as_str).unwrap_or_default();
                         let id = command.get("id").and_then(Value::as_str).map(str::to_owned).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
                         match command_type {
                             "prompt" if !active => {
-                                start_prompt(&connection, &state, &session.session_id, image_supported, command, completed_tx.clone()).map_err(acp_invalid_params)?;
+                                start_prompt(&PromptDispatch { connection: &connection, state: &state, session_id: &session.session_id, image_supported, completed: &completed_tx }, command).map_err(acp_invalid_params)?;
                                 active = true;
                                 cancel_requested = false;
                             }
@@ -2616,7 +2623,7 @@ async fn run_protocol(
                                 cancel_deadline = Some(Box::pin(tokio::time::sleep(std::time::Duration::from_secs(15))));
                             }
                             "steer" => {
-                                start_prompt(&connection, &state, &session.session_id, image_supported, command, completed_tx.clone()).map_err(acp_invalid_params)?;
+                                start_prompt(&PromptDispatch { connection: &connection, state: &state, session_id: &session.session_id, image_supported, completed: &completed_tx }, command).map_err(acp_invalid_params)?;
                                 active = true;
                                 cancel_requested = false;
                             }
@@ -2641,20 +2648,39 @@ async fn run_protocol(
                                 parent_response(&state.output, "new_session", &id, Some(message));
                             }
                             "new_session" => {
+                                // Report a recoverable close/create/auth failure to the
+                                // caller and keep the live agent. Do NOT `?` out of
+                                // run_protocol — that tears down the whole runtime
+                                // process for a transient per-command error, unlike the
+                                // sibling handlers which stay alive and reply with an error.
+                                let mut error: Option<String> = None;
                                 if close_supported {
-                                    connection.send_request(CloseSessionRequest::new(session.session_id.clone())).block_task().await?;
+                                    if let Err(e) = connection
+                                        .send_request(CloseSessionRequest::new(session.session_id.clone()))
+                                        .block_task()
+                                        .await
+                                    {
+                                        error = Some(e.to_string());
+                                    }
                                 }
-                                session = create_session_with_auth(
-                                    &connection,
-                                    &state,
-                                    &init,
-                                    &config,
-                                )
-                                .await?;
-                                state.reset_system_context(config.system_context.clone());
-                                apply_session_defaults(&connection, &config, &mut session).await;
-                                send_session_config(&state.output, &config.agent_id, &session);
-                                parent_response(&state.output, "new_session", &id, None);
+                                if error.is_none() {
+                                    match create_session_with_auth(&connection, &state, &init, &config).await {
+                                        Ok(new_session) => {
+                                            session = new_session;
+                                            state.reset_system_context(config.system_context.clone());
+                                            apply_session_defaults(&connection, &config, &mut session).await;
+                                            send_session_config(&state.output, &config.agent_id, &session);
+                                        }
+                                        Err(e) => error = Some(e.to_string()),
+                                    }
+                                }
+                                match error {
+                                    None => parent_response(&state.output, "new_session", &id, None),
+                                    Some(msg) => {
+                                        command_error(&state.output, &msg);
+                                        parent_response(&state.output, "new_session", &id, Some(&msg));
+                                    }
+                                }
                             }
                             // Config options may change at any point in a
                             // session per the ACP spec, including mid-turn.
@@ -2793,7 +2819,7 @@ async fn run_protocol(
                             parent_response(&state.output, "abort", &abort_id, None);
                         }
                         if let Some(steer) = pending_steer.take() {
-                            start_prompt(&connection, &state, &session.session_id, image_supported, steer, completed_tx.clone()).map_err(acp_invalid_params)?;
+                            start_prompt(&PromptDispatch { connection: &connection, state: &state, session_id: &session.session_id, image_supported, completed: &completed_tx }, steer).map_err(acp_invalid_params)?;
                             active = true;
                         }
                     }
