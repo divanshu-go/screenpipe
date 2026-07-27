@@ -632,11 +632,16 @@ const AISection = ({
     updateSettingsPreset(updates);
   }, [settingsPreset?.acpAgent, settingsPreset?.model, settingsPreset?.provider, settingsPreset?.url, updateSettingsPreset]);
 
-  const updateAcpAgent = useCallback((changes: Partial<NonNullable<AIPreset["acpAgent"]>>) => {
-    const current = settingsPreset?.acpAgent || { id: "pi-acp" };
-    const next = { ...current, ...changes };
-    updateSettingsPreset({ acpAgent: next, model: next.id });
-  }, [settingsPreset?.acpAgent, updateSettingsPreset]);
+  // AcpAgentPicker emits the COMPLETE next agent (it drops per-agent overrides
+  // like config/modeId/authMethod on a switch), so store it directly. Merging
+  // into the current agent would resurrect fields the picker intentionally
+  // cleared — the stale-override bug the shared picker exists to prevent.
+  const setAcpAgent = useCallback(
+    (agent: NonNullable<AIPreset["acpAgent"]>) => {
+      updateSettingsPreset({ acpAgent: agent, model: agent.id });
+    },
+    [updateSettingsPreset],
+  );
 
   // Live auto-naming: whenever the selection changes (provider, model, or
   // agent), write the generated name straight into the name field. It keeps
@@ -1406,7 +1411,7 @@ const AISection = ({
       {settingsPreset?.provider === "acp" && (
         <AcpAgentPicker
           agent={settingsPreset.acpAgent}
-          onChange={updateAcpAgent}
+          onChange={setAcpAgent}
           onInstallBlockedChange={setAcpInstallBlocked}
         />
       )}
