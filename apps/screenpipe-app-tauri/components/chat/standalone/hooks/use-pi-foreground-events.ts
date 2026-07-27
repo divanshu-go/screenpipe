@@ -1210,6 +1210,9 @@ export function usePiForegroundEvents({
 
           if (!piStartInFlightRef.current) {
             console.log("[Pi] Auto-restarting after crash");
+            // Hold the in-flight guard while starting, like the user send path;
+            // without it a concurrent send could double-start the session.
+            piStartInFlightRef.current = true;
             try {
               const providerConfig = buildProviderConfig();
               const home = await homeDir();
@@ -1239,6 +1242,8 @@ export function usePiForegroundEvents({
             } catch (e) {
               console.error("[Pi] Auto-restart exception:", e);
               setPiInfo(null);
+            } finally {
+              piStartInFlightRef.current = false;
             }
           }
         }, delay);
