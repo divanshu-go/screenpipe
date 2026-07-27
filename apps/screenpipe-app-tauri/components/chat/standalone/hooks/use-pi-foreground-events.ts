@@ -186,6 +186,9 @@ export function usePiForegroundEvents({
         // Dismissing an interactive ACP sign-in is a user stop, not a crash.
         // Mark the imminent termination as intentional so the normal crash
         // recovery loop does not immediately reopen the same login card.
+        // The install attempt ended without a "ready", so clear any pending
+        // install marker (else a later instant connect fires a spurious toast).
+        installingAgents.delete(stringValue(data.agentId));
         piStoppedIntentionallyRef.current = true;
         setPiInfo(null);
         setIsLoading(false);
@@ -210,6 +213,9 @@ export function usePiForegroundEvents({
         }, 15_000);
         const agentName = stringValue(data.agentName, "This agent");
         const agentId = stringValue(data.agentId);
+        // Install ended without a "ready"; clear the pending install marker so a
+        // later instant/cached connect doesn't fire a spurious "ready" toast.
+        installingAgents.delete(agentId);
         const command = stringValue(data.command);
         // A single unified sign-in dialog, deduped by the panel — not an
         // inline message card (which could be appended twice on retries).
