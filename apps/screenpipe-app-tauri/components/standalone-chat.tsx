@@ -1084,8 +1084,18 @@ export function StandaloneChat({
   }, [setMessages]);
 
   const removeAgentActionsForSession = useCallback((sessionId: string) => {
-    const stripSession = (rows: Message[]) =>
-      rows.flatMap((message) => {
+    const hasActionForSession = (rows: Message[]) =>
+      rows.some((message) =>
+        message.contentBlocks?.some(
+          (block) => block.type === "agent_action" && block.sessionId === sessionId,
+        ),
+      );
+    // Runs on every turn end; the common case has no agent_action block. Return
+    // the same array reference when there's nothing to strip so React and the
+    // store both bail out of a full-transcript rebuild + re-render.
+    const stripSession = (rows: Message[]) => {
+      if (!hasActionForSession(rows)) return rows;
+      return rows.flatMap((message) => {
         const blocks = message.contentBlocks;
         if (!blocks?.some(
           (block) => block.type === "agent_action" && block.sessionId === sessionId,
@@ -1098,13 +1108,17 @@ export function StandaloneChat({
         if (!message.content.trim() && nextBlocks.length === 0) return [];
         return [{ ...message, contentBlocks: nextBlocks }];
       });
+    };
     setMessages(stripSession);
     // acp_authenticated / acp_fatal / acp_auth_cancelled clear the session's
     // actions — dismiss any open sign-in dialog for it as well.
     setAcpSignIn((cur) => (cur?.kind === "methods" && cur.sessionId === sessionId ? null : cur));
     const store = useChatStore.getState();
     const stored = store.sessions[sessionId]?.messages as Message[] | undefined;
-    if (stored) store.actions.setMessages(sessionId, stripSession(stored));
+    if (stored) {
+      const stripped = stripSession(stored);
+      if (stripped !== stored) store.actions.setMessages(sessionId, stripped);
+    }
   }, [setMessages]);
 
   const answerAgentAction = useCallback(async (
@@ -1129,6 +1143,13 @@ export function StandaloneChat({
       inlineConnectAbortRef.current = null;
       for (const timer of connectionCardCleanupTimersRef.current) clearTimeout(timer);
       connectionCardCleanupTimersRef.current = [];
+      // The ACP sign-in retry probe (up to 25s) would otherwise fire after the
+      // panel unmounts (e.g. navigating to /settings mid-retry), leaking a
+      // timer and calling setState on an unmounted component.
+      if (acpSignInTimeoutRef.current != null) {
+        window.clearTimeout(acpSignInTimeoutRef.current);
+        acpSignInTimeoutRef.current = null;
+      }
     };
   }, []);
 
