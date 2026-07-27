@@ -20,6 +20,8 @@ const mocks = vi.hoisted(() => ({
   installBrainViewTemplateKit: vi.fn(),
   saveBrainView: vi.fn(),
   deleteBrainView: vi.fn(),
+  loadBrainViewCanvas: vi.fn(),
+  saveBrainViewCanvas: vi.fn(),
   generateLiveViewWithPi: vi.fn(),
   createOnboardingLiveView: vi.fn(),
   localFetch: vi.fn(),
@@ -53,6 +55,8 @@ vi.mock("@/lib/utils/tauri", () => ({
     installBrainViewTemplateKit: mocks.installBrainViewTemplateKit,
     saveBrainView: mocks.saveBrainView,
     deleteBrainView: mocks.deleteBrainView,
+    loadBrainViewCanvas: mocks.loadBrainViewCanvas,
+    saveBrainViewCanvas: mocks.saveBrainViewCanvas,
   },
 }));
 vi.mock("@/components/ui/use-toast", () => ({
@@ -258,6 +262,16 @@ beforeEach(() => {
   });
   mocks.refetchPipes.mockResolvedValue(undefined);
   mocks.deleteBrainView.mockResolvedValue({ status: "ok", data: null });
+  mocks.loadBrainViewCanvas.mockResolvedValue({ status: "ok", data: null });
+  mocks.saveBrainViewCanvas.mockImplementation(async (request) => ({
+    status: "ok",
+    data: {
+      schema: "live-view-canvas.v1",
+      ...request,
+      revision: (request.expectedRevision ?? 0) + 1,
+      updatedAt: "2026-07-27T18:00:00Z",
+    },
+  }));
   mocks.createOnboardingLiveView.mockResolvedValue({
     view: populatedView,
     pipeSlugs: ["daily-summary"],
@@ -835,9 +849,7 @@ describe("BrainOverview", () => {
     render(<BrainOverview />);
 
     fireEvent.click(await screen.findByTestId("overview-time-range"));
-    fireEvent.click(
-      await screen.findByRole("option", { name: "Last 7 days" }),
-    );
+    fireEvent.click(await screen.findByRole("option", { name: "Last 7 days" }));
 
     await waitFor(() =>
       expect(mocks.saveBrainView).toHaveBeenCalledWith(
@@ -1873,7 +1885,9 @@ describe("BrainOverview", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "update" }));
 
-    await waitFor(() => expect(mocks.generateLiveViewWithPi).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(mocks.generateLiveViewWithPi).toHaveBeenCalled(),
+    );
     expect(mocks.generateLiveViewWithPi).toHaveBeenCalledWith(
       expect.objectContaining({
         preset: expect.objectContaining({ id: "quality" }),
@@ -1885,5 +1899,107 @@ describe("BrainOverview", () => {
     await waitFor(() =>
       expect(screen.getByTestId("model-selector").textContent).toBe("quality"),
     );
+  });
+
+  it("switches to a source-backed Canvas and persists the layout mode", async () => {
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [populatedView],
+    });
+    render(<BrainOverview />);
+
+    fireEvent.click(await screen.findByTestId("overview-mode-canvas"));
+
+    expect(await screen.findByTestId("live-view-canvas")).toBeTruthy();
+    expect(screen.queryByTestId("brain-overview-grid")).toBeNull();
+    expect(screen.getByTestId("canvas-block-focus-time")).toBeTruthy();
+    expect(screen.getByText("Pipe: daily-summary")).toBeTruthy();
+    expect(screen.getByText("artifact #88 · v2")).toBeTruthy();
+    await waitFor(() =>
+      expect(mocks.saveBrainViewCanvas).toHaveBeenCalledWith(
+        expect.objectContaining({
+          viewId: "my-overview",
+          expectedRevision: null,
+          mode: "canvas",
+          blocks: [
+            expect.objectContaining({
+              slotId: "focus-time",
+              width: 440,
+              height: 280,
+            }),
+          ],
+        }),
+      ),
+    );
+    expect(mocks.capture).toHaveBeenCalledWith(
+      "live_view_layout_mode_changed",
+      expect.objectContaining({
+        analytics_schema_version: 2,
+        mode: "canvas",
+        block_count: 1,
+        has_result: true,
+      }),
+    );
+    const properties = mocks.capture.mock.calls.find(
+      ([event]) => event === "live_view_layout_mode_changed",
+    )?.[1];
+    expect(JSON.stringify(properties)).not.toContain("my-overview");
+    expect(JSON.stringify(properties)).not.toContain("daily-summary");
+  });
+
+  it("restores the saved Canvas instead of resetting manual positions", async () => {
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [populatedView],
+    });
+    mocks.loadBrainViewCanvas.mockResolvedValue({
+      status: "ok",
+      data: {
+        schema: "live-view-canvas.v1",
+        viewId: populatedView.id,
+        revision: 7,
+        mode: "canvas",
+        viewport: { x: -120, y: 44, zoom: 0.75 },
+        blocks: [
+          {
+            slotId: "focus-time",
+            x: 912,
+            y: 528,
+            width: 520,
+            height: 360,
+          },
+        ],
+        notes: [
+          {
+            id: "review-note",
+            text: "Keep this beside the evidence.",
+            x: 640,
+            y: 240,
+            width: 240,
+            height: 160,
+          },
+        ],
+        arrows: [
+          {
+            id: "review-arrow",
+            fromId: "note:review-note",
+            toId: "block:focus-time",
+            label: "verify",
+          },
+        ],
+        strokes: [],
+        updatedAt: "2026-07-27T17:00:00Z",
+      },
+    });
+    render(<BrainOverview />);
+
+    const block = await screen.findByTestId("canvas-block-focus-time");
+    expect(block.style.left).toBe("912px");
+    expect(block.style.top).toBe("528px");
+    expect(
+      screen.getByDisplayValue("Keep this beside the evidence."),
+    ).toBeTruthy();
+    expect(screen.getByText("verify")).toBeTruthy();
+    expect(mocks.saveBrainViewCanvas).not.toHaveBeenCalled();
   });
 });
