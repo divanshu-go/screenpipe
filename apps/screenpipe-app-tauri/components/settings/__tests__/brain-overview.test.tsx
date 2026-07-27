@@ -1661,6 +1661,7 @@ describe("BrainOverview", () => {
     const useful = await screen.findByRole("button", {
       name: "mark Focus time useful",
     });
+    mocks.capture.mockClear();
     fireEvent.click(useful);
     await waitFor(() =>
       expect(useful.getAttribute("aria-pressed")).toBe("true"),
@@ -1688,6 +1689,15 @@ describe("BrainOverview", () => {
         is_onboarding: false,
       }),
     );
+    expect(mocks.capture).toHaveBeenCalledWith("qualified_value_event", {
+      metric_version: "repeat_value_d7_v1",
+      surface: "app",
+      action: "artifact",
+      value_strength: "accepted",
+      user_initiated: true,
+      success: true,
+      result_non_empty: true,
+    });
 
     fireEvent.click(
       screen.getByRole("button", { name: "regenerate Focus time" }),
@@ -1736,6 +1746,7 @@ describe("BrainOverview", () => {
     const notUseful = await screen.findByRole("button", {
       name: "mark Focus time not useful",
     });
+    mocks.capture.mockClear();
     fireEvent.click(notUseful);
     fireEvent.change(
       await screen.findByPlaceholderText("e.g. exclude meetings"),
@@ -1759,6 +1770,40 @@ describe("BrainOverview", () => {
           correction: "exclude meetings",
         }),
       }),
+    );
+    expect(mocks.capture).not.toHaveBeenCalledWith(
+      "qualified_value_event",
+      expect.anything(),
+    );
+  });
+
+  it("does not accept a Live View result when positive feedback fails to persist", async () => {
+    mocks.localFetch.mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: async () => ({ error: "feedback write failed" }),
+    });
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [populatedView],
+    });
+    render(<BrainOverview />);
+
+    const useful = await screen.findByRole("button", {
+      name: "mark Focus time useful",
+    });
+    mocks.capture.mockClear();
+    fireEvent.click(useful);
+
+    await waitFor(() =>
+      expect(mocks.capture).toHaveBeenCalledWith(
+        "live_view_card_feedback_failed",
+        expect.objectContaining({ action: "up" }),
+      ),
+    );
+    expect(mocks.capture).not.toHaveBeenCalledWith(
+      "qualified_value_event",
+      expect.anything(),
     );
   });
 
