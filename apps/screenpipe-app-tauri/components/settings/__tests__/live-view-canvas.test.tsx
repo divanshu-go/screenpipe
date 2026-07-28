@@ -4,28 +4,13 @@
 
 import React, { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  act,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { LiveViewCanvas } from "../live-view-canvas";
 import { createCanvasDocument } from "@/lib/live-views/canvas-layout";
 import type {
   BrainViewCanvasDocument,
   BrainViewDefinition,
 } from "@/lib/utils/tauri";
-
-const eventMocks = vi.hoisted(() => ({
-  listeners: new Map<string, (event: { payload: unknown }) => void>(),
-  listen: vi.fn(),
-}));
-
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: eventMocks.listen,
-}));
 
 const view: BrainViewDefinition = {
   id: "canvas-component-view",
@@ -122,17 +107,6 @@ function CanvasHarness({
 }
 
 beforeEach(() => {
-  eventMocks.listeners.clear();
-  eventMocks.listen.mockClear();
-  eventMocks.listen.mockImplementation(
-    async (
-      event: string,
-      handler: (event: { payload: unknown }) => void,
-    ) => {
-      eventMocks.listeners.set(event, handler);
-      return () => eventMocks.listeners.delete(event);
-    },
-  );
   vi.stubGlobal("PointerEvent", PointerEventMock);
   HTMLElement.prototype.setPointerCapture = vi.fn();
   HTMLElement.prototype.releasePointerCapture = vi.fn();
@@ -364,22 +338,22 @@ describe("LiveViewCanvas", () => {
     expect(screen.getByText("25%")).toBeTruthy();
   });
 
-  it("zooms in and out around the trackpad pinch point", async () => {
+  it("keeps wheel zoom behind the cmd or ctrl modifier", () => {
     render(<CanvasHarness />);
     const surface = screen.getByTestId("live-view-canvas-surface");
-    fireEvent.pointerEnter(surface, { clientX: 250, clientY: 200 });
-    await waitFor(() =>
-      expect(eventMocks.listeners.has("native-magnify")).toBe(true),
-    );
+    const pane = surface.querySelector<HTMLElement>(".react-flow__pane");
+    expect(pane).toBeTruthy();
 
-    act(() => {
-      eventMocks.listeners.get("native-magnify")?.({ payload: 0.1 });
-    });
-    expect(screen.getByText("165%")).toBeTruthy();
-
-    act(() => {
-      eventMocks.listeners.get("native-magnify")?.({ payload: -0.1 });
-    });
+    fireEvent.wheel(pane!, { deltaY: -100, clientX: 500, clientY: 350 });
     expect(screen.getByText("100%")).toBeTruthy();
+
+    fireEvent.keyDown(document, {
+      key: "Meta",
+      code: "MetaLeft",
+      metaKey: true,
+    });
+    fireEvent.wheel(pane!, { deltaY: -100, clientX: 500, clientY: 350 });
+    expect(screen.queryByText("100%")).toBeNull();
+    fireEvent.keyUp(document, { key: "Meta", code: "MetaLeft" });
   });
 });
