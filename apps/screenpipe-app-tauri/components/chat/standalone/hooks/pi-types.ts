@@ -13,6 +13,7 @@ import type {
 import type { ExtractedDoc } from "@/lib/pi/extract-document";
 import type {
   ChatAttachment,
+  ChatSendOptions,
   ContentBlock,
   Message,
   OptimisticSteerPayload,
@@ -81,6 +82,7 @@ type PiTransportRefs = {
     message: string,
     displayLabel?: string,
     imageDataUrls?: string[],
+    options?: ChatSendOptions,
   ) => Promise<void>) | undefined>;
 };
 
@@ -242,6 +244,7 @@ export type PiForegroundEventsOptions = {
   lastUserMessageRef: PiTransportRefs["lastUserMessageRef"];
   markTurnIntentConsumed: TurnIntentActions["markTurnIntentConsumed"];
   messages: Message[];
+  messagesRef: React.MutableRefObject<Message[]>;
   mountedRef: React.MutableRefObject<boolean>;
   optimisticSteerRef: SteeringRefs["optimisticSteerRef"];
   pendingNextPiUserDisplayRef: SteeringRefs["pendingNextPiUserDisplayRef"];
@@ -281,4 +284,5 @@ export type PiSendCommand = (
   message: string,
   displayLabel?: string,
   imageDataUrls?: string[],
+  options?: ChatSendOptions,
 ) => Promise<void>;

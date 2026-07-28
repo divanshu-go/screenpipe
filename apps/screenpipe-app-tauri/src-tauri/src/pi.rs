@@ -6,7 +6,9 @@
 //!
 //! Manages the pi coding agent via RPC mode (stdin/stdout JSON protocol).
 
-use screenpipe_core::agents::pi::screenpipe_cloud_models;
+use screenpipe_core::agents::pi::{
+    screenpipe_cloud_models, PI_AI_PACKAGE, PI_NAMESPACE_DIR, PI_PACKAGE, SCREENPIPE_API_URL,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use specta::Type;
@@ -47,6 +49,7 @@ const TEXT_DELTA_EMIT_BATCH_CHARS: usize = 1_200;
 /// text-delta batching so titles stream visibly token-by-token.
 /// Keep in sync with TypeScript: lib/utils/internal-session.ts → INTERNAL_TITLE_PREFIX
 const TITLE_SESSION_PREFIX: &str = "__title:";
+const REQUIRED_PI_EXTENSION_PACKAGE: &str = "npm:pi-subagents";
 
 struct PendingAgentTextDelta {
     event: Value,
@@ -113,6 +116,8 @@ use tracing::{debug, error, info, warn};
 
 /// Signals that the background Pi install has finished (success or failure).
 static PI_INSTALL_DONE: AtomicBool = AtomicBool::new(false);
+static REQUIRED_PI_PACKAGE_INSTALL_LOCK: std::sync::OnceLock<Mutex<()>> =
+    std::sync::OnceLock::new();
 
 /// Captures the last bun-install error so `pi_start` can surface it to the UI
 /// when the install silently failed (e.g. Windows EPERM on bun's atomic rename).
@@ -292,11 +297,6 @@ fn check_package_bin(pkg_dir: std::path::PathBuf, bin_name: &str) -> Option<Stri
         None
     }
 }
-
-const PI_PACKAGE: &str = "@earendil-works/pi-coding-agent@0.75.4";
-const PI_AI_PACKAGE: &str = "@earendil-works/pi-ai@0.75.4";
-const PI_NAMESPACE_DIR: &str = "@earendil-works";
-const SCREENPIPE_API_URL: &str = "https://api.screenpipe.com/v1";
 
 /// Pool of Pi sessions — each session_id gets its own PiManager/process.
 pub struct PiPool {
@@ -1241,6 +1241,25 @@ fn ensure_save_artifact_extension(project_dir: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Install one compact Live View tool for every normal chat session. The tool
+/// loads a selected definition only when the model calls it, so dashboard
+/// contents never become ambient prompt context.
+fn ensure_live_views_extension(project_dir: &str) -> Result<(), String> {
+    let ext_dir = std::path::Path::new(project_dir)
+        .join(".pi")
+        .join("extensions");
+    std::fs::create_dir_all(&ext_dir)
+        .map_err(|e| format!("Failed to create extensions dir: {}", e))?;
+
+    let ext_path = ext_dir.join("live-views.ts");
+    let ext_content = include_str!("../assets/extensions/live-views.ts");
+    std::fs::write(&ext_path, ext_content)
+        .map_err(|e| format!("Failed to write Live Views extension: {}", e))?;
+
+    debug!("Live Views extension installed at {:?}", ext_path);
+    Ok(())
+}
+
 fn ensure_connection_gate_extension(project_dir: &str) -> Result<(), String> {
     let ext_dir = Path::new(project_dir).join(".pi").join("extensions");
     std::fs::create_dir_all(&ext_dir)
@@ -1296,6 +1315,20 @@ fn model_supports_reasoning(provider: &str, model: &str) -> bool {
     }
 }
 
+/// Claude's newer reasoning models reject the legacy
+/// `thinking: { type: "enabled", budget_tokens: ... }` request shape. Pi needs
+/// this compatibility hint for models supplied through our generated provider
+/// config because they do not inherit Pi's built-in Anthropic model metadata.
+fn anthropic_model_requires_adaptive_thinking(model: &str) -> bool {
+    let model = model.to_ascii_lowercase();
+    model.contains("claude-fable-5")
+        || model.contains("claude-sonnet-5")
+        || model.contains("claude-sonnet-4-6")
+        || model.contains("claude-opus-4-6")
+        || model.contains("claude-opus-4-7")
+        || model.contains("claude-opus-4-8")
+}
+
 /// Build the providers to add/update in models.json for pi-coding-agent.
 ///
 /// Returns a map of provider entries to merge into the existing models.json.
@@ -1307,8 +1340,10 @@ async fn build_models_json(
 ) -> serde_json::Value {
     let mut providers_map = serde_json::Map::new();
 
-    // Always add screenpipe cloud provider
-    let api_key_value = user_token.unwrap_or("SCREENPIPE_API_KEY");
+    // Always add screenpipe cloud provider. A real token is inlined as a
+    // literal; the logged-out fallback must use `$` env-var syntax (pi >= 0.80
+    // treats bare names as literal keys).
+    let api_key_value = user_token.unwrap_or("$SCREENPIPE_API_KEY");
     let models = screenpipe_cloud_models(SCREENPIPE_API_URL, user_token).await;
     let screenpipe_provider = json!({
         "baseUrl": SCREENPIPE_API_URL,
@@ -1349,12 +1384,15 @@ async fn build_models_json(
                     provider_name
                 );
             } else {
+                // pi >= 0.80 requires explicit `$NAME` syntax for env-var
+                // references; a bare name is sent to the provider as a literal
+                // API key (401 "Incorrect API key provided: CUSTOM_A**_KEY").
                 let api_key = match config.provider.as_str() {
                     "native-ollama" => "ollama".to_string(),
-                    "openai" => "OPENAI_API_KEY".to_string(),
-                    "openai-chatgpt" => "OPENAI_CHATGPT_TOKEN".to_string(),
-                    "anthropic" => "ANTHROPIC_API_KEY".to_string(),
-                    "custom" => "CUSTOM_API_KEY".to_string(),
+                    "openai" => "$OPENAI_API_KEY".to_string(),
+                    "openai-chatgpt" => "$OPENAI_CHATGPT_TOKEN".to_string(),
+                    "anthropic" => "$ANTHROPIC_API_KEY".to_string(),
+                    "custom" => "$CUSTOM_API_KEY".to_string(),
                     _ => "".to_string(),
                 };
 
@@ -1393,11 +1431,17 @@ async fn build_models_json(
                     "cost".into(),
                     json!({"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}),
                 );
+                let mut compat = serde_json::Map::new();
                 if requires_max_completion_tokens && wire_api == "openai-completions" {
-                    model_def.insert(
-                        "compat".into(),
-                        json!({"maxTokensField": "max_completion_tokens"}),
-                    );
+                    compat.insert("maxTokensField".into(), json!("max_completion_tokens"));
+                }
+                if wire_api == "anthropic-messages"
+                    && anthropic_model_requires_adaptive_thinking(&resolved_model)
+                {
+                    compat.insert("forceAdaptiveThinking".into(), json!(true));
+                }
+                if !compat.is_empty() {
+                    model_def.insert("compat".into(), serde_json::Value::Object(compat));
                 }
 
                 let user_provider = json!({
@@ -1459,6 +1503,12 @@ async fn ensure_pi_config(
     std::fs::write(&models_path, models_str)
         .map_err(|e| format!("Failed to write pi models config: {}", e))?;
     harden_secret_file(&models_path);
+
+    // Subagents are a baseline Screenpipe capability, not an optional Pi
+    // extension. Keep the package in the isolated settings for every user;
+    // `ensure_required_pi_extension_package` repairs the physical install
+    // before a chat process starts.
+    ensure_required_pi_extension_setting()?;
 
     // -- auth.json: merge screenpipe token, preserve other providers --
     let auth_path = config_dir.join("auth.json");
@@ -1694,12 +1744,16 @@ pub async fn pi_start_inner(
     // Save artifact: lets the agent register deliverables in the Artifacts library.
     ensure_save_artifact_extension(&project_dir)?;
 
+    // Live Views: lazy read/edit access for normal chat and focused composers.
+    ensure_live_views_extension(&project_dir)?;
+
     // Connection gate: lets Pi block on inline app authorization before
     // continuing app-dependent tasks.
     ensure_connection_gate_extension(&project_dir)?;
 
     // Ensure Pi is configured with the user's provider
     ensure_pi_config(user_token.as_deref(), provider_config.as_ref()).await?;
+    ensure_required_pi_extension_package().await?;
 
     // Determine which Pi provider and model to use
     let (pi_provider, pi_model) = match &provider_config {
@@ -1852,6 +1906,11 @@ pub async fn pi_start_inner(
     cmd.current_dir(&project_dir).args([
         "--mode",
         "rpc",
+        // pi 0.80 gates project-dir .pi/extensions behind a trust prompt that
+        // rpc mode can never answer — without --approve, mcp-bridge and
+        // connection-gate silently don't load. The project dir is created and
+        // populated exclusively by screenpipe, so it is trusted by definition.
+        "--approve",
         "--provider",
         &pi_provider,
         "--model",
@@ -3007,6 +3066,60 @@ fn write_pi_settings(settings: &serde_json::Value) -> Result<(), String> {
     std::fs::write(&settings_path, s).map_err(|e| format!("Failed to write settings.json: {}", e))
 }
 
+fn is_required_pi_extension_package_source(source: &str) -> bool {
+    npm_package_name_from_source(source)
+        .is_some_and(|name| name.eq_ignore_ascii_case("pi-subagents"))
+}
+
+fn normalize_required_pi_extension_setting(
+    settings: &mut serde_json::Value,
+) -> Result<bool, String> {
+    if !settings.is_object() {
+        *settings = json!({});
+    }
+    let obj = settings
+        .as_object_mut()
+        .ok_or_else(|| "Pi settings must be a JSON object".to_string())?;
+    let packages = obj
+        .entry("packages".to_string())
+        .or_insert_with(|| json!([]));
+    if !packages.is_array() {
+        *packages = json!([]);
+    }
+    let entries = packages
+        .as_array_mut()
+        .ok_or_else(|| "Pi packages must be a JSON array".to_string())?;
+    let already_canonical = entries
+        .iter()
+        .filter(|package| {
+            package_source_string(package).is_some_and(is_required_pi_extension_package_source)
+        })
+        .count()
+        == 1
+        && entries
+            .iter()
+            .any(|package| package.as_str() == Some(REQUIRED_PI_EXTENSION_PACKAGE));
+    if already_canonical {
+        return Ok(false);
+    }
+    // Replace version-pinned or filtered object entries with the canonical,
+    // unrestricted package. A filtered `{ source, extensions: [...] }` entry
+    // can otherwise list pi-subagents while silently hiding its tool.
+    entries.retain(|package| {
+        !package_source_string(package).is_some_and(is_required_pi_extension_package_source)
+    });
+    entries.push(json!(REQUIRED_PI_EXTENSION_PACKAGE));
+    Ok(true)
+}
+
+fn ensure_required_pi_extension_setting() -> Result<(), String> {
+    let mut settings = read_pi_settings()?;
+    if normalize_required_pi_extension_setting(&mut settings)? {
+        write_pi_settings(&settings)?;
+    }
+    Ok(())
+}
+
 fn read_pi_settings() -> Result<serde_json::Value, String> {
     let settings_path = get_pi_config_dir()?.join("settings.json");
     if !settings_path.exists() {
@@ -3338,6 +3451,20 @@ async fn run_pi_package_command(args: Vec<String>) -> Result<(), String> {
         .map_err(|e| format!("Pi package command panicked: {}", e))?
 }
 
+async fn ensure_required_pi_extension_package() -> Result<(), String> {
+    let lock = REQUIRED_PI_PACKAGE_INSTALL_LOCK.get_or_init(|| Mutex::new(()));
+    let _guard = lock.lock().await;
+    ensure_required_pi_extension_setting()?;
+    if pi_package_source_looks_installed(REQUIRED_PI_EXTENSION_PACKAGE) {
+        return Ok(());
+    }
+    run_pi_package_command(vec![
+        "install".to_string(),
+        REQUIRED_PI_EXTENSION_PACKAGE.to_string(),
+    ])
+    .await
+}
+
 async fn stop_idle_pi_sessions_for_package_change(state: &PiState) -> Result<(), String> {
     let mut pool = state.0.lock().await;
     let busy_sessions: Vec<String> = pool
@@ -3391,6 +3518,9 @@ pub async fn pi_remove_extension_package(
     source: String,
 ) -> Result<Vec<PiExtensionPackage>, String> {
     let source = validate_pi_extension_package_source(&source)?;
+    if is_required_pi_extension_package_source(&source) {
+        return Err("Subagents are required by screenpipe and cannot be disabled".to_string());
+    }
     stop_idle_pi_sessions_for_package_change(&state).await?;
     run_pi_package_command(vec!["remove".to_string(), source]).await?;
     stop_idle_pi_sessions_for_package_change(&state).await?;
@@ -3933,6 +4063,38 @@ mod tests {
     }
 
     #[test]
+    fn recognizes_required_subagents_package_across_versions_and_case() {
+        assert!(super::is_required_pi_extension_package_source(
+            "npm:pi-subagents"
+        ));
+        assert!(super::is_required_pi_extension_package_source(
+            "npm:PI-SUBAGENTS@0.33.1"
+        ));
+        assert!(!super::is_required_pi_extension_package_source(
+            "npm:pi-subagentura"
+        ));
+    }
+
+    #[test]
+    fn normalizes_required_subagents_to_an_unfiltered_package() {
+        let mut settings = json!({
+            "packages": [
+                "npm:other-tool",
+                {
+                    "source": "npm:pi-subagents@0.33.1",
+                    "extensions": ["not-the-subagent-tool"]
+                }
+            ]
+        });
+        assert!(super::normalize_required_pi_extension_setting(&mut settings).unwrap());
+        assert_eq!(
+            settings["packages"],
+            json!(["npm:other-tool", "npm:pi-subagents"])
+        );
+        assert!(!super::normalize_required_pi_extension_setting(&mut settings).unwrap());
+    }
+
+    #[test]
     fn lists_string_and_filtered_object_pi_packages() {
         let settings = json!({
             "packages": [
@@ -4197,10 +4359,12 @@ error: InstallFailed extracting tarball"#;
         } else {
             Command::new(&pi_path)
         };
-        cmd.args(["--mode", "rpc", "--provider", provider, "--model", model])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        cmd.args([
+            "--mode", "rpc", "--approve", "--provider", provider, "--model", model,
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
         cmd.spawn().ok()
     }
 
@@ -4705,7 +4869,8 @@ error: InstallFailed extracting tarball"#;
         let sp = &providers["screenpipe"];
         assert_eq!(sp["baseUrl"], "https://api.screenpipe.com/v1");
         assert_eq!(sp["api"], "openai-completions");
-        assert_eq!(sp["apiKey"], "SCREENPIPE_API_KEY");
+        // `$` prefix is required: pi >= 0.80 treats bare names as literal keys
+        assert_eq!(sp["apiKey"], "$SCREENPIPE_API_KEY");
         assert_eq!(sp["authHeader"], true);
         assert!(sp["models"].as_array().unwrap().len() > 0);
     }
@@ -4739,11 +4904,36 @@ error: InstallFailed extracting tarball"#;
         let openai = &providers["openai-byok"];
         assert_eq!(openai["baseUrl"], "https://api.openai.com/v1");
         assert_eq!(openai["api"], "openai-completions");
-        assert_eq!(openai["apiKey"], "OPENAI_API_KEY");
+        assert_eq!(openai["apiKey"], "$OPENAI_API_KEY");
         let models = openai["models"].as_array().unwrap();
         assert_eq!(models.len(), 1);
         assert_eq!(models[0]["id"], "gpt-4o");
         assert_eq!(models[0]["reasoning"], false);
+    }
+
+    #[tokio::test]
+    async fn test_build_models_json_api_keys_use_env_var_syntax() {
+        // Regression: pi >= 0.80 sends bare apiKey strings to the provider as
+        // literal keys (user-reported 401 "Incorrect API key provided:
+        // CUSTOM_A**_KEY"; ChatGPT OAuth failed the same way via
+        // "Failed to extract accountId from token"). Env references must be
+        // written as `$NAME`.
+        for (provider, provider_key, expected) in [
+            ("openai", "openai-byok", "$OPENAI_API_KEY"),
+            ("openai-chatgpt", "openai-chatgpt", "$OPENAI_CHATGPT_TOKEN"),
+            ("anthropic", "anthropic-byok", "$ANTHROPIC_API_KEY"),
+            ("custom", "custom", "$CUSTOM_API_KEY"),
+        ] {
+            let mut pc = make_provider_config(provider, "some-model");
+            if provider == "custom" {
+                pc.url = "https://example.com/v1".to_string();
+            }
+            let config = build_models_json(None, Some(&pc)).await;
+            assert_eq!(
+                config["providers"][provider_key]["apiKey"], expected,
+                "provider {provider} must reference its key as {expected}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -4795,6 +4985,26 @@ error: InstallFailed extracting tarball"#;
             "https://api.anthropic.com"
         );
         assert_eq!(providers["anthropic-byok"]["api"], "anthropic-messages");
+    }
+
+    #[tokio::test]
+    async fn test_build_models_json_fable_uses_adaptive_thinking() {
+        let pc = make_provider_config("anthropic", "claude-fable-5");
+        let config = build_models_json(None, Some(&pc)).await;
+        let model = &config["providers"]["anthropic-byok"]["models"][0];
+
+        assert_eq!(model["reasoning"], true);
+        assert_eq!(model["compat"]["forceAdaptiveThinking"], true);
+    }
+
+    #[tokio::test]
+    async fn test_build_models_json_legacy_claude_keeps_budget_thinking() {
+        let pc = make_provider_config("anthropic", "claude-sonnet-4-5");
+        let config = build_models_json(None, Some(&pc)).await;
+        let model = &config["providers"]["anthropic-byok"]["models"][0];
+
+        assert_eq!(model["reasoning"], true);
+        assert!(model.get("compat").is_none());
     }
 
     #[tokio::test]

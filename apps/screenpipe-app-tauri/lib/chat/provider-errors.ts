@@ -92,6 +92,10 @@ export function buildContextOverflowMessage(): string {
   return "This chat is too long for the selected model. Start a new chat, ask a narrower question, or remove large attachments/screenshots before trying again.";
 }
 
+export function buildChatGptAccountIdMessage(): string {
+  return "Your ChatGPT sign-in doesn't include chat access: the login token has no ChatGPT account id. This usually means an Enterprise/Business workspace where the admin hasn't enabled Codex local app access. Reconnect ChatGPT in Settings → AI with a personal account, or ask your workspace admin to enable access.";
+}
+
 export function buildProviderErrorMessage(
   errorStr: string,
   preset?: ProviderLike | null
@@ -102,6 +106,13 @@ export function buildProviderErrorMessage(
 
   if (isContextOverflowError(errorStr)) {
     return buildContextOverflowMessage();
+  }
+
+  // ChatGPT OAuth tokens from Enterprise/Business workspaces can lack the
+  // chatgpt_account_id claim the Codex backend requires — the pi provider
+  // then throws "Failed to extract accountId from token" on every turn.
+  if (normalized.includes("failed to extract accountid")) {
+    return buildChatGptAccountIdMessage();
   }
 
   if (isNativeOllamaProvider(provider)) {
@@ -117,6 +128,18 @@ export function buildProviderErrorMessage(
   }
 
   if (isHostedScreenpipeProvider(provider)) {
+    if (normalized.includes("free_chat_limit_exceeded")) {
+      return "You've used today's 2 free hosted AI messages. Try again tomorrow, upgrade, or switch your AI preset to Ollama, Claude, Codex, or your own provider key.";
+    }
+    if (normalized.includes("free_chat_turn_request_limit_exceeded")) {
+      return "This free message reached its 8-step agent limit. Upgrade for longer agent runs, or switch your AI preset to your own provider.";
+    }
+    if (normalized.includes("free_plan_hosted_background_disabled")) {
+      return "Hosted AI for background pipes requires a paid plan. You can still run this pipe with Ollama or your own provider key.";
+    }
+    if (normalized.includes("free_chat_client_update_required")) {
+      return "Update screenpipe to use your 2 daily free hosted AI messages.";
+    }
     if (normalized.includes("not allowed")) {
       return `Model is restricted on your current plan. Please switch to a free model or upgrade your account.`;
     }

@@ -11,6 +11,8 @@ import { check, type Update } from "@tauri-apps/plugin-updater";
 import { platform, arch } from "@tauri-apps/plugin-os";
 import { useToast } from "@/components/ui/use-toast";
 import { cn } from "@/lib/utils";
+import { screenpipeWebUrl } from "@/lib/web-url";
+import { enterpriseUpdateAuthHeaders } from "@/lib/enterprise-auth-recovery";
 
 interface UpdateInfo {
   version: string;
@@ -71,16 +73,20 @@ async function getWindowsUpdateOptions() {
   const headers: Record<string, string> = {};
 
   if (isEnterprise) {
-    const licenseKey = await commands.getEnterpriseLicenseKey().catch(() => null);
-    if (licenseKey) {
-      headers["X-License-Key"] = licenseKey;
-    }
+    const [licenseKey, accountToken] = await Promise.all([
+      commands.getEnterpriseLicenseKey().catch(() => null),
+      commands.getCloudToken().catch(() => null),
+    ]);
+    Object.assign(
+      headers,
+      enterpriseUpdateAuthHeaders(licenseKey, accountToken),
+    );
   }
 
   return {
     checkOptions: {
       endpoints: [
-        `https://screenpipe.com/api/app-update/${channel}/windows-${cpuArch}/{{current_version}}`,
+        screenpipeWebUrl(`/api/app-update/${channel}/windows-${cpuArch}/{{current_version}}`, "https://screenpipe.com"),
       ],
       ...(Object.keys(headers).length > 0 ? { headers } : {}),
     },
@@ -331,11 +337,10 @@ interface PendingUpdateSnapshot {
 // state from Rust so it can recover if the event fired before this hook
 // registered (boot-time webview race).
 export function useUpdateListener() {
-  const { setIsVisible, setUpdateInfo, setAuthRequired, resetDismissed } = useUpdateBanner();
+  const { setIsVisible, setUpdateInfo, setAuthRequired } = useUpdateBanner();
 
   useEffect(() => {
     let unlistenAvailable: (() => void) | undefined;
-    let unlistenClick: (() => void) | undefined;
     let unlistenAuth: (() => void) | undefined;
 
     // Rust re-emits update-available on every periodic check, and providers
@@ -359,13 +364,6 @@ export function useUpdateListener() {
       // when the download is complete and the app is ready to restart.
       unlistenAvailable = await listen<UpdateInfo>("update-available", (event) => {
         showIfNotDismissed(event.payload);
-      });
-
-      // Tray click is an explicit user request — clear any prior dismissal
-      // so the banner reappears even if they X'd it earlier this session.
-      unlistenClick = await listen("update-now-clicked", () => {
-        resetDismissed();
-        setIsVisible(true);
       });
 
       // Listen for auth-required (user needs to sign in to download update)
@@ -394,8 +392,7 @@ export function useUpdateListener() {
 
     return () => {
       unlistenAvailable?.();
-      unlistenClick?.();
       unlistenAuth?.();
     };
-  }, [setIsVisible, setUpdateInfo, setAuthRequired, resetDismissed]);
+  }, [setIsVisible, setUpdateInfo, setAuthRequired]);
 }

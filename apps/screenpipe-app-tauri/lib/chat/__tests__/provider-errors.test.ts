@@ -56,6 +56,44 @@ describe("provider error copy", () => {
     }
   });
 
+  it("maps the daily free-chat wall to tomorrow-or-BYOK copy", () => {
+    const msg = buildProviderErrorMessage(
+      '{"error":"free_chat_limit_exceeded","limit":2}',
+      { provider: "screenpipe-cloud", model: "auto" },
+    );
+    expect(msg).toContain("2 free hosted AI messages");
+    expect(msg).toContain("tomorrow");
+    expect(msg).toContain("upgrade");
+    expect(msg).toContain("Ollama");
+    expect(msg).toContain("Claude");
+    expect(msg).toContain("Codex");
+  });
+
+  it("maps the per-message tool-loop cap separately", () => {
+    const msg = buildProviderErrorMessage(
+      '{"error":"free_chat_turn_request_limit_exceeded"}',
+      { provider: "pi", model: "auto" },
+    );
+    expect(msg).toContain("8-step agent limit");
+  });
+
+  it("explains the free background-pipe provider options", () => {
+    const msg = buildProviderErrorMessage(
+      '{"error":"free_plan_hosted_background_disabled"}',
+      { provider: "screenpipe-cloud", model: "auto" },
+    );
+    expect(msg).toContain("background pipes");
+    expect(msg).toContain("Ollama");
+  });
+
+  it("asks old clients to update before using the allowance", () => {
+    const msg = buildProviderErrorMessage(
+      '{"error":"free_chat_client_update_required"}',
+      { provider: "screenpipe-cloud", model: "auto" },
+    );
+    expect(msg).toContain("Update screenpipe");
+  });
+
   it("gives a generic connectivity message for other remote providers", () => {
     expect(
       buildProviderErrorMessage("Connection error.", { provider: "anthropic", model: "claude-opus-4-8" })
@@ -63,6 +101,30 @@ describe("provider error copy", () => {
     expect(
       buildProviderErrorMessage("Connection error.", { provider: "custom", model: "x" })
     ).toContain("Can't reach the AI provider");
+  });
+
+  it("maps the ChatGPT missing-account-id error to reconnect guidance", () => {
+    // exact string thrown by pi's openai-codex-responses provider when the
+    // OAuth access token lacks the chatgpt_account_id claim (Enterprise/
+    // Business workspaces without Codex local access enabled)
+    const msg = buildProviderErrorMessage("Failed to extract accountId from token", {
+      provider: "openai-chatgpt",
+      model: "gpt-5.2-codex",
+    });
+
+    expect(msg).toContain("ChatGPT account id");
+    expect(msg).toContain("Reconnect ChatGPT");
+    // provider-independent: the error string alone identifies the failure
+    expect(
+      buildProviderErrorMessage("Error: Failed to extract accountId from token", null)
+    ).toContain("ChatGPT account id");
+  });
+
+  it("does not map unrelated token errors to the ChatGPT account-id message", () => {
+    expect(buildProviderErrorMessage("invalid token", { provider: "openai-chatgpt" })).toBeNull();
+    expect(
+      buildProviderErrorMessage("failed to extract something else", { provider: "openai-chatgpt" })
+    ).toBeNull();
   });
 
   it("leaves non-connection cloud errors untouched (quota/auth handled elsewhere)", () => {

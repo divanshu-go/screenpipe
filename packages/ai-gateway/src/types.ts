@@ -140,6 +140,8 @@ export interface GeminiResponse {
 
 export interface Env {
 	OPENAI_API_KEY: string;
+	/** Runner-only bearer for trusted backend jobs. Stored as a Worker secret. */
+	AI_GATEWAY_SERVICE_TOKEN?: string;
 	OPENAI_REALTIME_TRANSCRIPTION_COST_PER_HOUR?: string;
 	ANTHROPIC_API_KEY: string;
 	DEEPGRAM_API_KEY: string;
@@ -217,12 +219,27 @@ export interface Env {
 // User tier for rate limiting and model access
 export type UserTier = 'anonymous' | 'logged_in' | 'subscribed';
 
+// Server-verified commercial plan. This is intentionally separate from
+// UserTier: Free and paid Basic both keep the existing `logged_in` model/rate
+// tier, but only Free receives the daily two-message hosted-AI allowance.
+export type AccountPlan =
+	| 'free'
+	| 'basic'
+	| 'business'
+	| 'team'
+	| 'enterprise'
+	| 'lifetime'
+	| 'unknown';
+
 // Auth result with tier information
 export interface AuthResult {
 	isValid: boolean;
 	tier: UserTier;
+	accountPlan: AccountPlan;
 	deviceId: string;
 	userId?: string;
+	/** True only for the dedicated backend service bearer. */
+	service?: boolean;
 	error?: string;
 }
 
