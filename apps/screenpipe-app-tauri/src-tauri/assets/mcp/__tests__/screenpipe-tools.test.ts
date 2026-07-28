@@ -75,6 +75,8 @@ describe("screenpipe-tools MCP server", () => {
         "live_view",
         "save_artifact",
         "screenpipe_connect_app",
+        "sp_mcp_call",
+        "sp_mcp_list_tools",
         "sp_web_search",
       ].sort(),
     );

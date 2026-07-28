@@ -266,6 +266,7 @@ agents do not get screenpipe's `.pi/skills`, so this is your usage guide):
   - `search-content` for specific lookups; filter by content_type, app_name, window_name, and a time range.
   - `update-memory` (and search with content_type=memory) to persist and recall facts across sessions.
 - `list_connections` shows the user's connected apps; `screenpipe_connect_app` connects one and waits for the user when a task needs it.
+- for a connection returned with mcp=true (Linear, Notion, Stripe, Sentry, Jira, Gmail, Zoom, Drive), use `sp_mcp_list_tools` then `sp_mcp_call` (with its `mcp_server_id`) to actually use it — not the connection proxy.
 - `sp_web_search` searches the public web; `save_artifact` saves a finished, user-facing deliverable (text or, with encoding=base64, an image) to the Artifacts library.
 - `live_view` reads or edits the user's saved Live Views (dashboards): action=list to find one, action=get for its definition, action=save to persist edits — only when the user asks about a dashboard.
 Do not curl localhost for these; call the tools.";

@@ -50,6 +50,33 @@ function chatSessionId() {
   return process.env.SCREENPIPE_CHAT_SESSION_ID || "chat";
 }
 
+// Like authHeaders, but also carries the session tag the engine's per-session
+// MCP-server access gate reads (x-screenpipe-session). Matches the Pi
+// mcp-bridge extension so user-registered MCP servers scoped to a session
+// resolve the same way for ACP agents. Uses the chat/conversation id (the ACP
+// path sets SCREENPIPE_CHAT_SESSION_ID; the pi path sets SCREENPIPE_SESSION_ID)
+// — prefer whichever is present.
+function mcpBridgeHeaders() {
+  const headers = authHeaders();
+  const session =
+    process.env.SCREENPIPE_SESSION_ID || process.env.SCREENPIPE_CHAT_SESSION_ID || "";
+  if (session) headers["x-screenpipe-session"] = session;
+  return headers;
+}
+
+// GET /mcp-servers filtered to the enabled set — the same list the Pi
+// mcp-bridge extension operates on.
+async function fetchMcpBridgeServers() {
+  const res = await fetch(`${apiBase()}/mcp-servers`, {
+    method: "GET",
+    headers: mcpBridgeHeaders(),
+  });
+  if (!res.ok) throw new Error(`GET /mcp-servers returned ${res.status}`);
+  const body = await res.json();
+  const servers = Array.isArray(body?.data) ? body.data : [];
+  return servers.filter((s) => s.enabled !== false);
+}
+
 // ---------------------------------------------------------------------------
 // Connection enrichment — a faithful port of the Pi connection-gate extension,
 // so ACP harnesses see the same connected status, MCP-OAuth resolution, and
@@ -545,6 +572,117 @@ const TOOLS = [
       }
 
       throw new Error(`unsupported Live View action: ${action || "<missing>"}`);
+    },
+  },
+  {
+    // Parity with the Pi-only mcp-bridge extension (sp_mcp_list_tools). Without
+    // this, ACP agents are told by list_connections / screenpipe_connect_app to
+    // "use sp_mcp_list_tools" for MCP-OAuth and Composio-backed connections
+    // (Linear, Notion, Stripe, Sentry, Jira, Gmail, Zoom, Drive) but have no
+    // such tool — so those connections are advertised yet unreachable.
+    name: "sp_mcp_list_tools",
+    description:
+      "List the tools exposed by the user's registered MCP (Model Context Protocol) servers, including MCP-OAuth connections (Linear, Notion, Stripe, Sentry, Jira) and Composio-managed apps (Gmail, Zoom, Google Drive/Docs/Sheets). Call this BEFORE sp_mcp_call so you know which server_id to target and what arguments each tool expects. Cheap to call. Returns one entry per server with its tools.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        server_id: {
+          type: "string",
+          description:
+            "Optional. List tools from this server only (e.g. the mcp_server_id from list_connections). Omit to list every registered server.",
+        },
+      },
+      additionalProperties: false,
+    },
+    async run(args) {
+      const serverId = typeof args?.server_id === "string" ? args.server_id.trim() : "";
+      const servers = await fetchMcpBridgeServers();
+      const targets = serverId ? servers.filter((s) => s.id === serverId) : servers;
+      if (targets.length === 0) {
+        return JSON.stringify({
+          servers: [],
+          message: serverId
+            ? `No enabled MCP server with id "${serverId}".`
+            : "No MCP servers are registered. Ask the user to add one from the Connections page in the desktop app.",
+        });
+      }
+      // Probe each target independently so one unreachable server does not sink
+      // the whole listing — mirror the extension's per-server error capture.
+      const results = await Promise.all(
+        targets.map(async (srv) => {
+          try {
+            const res = await fetch(`${apiBase()}/mcp-servers/${encodeURIComponent(srv.id)}/tools`, {
+              method: "GET",
+              headers: mcpBridgeHeaders(),
+            });
+            if (!res.ok) {
+              const detail = await res.text().catch(() => "");
+              return { server_id: srv.id, server_name: srv.name, tools: [], error: `${res.status}: ${detail.slice(0, 200)}` };
+            }
+            const body = await res.json();
+            return { server_id: srv.id, server_name: srv.name, tools: body?.data?.tools ?? [] };
+          } catch (error) {
+            return {
+              server_id: srv.id,
+              server_name: srv.name,
+              tools: [],
+              error: error instanceof Error ? error.message : String(error),
+            };
+          }
+        }),
+      );
+      return JSON.stringify({ servers: results });
+    },
+  },
+  {
+    // Parity with the Pi-only mcp-bridge extension (sp_mcp_call).
+    name: "sp_mcp_call",
+    description:
+      "Invoke a tool on one of the user's registered MCP servers (including MCP-OAuth and Composio-managed connections). Always call sp_mcp_list_tools FIRST to find the server_id and tool name; the arguments object must match that tool's schema. Returns the MCP result content.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        server_id: { type: "string", description: "The MCP server id (from sp_mcp_list_tools or list_connections)." },
+        tool: { type: "string", description: "The tool name advertised by that server." },
+        arguments: {
+          type: "object",
+          description: "JSON arguments matching the tool's parameter schema.",
+          additionalProperties: true,
+        },
+      },
+      required: ["server_id", "tool"],
+      additionalProperties: false,
+    },
+    async run(args) {
+      const serverId = String(args?.server_id ?? "").trim();
+      const tool = String(args?.tool ?? "").trim();
+      if (!serverId) throw new Error("server_id is required");
+      if (!tool) throw new Error("tool is required");
+      const res = await fetch(`${apiBase()}/mcp-servers/${encodeURIComponent(serverId)}/call`, {
+        method: "POST",
+        headers: mcpBridgeHeaders(),
+        body: JSON.stringify({ tool, arguments: args?.arguments ?? {} }),
+      });
+      const bodyText = await res.text();
+      if (!res.ok) {
+        throw new Error(`sp_mcp_call failed (${res.status}): ${bodyText.slice(0, 800)}`);
+      }
+      // The engine wraps the raw MCP result as { data: { content, isError? } }.
+      // Return the inner result so the agent sees content and any isError flag;
+      // if the tool itself errored (isError=true, HTTP still 200), surface it.
+      let parsed;
+      try {
+        parsed = JSON.parse(bodyText);
+      } catch {
+        return JSON.stringify({ content: [{ type: "text", text: bodyText.slice(0, 4000) }] });
+      }
+      const result = parsed?.data ?? parsed;
+      if (result?.isError) {
+        throw new Error(
+          `MCP tool "${tool}" on server "${serverId}" reported an error: ${JSON.stringify(result?.content ?? result)}`,
+        );
+      }
+      return JSON.stringify(result);
     },
   },
 ];
