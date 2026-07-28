@@ -28,6 +28,10 @@ import {
   EnterpriseInstallMetadata,
   normalizeEnterpriseAppUpdatePolicy,
 } from "@/lib/enterprise/app-update-policy";
+import {
+  authenticationStateAfterKeyRejection,
+  ROTATED_ENTERPRISE_KEY_ERROR,
+} from "@/lib/enterprise-auth-recovery";
 
 export type EnterpriseAuthenticationMethod = "account" | "license_key";
 export type EnterpriseAuthenticationState =
@@ -929,15 +933,33 @@ export function useEnterprisePolicyRuntime() {
           setAuthenticationError(ACCOUNT_LOGIN_REQUIRED_ERROR);
         }
       } else if (result.reason === "invalid_key") {
-        console.warn("[enterprise] saved key is no longer valid, prompting for a new one");
+        console.warn("[enterprise] saved key is no longer valid, falling back to account auth");
         stopPolling();
-        setAuthenticationState("license_key");
-        setAuthenticationError("invalid enterprise key");
+        const token = accountTokenRef.current;
+        if (token && authenticateCredentialRef.current) {
+          setAuthenticationState("checking");
+          await authenticateCredentialRef.current({
+            type: "account",
+            value: token,
+          });
+          return;
+        }
+        setAuthenticationState("account");
+        setAuthenticationError(ROTATED_ENTERPRISE_KEY_ERROR);
       } else if (result.reason === "expired_key") {
-        console.warn("[enterprise] saved key has expired, prompting for a new one");
+        console.warn("[enterprise] saved key has expired, falling back to account auth");
         stopPolling();
-        setAuthenticationState("license_key");
-        setAuthenticationError("enterprise key has expired - contact your admin");
+        const token = accountTokenRef.current;
+        if (token && authenticateCredentialRef.current) {
+          setAuthenticationState("checking");
+          await authenticateCredentialRef.current({
+            type: "account",
+            value: token,
+          });
+          return;
+        }
+        setAuthenticationState("account");
+        setAuthenticationError(ROTATED_ENTERPRISE_KEY_ERROR);
       } else if (result.reason === "not_member") {
         console.warn("[enterprise] signed-in account is no longer an organization member");
         stopPolling();
@@ -1001,13 +1023,17 @@ export function useEnterprisePolicyRuntime() {
     }
 
     if (result.reason === "invalid_key") {
-      setAuthenticationState("license_key");
-      setAuthenticationError("invalid enterprise key");
+      setAuthenticationState(
+        authenticationStateAfterKeyRejection(Boolean(accountTokenRef.current)),
+      );
+      setAuthenticationError(ROTATED_ENTERPRISE_KEY_ERROR);
       return { authenticated: false, retryable: false };
     }
     if (result.reason === "expired_key") {
-      setAuthenticationState("license_key");
-      setAuthenticationError("enterprise key has expired - contact your admin");
+      setAuthenticationState(
+        authenticationStateAfterKeyRejection(Boolean(accountTokenRef.current)),
+      );
+      setAuthenticationError(ROTATED_ENTERPRISE_KEY_ERROR);
       return { authenticated: false, retryable: false };
     }
     if (result.reason === "not_member") {

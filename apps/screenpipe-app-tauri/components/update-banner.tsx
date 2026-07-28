@@ -12,6 +12,7 @@ import { platform, arch } from "@tauri-apps/plugin-os";
 import { useToast } from "@/components/ui/use-toast";
 import { cn } from "@/lib/utils";
 import { screenpipeWebUrl } from "@/lib/web-url";
+import { enterpriseUpdateAuthHeaders } from "@/lib/enterprise-auth-recovery";
 
 interface UpdateInfo {
   version: string;
@@ -72,10 +73,14 @@ async function getWindowsUpdateOptions() {
   const headers: Record<string, string> = {};
 
   if (isEnterprise) {
-    const licenseKey = await commands.getEnterpriseLicenseKey().catch(() => null);
-    if (licenseKey) {
-      headers["X-License-Key"] = licenseKey;
-    }
+    const [licenseKey, accountToken] = await Promise.all([
+      commands.getEnterpriseLicenseKey().catch(() => null),
+      commands.getCloudToken().catch(() => null),
+    ]);
+    Object.assign(
+      headers,
+      enterpriseUpdateAuthHeaders(licenseKey, accountToken),
+    );
   }
 
   return {
