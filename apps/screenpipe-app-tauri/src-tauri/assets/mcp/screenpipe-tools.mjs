@@ -207,6 +207,48 @@ async function resolveConnection(connectionId) {
   return connection ?? null;
 }
 
+// Live Views (dashboards) — mirrors the Pi-only screenpipe_live_view extension.
+// The engine returns error detail as { error: string }; surface it so the model
+// can react, matching the connect/save tools' isError convention.
+async function liveViewJson(res) {
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const message = typeof body?.error === "string" ? body.error : `HTTP ${res.status}`;
+    throw new Error(message);
+  }
+  return body;
+}
+
+function requireViewId(viewId) {
+  if (typeof viewId !== "string" || !viewId.trim()) {
+    throw new Error("viewId is required for this action");
+  }
+  return viewId.trim();
+}
+
+// Validate and shape the save payload the same way the Pi extension does: a
+// revision of 0 means "create" (expectedRevision null), any other value is the
+// optimistic-concurrency token that guards against clobbering a newer edit.
+function liveViewSaveRequest(view) {
+  if (!view || typeof view !== "object") {
+    throw new Error("view is required for save");
+  }
+  if (!view.id || !view.title || !Array.isArray(view.blocks)) {
+    throw new Error("view must include id, title, revision, timeRange, and blocks");
+  }
+  if (!Number.isInteger(view.revision) || view.revision < 0) {
+    throw new Error("view revision must be a non-negative integer");
+  }
+  return {
+    id: view.id,
+    title: view.title,
+    expectedRevision: view.revision === 0 ? null : view.revision,
+    timeRange: view.timeRange,
+    periodPolicy: view.periodPolicy,
+    blocks: view.blocks,
+  };
+}
+
 const IMAGE_EXT_KIND = {
   ".png": "image",
   ".jpg": "image",
@@ -422,6 +464,87 @@ const TOOLS = [
         name,
         message: `${name} is not connected yet. I've asked the user to connect it; retry this once they have.`,
       });
+    },
+  },
+  {
+    // Parity with the Pi-only `screenpipe_live_view` extension: read or edit the
+    // user's saved Screenpipe Live Views (dashboards) on demand, so every
+    // MCP-honoring ACP harness gets the same capability native Pi does. Loaded
+    // lazily by the model — dashboard contents are never preloaded into chat.
+    name: "live_view",
+    description:
+      "Read or edit the user's saved Screenpipe Live Views (dashboards) on demand. Use only when the user asks about a dashboard or Live View. action=list returns compact summaries; action=get returns one editable definition; action=save persists a complete definition previously returned by get. Before saving, get the latest definition and preserve every block the user did not ask to change; the revision guards against overwriting a newer edit. Only save when the user explicitly asked to create or change a Live View.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["list", "get", "save"],
+          description:
+            "list returns compact dashboard summaries; get returns one editable definition; save persists a complete definition previously returned by get.",
+        },
+        viewId: {
+          type: "string",
+          description: "Live View id for get. Use list first when the target is unknown.",
+        },
+        view: {
+          type: "object",
+          description:
+            "For save, the complete Live View object returned by get with the requested edits applied. Preserve its id, revision, periodPolicy, and every unchanged block.",
+          additionalProperties: true,
+        },
+      },
+      required: ["action"],
+      additionalProperties: false,
+    },
+    async run(args) {
+      const action = String(args?.action ?? "").trim();
+
+      if (action === "list") {
+        const res = await fetch(`${apiBase()}/live-views/catalog`, {
+          method: "GET",
+          headers: authHeaders(),
+        });
+        const body = await liveViewJson(res);
+        const views = Array.isArray(body) ? body : [];
+        return JSON.stringify({
+          views: views.map((view) => ({
+            id: view.id,
+            title: view.title,
+            revision: view.revision,
+            blockCount: view.blockCount,
+          })),
+        });
+      }
+
+      if (action === "get") {
+        const viewId = requireViewId(args?.viewId);
+        const res = await fetch(
+          `${apiBase()}/live-views/${encodeURIComponent(viewId)}/template`,
+          { method: "GET", headers: authHeaders() },
+        );
+        const view = await liveViewJson(res);
+        return JSON.stringify({ view });
+      }
+
+      if (action === "save") {
+        const request = liveViewSaveRequest(args?.view);
+        const res = await fetch(
+          `${apiBase()}/live-views/${encodeURIComponent(request.id)}`,
+          { method: "PUT", headers: authHeaders(), body: JSON.stringify(request) },
+        );
+        const saved = await liveViewJson(res);
+        return JSON.stringify({
+          saved: {
+            id: saved.id,
+            title: saved.title,
+            revision: saved.revision,
+            blockCount: Array.isArray(saved.blocks) ? saved.blocks.length : 0,
+          },
+        });
+      }
+
+      throw new Error(`unsupported Live View action: ${action || "<missing>"}`);
     },
   },
 ];

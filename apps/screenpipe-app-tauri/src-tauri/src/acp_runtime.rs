@@ -267,6 +267,7 @@ agents do not get screenpipe's `.pi/skills`, so this is your usage guide):
   - `update-memory` (and search with content_type=memory) to persist and recall facts across sessions.
 - `list_connections` shows the user's connected apps; `screenpipe_connect_app` connects one and waits for the user when a task needs it.
 - `sp_web_search` searches the public web; `save_artifact` saves a finished, user-facing deliverable (text or, with encoding=base64, an image) to the Artifacts library.
+- `live_view` reads or edits the user's saved Live Views (dashboards): action=list to find one, action=get for its definition, action=save to persist edits — only when the user asks about a dashboard.
 Do not curl localhost for these; call the tools.";
 
 /// Combine the always-on tools hint with the user's configured system prompt
