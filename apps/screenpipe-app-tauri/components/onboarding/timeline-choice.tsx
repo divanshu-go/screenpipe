@@ -162,18 +162,29 @@ export default function TimelineChoice({ handleNextSlide }: TimelineChoiceProps)
     setSaving(true);
     posthog.capture("onboarding_timeline_choice", {
       timeline_enabled: enabled,
+      screenshots_enabled: enabled,
       device_tier: settings.deviceTier ?? "unknown",
       followed_recommendation: enabled === recommendEnabled,
       time_spent_ms: Date.now() - mountTimeRef.current,
     });
     try {
-      // This slide runs before engine-startup spawns screenpipe, so the
-      // value is read at first spawn — no restart needed here (unlike the
-      // settings-page toggle in display-section.tsx).
-      await updateSettings({ disableTimeline: !enabled });
+      // Both flags move together. On its own `disableTimeline` only skips the
+      // in-memory hot frame cache — screen capture, JPEG writes, the OCR
+      // fallback and the ffmpeg compaction worker all keep running, so "saves
+      // ram, cpu & disk" would not hold. `disableScreenshots` stops that work
+      // while accessibility-tree capture continues, which is why search, ask
+      // and pipes are unaffected either way.
+      //
+      // This slide runs before engine-startup spawns screenpipe, so both values
+      // are read at first spawn — no restart needed here (unlike the
+      // settings-page toggles).
+      await updateSettings({
+        disableTimeline: !enabled,
+        disableScreenshots: !enabled,
+      });
     } catch {
-      // non-fatal: the default (timeline on) applies; user can change it
-      // later in settings → display
+      // non-fatal: the defaults (both on) apply; the user can change them
+      // later in settings
     }
     handleNextSlide();
   };
@@ -305,7 +316,7 @@ export default function TimelineChoice({ handleNextSlide }: TimelineChoiceProps)
         animate={{ opacity: 1 }}
         transition={{ delay: 0.45 }}
       >
-        not a forever choice — change it anytime in settings → display
+        not a forever choice — change it anytime in settings
       </motion.p>
     </motion.div>
   );

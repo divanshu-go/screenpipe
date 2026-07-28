@@ -34,7 +34,7 @@ describe("TimelineChoice", () => {
     mocks.updateSettings.mockResolvedValue(undefined);
   });
 
-  it("recommends on for high tier and persists disableTimeline: false when chosen", async () => {
+  it("recommends on for high tier and keeps both capture flags on when chosen", async () => {
     mocks.settings.deviceTier = "high";
     const handleNextSlide = vi.fn();
     render(<TimelineChoice handleNextSlide={handleNextSlide} />);
@@ -53,6 +53,7 @@ describe("TimelineChoice", () => {
 
     expect(mocks.updateSettings).toHaveBeenCalledWith({
       disableTimeline: false,
+      disableScreenshots: false,
     });
     expect(handleNextSlide).toHaveBeenCalledTimes(1);
   });
@@ -69,7 +70,7 @@ describe("TimelineChoice", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("recommends off on low tier and persists disableTimeline: true when chosen", async () => {
+  it("recommends off on low tier and stops screenshot capture too when chosen", async () => {
     mocks.settings.deviceTier = "low";
     const handleNextSlide = vi.fn();
     render(<TimelineChoice handleNextSlide={handleNextSlide} />);
@@ -87,8 +88,12 @@ describe("TimelineChoice", () => {
       fireEvent.click(offButton);
     });
 
+    // disableScreenshots is the flag that actually stops capture, JPEG writes,
+    // the OCR fallback and the ffmpeg compaction worker — disableTimeline alone
+    // would only skip the in-memory hot frame cache.
     expect(mocks.updateSettings).toHaveBeenCalledWith({
       disableTimeline: true,
+      disableScreenshots: true,
     });
     expect(handleNextSlide).toHaveBeenCalledTimes(1);
   });
@@ -104,11 +109,13 @@ describe("TimelineChoice", () => {
 
     expect(mocks.updateSettings).toHaveBeenCalledWith({
       disableTimeline: false,
+      disableScreenshots: false,
     });
     expect(mocks.capture).toHaveBeenCalledWith(
       "onboarding_timeline_choice",
       expect.objectContaining({
         timeline_enabled: true,
+        screenshots_enabled: true,
         device_tier: "low",
         followed_recommendation: false,
       }),
@@ -142,6 +149,7 @@ describe("TimelineChoice", () => {
     expect(mocks.updateSettings).toHaveBeenCalledTimes(1);
     expect(mocks.updateSettings).toHaveBeenCalledWith({
       disableTimeline: false,
+      disableScreenshots: false,
     });
     expect(handleNextSlide).toHaveBeenCalledTimes(1);
   });
