@@ -84,6 +84,7 @@ pub struct CaptureAdapterStats {
     pub class_nodes: usize,
     pub subrole_nodes: usize,
     pub value_nodes: usize,
+    pub class_overflow_nodes: usize,
 }
 
 /// Result of adapting a captured flat tree into the compact parser arena.
@@ -141,9 +142,11 @@ pub fn adapt_captured_accessibility_tree(
             .filter(|class| !class.is_empty())
         {
             if class_count == MAX_CAPTURE_CLASSES_PER_NODE {
-                return Err(TreeBuildError::TooManyClassesOnNode {
-                    count: class_count + 1,
-                });
+                // Utility-CSS apps (Tailwind through Chromium UIA ClassName)
+                // routinely exceed the scratch space; classes are matching
+                // hints, so keep the first N rather than rejecting the tree.
+                stats.class_overflow_nodes += 1;
+                break;
             }
             class_buffer[class_count] = class;
             class_count += 1;

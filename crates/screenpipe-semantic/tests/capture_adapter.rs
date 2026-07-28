@@ -189,6 +189,9 @@ fn skips_empty_roles_but_preserves_budget_errors() {
 
 #[test]
 fn bounds_per_node_class_scratch_space() {
+    // Utility-CSS apps (Tailwind via Chromium UIA ClassName) exceed the
+    // scratch space on real Windows trees; the adapter must truncate and
+    // count, never reject the whole tree.
     let class_name = (0..33)
         .map(|index| format!("class-{index}"))
         .collect::<Vec<_>>()
@@ -199,7 +202,13 @@ fn bounds_per_node_class_scratch_space() {
         ..Default::default()
     }];
 
-    assert!(adapt_captured_accessibility_tree(&nodes, TreeBudget::default()).is_err());
+    let adapted = adapt_captured_accessibility_tree(&nodes, TreeBudget::default()).unwrap();
+    assert_eq!(adapted.stats.class_overflow_nodes, 1);
+    let root = adapted.tree.roots().next().unwrap();
+    assert_eq!(adapted.tree.classes(root).count(), 32);
+    assert!(adapted.tree.has_class(root, "class-0"));
+    assert!(adapted.tree.has_class(root, "class-31"));
+    assert!(!adapted.tree.has_class(root, "class-32"));
 }
 
 #[test]
