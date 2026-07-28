@@ -12,7 +12,7 @@ use axum::{
     http::{Method, StatusCode},
     Json, Router,
 };
-use http::header::{HeaderValue, CONTENT_TYPE};
+use http::header::{HeaderValue, CONTENT_TYPE, HOST, ORIGIN};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use tauri::Emitter;
@@ -231,6 +231,80 @@ async fn kill_process_on_port(port: u16) {
     }
 }
 
+/// Loopback hostnames the control server treats as first-party. A `127.0.0.1`
+/// bind is reachable by any website the user visits and by any local process,
+/// so the only trustworthy `Origin`/`Host` values are these.
+fn is_local_hostname(host: &str) -> bool {
+    matches!(host, "localhost" | "127.0.0.1" | "::1" | "tauri.localhost")
+}
+
+/// Whether an `Origin` header names a local origin. Mirrors the engine
+/// server's `is_allowed_local_origin`. A browser cannot forge or omit `Origin`
+/// on a cross-origin request, so rejecting foreign origins blocks a malicious
+/// web page from POSTing to a state-changing local endpoint.
+fn is_allowed_local_origin(origin: &HeaderValue) -> bool {
+    let Ok(origin) = origin.to_str() else {
+        return false;
+    };
+    let Ok(uri) = origin.parse::<axum::http::Uri>() else {
+        return false;
+    };
+    match uri.host() {
+        Some(host) => is_local_hostname(host),
+        None => false,
+    }
+}
+
+/// Whether a `Host` header points at loopback. Defeats DNS rebinding, where a
+/// browser is tricked into resolving an attacker domain to `127.0.0.1` while
+/// keeping the attacker's `Host`. curl, pipes, and the webview all send a
+/// loopback `Host`.
+fn is_allowed_local_host(host: &HeaderValue) -> bool {
+    let Ok(raw) = host.to_str() else {
+        return false;
+    };
+    let raw = raw.trim();
+    let host = if let Some(rest) = raw.strip_prefix('[') {
+        // IPv6 literal, e.g. [::1] or [::1]:11435
+        match rest.split_once(']') {
+            Some((inner, _)) => inner,
+            None => return false,
+        }
+    } else {
+        // hostname or IPv4, optionally with :port
+        raw.split(':').next().unwrap_or(raw)
+    };
+    is_local_hostname(host)
+}
+
+/// Origin-validation guard for state-changing control endpoints (`/notify`).
+/// Rejects any request carrying a non-local `Origin` (malicious web page) or a
+/// non-local `Host` (DNS rebinding). Requests with neither header — a local
+/// process using curl, a pipe, an agent — still pass: loopback bind is not an
+/// authorization boundary, so a same-user process can reach this regardless.
+/// Closing that residual requires a capability token handed to first-party
+/// callers (tracked as a follow-up); the token must not be dropped later just
+/// because "it's localhost".
+async fn notify_origin_guard<B>(
+    req: axum::http::Request<B>,
+    next: axum::middleware::Next<B>,
+) -> axum::response::Response {
+    let headers = req.headers();
+    if let Some(origin) = headers.get(ORIGIN) {
+        if !is_allowed_local_origin(origin) {
+            tracing::warn!("/notify rejected: non-local Origin {:?}", origin);
+            return StatusCode::FORBIDDEN.into_response();
+        }
+    }
+    if let Some(host) = headers.get(HOST) {
+        if !is_allowed_local_host(host) {
+            tracing::warn!("/notify rejected: non-local Host {:?}", host);
+            return StatusCode::FORBIDDEN.into_response();
+        }
+    }
+    next.run(req).await
+}
+
 pub async fn run_server(app_handle: tauri::AppHandle, port: u16) {
     let state = ServerState { app_handle };
 
@@ -243,7 +317,8 @@ pub async fn run_server(app_handle: tauri::AppHandle, port: u16) {
     let app = Router::new()
         .route(
             "/notify",
-            axum::routing::post(crate::notifications::routes::send_notification),
+            axum::routing::post(crate::notifications::routes::send_notification)
+                .layer(axum::middleware::from_fn(notify_origin_guard)),
         )
         .route(
             "/notifications",
@@ -614,3 +689,66 @@ curl -X POST http://localhost:11435/notify \
       }'
 
 */
+
+#[cfg(test)]
+mod tests {
+    use super::{is_allowed_local_host, is_allowed_local_origin};
+    use http::header::HeaderValue;
+
+    fn origin(v: &str) -> HeaderValue {
+        HeaderValue::from_str(v).unwrap()
+    }
+
+    #[test]
+    fn accepts_local_origins() {
+        for o in [
+            "http://localhost",
+            "http://localhost:3000",
+            "https://localhost",
+            "http://127.0.0.1",
+            "http://127.0.0.1:11435",
+            "tauri://localhost",
+            "http://tauri.localhost",
+            "https://tauri.localhost",
+        ] {
+            assert!(is_allowed_local_origin(&origin(o)), "should accept {o}");
+        }
+    }
+
+    #[test]
+    fn rejects_foreign_origins() {
+        for o in [
+            "https://evil.com",
+            "http://attacker.example",
+            "https://localhost.evil.com",
+            "https://127.0.0.1.evil.com",
+            "null",
+        ] {
+            assert!(!is_allowed_local_origin(&origin(o)), "should reject {o}");
+        }
+    }
+
+    #[test]
+    fn accepts_local_hosts() {
+        for h in [
+            "localhost",
+            "localhost:11435",
+            "127.0.0.1",
+            "127.0.0.1:11435",
+            "[::1]",
+            "[::1]:11435",
+            "tauri.localhost",
+        ] {
+            assert!(is_allowed_local_host(&origin(h)), "should accept {h}");
+        }
+    }
+
+    #[test]
+    fn rejects_rebinding_hosts() {
+        // DNS rebinding keeps the attacker's Host while the IP resolves to
+        // loopback — reject anything that is not a loopback name.
+        for h in ["evil.com", "evil.com:11435", "attacker.example"] {
+            assert!(!is_allowed_local_host(&origin(h)), "should reject {h}");
+        }
+    }
+}
