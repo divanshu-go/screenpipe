@@ -100,6 +100,7 @@ mod tray;
 mod tray_monitor_preview;
 #[cfg(target_os = "macos")]
 mod staged_update;
+mod stale_tier;
 mod updates;
 mod voice_training;
 mod window;

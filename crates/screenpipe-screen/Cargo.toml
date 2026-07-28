@@ -77,10 +77,9 @@ harness = false
 
 # macOS: sck-rs for 12.3+ (ScreenCaptureKit), xcap as fallback for older versions
 [target.'cfg(target_os = "macos")'.dependencies]
-# Pinned to the sck-rs #16 branch head (wedge-accounting CAS fix, filter-update
-# poisoning + single-flight, 60s capture bound, cidre pin). Re-pin to the squash
-# commit once screenpipe/sck-rs#16 merges.
-sck-rs = { git = "https://github.com/screenpipe/sck-rs" , rev = "80f5ab8a33db77c52cc47880f35e3f564ce549a8"}
+# Pinned to sck-rs main at the #16 squash (wedge-accounting CAS fix,
+# filter-update poisoning + single-flight, 60s capture bound, cidre pin).
+sck-rs = { git = "https://github.com/screenpipe/sck-rs" , rev = "7d21895b73a96a9243ac954d579f9d4acb43e60a"}
 xcap = { workspace = true }
 libc = { workspace = true }
 cidre = { git = "https://github.com/yury/cidre.git", rev = "8481f3f0dc7dd39bb5be80d9424bfac0cad3801a", features = ["vn", "cv", "cg", "app"] }

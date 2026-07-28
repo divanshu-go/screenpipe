@@ -8,8 +8,10 @@
 //! Captures happen only on meaningful user events: app switch, window focus,
 //! click, typing pause, scroll stop, clipboard, and periodic idle fallback.
 
+use crate::capture_exclusions::{probe_excluded_sck_window_ids, storage_excluded_sck_window_ids};
 use crate::hot_frame_cache::{HotFrame, HotFrameCache};
 use crate::power::PowerProfile;
+use crate::visual_probe::bounded_visual_probe;
 use anyhow::Result;
 use chrono::Utc;
 use screenpipe_a11y::tree::TreeWalkerConfig;
@@ -18,7 +20,7 @@ use screenpipe_capture::ocr_gate::OcrGate;
 use screenpipe_capture::paired_capture::{paired_capture, CaptureContext, PairedCaptureResult};
 use screenpipe_core::window_pattern::{self, WindowPattern};
 use screenpipe_db::DatabaseManager;
-use screenpipe_screen::capture_screenshot_by_window::{get_excluded_sck_window_ids, WindowFilters};
+use screenpipe_screen::capture_screenshot_by_window::WindowFilters;
 use screenpipe_screen::frame_comparison::{FrameComparer, FrameComparisonConfig};
 use screenpipe_screen::monitor::{list_monitors, SafeMonitor};
 use screenpipe_screen::snapshot_writer::SnapshotWriter;
@@ -33,241 +35,6 @@ use tracing::{debug, error, info, warn};
 const CAPTURE_OPERATION_TIMEOUT: Duration = Duration::from_secs(15);
 const WARM_VISUAL_CHECK_INTERVAL: Duration = Duration::from_secs(5);
 const WARM_FOCUS_BACKSTOP_INTERVAL: Duration = Duration::from_secs(1);
-
-/// Bound on the visual-change probe screenshot (Active visual check and Warm
-/// focus probe). These probes previously awaited ScreenCaptureKit with no
-/// timeout; when the SCK daemon's completion callbacks wedge (observed live:
-/// threads parked forever under `fetch_shareable_content`), an unbounded
-/// probe froze the whole capture loop — no idle snapshots, no capture-attempt
-/// heartbeat — until user input happened to unwedge the daemon. `/health`
-/// then reported `frame_status="stale"` and the desktop app raised a false
-/// "recording needs help" incident on an idle, healthy machine.
-const VISUAL_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// Bound on one SCK window-exclusion refresh (`CGWindowListCopyWindowInfo`,
-/// a synchronous WindowServer IPC that must never run unbounded on the loop).
-const EXCLUSION_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// A storage capture may reuse a cached exclusion set at most this old when
-/// a live refresh can't complete in time. Beyond this, the exclusion state
-/// counts as UNKNOWN and the frame's pixels are skipped (fail closed) rather
-/// than risking storage of a window the user configured to ignore.
-const EXCLUSION_STORAGE_MAX_STALENESS: Duration = Duration::from_secs(60);
-
-/// Last successfully resolved exclusion ids + when that refresh completed.
-/// `None` timestamp = never refreshed successfully (a cold cache is NOT
-/// "last known good" — it must never satisfy a storage capture).
-struct ExclusionCache {
-    ids: Vec<u32>,
-    refreshed_at: Option<Instant>,
-}
-
-static EXCLUSION_CACHE: OnceLock<Mutex<ExclusionCache>> = OnceLock::new();
-
-/// Single-flight guard: while one (possibly WindowServer-wedged) refresh is
-/// in flight, no further blocking tasks are spawned. The flag is cleared by
-/// the blocking closure itself when it eventually completes, so a stall can
-/// pin at most ONE tokio blocking-pool thread instead of accumulating one
-/// per capture tick until the pool (512) starves.
-static EXCLUSION_REFRESH_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
-
-fn exclusion_cache() -> &'static Mutex<ExclusionCache> {
-    EXCLUSION_CACHE.get_or_init(|| {
-        Mutex::new(ExclusionCache {
-            ids: Vec::new(),
-            refreshed_at: None,
-        })
-    })
-}
-
-/// Kick (or join) one bounded exclusion refresh. Returns fresh ids when the
-/// refresh completed within `EXCLUSION_REFRESH_TIMEOUT`, `None` otherwise
-/// (in flight elsewhere, timed out, or task failure). The blocking closure
-/// always writes the cache and clears the in-flight flag on completion, even
-/// after its awaiting caller gave up.
-async fn refresh_excluded_sck_window_ids(window_filters: &WindowFilters) -> Option<Vec<u32>> {
-    if EXCLUSION_REFRESH_IN_FLIGHT.swap(true, Ordering::AcqRel) {
-        // A refresh (possibly stuck in CGWindowListCopyWindowInfo) is already
-        // running; don't pile another blocked thread behind it.
-        return None;
-    }
-
-    let filters = window_filters.clone();
-    let handle = tokio::task::spawn_blocking(move || {
-        let mut ids = get_excluded_sck_window_ids(&filters);
-        ids.sort_unstable();
-        ids.dedup();
-        {
-            let mut cache = exclusion_cache().lock().unwrap_or_else(|e| e.into_inner());
-            cache.ids = ids.clone();
-            cache.refreshed_at = Some(Instant::now());
-        }
-        EXCLUSION_REFRESH_IN_FLIGHT.store(false, Ordering::Release);
-        ids
-    });
-
-    match tokio::time::timeout(EXCLUSION_REFRESH_TIMEOUT, handle).await {
-        Ok(Ok(ids)) => Some(ids),
-        Ok(Err(join_err)) => {
-            // The task never ran its closure tail — clear the flag here.
-            EXCLUSION_REFRESH_IN_FLIGHT.store(false, Ordering::Release);
-            warn!("window exclusion refresh task failed ({join_err})");
-            None
-        }
-        Err(_elapsed) => {
-            // Abandoned but still running; IT clears the flag on completion.
-            // Throttle: WindowServer stalls fire this every capture tick.
-            static LAST_TIMEOUT_LOG: AtomicU64 = AtomicU64::new(0);
-            let now_secs = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            let prev = LAST_TIMEOUT_LOG.load(Ordering::Relaxed);
-            if now_secs.saturating_sub(prev) >= 60 {
-                LAST_TIMEOUT_LOG.store(now_secs, Ordering::Relaxed);
-                warn!(
-                    "window exclusion refresh did not complete within {:?} (WindowServer unresponsive)",
-                    EXCLUSION_REFRESH_TIMEOUT
-                );
-            }
-            None
-        }
-    }
-}
-
-/// Exclusion ids for the visual-change PROBE (frame diffing only — nothing is
-/// stored). Best effort: fresh ids when available, cached ids of any age
-/// otherwise. Over-inclusive probe pixels merely risk a spurious
-/// visual-change trigger; the storage capture applies its own stricter rule.
-async fn probe_excluded_sck_window_ids(window_filters: &WindowFilters) -> Vec<u32> {
-    if window_filters.is_empty() {
-        return Vec::new();
-    }
-    if let Some(ids) = refresh_excluded_sck_window_ids(window_filters).await {
-        return ids;
-    }
-    exclusion_cache()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .ids
-        .clone()
-}
-
-/// Exclusion ids for a STORAGE capture. Fail closed: `None` means the current
-/// exclusion state is unknown (no successful refresh within
-/// `EXCLUSION_STORAGE_MAX_STALENESS`) while exclusions ARE configured — the
-/// caller must skip the frame's pixels rather than store a frame that may
-/// contain a window the user asked to hide. Pre-fix behavior stored nothing
-/// during a WindowServer stall (the loop was frozen); this preserves that
-/// privacy property without freezing the loop.
-async fn storage_excluded_sck_window_ids(window_filters: &WindowFilters) -> Option<Vec<u32>> {
-    if window_filters.is_empty() {
-        return Some(Vec::new());
-    }
-    if let Some(ids) = refresh_excluded_sck_window_ids(window_filters).await {
-        return Some(ids);
-    }
-    let cache = exclusion_cache().lock().unwrap_or_else(|e| e.into_inner());
-    cache_ids_if_fresh(&cache, EXCLUSION_STORAGE_MAX_STALENESS)
-}
-
-/// Storage-tier cache rule: only a cache with a SUCCESSFUL refresh inside the
-/// staleness window may back a stored frame. A cold cache (never refreshed)
-/// is not "last known good" and must never satisfy a storage capture.
-fn cache_ids_if_fresh(cache: &ExclusionCache, max_staleness: Duration) -> Option<Vec<u32>> {
-    match cache.refreshed_at {
-        Some(at) if at.elapsed() <= max_staleness => Some(cache.ids.clone()),
-        _ => None,
-    }
-}
-
-/// E2E fault injection: `SCREENPIPE_E2E_SEED=visual-check-hang-once` makes the
-/// next visual-change probe hang far past `VISUAL_PROBE_TIMEOUT`, simulating a
-/// wedged ScreenCaptureKit call. The e2e spec asserts the loop survives:
-/// `/health` keeps `frame_status="ok"` and `capture_attempts` keeps advancing
-/// while the probe is stuck.
-#[cfg(debug_assertions)]
-static E2E_VISUAL_HANG_FIRED: AtomicBool = AtomicBool::new(false);
-
-/// Whether the visual-check hang seed is armed and has not fired yet.
-///
-/// Also used to FORCE one visual-check tick past the keyboard-idle gate:
-/// the injection must fire deterministically even when someone is typing on
-/// the e2e host, otherwise the spec passes vacuously without ever exercising
-/// the hang.
-#[cfg(debug_assertions)]
-fn e2e_visual_check_hang_armed() -> bool {
-    !E2E_VISUAL_HANG_FIRED.load(Ordering::SeqCst)
-        && std::env::var("SCREENPIPE_E2E_SEED")
-            .ok()
-            .is_some_and(|seeds| {
-                seeds
-                    .split(',')
-                    .any(|seed| seed.trim() == "visual-check-hang-once")
-            })
-}
-
-#[cfg(debug_assertions)]
-fn e2e_take_visual_check_hang() -> bool {
-    e2e_visual_check_hang_armed() && !E2E_VISUAL_HANG_FIRED.swap(true, Ordering::SeqCst)
-}
-
-/// Visual-change probe bounded by `VISUAL_PROBE_TIMEOUT`. `Ok(None)` means the
-/// probe timed out (SCK unresponsive) — callers skip this tick and keep the
-/// loop alive rather than freezing capture supervision.
-async fn bounded_visual_probe(
-    monitor: &SafeMonitor,
-    excluded_ids: &[u32],
-    monitor_id: u32,
-) -> Result<Option<(image::DynamicImage, Duration)>, anyhow::Error> {
-    #[cfg(debug_assertions)]
-    if e2e_take_visual_check_hang() {
-        warn!("e2e: injecting one hung visual-change probe (visual-check-hang-once)");
-        // Marker file so the e2e spec can prove the injection actually fired
-        // (a spec that never exercises the hang must fail, not pass).
-        if let Ok(dir) = std::env::var("SCREENPIPE_DATA_DIR") {
-            let _ = std::fs::write(
-                std::path::Path::new(&dir).join("e2e-visual-check-hang-fired"),
-                b"1",
-            );
-        }
-        match tokio::time::timeout(VISUAL_PROBE_TIMEOUT, async {
-            tokio::time::sleep(Duration::from_secs(120)).await;
-            capture_monitor_image(monitor, excluded_ids).await
-        })
-        .await
-        {
-            Ok(result) => return result.map(Some),
-            Err(_elapsed) => return Ok(None),
-        }
-    }
-
-    match tokio::time::timeout(
-        VISUAL_PROBE_TIMEOUT,
-        capture_monitor_image(monitor, excluded_ids),
-    )
-    .await
-    {
-        Ok(result) => result.map(Some),
-        Err(_elapsed) => {
-            // Throttled: a wedged SCK daemon would otherwise log every ~3s.
-            static LAST_TIMEOUT_LOG: AtomicU64 = AtomicU64::new(0);
-            let now_secs = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            let prev = LAST_TIMEOUT_LOG.load(Ordering::Relaxed);
-            if now_secs.saturating_sub(prev) >= 60 {
-                LAST_TIMEOUT_LOG.store(now_secs, Ordering::Relaxed);
-                warn!(
-                    "visual-change probe timed out after {:?} on monitor {} (ScreenCaptureKit unresponsive) — skipping check, capture loop stays live",
-                    VISUAL_PROBE_TIMEOUT, monitor_id
-                );
-            }
-            Ok(None)
-        }
-    }
-}
 
 fn warm_visual_wait_duration(elapsed: Duration) -> Duration {
     WARM_VISUAL_CHECK_INTERVAL
@@ -1626,7 +1393,7 @@ pub async fn event_driven_capture_loop(
         let force_visual_check_for_e2e = trigger.is_none()
             && visual_check_enabled
             && frame_comparer.is_some()
-            && e2e_visual_check_hang_armed();
+            && crate::visual_probe::e2e_visual_check_hang_armed();
         #[cfg(not(debug_assertions))]
         let force_visual_check_for_e2e = false;
         if should_run_visual_check(
@@ -4009,43 +3776,6 @@ mod tests {
         // Actually, Instant::now() is the creation time, and 0ms have passed
         // so can_capture should be false (0 < 200)
         assert!(!state.can_capture());
-    }
-
-    /// Storage-tier exclusion rule: a cold cache (no successful refresh ever)
-    /// must NEVER back a stored frame — an empty Vec there means "unknown",
-    /// not "no exclusions". Regression for the fail-open found in review.
-    #[test]
-    fn storage_exclusion_cache_cold_or_stale_fails_closed() {
-        let cold = ExclusionCache {
-            ids: Vec::new(),
-            refreshed_at: None,
-        };
-        assert_eq!(cache_ids_if_fresh(&cold, Duration::from_secs(60)), None);
-
-        // Even non-empty ids without a refresh timestamp are unknown-state.
-        let cold_with_ids = ExclusionCache {
-            ids: vec![1, 2],
-            refreshed_at: None,
-        };
-        assert_eq!(
-            cache_ids_if_fresh(&cold_with_ids, Duration::from_secs(60)),
-            None
-        );
-
-        let fresh = ExclusionCache {
-            ids: vec![7],
-            refreshed_at: Some(Instant::now()),
-        };
-        assert_eq!(
-            cache_ids_if_fresh(&fresh, Duration::from_secs(60)),
-            Some(vec![7])
-        );
-
-        let stale = ExclusionCache {
-            ids: vec![7],
-            refreshed_at: Instant::now().checked_sub(Duration::from_secs(120)),
-        };
-        assert_eq!(cache_ids_if_fresh(&stale, Duration::from_secs(60)), None);
     }
 
     #[test]
