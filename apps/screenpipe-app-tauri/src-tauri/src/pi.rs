@@ -2260,6 +2260,11 @@ pub async fn pi_start_inner(
         ensure_web_search_local_extension(&project_dir)?;
         ensure_mcp_bridge_extension(&project_dir)?;
         ensure_save_artifact_extension(&project_dir)?;
+        // Live Views: pi-acp is pi but can't consume the bundled MCP server, so
+        // it needs the extension (native pi seeds it above). Without this,
+        // pi-acp is the only ACP harness missing Live Views. Local file write,
+        // and its env (SCREENPIPE_LOCAL_API_*) is already set on this path.
+        ensure_live_views_extension(&project_dir)?;
         ensure_connection_gate_extension(&project_dir)?;
 
         // pi-acp can't pass pi's `--approve`, so rpc-mode pi would silently skip
@@ -2267,6 +2272,15 @@ pub async fn pi_start_inner(
         // Grant trust on disk — the on-disk equivalent of --approve.
         if let Err(e) = seed_pi_project_trust(&project_dir) {
             warn!("failed to seed pi project trust for pi-acp: {}", e);
+        }
+
+        // Subagent orchestration (the pi-subagents package) is declared required
+        // for native pi; pi-acp runs the same binary and should get it too, or a
+        // pi-acp-only user who never launched native pi silently lacks subagents.
+        // Non-fatal here (unlike native's fatal `?`): it may run a one-time npm
+        // install, and a transient failure must not block a pi-acp session start.
+        if let Err(e) = ensure_required_pi_extension_package().await {
+            warn!("failed to ensure required pi extension package for pi-acp: {}", e);
         }
     }
 
