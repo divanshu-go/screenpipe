@@ -10,7 +10,6 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { listen } from "@tauri-apps/api/event";
 import {
   Background,
   BackgroundVariant,
@@ -367,9 +366,6 @@ export function LiveViewCanvas({
   );
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const drawSessionRef = useRef<DrawSession | null>(null);
-  const canvasActiveRef = useRef(false);
-  const pointerAnchorRef = useRef<BrainViewCanvasPoint | null>(null);
-  const nativeZoomEndRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestDocumentRef = useRef(document);
   const slotsById = useMemo(
     () => new Map(slots.map((slot) => [slot.id, slot])),
@@ -821,7 +817,6 @@ export function LiveViewCanvas({
 
   const handleSurfacePointerMove = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
-      pointerAnchorRef.current = { x: event.clientX, y: event.clientY };
       const session = drawSessionRef.current;
       if (!session || session.pointerId !== event.pointerId) return;
       event.preventDefault();
@@ -911,65 +906,29 @@ export function LiveViewCanvas({
   }, [applyDocument, selection, setCanvasSelection]);
 
   const zoomCanvas = useCallback(
-    (
-      factor: number,
-      anchor: BrainViewCanvasPoint | null = null,
-      persist = true,
-    ) => {
+    (factor: number) => {
       const current = latestDocumentRef.current;
       const bounds = surfaceRef.current?.getBoundingClientRect();
       const zoom = clampCanvasZoom(current.viewport.zoom * factor);
       if (!bounds || zoom === current.viewport.zoom) return;
-      const anchorX = anchor
-        ? Math.min(bounds.width, Math.max(0, anchor.x - bounds.left))
-        : bounds.width / 2;
-      const anchorY = anchor
-        ? Math.min(bounds.height, Math.max(0, anchor.y - bounds.top))
-        : bounds.height / 2;
-      const worldX = (anchorX - current.viewport.x) / current.viewport.zoom;
-      const worldY = (anchorY - current.viewport.y) / current.viewport.zoom;
+      const centerX = bounds.width / 2;
+      const centerY = bounds.height / 2;
+      const worldX = (centerX - current.viewport.x) / current.viewport.zoom;
+      const worldY = (centerY - current.viewport.y) / current.viewport.zoom;
       applyDocument(
         {
           ...current,
           viewport: {
-            x: anchorX - worldX * zoom,
-            y: anchorY - worldY * zoom,
+            x: centerX - worldX * zoom,
+            y: centerY - worldY * zoom,
             zoom,
           },
         },
-        persist,
+        true,
       );
     },
     [applyDocument],
   );
-
-  useEffect(() => {
-    const unlisten = listen<number>("native-magnify", (event) => {
-      const magnification = event.payload;
-      if (
-        !canvasActiveRef.current ||
-        typeof magnification !== "number" ||
-        !Number.isFinite(magnification) ||
-        magnification === 0
-      ) {
-        return;
-      }
-      zoomCanvas(
-        Math.exp(magnification * 5),
-        pointerAnchorRef.current,
-        false,
-      );
-      if (nativeZoomEndRef.current) clearTimeout(nativeZoomEndRef.current);
-      nativeZoomEndRef.current = setTimeout(() => {
-        applyDocument(latestDocumentRef.current, true);
-        nativeZoomEndRef.current = null;
-      }, 160);
-    });
-    return () => {
-      if (nativeZoomEndRef.current) clearTimeout(nativeZoomEndRef.current);
-      void unlisten.then((dispose) => dispose());
-    };
-  }, [applyDocument, zoomCanvas]);
 
   const fitCanvas = useCallback(() => {
     const current = latestDocumentRef.current;
@@ -1117,17 +1076,6 @@ export function LiveViewCanvas({
         aria-label="Whiteboard canvas. Use the toolbar to select, pan, add notes, connect Blocks, or draw."
         tabIndex={0}
         className="live-view-process-canvas absolute inset-0 outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-inset"
-        onPointerEnter={(event) => {
-          canvasActiveRef.current = true;
-          pointerAnchorRef.current = {
-            x: event.clientX,
-            y: event.clientY,
-          };
-        }}
-        onPointerLeave={() => {
-          canvasActiveRef.current = false;
-          pointerAnchorRef.current = null;
-        }}
         onPointerDownCapture={handleSurfacePointerDown}
         onPointerMoveCapture={handleSurfacePointerMove}
         onPointerUpCapture={finishDrawSession}
@@ -1318,7 +1266,7 @@ export function LiveViewCanvas({
         </div>
       )}
       <div className="pointer-events-none absolute bottom-3 right-3 z-20 border border-border bg-background/95 px-2 py-1 font-mono text-[9px] text-muted-foreground">
-        drag nodes · pan tool or middle-drag · pinch or ctrl/⌘ + wheel to zoom
+        drag nodes · pan tool or middle-drag · ctrl/⌘ + wheel to zoom
       </div>
     </section>
   );
