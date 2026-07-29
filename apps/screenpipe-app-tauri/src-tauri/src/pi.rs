@@ -440,6 +440,92 @@ fn event_tool_call_ids(event: &Value) -> Vec<String> {
     }
 }
 
+/// Apply one parsed Pi RPC event to the command queue's synchronization state.
+/// Keeping this at the stdout boundary lets process-level tests exercise the
+/// same response/agent lifecycle that production uses.
+fn sync_queue_state_from_event(
+    queue_state: &Arc<crate::pi_command_queue::PiQueueState>,
+    event: &Value,
+) {
+    let event_type = event.get("type").and_then(|value| value.as_str());
+
+    if event_type == Some("response") {
+        if let Some(request_id) = event.get("id").and_then(|id| id.as_str()) {
+            let rejected =
+                event.get("success").and_then(|success| success.as_bool()) == Some(false);
+            let error = rejected.then(|| {
+                event
+                    .get("error")
+                    .and_then(|error| error.as_str())
+                    .unwrap_or("Pi rejected the prompt before it started")
+                    .to_string()
+            });
+            queue_state.signal_rpc_response(request_id, error);
+        }
+    }
+
+    match event_type {
+        Some("agent_start") => {
+            queue_state.mark_agent_active();
+            queue_state.clear_steer_in_flight();
+        }
+        Some("agent_end") => {
+            queue_state.mark_agent_idle();
+            queue_state.signal_done_if_idle();
+        }
+        Some("message_start") => {
+            if queue_state.is_steer_in_flight() {
+                queue_state.mark_agent_active();
+                queue_state.clear_steer_in_flight();
+            }
+        }
+        Some("message_end") => {
+            let ids = event_tool_call_ids(event);
+            let role = event
+                .get("message")
+                .and_then(|message| message.get("role"))
+                .and_then(|role| role.as_str());
+            match role {
+                Some("assistant") => {
+                    for id in ids {
+                        queue_state.mark_tool_active(id);
+                    }
+                }
+                Some("toolResult") => {
+                    for id in ids {
+                        queue_state.mark_tool_idle(&id);
+                    }
+                    queue_state.signal_done_if_idle();
+                }
+                _ => {}
+            }
+        }
+        Some("message_update") | Some("tool_execution_start") => {
+            for id in event_tool_call_ids(event) {
+                queue_state.mark_tool_active(id);
+            }
+        }
+        Some("tool_execution_end") => {
+            for id in event_tool_call_ids(event) {
+                queue_state.mark_tool_idle(&id);
+            }
+            queue_state.signal_done_if_idle();
+        }
+        Some("response") => {
+            if !queue_state.has_active_turn_work() {
+                // Non-prompt commands do not emit agent_start/agent_end, so a
+                // successful response remains their completion fallback.
+                let queue_state = queue_state.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    queue_state.signal_done();
+                });
+            }
+        }
+        _ => {}
+    }
+}
+
 #[allow(dead_code)]
 pub struct PiManager {
     child: Option<Child>,
@@ -2276,96 +2362,8 @@ pub async fn pi_start_inner(
             // ~500ms after command ACK regardless of whether the agent is still
             // streaming. This caused "Agent is already processing" when a second
             // prompt was sent while the first was still running.
-            if let Some(ref qs) = queue_state_for_reader {
-                match event_type.as_deref() {
-                    Some("agent_start") => {
-                        // A prompt has begun streaming. Suppress the
-                        // response→done fallback below so the prompt's
-                        // mid-stream `response` ACK doesn't unblock the
-                        // queue early.
-                        qs.mark_agent_active();
-                        // If a steer was in flight, it has now started its
-                        // agent turn. The drain loop can rely on agent_active
-                        // from here on.
-                        qs.clear_steer_in_flight();
-                    }
-                    Some("agent_end") => {
-                        qs.mark_agent_idle();
-                        qs.signal_done_if_idle();
-                    }
-                    Some("message_start") => {
-                        // Native steer may not emit agent_start — it goes
-                        // straight from message_start to text deltas. If a
-                        // steer is in flight, treat message_start as the
-                        // start of the steered turn so the drain loop
-                        // stays blocked via agent_active until agent_end.
-                        if qs.is_steer_in_flight() {
-                            qs.mark_agent_active();
-                            qs.clear_steer_in_flight();
-                        }
-                    }
-                    Some("message_end") => {
-                        if let Some(event) = parsed.as_ref() {
-                            let ids = event_tool_call_ids(event);
-                            let role = event
-                                .get("message")
-                                .and_then(|message| message.get("role"))
-                                .and_then(|role| role.as_str());
-                            match role {
-                                Some("assistant") => {
-                                    for id in ids {
-                                        qs.mark_tool_active(id);
-                                    }
-                                }
-                                Some("toolResult") => {
-                                    for id in ids {
-                                        qs.mark_tool_idle(&id);
-                                    }
-                                    qs.signal_done_if_idle();
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    Some("message_update") => {
-                        if let Some(event) = parsed.as_ref() {
-                            for id in event_tool_call_ids(event) {
-                                qs.mark_tool_active(id);
-                            }
-                        }
-                    }
-                    Some("tool_execution_start") => {
-                        if let Some(event) = parsed.as_ref() {
-                            for id in event_tool_call_ids(event) {
-                                qs.mark_tool_active(id);
-                            }
-                        }
-                    }
-                    Some("tool_execution_end") => {
-                        if let Some(event) = parsed.as_ref() {
-                            for id in event_tool_call_ids(event) {
-                                qs.mark_tool_idle(&id);
-                            }
-                        }
-                        qs.signal_done_if_idle();
-                    }
-                    Some("response") => {
-                        // Only meaningful for new_session/abort — those don't
-                        // fire agent_start/agent_end. Suppress while a prompt
-                        // or tool is mid-turn so the queue never advances on
-                        // an ACK while the assistant is still working.
-                        if !qs.has_active_turn_work() {
-                            // Note: this runs on a std::thread (not tokio),
-                            // so use std::thread::spawn + std::thread::sleep.
-                            let qs = qs.clone();
-                            std::thread::spawn(move || {
-                                std::thread::sleep(std::time::Duration::from_millis(500));
-                                qs.signal_done();
-                            });
-                        }
-                    }
-                    _ => {}
-                }
+            if let (Some(qs), Some(event)) = (queue_state_for_reader.as_ref(), parsed.as_ref()) {
+                sync_queue_state_from_event(qs, event);
             }
 
             match parsed {
@@ -2598,6 +2596,31 @@ fn build_prompt_command(
     Ok(cmd)
 }
 
+async fn await_prompt_start(
+    state: &PiState,
+    session_id: &str,
+    rx: oneshot::Receiver<Result<(), String>>,
+) -> Result<(), String> {
+    let result = rx
+        .await
+        .map_err(|_| "Pi command queue dropped".to_string())?;
+
+    if let Err(error) = &result {
+        if error == crate::pi_command_queue::PROMPT_START_TIMEOUT_ERROR {
+            warn!(
+                "Pi prompt produced no stdout; stopping stuck session {}",
+                session_id
+            );
+            let mut pool = state.0.lock().await;
+            if let Some(manager) = pool.sessions.get_mut(session_id) {
+                manager.stop();
+            }
+        }
+    }
+
+    result
+}
+
 async fn open_secret_store_for_connection_context() -> Option<screenpipe_secrets::SecretStore> {
     let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
     let db_path = data_dir.join("db.sqlite");
@@ -2700,8 +2723,7 @@ pub async fn pi_prompt(
             false,
         )
         .await?;
-    rx.await
-        .map_err(|_| "Pi command queue dropped".to_string())??;
+    await_prompt_start(state.inner(), &sid, rx).await?;
     Ok(queue_id)
 }
 
@@ -2734,7 +2756,7 @@ pub async fn pi_queue_prompt(
     let preview = display_preview.unwrap_or_else(|| message.clone());
     let message = attach_foreground_connections_context(&app, &sid, message).await;
     let cmd = build_prompt_command(message, images)?;
-    let (queue_id, _rx) = queue
+    let (queue_id, rx) = queue
         .send_prompt(
             cmd,
             crate::pi_command_queue::WaitMode::Prompt,
@@ -2742,6 +2764,16 @@ pub async fn pi_queue_prompt(
             true,
         )
         .await?;
+    let state_for_watchdog = state.inner().clone();
+    let sid_for_watchdog = sid.clone();
+    tokio::spawn(async move {
+        if let Err(error) = await_prompt_start(&state_for_watchdog, &sid_for_watchdog, rx).await {
+            warn!(
+                "queued Pi prompt failed before it started for session {}: {}",
+                sid_for_watchdog, error
+            );
+        }
+    });
     Ok(queue_id)
 }
 
@@ -4193,6 +4225,170 @@ mod tests {
         assert!(super::pi_session_has_in_flight_work(None, &pending));
     }
 
+    /// Process-level regression for the customer-visible lifecycle: one child
+    /// accepts a prompt but never emits RPC stdout, its queue closes after the
+    /// start watchdog, then a fresh child acknowledges a retry and runs longer
+    /// than that watchdog before completing normally.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn pi_prompt_watchdog_recovers_with_fresh_process_e2e() {
+        use std::process::{ChildStdout, Command as StdCommand};
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        fn spawn_reader(
+            stdout: ChildStdout,
+            state: Arc<crate::pi_command_queue::PiQueueState>,
+        ) -> std::thread::JoinHandle<()> {
+            std::thread::spawn(move || {
+                let mut reader = BufReader::new(stdout);
+                while let Some(line) = super::read_lines_lossy(&mut reader) {
+                    if let Ok(event) = serde_json::from_str::<Value>(&line) {
+                        super::sync_queue_state_from_event(&state, &event);
+                    }
+                }
+                state.signal_terminated();
+            })
+        }
+
+        let start_timeout = Duration::from_secs(1);
+        let mut silent_child = StdCommand::new("sh")
+            .args(["-c", "while IFS= read -r _line; do :; done"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn silent fake Pi process");
+        let silent_stdin = Arc::new(Mutex::new(
+            silent_child.stdin.take().expect("silent child stdin"),
+        ));
+        let silent_state = crate::pi_command_queue::PiQueueState::new();
+        let silent_reader = spawn_reader(
+            silent_child.stdout.take().expect("silent child stdout"),
+            silent_state.clone(),
+        );
+        let (silent_queue, silent_join) =
+            crate::pi_command_queue::spawn_queue_with_prompt_start_timeout(
+                silent_stdin,
+                silent_state.clone(),
+                0,
+                start_timeout,
+            );
+
+        let (_silent_id, silent_reply) = silent_queue
+            .send_prompt(
+                json!({ "type": "prompt", "message": "silent" }),
+                crate::pi_command_queue::WaitMode::Prompt,
+                "silent".to_string(),
+                false,
+            )
+            .await
+            .expect("enqueue silent prompt");
+        let (_queued_id, queued_reply) = silent_queue
+            .send_prompt(
+                json!({ "type": "prompt", "message": "must wait for restart" }),
+                crate::pi_command_queue::WaitMode::Prompt,
+                "must wait for restart".to_string(),
+                true,
+            )
+            .await
+            .expect("enqueue follow-up behind silent prompt");
+
+        let silent_result = tokio::time::timeout(Duration::from_secs(3), silent_reply)
+            .await
+            .expect("silent prompt must hit the start watchdog")
+            .expect("silent reply channel stayed open");
+        assert_eq!(
+            silent_result,
+            Err(crate::pi_command_queue::PROMPT_START_TIMEOUT_ERROR.to_string())
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), queued_reply)
+                .await
+                .expect("old queued follow-up must be released")
+                .is_err(),
+            "the dead queue must not drain a follow-up into the silent process"
+        );
+        tokio::time::timeout(Duration::from_secs(2), silent_join)
+            .await
+            .expect("silent queue drain loop must close after timeout")
+            .expect("silent queue task must not panic");
+        drop(silent_queue);
+        silent_child.wait().expect("reap silent fake Pi process");
+        silent_reader.join().expect("join silent stdout reader");
+
+        let healthy_script = r#"
+IFS= read -r _line
+printf '%s\n' '{"type":"response","id":"req_1","success":true}'
+printf '%s\n' '{"type":"agent_start"}'
+sleep 2
+printf '%s\n' '{"type":"agent_end"}'
+"#;
+        let mut healthy_child = StdCommand::new("sh")
+            .args(["-c", healthy_script])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn healthy fake Pi process");
+        let healthy_stdin = Arc::new(Mutex::new(
+            healthy_child.stdin.take().expect("healthy child stdin"),
+        ));
+        let healthy_state = crate::pi_command_queue::PiQueueState::new();
+        let healthy_reader = spawn_reader(
+            healthy_child.stdout.take().expect("healthy child stdout"),
+            healthy_state.clone(),
+        );
+        let (healthy_queue, healthy_join) =
+            crate::pi_command_queue::spawn_queue_with_prompt_start_timeout(
+                healthy_stdin,
+                healthy_state.clone(),
+                0,
+                start_timeout,
+            );
+
+        let (_retry_id, retry_reply) = healthy_queue
+            .send_prompt(
+                json!({ "type": "prompt", "message": "retry" }),
+                crate::pi_command_queue::WaitMode::Prompt,
+                "retry".to_string(),
+                false,
+            )
+            .await
+            .expect("enqueue retry on fresh process");
+        let retry_result = tokio::time::timeout(Duration::from_secs(2), retry_reply)
+            .await
+            .expect("fresh process must acknowledge retry")
+            .expect("retry reply channel stayed open");
+        assert_eq!(retry_result, Ok(()));
+
+        tokio::time::sleep(Duration::from_millis(1_200)).await;
+        assert!(
+            healthy_state.is_agent_active(),
+            "an acknowledged turn remains active beyond the start watchdog"
+        );
+        assert!(
+            !healthy_join.is_finished(),
+            "the start watchdog must not cap total agent duration"
+        );
+
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while healthy_state.is_agent_active() {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .expect("healthy process must emit agent_end");
+        healthy_state.signal_terminated();
+        drop(healthy_queue);
+        tokio::time::timeout(Duration::from_secs(2), healthy_join)
+            .await
+            .expect("healthy queue task must close")
+            .expect("healthy queue task must not panic");
+        healthy_child.wait().expect("reap healthy fake Pi process");
+        healthy_reader.join().expect("join healthy stdout reader");
+    }
+
     fn write_package_json(package_dir: &std::path::Path, name: &str, version: &str) {
         std::fs::create_dir_all(package_dir).expect("create package dir");
         std::fs::write(
@@ -4361,7 +4557,13 @@ error: InstallFailed extracting tarball"#;
             Command::new(&pi_path)
         };
         cmd.args([
-            "--mode", "rpc", "--approve", "--provider", provider, "--model", model,
+            "--mode",
+            "rpc",
+            "--approve",
+            "--provider",
+            provider,
+            "--model",
+            model,
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
