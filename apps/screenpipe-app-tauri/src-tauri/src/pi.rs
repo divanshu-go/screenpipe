@@ -2274,14 +2274,18 @@ pub async fn pi_start_inner(
             warn!("failed to seed pi project trust for pi-acp: {}", e);
         }
 
-        // Subagent orchestration (the pi-subagents package) is declared required
-        // for native pi; pi-acp runs the same binary and should get it too, or a
-        // pi-acp-only user who never launched native pi silently lacks subagents.
-        // Non-fatal here (unlike native's fatal `?`): it may run a one-time npm
-        // install, and a transient failure must not block a pi-acp session start.
-        if let Err(e) = ensure_required_pi_extension_package().await {
-            warn!("failed to ensure required pi extension package for pi-acp: {}", e);
-        }
+        // pi-acp uses the SAME isolated PI_CODING_AGENT_DIR as native pi, so a
+        // fresh Pi-over-ACP profile must get Screenpipe's provider setup and the
+        // required pi-subagents install exactly like native — otherwise it starts
+        // without them, and an existing raw-pi install would mask the regression.
+        // These are ACP-safe: ensure_pi_config only merges into models.json /
+        // auth.json (additive, never clobbering what the ACP session config
+        // supplies) and registers the subagents setting; the package call then
+        // repairs the physical install. Kept fatal (`?`) to match native pi's
+        // guarantee — a fresh pi-acp user gets the baseline or fails loudly,
+        // rather than silently degraded.
+        ensure_pi_config(user_token.as_deref(), provider_config.as_ref()).await?;
+        ensure_required_pi_extension_package().await?;
     }
 
     // Determine which Pi provider and model to use
@@ -6602,5 +6606,59 @@ error: InstallFailed extracting tarball"#;
             assert!(m["cost"]["input"].is_number(), "model missing cost.input");
             assert!(m["cost"]["output"].is_number(), "model missing cost.output");
         }
+    }
+
+    /// Fresh-profile parity (review item F): from an EMPTY profile, the pi-acp
+    /// baseline seeds Screenpipe skills, the Live Views extension, and registers
+    /// the required pi-subagents package — the exact pieces the pi-acp path now
+    /// calls ensure_screenpipe_skill / ensure_live_views_extension /
+    /// ensure_pi_config (which registers the setting) + ensure_required_pi_-
+    /// extension_package for. So an existing raw-Pi install can't be what makes
+    /// these appear. The physical pi-subagents npm install and a real pinned
+    /// pi-acp@0.0.32 adapter launch (network + ACP handshake + select/confirm
+    /// UI) are proven by the separate clean-profile E2E, not by this unit test.
+    #[test]
+    fn fresh_profile_seeds_screenpipe_baseline() {
+        let project = tempfile::tempdir().expect("project dir");
+        let project_dir = project.path().to_str().expect("utf8 path");
+
+        // Screenpipe skills materialize under the fresh project's .pi/skills.
+        super::ensure_screenpipe_skill(project_dir).expect("seed skills");
+        let skills_dir = project.path().join(".pi").join("skills");
+        assert!(skills_dir.is_dir(), "skills dir must exist on a fresh profile");
+        assert!(
+            std::fs::read_dir(&skills_dir)
+                .expect("read skills")
+                .filter_map(Result::ok)
+                .any(|e| e.file_name().to_string_lossy().starts_with("screenpipe")),
+            "at least one screenpipe skill must be seeded on a fresh profile"
+        );
+
+        // The Live Views extension (the pi-acp parity fix) materializes too.
+        super::ensure_live_views_extension(project_dir).expect("seed live-views");
+        assert!(
+            project
+                .path()
+                .join(".pi")
+                .join("extensions")
+                .join("live-views.ts")
+                .is_file(),
+            "live-views extension must be seeded for pi-acp on a fresh profile"
+        );
+
+        // The required pi-subagents package is registered from empty settings —
+        // this is what ensure_pi_config → ensure_required_pi_extension_setting
+        // does before the physical install runs.
+        let mut settings = json!({});
+        let changed = super::normalize_required_pi_extension_setting(&mut settings)
+            .expect("normalize setting");
+        assert!(changed, "empty settings must gain the required package");
+        let packages = settings["packages"].as_array().expect("packages array");
+        assert!(
+            packages
+                .iter()
+                .any(|p| p.as_str() == Some(super::REQUIRED_PI_EXTENSION_PACKAGE)),
+            "pi-subagents must be registered as a required package"
+        );
     }
 }
