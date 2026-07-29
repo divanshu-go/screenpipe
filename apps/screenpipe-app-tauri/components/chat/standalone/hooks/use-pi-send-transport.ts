@@ -14,6 +14,10 @@ import { createPiMessageQueueTransport } from "@/components/chat/standalone/hook
 import { usePiLiveSendControls } from "@/components/chat/standalone/hooks/use-pi-live-send";
 import { usePiSteeringTransport } from "@/components/chat/standalone/hooks/use-pi-steering-transport";
 import {
+  isPiPromptStartTimeout,
+  piPromptStartTimeoutMessage,
+} from "@/components/chat/standalone/hooks/pi-event-handlers";
+import {
   externalizePreparedMessageIfNeeded,
   foldAttachedDocsIntoMessage,
   piImageFromDataUrl,
@@ -589,7 +593,10 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
         const currentPreset = getActivePreset();
         const providerError = buildProviderErrorMessage(rawError, currentPreset);
 
-        if (rawError.includes("already processing")) {
+        if (isPiPromptStartTimeout(rawError)) {
+          errorMsg = piPromptStartTimeoutMessage();
+          retryPrompt = userMessage;
+        } else if (rawError.includes("already processing")) {
           errorMsg = "The AI was mid-response when your message arrived.";
           retryPrompt = userMessage;
         } else if (rawError.includes("Broken pipe") || rawError.includes("not running") || rawError.includes("has died") || rawError.includes("Pi not initialized")) {
@@ -614,6 +621,27 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
               : m
           )
         );
+        if (sidNow) {
+          const storeState = useChatStore.getState();
+          storeState.actions.patchMessage(sidNow, assistantMessageId, (message: any) => ({
+            ...message,
+            content: errorMsg,
+            ...(retryPrompt ? { retryPrompt } : {}),
+          }));
+          storeState.actions.setStreaming(sidNow, {
+            streamingMessageId: null,
+            streamingText: "",
+            contentBlocks: [],
+            isLoading: false,
+            isStreaming: false,
+          });
+        }
+        posthog.capture("chat_response_error", {
+          provider: getActivePreset()?.provider,
+          model: getActivePreset()?.model,
+          error_type: isPiPromptStartTimeout(rawError) ? "start_timeout" : "prompt_dispatch",
+          ...chatSendTelemetryContext(sendOptions, messageIndex),
+        });
         forceQueueModeRef.current = false;
         setIsLoading(false);
         setIsStreaming(false);
@@ -628,8 +656,24 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
           m.id === assistantMessageId
             ? { ...m, content: providerError || `Error: ${rawError}` }
             : m
-        )
+          )
       );
+      if (sidNow) {
+        const content = providerError || `Error: ${rawError}`;
+        const storeState = useChatStore.getState();
+        storeState.actions.patchMessage(sidNow, assistantMessageId, (message: any) => ({
+          ...message,
+          content,
+          retryPrompt: userMessage,
+        }));
+        storeState.actions.setStreaming(sidNow, {
+          streamingMessageId: null,
+          streamingText: "",
+          contentBlocks: [],
+          isLoading: false,
+          isStreaming: false,
+        });
+      }
       forceQueueModeRef.current = false;
       setIsLoading(false);
       setIsStreaming(false);
