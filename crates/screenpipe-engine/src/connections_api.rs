@@ -649,7 +649,8 @@ async fn list_instances(
         .is_some();
 
     if is_oauth {
-        let instances = oauth_store::list_oauth_instances(state.secret_store.as_deref(), &id).await;
+        let instances =
+            oauth_store::list_connected_oauth_instances(state.secret_store.as_deref(), &id).await;
         let mut items = Vec::new();
         for inst in instances {
             let token =
