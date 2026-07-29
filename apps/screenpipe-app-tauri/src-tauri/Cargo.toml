@@ -305,6 +305,7 @@ jemalloc = ["tikv-jemallocator"]
 tempfile = "3"
 wiremock = "0.6"
 serial_test = "3"
+tower = { version = "0.4", features = ["util"] }
 # MockRuntime for store.rs recovery tests that must exercise the real
 # tauri-plugin-store registry (state + resources table).
 tauri = { version = "=2.11.2", features = ["test"] }
