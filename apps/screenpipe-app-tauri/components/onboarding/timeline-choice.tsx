@@ -190,7 +190,9 @@ export default function TimelineChoice({ handleNextSlide }: TimelineChoiceProps)
   const mountTimeRef = useRef(Date.now());
   const hasAdvanced = useRef(false);
   const inFlight = useRef(false);
-  const [saving, setSaving] = useState(false);
+  // Which choice is being saved, so only the clicked button spins. A plain
+  // boolean would light up both, since each button renders the same flag.
+  const [pending, setPending] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const lowTier = isLowTier(settings.deviceTier);
@@ -203,7 +205,7 @@ export default function TimelineChoice({ handleNextSlide }: TimelineChoiceProps)
     // from hasAdvanced so a failed attempt stays retryable.
     if (hasAdvanced.current || inFlight.current) return;
     inFlight.current = true;
-    setSaving(true);
+    setPending(enabled);
     setError(null);
     posthog.capture("onboarding_timeline_choice", {
       timeline_enabled: enabled,
@@ -230,7 +232,7 @@ export default function TimelineChoice({ handleNextSlide }: TimelineChoiceProps)
       posthog.capture("onboarding_timeline_choice_failed", { stage: "persist" });
       setError("couldn't save that choice. check disk space and try again.");
       inFlight.current = false;
-      setSaving(false);
+      setPending(null);
       return;
     }
 
@@ -238,7 +240,7 @@ export default function TimelineChoice({ handleNextSlide }: TimelineChoiceProps)
       posthog.capture("onboarding_timeline_choice_failed", { stage: "restart" });
       setError("saved, but screenpipe didn't restart. try again to apply it.");
       inFlight.current = false;
-      setSaving(false);
+      setPending(null);
       return;
     }
 
@@ -353,7 +355,7 @@ export default function TimelineChoice({ handleNextSlide }: TimelineChoiceProps)
       >
         <button
           onClick={() => choose(true)}
-          disabled={saving}
+          disabled={pending !== null}
           className={`flex-1 flex flex-col items-center gap-1 border py-3 font-mono text-xs uppercase tracking-widest transition-colors duration-150 disabled:opacity-60 ${
             recommendEnabled
               ? "border-foreground bg-foreground text-background hover:bg-background hover:text-foreground"
@@ -361,7 +363,7 @@ export default function TimelineChoice({ handleNextSlide }: TimelineChoiceProps)
           }`}
         >
           <span className="flex items-center gap-1.5">
-            {saving && <Loader className="w-3 h-3 animate-spin" />}
+            {pending === true && <Loader className="w-3 h-3 animate-spin" />}
             timeline on
           </span>
           {recommendEnabled
@@ -370,7 +372,7 @@ export default function TimelineChoice({ handleNextSlide }: TimelineChoiceProps)
         </button>
         <button
           onClick={() => choose(false)}
-          disabled={saving}
+          disabled={pending !== null}
           className={`flex-1 flex flex-col items-center gap-1 border py-3 font-mono text-xs uppercase tracking-widest transition-colors duration-150 disabled:opacity-60 ${
             !recommendEnabled
               ? "border-foreground bg-foreground text-background hover:bg-background hover:text-foreground"
@@ -378,7 +380,7 @@ export default function TimelineChoice({ handleNextSlide }: TimelineChoiceProps)
           }`}
         >
           <span className="flex items-center gap-1.5">
-            {saving && <Loader className="w-3 h-3 animate-spin" />}
+            {pending === false && <Loader className="w-3 h-3 animate-spin" />}
             keep it off
           </span>
           {!recommendEnabled

@@ -194,6 +194,37 @@ describe("TimelineChoice", () => {
     await waitFor(() => expect(handleNextSlide).toHaveBeenCalledTimes(1));
   });
 
+  // Regression: a single `saving` boolean lit the spinner in both buttons, so
+  // the panel looked like it was applying both choices at once.
+  it("spins only the button that was clicked", async () => {
+    mocks.settings.deviceTier = "high";
+    let releaseWrite!: () => void;
+    mocks.updateSettings.mockImplementation(
+      () => new Promise<void>((resolve) => (releaseWrite = resolve)),
+    );
+    render(<TimelineChoice handleNextSlide={vi.fn()} />);
+
+    const onButton = screen.getByRole("button", { name: /timeline on/i });
+    const offButton = screen.getByRole("button", { name: /keep it off/i });
+
+    await act(async () => {
+      fireEvent.click(offButton);
+    });
+
+    // write still pending: exactly one spinner, and it is inside "keep it off"
+    const spinners = document.querySelectorAll(".animate-spin");
+    expect(spinners).toHaveLength(1);
+    expect(offButton).toContainElement(spinners[0] as HTMLElement);
+    expect(onButton).not.toContainElement(spinners[0] as HTMLElement);
+    // both stay disabled while a choice is in flight
+    expect(onButton).toBeDisabled();
+    expect(offButton).toBeDisabled();
+
+    await act(async () => {
+      releaseWrite();
+    });
+  });
+
   it("does not restart screenpipe during first-run onboarding", async () => {
     mocks.settings.deviceTier = "high";
     const handleNextSlide = vi.fn();
