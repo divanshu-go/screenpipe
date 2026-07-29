@@ -582,7 +582,7 @@ async fn get_connection(
     response
 }
 
-/// PUT /connections/:id — save credentials.
+/// PUT/POST /connections/:id — save credentials.
 async fn connect_integration(
     State(state): State<ConnectionsState>,
     Path(id): Path<String>,
@@ -3397,7 +3397,12 @@ where
         .route(
             "/:id",
             get(get_connection)
+                // Keep POST as an alias for agent/tool callers. The UI and
+                // older clients use PUT, but the public connection contract
+                // describes configuration as POST /connections/:id. Both
+                // paths share the same credential-safe handler.
                 .put(connect_integration)
+                .post(connect_integration)
                 .delete(disconnect_integration),
         )
         .route("/:id/test", post(test_connection))
