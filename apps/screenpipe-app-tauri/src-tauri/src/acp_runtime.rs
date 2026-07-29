@@ -2901,6 +2901,59 @@ async fn run_protocol(
         .await
 }
 
+// Per-line caps for the ACP agent subprocess. `next_line()` buffers until a
+// newline, so a wedged or hostile adapter that streams bytes without one would
+// grow memory without bound. These bound one line's buffer; overflow past the
+// cap is discarded (the line is truncated) rather than accumulated.
+const ACP_STDOUT_LINE_CAP: usize = 16 * 1024 * 1024; // protocol frames can carry file/image content
+const ACP_STDERR_LINE_CAP: usize = 256 * 1024; // log lines; truncating a giant one is harmless
+
+/// Read one newline-delimited line, buffering at most `cap` bytes. If a line
+/// exceeds `cap` before a newline arrives, the excess is read and discarded
+/// (not stored) so a peer that never emits `\n` cannot exhaust memory. Returns
+/// `Ok(None)` only at a clean EOF with nothing buffered; otherwise the (possibly
+/// truncated) line, with a flag indicating truncation occurred.
+async fn read_capped_line<R: tokio::io::AsyncBufRead + Unpin>(
+    reader: &mut R,
+    cap: usize,
+) -> std::io::Result<Option<(String, bool)>> {
+    let mut buf: Vec<u8> = Vec::new();
+    let mut truncated = false;
+    let mut saw_any = false;
+    loop {
+        let available = reader.fill_buf().await?;
+        if available.is_empty() {
+            if !saw_any {
+                return Ok(None);
+            }
+            return Ok(Some((String::from_utf8_lossy(&buf).into_owned(), truncated)));
+        }
+        saw_any = true;
+        match available.iter().position(|&b| b == b'\n') {
+            Some(pos) => {
+                let room = cap.saturating_sub(buf.len());
+                let take = room.min(pos);
+                buf.extend_from_slice(&available[..take]);
+                if take < pos {
+                    truncated = true;
+                }
+                reader.consume(pos + 1);
+                return Ok(Some((String::from_utf8_lossy(&buf).into_owned(), truncated)));
+            }
+            None => {
+                let len = available.len();
+                let room = cap.saturating_sub(buf.len());
+                let take = room.min(len);
+                buf.extend_from_slice(&available[..take]);
+                if take < len {
+                    truncated = true;
+                }
+                reader.consume(len);
+            }
+        }
+    }
+}
+
 pub async fn run_from_env() -> Result<(), String> {
     #[cfg(windows)]
     let _runtime_job = std::mem::ManuallyDrop::new(
@@ -2986,9 +3039,11 @@ pub async fn run_from_env() -> Result<(), String> {
     let agent_id_for_stderr = config.agent_id.clone();
     let stderr_output = output.clone();
     tokio::spawn(async move {
-        let mut lines = tokio::io::BufReader::new(stderr).lines();
+        let mut reader = tokio::io::BufReader::new(stderr);
         let mut announced_download = false;
-        while let Ok(Some(line)) = lines.next_line().await {
+        while let Ok(Some((line, _truncated))) =
+            read_capped_line(&mut reader, ACP_STDERR_LINE_CAP).await
+        {
             // bun prints these to stderr while fetching a package on first run;
             // announce it (once) so the UI can explain the wait.
             if !announced_download
@@ -3014,17 +3069,27 @@ pub async fn run_from_env() -> Result<(), String> {
     let (stdout_eof_tx, mut stdout_eof_rx) = oneshot::channel::<()>();
     let incoming = futures::stream::unfold(
         (
-            tokio::io::BufReader::new(stdout).lines(),
+            tokio::io::BufReader::new(stdout),
             Some(stdout_eof_tx),
         ),
-        |(mut lines, mut eof_tx)| async move {
+        |(mut reader, mut eof_tx)| async move {
             loop {
-                match lines.next_line().await {
-                    Ok(Some(line)) => {
+                match read_capped_line(&mut reader, ACP_STDOUT_LINE_CAP).await {
+                    Ok(Some((line, truncated))) => {
+                        // A line over the cap can't be a well-formed frame we
+                        // want to buffer; it was truncated, so drop it loudly
+                        // instead of feeding a mangled body to the parser.
+                        if truncated {
+                            eprintln!(
+                                "[acp-runtime] dropped oversized agent stdout line (> {} bytes)",
+                                ACP_STDOUT_LINE_CAP
+                            );
+                            continue;
+                        }
                         if serde_json::from_str::<agent_client_protocol::RawJsonRpcMessage>(&line)
                             .is_ok()
                         {
-                            return Some((Ok(line), (lines, eof_tx)));
+                            return Some((Ok(line), (reader, eof_tx)));
                         }
                         eprintln!(
                             "[acp-runtime] ignored non-JSON agent stdout: {}",
@@ -3037,7 +3102,7 @@ pub async fn run_from_env() -> Result<(), String> {
                         }
                         return None;
                     }
-                    Err(error) => return Some((Err(error), (lines, eof_tx))),
+                    Err(error) => return Some((Err(error), (reader, eof_tx))),
                 }
             }
         },
@@ -3254,6 +3319,45 @@ mod tests {
                 .expect_err("escape must fail");
             assert!(error.contains("outside workspace"));
         }
+    }
+
+    #[tokio::test]
+    async fn read_capped_line_reads_normal_lines() {
+        let data = b"first\nsecond\n";
+        let mut reader = tokio::io::BufReader::new(&data[..]);
+        let (a, ta) = read_capped_line(&mut reader, 1024).await.unwrap().unwrap();
+        assert_eq!(a, "first");
+        assert!(!ta);
+        let (b, tb) = read_capped_line(&mut reader, 1024).await.unwrap().unwrap();
+        assert_eq!(b, "second");
+        assert!(!tb);
+        assert!(read_capped_line(&mut reader, 1024).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn read_capped_line_returns_trailing_line_without_newline() {
+        let data = b"no-newline-eof";
+        let mut reader = tokio::io::BufReader::new(&data[..]);
+        let (line, truncated) = read_capped_line(&mut reader, 1024).await.unwrap().unwrap();
+        assert_eq!(line, "no-newline-eof");
+        assert!(!truncated);
+        assert!(read_capped_line(&mut reader, 1024).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn read_capped_line_bounds_and_truncates_oversized_line() {
+        // A 10KB line with a 16-byte cap: the buffer must stay at the cap, the
+        // line is flagged truncated, and the reader still advances to the next
+        // line (overflow past the cap is discarded, not accumulated).
+        let mut data = vec![b'x'; 10_000];
+        data.push(b'\n');
+        data.extend_from_slice(b"next\n");
+        let mut reader = tokio::io::BufReader::new(&data[..]);
+        let (line, truncated) = read_capped_line(&mut reader, 16).await.unwrap().unwrap();
+        assert_eq!(line.len(), 16);
+        assert!(truncated);
+        let (next, _) = read_capped_line(&mut reader, 16).await.unwrap().unwrap();
+        assert_eq!(next, "next");
     }
 
     #[test]
