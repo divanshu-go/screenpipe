@@ -691,16 +691,15 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     ) {
       aiTitleAttempted.add(convId);
 
-      // ACP presets can't generate a title (no model/cloud creds, and spawning
-      // a second ACP harness could reopen interactive auth), so route ACP chats
-      // through a non-acp preset (the default first) — they still get a smart
-      // title instead of the truncated first message.
-      const titlePreset =
-        currentPreset?.provider === "acp"
-          ? (settings?.aiPresets?.find((p: AIPreset) => p.provider !== "acp" && p.defaultPreset) ??
-             settings?.aiPresets?.find((p: AIPreset) => p.provider !== "acp") ??
-             null)
-          : currentPreset;
+      // Never send an ACP chat's message to a different provider for titling.
+      // The user picked that agent's own provider deliberately (a privacy /
+      // account boundary), so shipping the first prompt to a non-ACP default
+      // (e.g. Screenpipe Cloud) to make a "smart" title would silently leak it.
+      // Keep currentPreset — titleCreatedByAI is a no-op for ACP presets — so
+      // an ACP chat keeps its local fallback title (deriveFallbackConversation-
+      // Title). This matches how other ACP clients (e.g. Zed) title threads
+      // locally; the user can still rename manually.
+      const titlePreset = currentPreset;
 
       // Generate title in background (non-blocking)
       // Pass the full raw user message — the AI can parse wrapper tags
