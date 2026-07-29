@@ -137,15 +137,20 @@ export default function OnboardingPage() {
     policy: managedPolicy,
     isSettingLocked,
   } = useManagedPolicy();
-  // Nothing to choose when policy manages disableTimeline — drop the slide
-  // from the sequence (also keeps the progress bar count honest).
+  // The timeline slide writes disableTimeline AND disableScreenshots, so a
+  // policy owning either one already decides the outcome — showing the choice
+  // would let it contradict what the user picked. Drop the slide from the
+  // sequence in that case (which also keeps the progress bar count honest).
+  const timelineChoiceLocked =
+    isSettingLocked("disableTimeline") || isSettingLocked("disableScreenshots");
   const visibleOrder = useMemo(
-    () =>
-      SLIDE_ORDER.filter(
-        (s) => s !== "timeline" || !isSettingLocked("disableTimeline")
-      ),
-    [isSettingLocked]
+    () => SLIDE_ORDER.filter((s) => s !== "timeline" || !timelineChoiceLocked),
+    [timelineChoiceLocked]
   );
+  // Read by the mount-only restore effect below, which must not re-run when the
+  // policy resolves. Assigned during render, per the ref-mirror rule in CLAUDE.md.
+  const lockedRef = React.useRef(timelineChoiceLocked);
+  lockedRef.current = timelineChoiceLocked;
 
   // Restore saved step on mount
   useEffect(() => {
@@ -179,7 +184,11 @@ export default function OnboardingPage() {
         };
         const mapped = stepMap[step];
         if (mapped) {
-          setCurrentSlide(mapped);
+          // A step saved before policy took ownership must not resume onto a
+          // slide the policy now decides — skip to the next visible one.
+          setCurrentSlide(
+            mapped === "timeline" && lockedRef.current ? "engine" : mapped
+          );
         }
       }
     };

@@ -6,9 +6,11 @@
 
 import React, { useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { Camera, Check, Cpu, HardDrive } from "lucide-react";
+import { Camera, Check, Cpu, HardDrive, Loader } from "lucide-react";
 import posthog from "posthog-js";
 import { useSettings } from "@/lib/hooks/use-settings";
+import { commands } from "@/lib/utils/tauri";
+import { localFetch } from "@/lib/api";
 
 interface TimelineChoiceProps {
   handleNextSlide: () => void;
@@ -139,27 +141,70 @@ const COSTS = [
   },
 ];
 
+/**
+ * Restart screenpipe if it is already running, so a choice made on an
+ * onboarding replay reaches the live recorder.
+ *
+ * Both flags are read at spawn, and engine-startup skips spawning when /health
+ * already reports a live engine (tray → "Reset Onboarding" while recording).
+ * Without this, a replayed choice would change storage and UI while the running
+ * recorder kept its old behaviour until some later restart. Mirrors the
+ * stop → wait → spawn sequence in components/settings/display-section.tsx.
+ *
+ * Returns false only when a restart was needed and failed.
+ */
+async function applyToRunningEngine(): Promise<boolean> {
+  let engineRunning = false;
+  try {
+    const res = await localFetch("/health", {
+      signal: AbortSignal.timeout(3000),
+    });
+    // /health answers 503 while a pipeline has no data yet, which still means
+    // an engine is up — any response at all is enough here.
+    engineRunning = !!res;
+  } catch {
+    // Nothing listening: first-run onboarding, engine not spawned yet.
+    return true;
+  }
+  if (!engineRunning) return true;
+
+  try {
+    await commands.stopScreenpipe();
+    await new Promise((r) => setTimeout(r, 500));
+    await commands.spawnScreenpipe(null);
+    return true;
+  } catch (e) {
+    console.error("failed to restart screenpipe after timeline choice:", e);
+    return false;
+  }
+}
+
 // ─── Main ────────────────────────────────────────────────────────────────────
 //
-// Pure UI: no effects. When disableTimeline is enterprise-policy-managed the
-// slide sequencer in app/onboarding/page.tsx leaves this slide out entirely.
+// Pure UI apart from the persist/restart the buttons trigger. When either
+// capture flag is enterprise-policy-managed the slide sequencer in
+// app/onboarding/page.tsx leaves this slide out entirely.
 
 export default function TimelineChoice({ handleNextSlide }: TimelineChoiceProps) {
   const { settings, updateSettings } = useSettings();
   const mountTimeRef = useRef(Date.now());
   const hasAdvanced = useRef(false);
+  const inFlight = useRef(false);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const lowTier = isLowTier(settings.deviceTier);
   // Recommendation: keep the timeline on unless the device is low tier.
   const recommendEnabled = !lowTier;
 
   const choose = async (enabled: boolean) => {
-    // hasAdvanced is a ref, not state: state updates don't land between two
-    // rapid clicks, so only a synchronous guard prevents a double persist.
-    if (hasAdvanced.current) return;
-    hasAdvanced.current = true;
+    // Refs, not state: state updates don't land between two rapid clicks, so
+    // only a synchronous guard prevents a double persist. inFlight is separate
+    // from hasAdvanced so a failed attempt stays retryable.
+    if (hasAdvanced.current || inFlight.current) return;
+    inFlight.current = true;
     setSaving(true);
+    setError(null);
     posthog.capture("onboarding_timeline_choice", {
       timeline_enabled: enabled,
       screenshots_enabled: enabled,
@@ -167,25 +212,37 @@ export default function TimelineChoice({ handleNextSlide }: TimelineChoiceProps)
       followed_recommendation: enabled === recommendEnabled,
       time_spent_ms: Date.now() - mountTimeRef.current,
     });
+
+    // Fail closed: advancing after a failed write would start the engine with
+    // capture still on, i.e. the opposite of what the user just asked for —
+    // worst on exactly the low-end machines this step exists to protect.
     try {
       // Both flags move together. On its own `disableTimeline` only skips the
       // in-memory hot frame cache — screen capture, JPEG writes, the OCR
       // fallback and the ffmpeg compaction worker all keep running, so "saves
-      // ram, cpu & disk" would not hold. `disableScreenshots` stops that work
-      // while accessibility-tree capture continues, which is why search, ask
-      // and pipes are unaffected either way.
-      //
-      // This slide runs before engine-startup spawns screenpipe, so both values
-      // are read at first spawn — no restart needed here (unlike the
-      // settings-page toggles).
+      // ram, cpu & disk" would not hold.
       await updateSettings({
         disableTimeline: !enabled,
         disableScreenshots: !enabled,
       });
-    } catch {
-      // non-fatal: the defaults (both on) apply; the user can change them
-      // later in settings
+    } catch (e) {
+      console.error("failed to save timeline choice:", e);
+      posthog.capture("onboarding_timeline_choice_failed", { stage: "persist" });
+      setError("couldn't save that choice. check disk space and try again.");
+      inFlight.current = false;
+      setSaving(false);
+      return;
     }
+
+    if (!(await applyToRunningEngine())) {
+      posthog.capture("onboarding_timeline_choice_failed", { stage: "restart" });
+      setError("saved, but screenpipe didn't restart. try again to apply it.");
+      inFlight.current = false;
+      setSaving(false);
+      return;
+    }
+
+    hasAdvanced.current = true;
     handleNextSlide();
   };
 
@@ -267,10 +324,24 @@ export default function TimelineChoice({ handleNextSlide }: TimelineChoiceProps)
           </p>
           <p className="font-mono text-[10px] text-muted-foreground/70 mt-1 leading-snug">
             the timeline can take a real toll on machines like this one.
-            keeping it off saves memory, cpu and disk — everything is still
-            recorded and searchable; only the visual rewind view is off.
+            keeping it off saves memory, cpu and disk. the text screenpipe
+            reads from your apps stays recorded and searchable — you lose the
+            visual rewind, and apps that don&apos;t expose their text stop
+            being captured.
           </p>
         </motion.div>
+      )}
+
+      {/* Persist / restart failure — the step never advances past this */}
+      {error && (
+        <motion.p
+          role="alert"
+          className="w-full border border-destructive/50 bg-destructive/[0.06] p-3 mt-3 font-mono text-[10px] text-destructive leading-snug"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+        >
+          {error}
+        </motion.p>
       )}
 
       {/* Choice */}
@@ -289,7 +360,10 @@ export default function TimelineChoice({ handleNextSlide }: TimelineChoiceProps)
               : "border-border text-foreground hover:border-foreground"
           }`}
         >
-          <span>timeline on</span>
+          <span className="flex items-center gap-1.5">
+            {saving && <Loader className="w-3 h-3 animate-spin" />}
+            timeline on
+          </span>
           {recommendEnabled
             ? recommendedTag
             : subtext("full visual rewind of your screen")}
@@ -303,7 +377,10 @@ export default function TimelineChoice({ handleNextSlide }: TimelineChoiceProps)
               : "border-border text-foreground hover:border-foreground"
           }`}
         >
-          <span>keep it off</span>
+          <span className="flex items-center gap-1.5">
+            {saving && <Loader className="w-3 h-3 animate-spin" />}
+            keep it off
+          </span>
           {!recommendEnabled
             ? recommendedTag
             : subtext("saves ram, cpu & disk")}

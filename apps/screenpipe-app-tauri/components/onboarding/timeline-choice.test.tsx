@@ -4,7 +4,13 @@
 
 import "@testing-library/jest-dom/vitest";
 import React from "react";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import TimelineChoice from "./timeline-choice";
 
@@ -12,6 +18,9 @@ const mocks = vi.hoisted(() => ({
   updateSettings: vi.fn().mockResolvedValue(undefined),
   settings: { deviceTier: undefined as string | null | undefined },
   capture: vi.fn(),
+  localFetch: vi.fn(),
+  stopScreenpipe: vi.fn().mockResolvedValue(undefined),
+  spawnScreenpipe: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@/lib/hooks/use-settings", () => ({
@@ -19,6 +28,17 @@ vi.mock("@/lib/hooks/use-settings", () => ({
     settings: mocks.settings,
     updateSettings: mocks.updateSettings,
   }),
+}));
+
+vi.mock("@/lib/api", () => ({
+  localFetch: mocks.localFetch,
+}));
+
+vi.mock("@/lib/utils/tauri", () => ({
+  commands: {
+    stopScreenpipe: mocks.stopScreenpipe,
+    spawnScreenpipe: mocks.spawnScreenpipe,
+  },
 }));
 
 vi.mock("posthog-js", () => ({
@@ -32,6 +52,10 @@ describe("TimelineChoice", () => {
     vi.clearAllMocks();
     mocks.settings.deviceTier = undefined;
     mocks.updateSettings.mockResolvedValue(undefined);
+    mocks.stopScreenpipe.mockResolvedValue(undefined);
+    mocks.spawnScreenpipe.mockResolvedValue(undefined);
+    // Default: nothing on the port — first-run onboarding, engine not spawned.
+    mocks.localFetch.mockRejectedValue(new Error("connection refused"));
   });
 
   it("recommends on for high tier and keeps both capture flags on when chosen", async () => {
@@ -123,9 +147,55 @@ describe("TimelineChoice", () => {
     expect(handleNextSlide).toHaveBeenCalledTimes(1);
   });
 
-  it("still advances when updateSettings fails", async () => {
-    mocks.settings.deviceTier = "high";
+  // Fail closed: advancing on a failed write would spawn the engine with
+  // capture still on — the opposite of what the user asked for.
+  it("stays on the step and surfaces a retryable error when the write fails", async () => {
+    mocks.settings.deviceTier = "low";
     mocks.updateSettings.mockRejectedValue(new Error("store write failed"));
+    const handleNextSlide = vi.fn();
+    render(<TimelineChoice handleNextSlide={handleNextSlide} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /keep it off/i }));
+    });
+
+    expect(handleNextSlide).not.toHaveBeenCalled();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /couldn't save that choice/i,
+    );
+    expect(mocks.capture).toHaveBeenCalledWith(
+      "onboarding_timeline_choice_failed",
+      { stage: "persist" },
+    );
+  });
+
+  it("advances on a retry that succeeds", async () => {
+    mocks.settings.deviceTier = "low";
+    mocks.updateSettings.mockRejectedValueOnce(new Error("store write failed"));
+    const handleNextSlide = vi.fn();
+    render(<TimelineChoice handleNextSlide={handleNextSlide} />);
+
+    const offButton = screen.getByRole("button", { name: /keep it off/i });
+    await act(async () => {
+      fireEvent.click(offButton);
+    });
+    expect(handleNextSlide).not.toHaveBeenCalled();
+
+    // second attempt uses the default resolved mock
+    await act(async () => {
+      fireEvent.click(offButton);
+    });
+
+    expect(mocks.updateSettings).toHaveBeenCalledTimes(2);
+    expect(mocks.updateSettings).toHaveBeenLastCalledWith({
+      disableTimeline: true,
+      disableScreenshots: true,
+    });
+    await waitFor(() => expect(handleNextSlide).toHaveBeenCalledTimes(1));
+  });
+
+  it("does not restart screenpipe during first-run onboarding", async () => {
+    mocks.settings.deviceTier = "high";
     const handleNextSlide = vi.fn();
     render(<TimelineChoice handleNextSlide={handleNextSlide} />);
 
@@ -133,7 +203,45 @@ describe("TimelineChoice", () => {
       fireEvent.click(screen.getByRole("button", { name: /timeline on/i }));
     });
 
+    expect(mocks.stopScreenpipe).not.toHaveBeenCalled();
+    expect(mocks.spawnScreenpipe).not.toHaveBeenCalled();
     expect(handleNextSlide).toHaveBeenCalledTimes(1);
+  });
+
+  // Onboarding replay (tray -> "Reset Onboarding") can run while the recorder
+  // is live; both flags are only read at spawn, so it has to be restarted.
+  it("restarts a running engine so a replayed choice takes effect", async () => {
+    mocks.settings.deviceTier = "low";
+    mocks.localFetch.mockResolvedValue({ ok: true, status: 200 });
+    const handleNextSlide = vi.fn();
+    render(<TimelineChoice handleNextSlide={handleNextSlide} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /keep it off/i }));
+    });
+
+    await waitFor(() => expect(mocks.spawnScreenpipe).toHaveBeenCalledTimes(1));
+    expect(mocks.stopScreenpipe).toHaveBeenCalledTimes(1);
+    expect(handleNextSlide).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the user on the step when the restart fails", async () => {
+    mocks.settings.deviceTier = "low";
+    mocks.localFetch.mockResolvedValue({ ok: true, status: 200 });
+    mocks.spawnScreenpipe.mockRejectedValue(new Error("spawn failed"));
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const handleNextSlide = vi.fn();
+    render(<TimelineChoice handleNextSlide={handleNextSlide} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /keep it off/i }));
+    });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /didn't restart/i,
+    );
+    expect(handleNextSlide).not.toHaveBeenCalled();
+    consoleError.mockRestore();
   });
 
   it("only persists the first choice when both buttons are clicked quickly", async () => {
