@@ -218,7 +218,7 @@ export async function executeNotificationAction(
         // so an absolute URL pointing off-box would exfiltrate that key or turn
         // the app into a confused deputy. Only same-origin relative paths and
         // explicit local-API URLs are allowed.
-        if (action.url.startsWith("http") && !isLocalApiUrl(action.url)) {
+        if (!isLocalApiUrl(action.url)) {
           throw new Error(
             `refused api action to non-local url: ${action.url}`,
           );

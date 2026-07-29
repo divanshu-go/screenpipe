@@ -242,7 +242,7 @@ const NotificationHandler: React.FC = () => {
         }
 
         if (action.type === "api" && action.url) {
-          if (action.url.startsWith("http") && !isLocalApiUrl(action.url)) {
+          if (!isLocalApiUrl(action.url)) {
             console.warn("refused api action to non-local url:", action.url);
             return;
           }

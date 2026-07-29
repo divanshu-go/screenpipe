@@ -63,7 +63,7 @@ function installLocalFetchInterceptor(): void {
     if (
       _authEnabled &&
       _apiKey &&
-      (url.includes(`localhost:${_port}`) || url.includes(`127.0.0.1:${_port}`))
+      isLocalApiUrl(url, window.location.href)
     ) {
       const headers = new Headers(init?.headers);
       if (!headers.has("Authorization")) {
@@ -255,6 +255,19 @@ export async function localFetch(
   return response;
 }
 
-export function isLocalApiUrl(url: string): boolean {
-  return url.includes(`localhost:${_port}`) || url.includes(`127.0.0.1:${_port}`);
+export function isLocalApiUrl(
+  url: string,
+  baseUrl = getApiBaseUrl(),
+): boolean {
+  try {
+    const parsed = new URL(url, baseUrl);
+    const port = parsed.port || (parsed.protocol === "http:" ? "80" : "");
+    return (
+      parsed.protocol === "http:" &&
+      (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1") &&
+      port === String(_port)
+    );
+  } catch {
+    return false;
+  }
 }
