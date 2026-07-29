@@ -11,6 +11,7 @@
 use crate::capture_exclusions::{probe_excluded_sck_window_ids, storage_excluded_sck_window_ids};
 use crate::hot_frame_cache::{HotFrame, HotFrameCache};
 use crate::power::PowerProfile;
+use crate::semantic_worker::{SemanticProjectionJob, SemanticProjectionSender};
 use crate::visual_probe::bounded_visual_probe;
 use anyhow::Result;
 use chrono::Utc;
@@ -62,7 +63,7 @@ async fn wait_for_warm_focus_or_timeout(
 ///
 /// Groups parameters that don't change between captures on the same monitor,
 /// keeping `do_capture`'s argument list manageable.
-pub struct CaptureParams<'a> {
+pub(crate) struct CaptureParams<'a> {
     pub db: &'a DatabaseManager,
     pub monitor: &'a SafeMonitor,
     pub monitor_id: u32,
@@ -74,6 +75,8 @@ pub struct CaptureParams<'a> {
     pub use_pii_removal: bool,
     pub pause_on_drm_content: bool,
     pub languages: &'a [screenpipe_core::Language],
+    /// Opt-in background semantic parser. None preserves historical capture.
+    pub semantic_tx: Option<&'a SemanticProjectionSender>,
 }
 
 async fn capture_with_timeout<F, T>(
@@ -657,7 +660,7 @@ fn idle_phase_delay(
 ///
 /// Each trigger results in a paired capture (screenshot + accessibility tree walk).
 #[allow(clippy::too_many_arguments)]
-pub async fn event_driven_capture_loop(
+pub(crate) async fn event_driven_capture_loop(
     db: Arc<DatabaseManager>,
     monitor: Arc<SafeMonitor>,
     monitor_id: u32,
@@ -680,6 +683,7 @@ pub async fn event_driven_capture_loop(
     // The loop polls `effective_interval_ms()` each tick; `None` here means
     // the override is fully disabled (no auto, no manual, no detector).
     high_fps_controller: Option<Arc<crate::high_fps_controller::HighFpsController>>,
+    semantic_tx: Option<SemanticProjectionSender>,
 ) -> Result<()> {
     info!(
         "event-driven capture started for monitor {} (device: {})",
@@ -807,6 +811,7 @@ pub async fn event_driven_capture_loop(
         use_pii_removal,
         pause_on_drm_content,
         languages: &languages,
+        semantic_tx: semantic_tx.as_ref(),
     };
 
     // Capture immediately on startup so the timeline has a frame right away.
@@ -2826,6 +2831,16 @@ async fn do_capture(
     };
 
     let result = paired_capture(&ctx, tree_snapshot.as_ref(), Some(ocr_gate)).await?;
+    if let (Some(sender), Some(snapshot)) = (params.semantic_tx, tree_snapshot) {
+        sender.submit(SemanticProjectionJob::from_capture(
+            result.frame_id,
+            result.captured_at,
+            result.app_name.clone(),
+            result.browser_url.clone(),
+            snapshot,
+            params.use_pii_removal,
+        ));
+    }
     let deduped = elements_ref_frame_id.is_some();
     // Extract image from Arc for comparer reuse. Arc::try_unwrap succeeds
     // because paired_capture no longer retains a clone.
@@ -3244,9 +3259,13 @@ mod tests {
     fn resolve_capture_metadata_uses_lightweight_metadata_when_tree_values_are_blank() {
         let snapshot = screenpipe_a11y::tree::TreeSnapshot {
             app_name: "  ".into(),
+            app_id: None,
+            executable: None,
+            app_version: None,
             window_name: "".into(),
             text_content: "visible text".into(),
             nodes: Vec::new(),
+            semantic_nodes: Vec::new(),
             browser_url: None,
             document_path: None,
             timestamp: Utc::now(),
@@ -3275,9 +3294,13 @@ mod tests {
     fn resolve_capture_metadata_prefers_lightweight_metadata_over_stale_tree_values() {
         let snapshot = screenpipe_a11y::tree::TreeSnapshot {
             app_name: "electron".into(),
+            app_id: None,
+            executable: Some("electron".into()),
+            app_version: None,
             window_name: "stale browser title".into(),
             text_content: "visible text".into(),
             nodes: Vec::new(),
+            semantic_nodes: Vec::new(),
             browser_url: None,
             document_path: None,
             timestamp: Utc::now(),
@@ -3310,9 +3333,13 @@ mod tests {
     fn resolve_capture_metadata_keeps_tree_values_when_lightweight_is_fallback_only() {
         let snapshot = screenpipe_a11y::tree::TreeSnapshot {
             app_name: "Safari".into(),
+            app_id: Some("com.apple.Safari".into()),
+            executable: None,
+            app_version: None,
             window_name: "Current Page".into(),
             text_content: "visible text".into(),
             nodes: Vec::new(),
+            semantic_nodes: Vec::new(),
             browser_url: None,
             document_path: None,
             timestamp: Utc::now(),
@@ -3345,9 +3372,13 @@ mod tests {
     fn resolve_capture_metadata_normalizes_blank_tree_values_without_lightweight_metadata() {
         let snapshot = screenpipe_a11y::tree::TreeSnapshot {
             app_name: "  ".into(),
+            app_id: None,
+            executable: None,
+            app_version: None,
             window_name: "".into(),
             text_content: "visible text".into(),
             nodes: Vec::new(),
+            semantic_nodes: Vec::new(),
             browser_url: None,
             document_path: None,
             timestamp: Utc::now(),

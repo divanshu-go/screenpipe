@@ -89,8 +89,14 @@ jobs:
       # Builds the `runtime` stage (gateway binary only — no seeder, no policy
       # fixture) and fails the job if the result carries anything credential-
       # shaped. Nothing is pushed until this passes.
+      # VERSION stamps org.opencontainers.image.version. Without it the label
+      # keeps the Dockerfile's `dev` default, which is what 0.0.1 shipped with —
+      # a published image that cannot say which release it is.
       - name: Build and scan for secrets
-        run: TAG="$IMAGE:${{ steps.version.outputs.version }}" ./scripts/build-gateway-container.sh
+        run: |
+          TAG="$IMAGE:${{ steps.version.outputs.version }}" \
+          VERSION="${{ steps.version.outputs.version }}" \
+            ./scripts/build-gateway-container.sh
 
       - name: Push
         id: push

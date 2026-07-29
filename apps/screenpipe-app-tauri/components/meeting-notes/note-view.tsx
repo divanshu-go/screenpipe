@@ -70,8 +70,8 @@ import { isLiveCaptureDegraded } from "@/lib/utils/live-capture-state";
 import {
   buildEnrichedSummarizePrompt,
   extractImageDataUrlsFromMarkdown,
+  extractPipePromptBody,
   buildMeetingSummarizeDisplayLabel,
-  buildMeetingMarkdown,
   fetchMeetingAudio,
   fetchMeetingContext,
   type MeetingContext,
@@ -103,6 +103,7 @@ import {
 } from "./note-save-queue";
 import { listenTyped, TAURI_EVENTS } from "@/lib/events/tauri-events";
 import { writeBrowserLogNow } from "@/lib/logging/browser-log";
+import { copyMeetingToClipboard } from "./copy-meeting";
 
 const AUTOSAVE_DEBOUNCE_MS = 800;
 
@@ -619,10 +620,14 @@ export function NoteView({
       try {
         const res = await localFetch(`/pipes/${pipeSlug}`);
         if (res.ok) {
-          const json = await res.json();
-          const body: string | undefined = json.data?.body || json.body;
+          const json: unknown = await res.json();
+          const body = extractPipePromptBody(json);
           if (body && body.trim().length > 0) {
             directiveOverride = body;
+          } else {
+            console.warn(
+              `summary pipe ${pipeSlug} response did not include prompt_body; falling back`,
+            );
           }
         }
       } catch (err) {
@@ -861,40 +866,8 @@ export function NoteView({
       // Re-fetch context + transcript so the clipboard reflects what the
       // user sees right now (live meetings update; speaker rename can
       // happen without re-rendering ReplayStrip).
-      const [ctx, allTranscript] = await Promise.all([
-        fetchMeetingContext(fresh),
-        fetchMeetingAudio(
-          new Date(meeting.meeting_start).toISOString(),
-          (meeting.meeting_end
-            ? new Date(meeting.meeting_end)
-            : new Date()
-          ).toISOString(),
-          1000,
-          meeting.id,
-        ).catch(() => []),
-      ]);
+      const ctx = await copyMeetingToClipboard(fresh);
       setMeetingCtx(ctx);
-
-      // Prefer meeting-routed (live) transcript over background search noise.
-      // For manual meetings (no routed audio), fall back to input-device-only
-      // entries (the user's mic) to avoid including YouTube/podcast noise.
-      const liveChunks = allTranscript.filter((c) => c.source === "live");
-      const inputChunks = allTranscript.filter((c) => c.isInput);
-      const transcript = liveChunks.length > 0
-        ? liveChunks
-        : inputChunks.length > 0
-          ? inputChunks
-          : allTranscript;
-
-      const md = buildMeetingMarkdown({
-        meeting: fresh,
-        context: ctx,
-        transcript,
-      });
-      // Use Tauri's native clipboard API (arboard) instead of
-      // navigator.clipboard.writeText which fails after async operations
-      // due to WebKit's user-activation timeout.
-      await commands.copyTextToClipboard(md);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 2000);
       toast({ title: "copied to clipboard" });

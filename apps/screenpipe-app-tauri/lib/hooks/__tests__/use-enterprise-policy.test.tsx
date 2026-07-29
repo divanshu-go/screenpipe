@@ -105,7 +105,7 @@ import {
   useManagedPolicy,
 } from "@/lib/hooks/use-managed-policy";
 
-const KEY = "ENT-GWXX-RNUB-LW9F-3YA6";
+const KEY = "ENT-TEST-ONLY-HOOK-0001";
 
 function policyResponse(overrides: Record<string, unknown> = {}) {
   return new Response(
@@ -537,6 +537,49 @@ describe("enterprise policy runtime manual activation", () => {
         init?.headers?.["X-License-Key"] === undefined
     );
     expect(accountPolicyCall).toBeDefined();
+  });
+
+  it("recovers a rotated saved key through the signed-in account", async () => {
+    mocks.commands.getEnterpriseLicenseKey.mockResolvedValue(KEY);
+    Object.assign(mocks.settings, { user: { token: "account-token" } });
+    mocks.tauriFetch.mockImplementation(async (
+      url: string,
+      init?: { headers?: Record<string, string> }
+    ) => {
+      if (url.includes("/api/enterprise/policy")) {
+        if (init?.headers?.["X-License-Key"] === KEY) {
+          return new Response(JSON.stringify({ error: "bad credential" }), {
+            status: 401,
+          });
+        }
+        return policyResponse();
+      }
+      if (url.includes("/api/enterprise/heartbeat")) return heartbeatResponse();
+      throw new Error(`unexpected fetch ${url}`);
+    });
+
+    const { result } = await renderEnterprisePolicy();
+
+    await waitFor(() => expect(result.current.isEnterpriseAuthenticated).toBe(true));
+    expect(
+      mocks.tauriFetch.mock.calls.some(
+        ([url, init]) =>
+          String(url).includes("/api/enterprise/policy") &&
+          init?.headers?.Authorization === "Bearer account-token" &&
+          init?.headers?.["X-License-Key"] === undefined
+      )
+    ).toBe(true);
+  });
+
+  it("prompts for account sign-in when a rotated saved key has no account", async () => {
+    mocks.commands.getEnterpriseLicenseKey.mockResolvedValue(KEY);
+    mockEnterpriseApi({ policyStatus: 401 });
+
+    const { result } = await renderEnterprisePolicy();
+
+    await waitFor(() => expect(result.current.authenticationState).toBe("account"));
+    expect(result.current.authenticationError).toMatch(/sign in with your screenpipe account/i);
+    expect(result.current.isEnterpriseAuthenticated).toBe(false);
   });
 
   it("signs out a key-authenticated device when the policy flips to require account sign-in", async () => {

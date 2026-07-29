@@ -47,6 +47,7 @@ mod resource_monitor;
 pub mod retention;
 pub mod routes;
 pub mod schedule_monitor;
+mod semantic_worker;
 pub mod server;
 pub mod sleep_monitor;
 pub mod snapshot_compaction;

@@ -62,6 +62,7 @@ import { useSettings } from "@/lib/hooks/use-settings";
 import { useHealthCheck } from "@/lib/hooks/use-health-check";
 import { useToast } from "@/components/ui/use-toast";
 import { localFetch } from "@/lib/api";
+import { showChatWithPrefill } from "@/lib/chat-utils";
 import {
   readActiveAiPresetId,
   resolveActiveAiPreset,
@@ -1075,7 +1076,9 @@ export function BrainOverview({
           (candidate) => candidate.id === dataRefresh.viewId,
         );
         if (!refreshedView) return;
-        setView(refreshedView);
+        setView((current) =>
+          current?.id === refreshedView.id ? refreshedView : current,
+        );
         const filled = refreshedView.slots.filter((slot) => {
           if (
             !dataRefresh.slotIds.includes(slot.id) ||
@@ -1291,18 +1294,11 @@ export function BrainOverview({
             pipe.prompt_body?.trim().slice(0, 500) ||
             `${pipe.config.name} Screenpipe Pipe`,
         })),
-        currentView:
+        currentViewRef:
           view && intent !== "new-dashboard"
             ? {
-                title: view.title,
-                timeRange: view.timeRange,
-                blocks: normalizedSlots(view.slots).map((slot) => ({
-                  title: slot.title,
-                  intent: slot.intent ?? slot.title,
-                  component: slot.component,
-                  width: slot.width === 3 || slot.width === 12 ? slot.width : 6,
-                  pipeName: slot.binding?.pipeName ?? null,
-                })),
+                id: view.id,
+                revision: view.revision,
               }
             : null,
       });
@@ -1315,7 +1311,8 @@ export function BrainOverview({
               title: generated.title,
               revision: 0,
               timeRange: generated.timeRange,
-              periodPolicy: DEFAULT_LIVE_VIEW_PERIOD_POLICY,
+              periodPolicy:
+                generated.periodPolicy ?? DEFAULT_LIVE_VIEW_PERIOD_POLICY,
               slots: [],
               createdAt: now,
               updatedAt: now,
@@ -1386,6 +1383,62 @@ export function BrainOverview({
     preset: AIPreset,
     intent: LiveViewGenerationIntent,
   ) => {
+    if (intent === "pipe-agent") {
+      posthog.capture("live_view_pipe_agent_handoff", {
+        analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
+        has_current_view: Boolean(view),
+        current_block_count: view?.slots.length ?? 0,
+        prompt_length: prompt.length,
+      });
+
+      const liveViewReference = view
+        ? JSON.stringify({
+            id: view.id,
+            title: view.title,
+            revision: view.revision,
+          })
+        : "none; the user has not created a Live View yet";
+      const agentPrompt = `The user started this request from Brain > Live Views.
+
+Current Live View reference: ${liveViewReference}
+
+User request:
+${prompt}
+
+Use the screenpipe-cli skill for Pipe creation or editing and the screenpipe_live_view tool for Live View work.
+- Read the screenpipe-cli skill before changing a Pipe.
+- Load the current Live View lazily by id. Do not ask the app to inject its contents into chat context.
+- Treat this submitted request as explicit authorization to make the requested Pipe and Live View changes. Do not ask the user to approve those requested actions again.
+- It is okay to create a new disabled/manual Pipe draft and run it once for testing.
+- Test a changed Pipe with pipe run before binding it to the Live View.
+- After the Pipe works, save the smallest relevant Live View Block additions or edits directly. Preserve every unrelated Block; do not replace the whole dashboard, show a preview, or ask whether to replace it.
+- Ask one short question only when essential ambiguity remains or an action goes beyond the request: deleting a Pipe, overwriting a name collision when the user asked for a new Pipe, installing external code or a connection, or enabling a schedule the user did not request.
+- Use ask_user for that exceptional question when it is available; otherwise ask in chat and wait.
+- Do not publish anything to the Pipe Store.`;
+
+      try {
+        await showChatWithPrefill({
+          context: view
+            ? `Live View “${view.title}” (revision ${view.revision})`
+            : "Create a Pipe for a new Live View",
+          prompt: agentPrompt,
+          displayLabel: prompt,
+          autoSend: true,
+          source: "live-view-pipe-agent",
+          useHomeChat: true,
+        });
+      } catch (handoffError) {
+        toast({
+          title: "could not open the Pipe agent",
+          description:
+            handoffError instanceof Error
+              ? handoffError.message
+              : String(handoffError),
+          variant: "destructive",
+        });
+      }
+      return;
+    }
     await generate(prompt, scope, preset, intent);
   };
 
@@ -2434,6 +2487,7 @@ export function BrainOverview({
   const refreshingSlotIds = new Set(
     refreshIsActive ? (dataRefresh?.slotIds ?? []) : [],
   );
+  const dashboardSelectionDisabled = saving || generating;
   const showOnboardingActivation = Boolean(
     onboardingActivation && !onboardingActivation.completedAt,
   );
@@ -2449,6 +2503,7 @@ export function BrainOverview({
             views={views}
             current={view}
             busy={dashboardBusy}
+            selectionDisabled={dashboardSelectionDisabled}
             onSelect={selectDashboard}
             onCreate={beginCreate}
             onRename={renameDashboard}
@@ -2530,15 +2585,7 @@ export function BrainOverview({
               </Button>
             </div>
           )}
-          {view.periodPolicy.type === "fixed.v1" ? (
-            <div
-              data-testid="overview-fixed-period"
-              aria-label={`Live View period: ${selectedPeriod.label}`}
-              className="inline-flex h-9 min-w-28 flex-1 items-center border border-border bg-muted/20 px-3 text-xs sm:flex-none"
-            >
-              {selectedPeriod.label}
-            </div>
-          ) : (
+          {view.periodPolicy.type !== "fixed.v1" && (
             <Select
               value={view.timeRange}
               disabled={dashboardBusy}

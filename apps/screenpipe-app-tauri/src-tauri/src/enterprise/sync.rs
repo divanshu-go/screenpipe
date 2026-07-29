@@ -20,8 +20,8 @@
 //!
 //! - **Empty batch** — skip POST, advance no cursor, retry next tick
 //! - **Network failure** — exponential backoff (60s → 1h cap), task survives
-//! - **4xx auth failure** — log loudly, sleep `RETRY_AFTER_AUTH_FAIL`, no retry
-//!   storm; license key was either revoked or wrong
+//! - **4xx auth failure** — use the signed-in employee account to fetch the
+//!   rotated device key, then retry without advancing the cursor
 //! - **5xx server error** — exponential backoff (transient, can recover)
 //! - **Cursor file corruption** — fall back to "now - SAFE_BACKFILL", never
 //!   re-emit the entire DB
@@ -68,6 +68,11 @@ const BACKOFF_MAX: Duration = Duration::from_secs(60 * 60);
 /// Cool-off after an auth failure (401/403). License likely revoked; no point
 /// retrying every interval.
 const RETRY_AFTER_AUTH_FAIL: Duration = Duration::from_secs(60 * 60);
+
+/// A revoked key may be waiting for the employee to finish account sign-in.
+/// Poll for that local account token without retrying the data endpoint more
+/// than once per minute.
+const RETRY_WHILE_WAITING_FOR_ACCOUNT: Duration = Duration::from_secs(60);
 
 /// Admin-triggered log collection must keep working while telemetry sync is in
 /// exponential backoff. Otherwise the machines we most need logs from can sit
@@ -1258,6 +1263,66 @@ fn enterprise_http_client() -> reqwest::Client {
     enterprise_http_client_with_timeout(Duration::from_secs(60))
 }
 
+fn apply_rotated_device_config(
+    cfg: &mut EnterpriseSyncConfig,
+    remote: &super::device_config::RemoteDeviceConfig,
+) -> bool {
+    if remote.license_key.trim().is_empty() || remote.license_key == cfg.license_key {
+        return false;
+    }
+
+    cfg.license_key = remote.license_key.clone();
+    if let Some(ingest_url) = remote
+        .ingest_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+    {
+        cfg.ingest_url = ingest_url.to_string();
+    }
+    true
+}
+
+/// Exchange a signed-in enterprise member's Clerk session for the current
+/// device credential. This is deliberately attempted only after the server
+/// rejects the saved key; ordinary sync remains key-authenticated and no Clerk
+/// token is attached to telemetry requests.
+async fn recover_rotated_license_key(cfg: &mut EnterpriseSyncConfig) -> bool {
+    let Some(token) = crate::commands::get_cloud_token() else {
+        return false;
+    };
+    let url = super::device_config::device_config_url(Some(&cfg.ingest_url));
+    let remote = match super::device_config::fetch_remote_device_config(&url, &token).await {
+        Ok(remote) => remote,
+        Err(error) => {
+            debug!(
+                error = %error,
+                "enterprise sync: account device-config recovery not available"
+            );
+            return false;
+        }
+    };
+    if !apply_rotated_device_config(cfg, &remote) {
+        return false;
+    }
+
+    if let Err(error) = crate::commands::persist_enterprise_device_config(
+        Some(&remote.license_key),
+        remote.ingest_url.as_deref(),
+    ) {
+        warn!(
+            error = %error,
+            "enterprise sync: rotated key works for this session but could not be persisted"
+        );
+    }
+    cfg.resolve_upload_mode().await;
+    info!(
+        org = remote.org_name.as_deref().unwrap_or("?"),
+        "enterprise sync: recovered rotated device credential through account auth"
+    );
+    true
+}
+
 /// The single place that knows the redirect policy for license-authenticated
 /// requests. Build every such client through here rather than calling
 /// `reqwest::Client::builder()` directly, so the no-redirect guarantee can't
@@ -1287,7 +1352,7 @@ pub async fn run(
 
     let mut cursor = Cursor::load(&cfg.cursor_path);
     let mut backoff = BACKOFF_INITIAL;
-    let log_request_loop = tokio::spawn(run_log_request_loop(
+    let mut log_request_loop = tokio::spawn(run_log_request_loop(
         cfg.clone(),
         http.clone(),
         shutdown.clone(),
@@ -1303,8 +1368,7 @@ pub async fn run(
         match &result {
             Err(EnterpriseSyncError::IngestAuthRejected) => {
                 error!(
-                    "enterprise sync: license rejected by ingest endpoint (license invalid / revoked), sleeping {}s",
-                    RETRY_AFTER_AUTH_FAIL.as_secs()
+                    "enterprise sync: license rejected by ingest endpoint (license invalid / revoked), attempting account recovery"
                 );
             }
             Err(EnterpriseSyncError::CentralizedDataDisabled) => {
@@ -1355,7 +1419,20 @@ pub async fn run(
                 }
             }
             Err(EnterpriseSyncError::IngestAuthRejected) => {
-                if sleep_or_shutdown(RETRY_AFTER_AUTH_FAIL, &mut shutdown).await {
+                if recover_rotated_license_key(&mut cfg).await {
+                    // The log poller owns a cloned config, so restart it with
+                    // the recovered key too. No diagnostic request is lost;
+                    // fulfillment state lives server-side.
+                    log_request_loop.abort();
+                    log_request_loop = tokio::spawn(run_log_request_loop(
+                        cfg.clone(),
+                        http.clone(),
+                        shutdown.clone(),
+                    ));
+                    backoff = BACKOFF_INITIAL;
+                    continue;
+                }
+                if sleep_or_shutdown(RETRY_WHILE_WAITING_FOR_ACCOUNT, &mut shutdown).await {
                     break;
                 }
                 continue;
@@ -2161,6 +2238,27 @@ mod tests {
             upload_mode: EnterpriseUploadMode::HostedIngest,
             log_dirs: vec![dir.path().to_path_buf()],
         }
+    }
+
+    #[test]
+    fn rotated_device_config_replaces_key_and_control_plane() {
+        let dir = TempDir::new().unwrap();
+        let mut cfg = test_cfg(
+            &dir,
+            "https://old.example/api/enterprise/ingest".to_string(),
+        );
+        let remote = super::super::device_config::RemoteDeviceConfig {
+            license_key: "sek_rotated".to_string(),
+            ingest_url: Some("https://new.example/api/enterprise/ingest".to_string()),
+            org_name: Some("Acme".to_string()),
+            desired_mode: Some("hosted_ingest".to_string()),
+            gateway_url: None,
+        };
+
+        assert!(apply_rotated_device_config(&mut cfg, &remote));
+        assert_eq!(cfg.license_key, "sek_rotated");
+        assert_eq!(cfg.ingest_url, "https://new.example/api/enterprise/ingest");
+        assert!(!apply_rotated_device_config(&mut cfg, &remote));
     }
 
     #[tokio::test]
