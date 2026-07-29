@@ -63,7 +63,7 @@ function installLocalFetchInterceptor(): void {
     if (
       _authEnabled &&
       _apiKey &&
-      isLocalApiUrl(url, window.location.href)
+      isLocalApiUrl(url, document.baseURI)
     ) {
       const headers = new Headers(init?.headers);
       if (!headers.has("Authorization")) {

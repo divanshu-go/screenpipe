@@ -80,7 +80,7 @@ describe("local API URL boundary", () => {
     expect(requestHeaders().has("Authorization")).toBe(false);
   });
 
-  it("keeps the global fetch interceptor exact and origin-aware", async () => {
+  it("keeps the global fetch interceptor exact and document-base-aware", async () => {
     await window.fetch("https://attacker.example/?next=localhost:3030");
     await window.fetch("/app-relative-endpoint");
     await window.fetch("http://127.0.0.1:3030/health");
@@ -90,6 +90,21 @@ describe("local API URL boundary", () => {
     expect(requestHeaders(2).get("Authorization")).toBe(
       "Bearer local-secret",
     );
+  });
+
+  it("resolves interceptor-relative URLs against document.baseURI", async () => {
+    const base = document.createElement("base");
+    base.href = "http://localhost:3030/";
+    document.head.appendChild(base);
+
+    try {
+      await window.fetch("/health");
+      expect(requestHeaders().get("Authorization")).toBe(
+        "Bearer local-secret",
+      );
+    } finally {
+      base.remove();
+    }
   });
 
   it("still attaches the bearer key to localFetch paths", async () => {
