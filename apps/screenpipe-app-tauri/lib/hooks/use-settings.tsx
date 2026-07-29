@@ -34,6 +34,13 @@ import {
 	applyManagedOverrides,
 	type ManagedSettingValue,
 } from "./managed-settings";
+import {
+	clearLegacyUserGoalCategory,
+	DEFAULT_USER_GOAL_CATEGORY,
+	normalizeUserGoalCategory,
+	readLegacyUserGoalCategory,
+	type UserGoalCategory,
+} from "@/lib/live-views/onboarding-activation";
 export type VadSensitivity = "low" | "medium" | "high";
 
 export type AIProviderType =
@@ -188,6 +195,10 @@ export interface ChatConversation {
 	/** Optional user-assigned sidebar group label (lowercase, trimmed).
 	 *  Drives the manual-grouping sections in the chat sidebar. */
 	sidebarGroup?: string;
+	/** Id of the conversation this one was branched from. Set only by
+	 *  "branch in new chat". Exempts the branch from first-user-message
+	 *  dedup — it deliberately shares its parent's opening message. */
+	branchedFrom?: string;
 	/** Last URL the agent navigated the embedded browser sidebar to.
 	 *  Drives the right-side `<BrowserSidebar />` panel: when the user
 	 *  re-opens this conversation the panel restores to this URL.
@@ -219,6 +230,8 @@ export interface ChatHistoryStore {
 
 // Extend SettingsStore with fields added before Rust types are regenerated
 export type Settings = SettingsStore & {
+	/** Goal used to prioritize the Home cards. Persisted in store.bin. */
+	userGoalCategory?: UserGoalCategory;
 	/** Internal marker/snapshot used to unwind the forced free-plan policy. */
 	_freePlanRetentionApplied?: boolean;
 	_preFreePlanRetention?: LocalRetentionPreference | null;
@@ -621,6 +634,7 @@ const applyProCloudAudioDefaults = (settings: Settings): Settings => {
 
 let DEFAULT_SETTINGS: Settings = {
 			aiPresets: makeDefaultPresets(false) as any,
+			userGoalCategory: DEFAULT_USER_GOAL_CATEGORY,
 			deviceId: crypto.randomUUID(),
 			deepgramApiKey: "",
 			isLoading: false,
@@ -705,6 +719,8 @@ let DEFAULT_SETTINGS: Settings = {
 			lockVaultShortcut: "Super+Shift+L",
 			disableVision: false,
 			disableScreenshots: false,
+			enableSemanticContext: false,
+			semanticContextMode: "memory",
 			useAllMonitors: true,
 			showShortcutOverlay: true,
 			chatHistory: {
@@ -723,6 +739,7 @@ let DEFAULT_SETTINGS: Settings = {
 			meetingSummaryPipeSlug: "meeting-summary",
 			filterMusic: false,
 			ignoreIncognitoWindows: true,
+			enhancedIncognitoDetection: false,
 			pauseOnDrmContent: false,
 			disableClipboardCapture: true,
 			disableKeyboardCapture: true,
@@ -889,6 +906,16 @@ function createSettingsStore() {
 
 		// Migration: Ensure existing users have deviceId for free tier tracking
 		let needsUpdate = false;
+		const existingUserGoal = normalizeUserGoalCategory(
+			settings.userGoalCategory,
+		);
+		const shouldMigrateUserGoal = existingUserGoal === null;
+		if (shouldMigrateUserGoal) {
+			settings.userGoalCategory = readLegacyUserGoalCategory();
+			needsUpdate = true;
+		} else {
+			settings.userGoalCategory = existingUserGoal;
+		}
 		if (!settings.deviceId) {
 			settings.deviceId = crypto.randomUUID();
 			needsUpdate = true;
@@ -1069,7 +1096,7 @@ function createSettingsStore() {
 		}
 
 		// Post-migration: if user becomes pro and the Chat preset is still on the
-		// non-pro fallback (Sonnet), upgrade it to Opus 4.7.
+		// non-pro fallback (Sonnet), upgrade it to Opus 5.
 		// Guards:
 		//   - only touches the preset with id === "chat" (leaves user-created presets alone)
 		//   - only if provider is still screenpipe-cloud and model is exactly the seeded
@@ -1089,7 +1116,7 @@ function createSettingsStore() {
 					p?.model === "claude-sonnet-4-5"
 				) {
 					upgraded = true;
-					return { ...p, model: "claude-opus-4-8" };
+					return { ...p, model: "claude-opus-5" };
 				}
 				return p;
 			});
@@ -1148,6 +1175,11 @@ function createSettingsStore() {
 			await setSettingsStripped(store, settings);
 			await saveAndEncrypt(store);
 		}
+
+		// Remove browser-only values only after the durable app setting exists.
+		// This makes the migration one-shot without risking data loss on a failed
+		// settings write.
+		if (shouldMigrateUserGoal) clearLegacyUserGoalCategory();
 
 		return settings;
 	};
@@ -1443,7 +1475,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [settings.user?.cloud_subscribed, isSettingsLoaded]);
 
-	// Upgrade the seeded "chat" preset Sonnet → Opus 4.7 the moment the user
+	// Upgrade the seeded "chat" preset Sonnet → Opus 5 the moment the user
 	// becomes pro (mirrors the on-load migration for same-session transitions).
 	// Guards match the migration: only touch the unmodified seeded chat preset,
 	// never clobber a user override, only fire once.
@@ -1468,7 +1500,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 		}
 
 		const nextPresets = settings.aiPresets.map((p: any, i: number) =>
-			i === idx ? { ...p, model: "claude-opus-4-8" } : p
+			i === idx ? { ...p, model: "claude-opus-5" } : p
 		);
 		settingsStore.set({
 			aiPresets: nextPresets,

@@ -1241,6 +1241,25 @@ fn ensure_save_artifact_extension(project_dir: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Install one compact Live View tool for every normal chat session. The tool
+/// loads a selected definition only when the model calls it, so dashboard
+/// contents never become ambient prompt context.
+fn ensure_live_views_extension(project_dir: &str) -> Result<(), String> {
+    let ext_dir = std::path::Path::new(project_dir)
+        .join(".pi")
+        .join("extensions");
+    std::fs::create_dir_all(&ext_dir)
+        .map_err(|e| format!("Failed to create extensions dir: {}", e))?;
+
+    let ext_path = ext_dir.join("live-views.ts");
+    let ext_content = include_str!("../assets/extensions/live-views.ts");
+    std::fs::write(&ext_path, ext_content)
+        .map_err(|e| format!("Failed to write Live Views extension: {}", e))?;
+
+    debug!("Live Views extension installed at {:?}", ext_path);
+    Ok(())
+}
+
 fn ensure_connection_gate_extension(project_dir: &str) -> Result<(), String> {
     let ext_dir = Path::new(project_dir).join(".pi").join("extensions");
     std::fs::create_dir_all(&ext_dir)
@@ -1302,7 +1321,8 @@ fn model_supports_reasoning(provider: &str, model: &str) -> bool {
 /// config because they do not inherit Pi's built-in Anthropic model metadata.
 fn anthropic_model_requires_adaptive_thinking(model: &str) -> bool {
     let model = model.to_ascii_lowercase();
-    model.contains("claude-fable-5")
+    model.contains("claude-opus-5")
+        || model.contains("claude-fable-5")
         || model.contains("claude-sonnet-5")
         || model.contains("claude-sonnet-4-6")
         || model.contains("claude-opus-4-6")
@@ -1724,6 +1744,9 @@ pub async fn pi_start_inner(
 
     // Save artifact: lets the agent register deliverables in the Artifacts library.
     ensure_save_artifact_extension(&project_dir)?;
+
+    // Live Views: lazy read/edit access for normal chat and focused composers.
+    ensure_live_views_extension(&project_dir)?;
 
     // Connection gate: lets Pi block on inline app authorization before
     // continuing app-dependent tasks.
@@ -4966,13 +4989,15 @@ error: InstallFailed extracting tarball"#;
     }
 
     #[tokio::test]
-    async fn test_build_models_json_fable_uses_adaptive_thinking() {
-        let pc = make_provider_config("anthropic", "claude-fable-5");
-        let config = build_models_json(None, Some(&pc)).await;
-        let model = &config["providers"]["anthropic-byok"]["models"][0];
+    async fn test_build_models_json_current_claude_uses_adaptive_thinking() {
+        for model_id in ["claude-opus-5", "claude-fable-5", "claude-sonnet-5"] {
+            let pc = make_provider_config("anthropic", model_id);
+            let config = build_models_json(None, Some(&pc)).await;
+            let model = &config["providers"]["anthropic-byok"]["models"][0];
 
-        assert_eq!(model["reasoning"], true);
-        assert_eq!(model["compat"]["forceAdaptiveThinking"], true);
+            assert_eq!(model["reasoning"], true, "{model_id}");
+            assert_eq!(model["compat"]["forceAdaptiveThinking"], true, "{model_id}");
+        }
     }
 
     #[tokio::test]
