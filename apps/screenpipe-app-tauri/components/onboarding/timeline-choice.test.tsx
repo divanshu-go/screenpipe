@@ -256,7 +256,27 @@ describe("TimelineChoice", () => {
     expect(handleNextSlide).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps the user on the step when the restart fails", async () => {
+  // Regression: awaiting the restart wedged the step. A full stop/spawn cycle
+  // took ~28s on a populated install and WKWebView killed its content process
+  // partway through, destroying the pending promise so the click handler never
+  // resumed. The step must advance without waiting for the engine.
+  it("advances without waiting for the restart to finish", async () => {
+    mocks.settings.deviceTier = "low";
+    mocks.localFetch.mockResolvedValue({ ok: true, status: 200 });
+    // A stop that never settles stands in for the multi-second real one.
+    mocks.stopScreenpipe.mockImplementation(() => new Promise<void>(() => {}));
+    const handleNextSlide = vi.fn();
+    render(<TimelineChoice handleNextSlide={handleNextSlide} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /keep it off/i }));
+    });
+
+    await waitFor(() => expect(handleNextSlide).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("still advances when the restart itself fails", async () => {
     mocks.settings.deviceTier = "low";
     mocks.localFetch.mockResolvedValue({ ok: true, status: 200 });
     mocks.spawnScreenpipe.mockRejectedValue(new Error("spawn failed"));
@@ -268,10 +288,8 @@ describe("TimelineChoice", () => {
       fireEvent.click(screen.getByRole("button", { name: /keep it off/i }));
     });
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      /didn't restart/i,
-    );
-    expect(handleNextSlide).not.toHaveBeenCalled();
+    // engine-startup owns surfacing engine trouble, so the step does not block
+    await waitFor(() => expect(handleNextSlide).toHaveBeenCalledTimes(1));
     consoleError.mockRestore();
   });
 

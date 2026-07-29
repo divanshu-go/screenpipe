@@ -151,32 +151,34 @@ const COSTS = [
  * recorder kept its old behaviour until some later restart. Mirrors the
  * stop → wait → spawn sequence in components/settings/display-section.tsx.
  *
- * Returns false only when a restart was needed and failed.
+ * Deliberately NOT awaited by the caller. A full cycle measured ~28s on a
+ * populated install (audio shutdown alone hit its 15s timeout, and a
+ * `PRAGMA quick_check` took 73s), and WKWebView terminated its content process
+ * partway through — which destroys the pending promise, so an awaiting click
+ * handler never resumes and the button spins forever. The next slide is
+ * engine-startup, which polls /health and owns the "engine is coming up" UI,
+ * so it absorbs this window properly.
  */
-async function applyToRunningEngine(): Promise<boolean> {
-  let engineRunning = false;
-  try {
-    const res = await localFetch("/health", {
-      signal: AbortSignal.timeout(3000),
-    });
-    // /health answers 503 while a pipeline has no data yet, which still means
-    // an engine is up — any response at all is enough here.
-    engineRunning = !!res;
-  } catch {
-    // Nothing listening: first-run onboarding, engine not spawned yet.
-    return true;
-  }
-  if (!engineRunning) return true;
+function restartRunningEngine(): void {
+  void (async () => {
+    try {
+      await localFetch("/health", { signal: AbortSignal.timeout(3000) });
+    } catch {
+      // Nothing listening: first-run onboarding, engine not spawned yet, and
+      // the upcoming engine-startup slide will spawn it with the new flags.
+      return;
+    }
 
-  try {
-    await commands.stopScreenpipe();
-    await new Promise((r) => setTimeout(r, 500));
-    await commands.spawnScreenpipe(null);
-    return true;
-  } catch (e) {
-    console.error("failed to restart screenpipe after timeline choice:", e);
-    return false;
-  }
+    try {
+      await commands.stopScreenpipe();
+      await new Promise((r) => setTimeout(r, 500));
+      await commands.spawnScreenpipe(null);
+    } catch (e) {
+      // Surfaced by engine-startup's own health UI rather than blocking here.
+      console.error("failed to restart screenpipe after timeline choice:", e);
+      posthog.capture("onboarding_timeline_restart_failed");
+    }
+  })();
 }
 
 // ─── Main ────────────────────────────────────────────────────────────────────
@@ -236,13 +238,9 @@ export default function TimelineChoice({ handleNextSlide }: TimelineChoiceProps)
       return;
     }
 
-    if (!(await applyToRunningEngine())) {
-      posthog.capture("onboarding_timeline_choice_failed", { stage: "restart" });
-      setError("saved, but screenpipe didn't restart. try again to apply it.");
-      inFlight.current = false;
-      setPending(null);
-      return;
-    }
+    // Kick the restart off and advance immediately — see restartRunningEngine
+    // for why awaiting it wedged the step.
+    restartRunningEngine();
 
     hasAdvanced.current = true;
     handleNextSlide();
