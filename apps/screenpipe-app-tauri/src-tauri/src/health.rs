@@ -1717,7 +1717,13 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
             // Recovery needs a real successful health response this tick:
             // decide_status holds "Recording" through up to 30 failed checks
             // (anti-flicker), which must not read as "recovered" mid-restart.
-            crate::overlay_health::on_tick(&app, decision.broken, decision.healthy).await;
+            crate::overlay_health::on_tick(
+                &app,
+                decision.broken,
+                decision.healthy,
+                intentionally_paused && !sim_break,
+            )
+            .await;
         }
     });
 
