@@ -234,7 +234,7 @@ export function useChatComposerShellActions({
   const handleSteerShortcut = useCallback(() => {
     if ((input.trim() || pastedImages.length > 0) && !steerShortcutInFlightRef.current) {
       steerShortcutInFlightRef.current = true;
-      void Promise.resolve(steerMessage(input.trim())).finally(() => {
+      void steerMessage(input.trim()).finally(() => {
         steerShortcutInFlightRef.current = false;
       });
       return;
@@ -248,7 +248,7 @@ export function useChatComposerShellActions({
       !steerShortcutInFlightRef.current
     ) {
       steerShortcutInFlightRef.current = true;
-      void Promise.resolve(steerQueuedPrompt(queuedPrompts[0])).finally(() => {
+      void steerQueuedPrompt(queuedPrompts[0]).finally(() => {
         steerShortcutInFlightRef.current = false;
       });
     }
