@@ -40,8 +40,8 @@ export const searchIndex: SettingsField[] = [
   { label: "Smart recording", keywords: ["smart recording", "beta", "meeting", "piggyback", "per-process", "meeting audio"], conditional: true },
   { label: "Bluetooth microphones", keywords: ["bluetooth", "airpods", "headset", "a2dp", "sco", "meeting"], conditional: true },
   { label: "Screen context capture", keywords: ["screen", "video", "accessibility"] },
-  { label: "structured app context", keywords: ["semantic", "ai", "messages", "email", "tasks", "code"], conditional: true },
-  { label: "AI context use", keywords: ["memory", "computer use", "automation", "agent", "skills"], conditional: true },
+  { label: "Structured app context", keywords: ["semantic", "ai", "messages", "email", "tasks", "code"], conditional: true },
+  { label: "Use it for", keywords: ["memory", "computer use", "automation", "agent", "skills"], conditional: true },
   { label: "Screenshot images", keywords: ["screenshot", "pixels", "ocr", "jpeg"] },
   { label: "Use all monitors", keywords: ["monitor", "display"], conditional: true },
   // conditional: monitor picker only renders when "Use all monitors" is off — paired right under that toggle.
@@ -3788,13 +3788,13 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                     <AppWindowMac className="h-4 w-4 text-muted-foreground shrink-0" />
                     <div className="min-w-0">
                       <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                        structured app context
-                        <Badge variant="secondary" aria-label="experimental" className="px-1.5 py-0 text-[10px] font-medium uppercase tracking-wide">
-                          experimental
+                        Structured app context
+                        <Badge variant="secondary" aria-label="Experimental" className="px-1.5 py-0 text-[10px] font-medium">
+                          Experimental
                         </Badge>
                       </h3>
                       <p className="text-xs text-muted-foreground">
-                        Derive compact AI views from the accessibility data Screenpipe already captures. No second recorder or duplicate raw tree.
+                        Turn what Screenpipe already captures into a clearer view for AI. Nothing is recorded twice.
                       </p>
                     </div>
                   </div>
@@ -3808,10 +3808,10 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
 
                 {settings.enableSemanticContext && (
                   <LockedSetting settingKey="semanticContextMode">
-                    <div className="flex items-start justify-between gap-4 border-t border-border pt-3">
+                    <div className="flex flex-col gap-3 border-t border-border pt-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
                       <div className="min-w-0">
                         <label htmlFor="semanticContextMode" className="text-xs font-medium text-foreground">
-                          AI context use
+                          Use it for
                         </label>
                         <p className="text-xs text-muted-foreground mt-0.5">
                           {
@@ -3827,8 +3827,8 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                           handleSettingsChange({ semanticContextMode: value }, true)
                         }
                       >
-                        <SelectTrigger id="semanticContextMode" className="w-[180px] h-8 text-xs shrink-0">
-                          <SelectValue />
+                        <SelectTrigger id="semanticContextMode" className="h-8 w-full shrink-0 text-xs sm:w-[220px]">
+                          <SelectValue className="min-w-0 flex-1 truncate text-left" />
                         </SelectTrigger>
                         <SelectContent>
                           <SelectItem value="memory">{SEMANTIC_CONTEXT_MODE_COPY.memory.label}</SelectItem>
