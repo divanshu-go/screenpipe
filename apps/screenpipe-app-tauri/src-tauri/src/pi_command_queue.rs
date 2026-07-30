@@ -25,8 +25,20 @@ use std::io::Write;
 use std::process::ChildStdin;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{mpsc, oneshot, watch, Mutex, Notify};
 use tracing::{debug, error, info, warn};
+
+/// How long a written prompt may produce no acceptance signal (agent_start or a
+/// synchronous rejection) before the queue gives up and fails it. This is a
+/// start watchdog, not a turn-duration limit: a healthy turn acknowledges
+/// almost immediately, so a silent adapter that never starts responding is
+/// released here instead of stranding the UI behind the multi-minute done
+/// timeout. The desktop keys its fresh-process recovery off the exact error
+/// below (see `await_prompt_start` in pi.rs).
+pub const PROMPT_START_TIMEOUT: Duration = Duration::from_secs(15);
+pub const PROMPT_START_TIMEOUT_ERROR: &str =
+    "AI agent did not start responding within 15 seconds";
 
 /// A user prompt that's been enqueued but not yet written to Pi's stdin.
 /// Surfaced to the UI so the chat can render "queued" cards while a prior
@@ -748,6 +760,17 @@ pub fn spawn_queue(
     state: Arc<PiQueueState>,
     request_id_start: u64,
 ) -> (PiQueueHandle, tokio::task::JoinHandle<()>) {
+    spawn_queue_with_prompt_start_timeout(stdin, state, request_id_start, PROMPT_START_TIMEOUT)
+}
+
+/// Like [`spawn_queue`] but with an explicit prompt-start watchdog timeout, so
+/// tests can drive the watchdog on a short clock instead of the 15s default.
+pub(crate) fn spawn_queue_with_prompt_start_timeout(
+    stdin: Arc<Mutex<ChildStdin>>,
+    state: Arc<PiQueueState>,
+    request_id_start: u64,
+    prompt_start_timeout: Duration,
+) -> (PiQueueHandle, tokio::task::JoinHandle<()>) {
     let (tx, mut rx) = mpsc::channel::<QueueMessage>(32);
     let handle = PiQueueHandle {
         tx,
@@ -983,12 +1006,26 @@ pub fn spawn_queue(
                                 &mut alive_rx,
                                 &cmd_type,
                                 response_rx,
+                                prompt_start_timeout,
                             )
                             .await;
                             let rejected = accepted.is_err();
+                            // A start-timeout means the process produced no
+                            // stdout at all — presume it wedged and stop
+                            // draining, so queued follow-ups are released with a
+                            // dropped-channel error instead of being fed one by
+                            // one into a dead process (each waiting its own full
+                            // watchdog). The desktop's `await_prompt_start`
+                            // stops/recovers the session on this same error. A
+                            // plain rejection (process still alive) just skips
+                            // this one prompt and drains the next.
+                            let wedged = matches!(&accepted, Err(error) if error == PROMPT_START_TIMEOUT_ERROR);
                             let _ = cmd.reply.send(accepted);
                             if rejected {
                                 state.cancel_response(&req_id);
+                                if wedged {
+                                    break;
+                                }
                                 continue;
                             }
                             let wait = wait_for_prompt_idle_or_rejected(
@@ -1109,11 +1146,12 @@ async fn wait_for_prompt_acceptance(
     alive_rx: &mut watch::Receiver<bool>,
     cmd_type: &str,
     mut response_rx: oneshot::Receiver<Result<(), String>>,
+    start_timeout: Duration,
 ) -> (
     Result<(), String>,
     Option<oneshot::Receiver<Result<(), String>>>,
 ) {
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+    let deadline = tokio::time::Instant::now() + start_timeout;
     loop {
         if !*alive_rx.borrow() {
             state.mark_prompt_rejected();
@@ -1152,7 +1190,15 @@ async fn wait_for_prompt_acceptance(
             }
             _ = tokio::time::sleep_until(deadline) => {
                 state.mark_prompt_rejected();
-                return (Err(format!("timed out waiting for {cmd_type} acceptance")), None);
+                // The exact error string the desktop's fresh-process recovery
+                // (`await_prompt_start`) keys on to stop a silently-stuck
+                // session; keep them in sync.
+                warn!(
+                    "pi_command_queue: prompt start timeout after {}s waiting for {} acceptance",
+                    start_timeout.as_secs_f32(),
+                    cmd_type
+                );
+                return (Err(PROMPT_START_TIMEOUT_ERROR.to_string()), None);
             }
         }
     }

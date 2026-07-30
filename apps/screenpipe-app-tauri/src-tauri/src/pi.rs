@@ -490,21 +490,6 @@ fn sync_queue_state_from_event(
 ) {
     let event_type = event.get("type").and_then(|value| value.as_str());
 
-    if event_type == Some("response") {
-        if let Some(request_id) = event.get("id").and_then(|id| id.as_str()) {
-            let rejected =
-                event.get("success").and_then(|success| success.as_bool()) == Some(false);
-            let error = rejected.then(|| {
-                event
-                    .get("error")
-                    .and_then(|error| error.as_str())
-                    .unwrap_or("Pi rejected the prompt before it started")
-                    .to_string()
-            });
-            queue_state.signal_rpc_response(request_id, error);
-        }
-    }
-
     match event_type {
         Some("agent_start") => {
             queue_state.mark_agent_active();
@@ -541,10 +526,23 @@ fn sync_queue_state_from_event(
                 _ => {}
             }
         }
-        Some("message_update") | Some("tool_execution_start") => {
+        Some("message_update") => {
+            // Streamed text/thinking deltas carry no tool ids but still prove
+            // the turn is alive — keep the drain loop's silence deadline from
+            // force-preempting a long turn.
+            queue_state.record_activity();
             for id in event_tool_call_ids(event) {
                 queue_state.mark_tool_active(id);
             }
+        }
+        Some("tool_execution_start") => {
+            for id in event_tool_call_ids(event) {
+                queue_state.mark_tool_active(id);
+            }
+        }
+        Some("tool_execution_progress") => {
+            // Streamed tool output and subagent heartbeats prove liveness.
+            queue_state.record_activity();
         }
         Some("tool_execution_end") => {
             for id in event_tool_call_ids(event) {
@@ -553,14 +551,24 @@ fn sync_queue_state_from_event(
             queue_state.signal_done_if_idle();
         }
         Some("response") => {
-            if !queue_state.has_active_turn_work() {
-                // Non-prompt commands do not emit agent_start/agent_end, so a
-                // successful response remains their completion fallback.
-                let queue_state = queue_state.clone();
-                std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_millis(500));
-                    queue_state.signal_done();
-                });
+            // Lifecycle commands (new_session, set_model, abort) are correlated
+            // to their exact response id. A shared wakeup could be lost before a
+            // waiter is armed or released by a later unrelated command.
+            if let Some(id) = event.get("id").and_then(|id| id.as_str()) {
+                let success = event
+                    .get("success")
+                    .and_then(|success| success.as_bool())
+                    .unwrap_or(true);
+                let result = if success {
+                    Ok(())
+                } else {
+                    Err(event
+                        .get("error")
+                        .and_then(|error| error.as_str())
+                        .unwrap_or("Pi command failed")
+                        .to_string())
+                };
+                queue_state.signal_response(id, result);
             }
         }
         _ => {}
@@ -2977,111 +2985,11 @@ pub async fn pi_start_inner(
             // The "done" type was the original intent but pi-mono never emits it —
             // it emits "agent_end" instead. Prompt completion therefore uses the
             // durable turn/tool predicate; lifecycle responses are matched by id.
-            if let Some(ref qs) = queue_state_for_reader {
-                match event_type.as_deref() {
-                    Some("agent_start") => {
-                        // A prompt has begun streaming. Suppress the
-                        // A mid-stream `response` ACK must not unblock the queue.
-                        qs.mark_agent_active();
-                        // If a steer was in flight, it has now started its
-                        // agent turn. The drain loop can rely on agent_active
-                        // from here on.
-                        qs.clear_steer_in_flight();
-                    }
-                    Some("agent_end") => {
-                        qs.mark_agent_idle();
-                        qs.signal_done_if_idle();
-                    }
-                    Some("message_start") => {
-                        // Native steer may not emit agent_start — it goes
-                        // straight from message_start to text deltas. If a
-                        // steer is in flight, treat message_start as the
-                        // start of the steered turn so the drain loop
-                        // stays blocked via agent_active until agent_end.
-                        if qs.is_steer_in_flight() {
-                            qs.mark_agent_active();
-                            qs.clear_steer_in_flight();
-                        }
-                    }
-                    Some("message_end") => {
-                        if let Some(event) = parsed.as_ref() {
-                            let ids = event_tool_call_ids(event);
-                            let role = event
-                                .get("message")
-                                .and_then(|message| message.get("role"))
-                                .and_then(|role| role.as_str());
-                            match role {
-                                Some("assistant") => {
-                                    for id in ids {
-                                        qs.mark_tool_active(id);
-                                    }
-                                }
-                                Some("toolResult") => {
-                                    for id in ids {
-                                        qs.mark_tool_idle(&id);
-                                    }
-                                    qs.signal_done_if_idle();
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    Some("message_update") => {
-                        // Streamed text/thinking deltas carry no tool ids but
-                        // still prove the turn is alive.
-                        qs.record_activity();
-                        if let Some(event) = parsed.as_ref() {
-                            for id in event_tool_call_ids(event) {
-                                qs.mark_tool_active(id);
-                            }
-                        }
-                    }
-                    Some("tool_execution_start") => {
-                        if let Some(event) = parsed.as_ref() {
-                            for id in event_tool_call_ids(event) {
-                                qs.mark_tool_active(id);
-                            }
-                        }
-                    }
-                    Some("tool_execution_progress") => {
-                        // Streamed tool output and subagent heartbeats prove
-                        // the turn is alive; keep the drain loop's silence
-                        // deadline from force-preempting a long turn.
-                        qs.record_activity();
-                    }
-                    Some("tool_execution_end") => {
-                        if let Some(event) = parsed.as_ref() {
-                            for id in event_tool_call_ids(event) {
-                                qs.mark_tool_idle(&id);
-                            }
-                        }
-                        qs.signal_done_if_idle();
-                    }
-                    Some("response") => {
-                        // Lifecycle commands are correlated by request id.
-                        // Shared/delayed wakeups can be lost before a waiter is
-                        // armed or can release a later unrelated command.
-                        if let Some(event) = parsed.as_ref() {
-                            if let Some(id) = event.get("id").and_then(Value::as_str) {
-                                let success = event
-                                    .get("success")
-                                    .and_then(Value::as_bool)
-                                    .unwrap_or(true);
-                                let result = if success {
-                                    Ok(())
-                                } else {
-                                    Err(event
-                                        .get("error")
-                                        .and_then(Value::as_str)
-                                        .unwrap_or("Pi command failed")
-                                        .to_string())
-                                };
-                                qs.signal_response(id, result);
-                            }
-                        }
-                    }
-                    _ => {}
-                }
+            // Drive the command queue's turn/tool/lifecycle state machine from
+            // this event. Extracted into one helper so the production reader and
+            // the watchdog e2e test share a single, tested code path.
+            if let (Some(qs), Some(event)) = (queue_state_for_reader.as_ref(), parsed.as_ref()) {
+                sync_queue_state_from_event(qs, event);
             }
 
             match parsed {
@@ -3396,7 +3304,7 @@ async fn await_prompt_start(
             );
             let mut pool = state.0.lock().await;
             if let Some(manager) = pool.sessions.get_mut(session_id) {
-                manager.stop();
+                manager.stop().await;
             }
         }
     }
