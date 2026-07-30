@@ -29,23 +29,45 @@ export function hasFrameVisualMedia(
 export function findTimelineDisplayFrame(
 	frames: StreamTimeSeriesResponse[],
 	currentIndex: number,
+	selectedDate?: Date,
 ): StreamTimeSeriesResponse | null {
 	if (frames.length === 0) return null;
 	const clamped = clampTimelineIndex(currentIndex, frames.length);
 	const current = frames[clamped];
+	const isOnSelectedDate = (frame: StreamTimeSeriesResponse): boolean => {
+		if (!selectedDate) return true;
+		const timestamp = new Date(frame.timestamp);
+		if (Number.isNaN(timestamp.getTime())) return false;
+		return (
+			timestamp.getFullYear() === selectedDate.getFullYear() &&
+			timestamp.getMonth() === selectedDate.getMonth() &&
+			timestamp.getDate() === selectedDate.getDate()
+		);
+	};
+
+	// Date navigation intentionally keeps the previous day's frames mounted
+	// until the new batch arrives. Never render one of those retained frames
+	// under the newly selected calendar date.
+	if (!isOnSelectedDate(current)) return null;
 	if (hasFrameVisualMedia(current)) return current;
 
 	let newerVisual: StreamTimeSeriesResponse | undefined;
 	let olderVisual: StreamTimeSeriesResponse | undefined;
 
 	for (let index = clamped - 1; index >= 0; index--) {
-		if (hasFrameVisualMedia(frames[index])) {
+		if (
+			isOnSelectedDate(frames[index]) &&
+			hasFrameVisualMedia(frames[index])
+		) {
 			newerVisual = frames[index];
 			break;
 		}
 	}
 	for (let index = clamped + 1; index < frames.length; index++) {
-		if (hasFrameVisualMedia(frames[index])) {
+		if (
+			isOnSelectedDate(frames[index]) &&
+			hasFrameVisualMedia(frames[index])
+		) {
 			olderVisual = frames[index];
 			break;
 		}

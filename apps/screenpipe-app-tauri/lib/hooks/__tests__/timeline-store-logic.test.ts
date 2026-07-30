@@ -483,6 +483,44 @@ describe("Timeline frame navigation", () => {
       findTimelineDisplayFrame([newerVisual, audioOnly, olderVisual], 1),
     ).toBe(newerVisual);
   });
+
+  it("does not show the previous day's retained screenshot after a date change", () => {
+    const previousDayVisual = createMockFrame(
+      "2026-07-27T21:27:03",
+      "monitor_1",
+      3,
+    );
+
+    expect(
+      findTimelineDisplayFrame(
+        [previousDayVisual],
+        0,
+        new Date(2026, 6, 29),
+      ),
+    ).toBeNull();
+  });
+
+  it("keeps screenshot fallback within the selected local calendar day", () => {
+    const nextDayVisual = createMockFrame(
+      "2026-07-30T00:01:00",
+      "monitor_1",
+      3,
+    );
+    const audioOnly = createAudioOnlyFrame("2026-07-29T23:59:00", -2);
+    const sameDayVisual = createMockFrame(
+      "2026-07-29T23:50:00",
+      "monitor_1",
+      2,
+    );
+
+    expect(
+      findTimelineDisplayFrame(
+        [nextDayVisual, audioOnly, sameDayVisual],
+        1,
+        new Date(2026, 6, 29),
+      ),
+    ).toBe(sameDayVisual);
+  });
 });
 
 describe("Timeline Store - Documented Bug Analysis", () => {

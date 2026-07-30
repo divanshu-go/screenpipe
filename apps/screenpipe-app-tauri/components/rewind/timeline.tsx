@@ -196,8 +196,8 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 	// transition after the final visual frame.
 	const visualFrame = useMemo(() => {
 		if (!currentFrame) return null;
-		return findTimelineDisplayFrame(frames, currentIndex) ?? currentFrame;
-	}, [currentFrame, currentIndex, frames]);
+		return findTimelineDisplayFrame(frames, currentIndex, currentDate);
+	}, [currentFrame, currentDate, currentIndex, frames]);
 
 	const { meetings } = useMeetings(frames);
 

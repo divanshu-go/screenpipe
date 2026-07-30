@@ -192,8 +192,8 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 		}
 	},
 
-	// Prepare for date navigation — keep old frames visible while new ones load.
-	// Sets pendingDateSwap so flushFrameBuffer replaces frames atomically on first batch.
+	// Prepare for date navigation by removing the previous day's timeline.
+	// Sets pendingDateSwap so the first incoming batch becomes the new date.
 	clearFramesForNavigation: () => {
 		// Clear the frame buffer too
 		frameBuffer = [];
@@ -207,9 +207,9 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 			requestTimeoutTimer = null;
 		}
 		requestRetryCount = 0;
-		// Keep frames + frameTimestamps so old content stays visible.
-		// pendingDateSwap tells flushFrameBuffer to replace (not merge) on next batch.
 		set(() => ({
+			frames: [],
+			frameTimestamps: new Set<string>(),
 			sentRequests: new Set<string>(),
 			pendingDateSwap: true,
 			isLoading: true,
