@@ -228,7 +228,6 @@ export type AccountPlan =
 	| 'business'
 	| 'team'
 	| 'enterprise'
-	| 'lifetime'
 	| 'unknown';
 
 // Auth result with tier information

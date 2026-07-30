@@ -62,8 +62,7 @@ export function hasPaidHostedAiPlan(auth: AuthResult): boolean {
 	return auth.accountPlan === 'basic' ||
 		auth.accountPlan === 'business' ||
 		auth.accountPlan === 'team' ||
-		auth.accountPlan === 'enterprise' ||
-		auth.accountPlan === 'lifetime';
+		auth.accountPlan === 'enterprise';
 }
 
 function blocked(status: number, code: string, message: string): FreeChatPreflight {

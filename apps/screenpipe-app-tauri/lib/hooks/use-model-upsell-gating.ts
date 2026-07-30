@@ -6,19 +6,23 @@
 import { useFeatureFlagEnabled } from "posthog-js/react";
 import { useSettings } from "@/lib/hooks/use-settings";
 import type { AppUser } from "@/lib/app-entitlement";
-import { MODEL_UPSELL_FLAG, shouldShowModelUpsell } from "@/lib/upsell-gating";
+import {
+  isModelUpsellFlagEnabled,
+  MODEL_UPSELL_FLAG,
+  shouldShowModelUpsell,
+} from "@/lib/upsell-gating";
 
 /**
  * Whether to surface the proactive model-gating upsell UI (greyed "Business"
- * picker + at-the-cap banner). Combines the PostHog flag (`model_gating_upsell`,
- * default off → ships dark) with the persisted-entitlement fail-open in
- * `shouldShowModelUpsell`, so a paying customer is never nagged.
+ * picker + at-the-cap banner). An absent PostHog flag defaults ON so Basic and
+ * Lifetime users get the Business path; an explicit false remains a remote
+ * kill-switch. `shouldShowModelUpsell` still fails open on unknown paid truth.
  */
 export function useModelUpsellGating(): boolean {
   const flag = useFeatureFlagEnabled(MODEL_UPSELL_FLAG);
   const { settings } = useSettings();
   return shouldShowModelUpsell(
     settings.user as AppUser | null | undefined,
-    flag === true,
+    isModelUpsellFlagEnabled(flag),
   );
 }

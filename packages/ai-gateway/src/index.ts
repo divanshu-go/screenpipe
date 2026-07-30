@@ -7,7 +7,7 @@ import { Env, RequestBody, AuthResult } from './types';
 import { handleOptions, createSuccessResponse, createErrorResponse, addCorsHeaders } from './utils/cors';
 import { validateAuth } from './utils/auth';
 import { RateLimiter, checkRateLimit } from './utils/rate-limiter';
-import { trackUsage, getUsageStatus, isModelAllowed, isFreeModel, resolveModelGate, getTierConfig, getCreditBalance } from './services/usage-tracker';
+import { trackUsage, getUsageStatus, isModelAllowed, isFreeModel, resolveModelGate, getTierConfig } from './services/usage-tracker';
 import { handleChatCompletions } from './handlers/chat';
 import { handleModelListing } from './handlers/models';
 import { handleFileTranscription, handleABTestAdmin } from './handlers/transcription';
@@ -148,14 +148,13 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			const status = await getUsageStatus(env, authResult.deviceId, authResult.tier, authResult.userId);
 			// Enrich with cost-based limit flag (NOT the raw $ numbers — those
 			// are our internal margin and shouldn't leak to any client/user).
-			// Credits extend the cap 1:1 (1 credit = $1 of headroom) so that the
-			// /billing top-up button actually lifts the limit it advertises.
+			// Stored query credits do not raise the cash ceiling. Credit-funded
+			// provider spend needs consumptive accounting before it can safely do so.
 			const dailyCost = await getDailyUserCost(env, authResult.deviceId);
 			const maxCost = getTierDailyCostCap(authResult.tier, env);
-			const credits = authResult.userId ? await getCreditBalance(env, authResult.userId) : 0;
 			const enriched = {
 				...status,
-				cost_limit_reached: dailyCost >= maxCost + credits,
+				cost_limit_reached: dailyCost >= maxCost,
 			};
 			return addCorsHeaders(createSuccessResponse(enriched));
 		}
@@ -294,11 +293,11 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				return rateLimit.response;
 			}
 
-			// Per-user daily cost cap (account-wide $ ceiling, credit-extended).
+			// Per-user daily cost cap (account-wide base cash ceiling).
 			// Applies to every priced model: weight-0 "free" models like
 			// gemini-3.5-flash still bleed real money once caching inflates the
 			// prompt, so the old weight>=3 gate let a single user hit ~$270/day.
-			const capError = await enforceDailyCostCap(env, authResult.deviceId, authResult.userId, authResult.tier, body.model);
+			const capError = await enforceDailyCostCap(env, authResult.deviceId, authResult.tier, body.model);
 			if (capError) return capError;
 
 			// Track usage and check daily limit (includes IP-based abuse prevention)
@@ -631,8 +630,8 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				// If body parse fails, let the proxy handle the error downstream
 			}
 
-			// Per-user daily cost cap (account-wide $ ceiling, credit-extended).
-			const msgCapError = await enforceDailyCostCap(env, authResult.deviceId, authResult.userId, authResult.tier, parsedModel);
+			// Per-user daily cost cap (account-wide base cash ceiling).
+			const msgCapError = await enforceDailyCostCap(env, authResult.deviceId, authResult.tier, parsedModel);
 			if (msgCapError) return msgCapError;
 
 			// Track usage and check daily limit (weighted by model)
@@ -751,8 +750,8 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				})));
 			}
 
-			// Per-user daily cost cap (account-wide $ ceiling, credit-extended).
-			const ocCapError = await enforceDailyCostCap(env, authResult.deviceId, authResult.userId, authResult.tier, ocModel);
+			// Per-user daily cost cap (account-wide base cash ceiling).
+			const ocCapError = await enforceDailyCostCap(env, authResult.deviceId, authResult.tier, ocModel);
 			if (ocCapError) return ocCapError;
 
 			// Track usage for OpenCode requests (weighted by model)

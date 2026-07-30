@@ -32,8 +32,8 @@ export function UpgradeQuotaBanner() {
   const [busy, setBusy] = useState(false);
 
   if (dismissed) return null;
-  // Off unless the PostHog flag is on AND the user isn't a (possibly flickering)
-  // paying customer — never nag someone with persisted entitlement evidence.
+  // Missing flag configuration defaults on. Explicit false kills the UI;
+  // Business/Team/Enterprise and unknown paid truth remain suppressed.
   if (!upsellEnabled) return null;
   if (!usage) return null;
   if (usage.tier === "subscribed") return null;
