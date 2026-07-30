@@ -160,6 +160,12 @@ pub struct PiQueueState {
     /// rejection, write failure, or termination. This reserves the turn
     /// without pretending the SDK actually accepted the prompt.
     prompt_pending: AtomicBool,
+    /// True once the current turn's `agent_start` has fired; reset when the
+    /// next prompt is written. Lets the acceptance wait tell a turn that
+    /// started-then-finished (a very short turn) apart from a prompt whose
+    /// `prompt_pending` was cleared by an abort/cancel *before* it ever
+    /// started — both leave `prompt_pending` and `agent_active` false.
+    agent_started: AtomicBool,
     /// True while a steer command has been written to stdin via
     /// `send_immediate` but the new turn's `agent_start` has not yet fired.
     /// Prevents the drain loop from writing the next queued prompt during
@@ -200,6 +206,7 @@ impl PiQueueState {
             queued_payloads: std::sync::Mutex::new(HashMap::new()),
             agent_active: AtomicBool::new(false),
             prompt_pending: AtomicBool::new(false),
+            agent_started: AtomicBool::new(false),
             steer_in_flight: AtomicBool::new(false),
             active_tool_calls: std::sync::Mutex::new(HashSet::new()),
             abort_requests: AtomicUsize::new(0),
@@ -236,6 +243,10 @@ impl PiQueueState {
         self.stamp_activity();
         self.prompt_pending.store(false, Ordering::SeqCst);
         self.agent_active.store(true, Ordering::SeqCst);
+        // Records that this turn genuinely started, so the acceptance wait can
+        // still recognize a turn that finished before it looked (vs an abort
+        // that cleared prompt_pending without ever starting).
+        self.agent_started.store(true, Ordering::SeqCst);
         self.done_notify.notify_waiters();
     }
 
@@ -251,8 +262,14 @@ impl PiQueueState {
     }
 
     fn mark_prompt_pending(&self) {
+        // New turn: arm pending and clear the "started" marker from any prior
+        // turn so this turn's acceptance is judged only on ITS own agent_start.
+        self.agent_started.store(false, Ordering::SeqCst);
         self.prompt_pending.store(true, Ordering::SeqCst);
         self.done_notify.notify_waiters();
+    }
+    fn agent_started_current_turn(&self) -> bool {
+        self.agent_started.load(Ordering::SeqCst)
     }
 
     fn mark_prompt_rejected(&self) {
@@ -1161,10 +1178,18 @@ async fn wait_for_prompt_acceptance(
         let notified = state.done_notify.notified();
         tokio::pin!(notified);
         notified.as_mut().enable();
-        // `prompt_pending` is cleared by agent_start. It may already be idle
-        // again if a very short turn started and ended before this check.
-        if state.is_agent_active() || !state.is_prompt_pending() {
+        // Accepted once the turn actually started — either still running, or it
+        // started and finished before this check (a very short turn), which
+        // `agent_started` records.
+        if state.is_agent_active() || state.agent_started_current_turn() {
             return (Ok(()), Some(response_rx));
+        }
+        // `prompt_pending` cleared but the turn never started → an abort/cancel
+        // landed before `agent_start`. Report it rejected rather than silently
+        // accepted, which would strand a user bubble with no assistant reply.
+        if !state.is_prompt_pending() {
+            state.mark_prompt_rejected();
+            return (Err(format!("{cmd_type} was cancelled before it started")), None);
         }
 
         tokio::select! {
@@ -1562,6 +1587,61 @@ mod tests {
             Err("aborted".to_string())
         );
         assert!(!state.is_abort_requested());
+
+        state.signal_terminated();
+        drop(handle);
+        join.await.expect("queue join");
+        let _ = child.wait();
+    }
+
+    #[tokio::test]
+    async fn test_abort_before_agent_start_rejects_the_prompt() {
+        use std::process::{Command as StdCommand, Stdio};
+
+        let mut child = StdCommand::new("cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn fake pi");
+        let stdin = Arc::new(Mutex::new(child.stdin.take().expect("fake pi stdin")));
+        let state = PiQueueState::new();
+        let (handle, join) = spawn_queue(stdin, state.clone(), 0);
+
+        let (_, reply) = handle
+            .send_prompt(
+                json!({ "type": "prompt", "message": "never starts" }),
+                WaitMode::Prompt,
+                "never starts".into(),
+                false,
+            )
+            .await
+            .expect("enqueue prompt");
+
+        // Wait until the prompt is written and in the acceptance wait (pending),
+        // with no agent_start yet.
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while !state.is_prompt_pending() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("prompt should become pending");
+
+        // Simulate an abort landing before agent_start — exactly what
+        // abort_active_only_inner does to the state on the abort response.
+        state.finish_aborted_turn();
+
+        // The never-started prompt must be REJECTED, not silently reported as
+        // accepted (which would strand a user bubble with no assistant reply).
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), reply)
+            .await
+            .expect("reply should resolve")
+            .expect("reply channel open");
+        assert!(
+            result.is_err(),
+            "a prompt aborted before agent_start must be rejected, got {result:?}"
+        );
 
         state.signal_terminated();
         drop(handle);
