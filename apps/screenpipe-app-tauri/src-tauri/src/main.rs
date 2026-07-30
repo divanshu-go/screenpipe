@@ -687,10 +687,11 @@ async fn main() {
         }
     }
 
-    // Generate TypeScript bindings in debug mode (also via `cargo test` — see
-    // specta_bindings.rs).
+    // Opt-in only. Auto-export on every debug launch wipes tauri.ts whenever
+    // specta_collect_commands! expands empty (wrong target-dir / stale sccache).
+    // Regenerate with: UPDATE_TAURI_BINDINGS=1 bun run bindings:generate
     #[cfg(debug_assertions)]
-    {
+    if std::env::var("UPDATE_TAURI_BINDINGS").as_deref() == Ok("1") {
         info!("Generating TypeScript bindings...");
 
         // tauri-specta command registry — must live in crate root scope for `collect_commands!`.

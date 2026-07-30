@@ -79,14 +79,14 @@ pub fn write_bindings_if_changed_with(
     let new_content = std::fs::read(&tmp_path).unwrap_or_default();
     let old_content = std::fs::read(path).unwrap_or_default();
 
-    // Refuse hollow exports (`commands = {}`) that would wipe a healthy file.
+    // Never write a hollow `commands = {}` export.
     let new_invokes = invoke_count(&new_content);
     let old_invokes = invoke_count(&old_content);
-    if new_invokes == 0 && old_invokes > 0 {
+    if new_invokes == 0 {
         let _ = std::fs::remove_file(&tmp_path);
         return Err(format!(
-            "refusing to overwrite {} with an empty command list (had {old_invokes} invokes). \
-             Rebuild so tauri-helper regenerates target/tauri_commands_list first",
+            "refusing to write {} with an empty command list (had {old_invokes} invokes). \
+             Rebuild so tauri-helper regenerates tauri_commands_list first",
             path.display()
         ));
     }
