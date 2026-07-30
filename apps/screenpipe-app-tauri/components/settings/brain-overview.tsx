@@ -17,11 +17,9 @@ import {
   AlertCircle,
   CheckCircle2,
   LayoutDashboard,
-  LayoutTemplate,
   Loader2,
   Network,
   RefreshCw,
-  SlidersHorizontal,
   Undo2,
   X,
 } from "lucide-react";
@@ -2555,9 +2553,6 @@ export function BrainOverview({
   const slots = normalizedSlots(view.slots);
   const boundSlotCount = slots.filter((slot) => slot.binding).length;
   const periodRanges = allowedLiveViewTimeRanges(view.periodPolicy);
-  const selectedPeriod =
-    periodRanges.find((range) => range.value === view.timeRange) ??
-    getLiveViewTimeRangeOption(view.timeRange);
   const latestDataTimestamp = slots.reduce<number | null>((latest, slot) => {
     const timestamp = slot.value?.updatedAt
       ? Date.parse(slot.value.updatedAt)
@@ -2594,6 +2589,12 @@ export function BrainOverview({
             selectionDisabled={dashboardSelectionDisabled}
             onSelect={selectDashboard}
             onCreate={beginCreate}
+            onCustomize={onboardingColdStart ? undefined : beginEdit}
+            onOpenTemplates={
+              !onboardingColdStart && templateKits.length > 0
+                ? () => setTemplateGalleryOpen(true)
+                : undefined
+            }
             onRename={renameDashboard}
             onDuplicate={duplicateDashboard}
             onDelete={deleteDashboard}
@@ -2609,15 +2610,15 @@ export function BrainOverview({
             }
             onCreateBlank={beginManualCreate}
           />
-          <p className="mt-2 text-xs text-muted-foreground">
+          <p
+            data-testid="overview-data-status"
+            className="mt-2 text-xs text-muted-foreground"
+          >
             {onboardingColdStart
               ? "This view will appear when Screenpipe has enough real activity for your outcome."
-              : `Pipes fill these Blocks for ${selectedPeriod.label.toLowerCase()}. Data changes when you refresh or a connected Pipe runs.`}
-            {latestDataTimestamp !== null && (
-              <span className="ml-1">
-                Last data {new Date(latestDataTimestamp).toLocaleString()}.
-              </span>
-            )}
+              : latestDataTimestamp !== null
+                ? `Updated ${new Date(latestDataTimestamp).toLocaleString()}`
+                : "No data yet"}
           </p>
         </div>
         <div
@@ -2697,46 +2698,22 @@ export function BrainOverview({
               </SelectContent>
             </Select>
           )}
-          {!onboardingColdStart && templateKits.length > 0 && (
-            <Button
-              data-testid="overview-templates"
-              variant="outline"
-              size="sm"
-              className="h-9 flex-1 rounded-none px-3 sm:flex-none"
-              disabled={dashboardBusy}
-              onClick={() => setTemplateGalleryOpen((open) => !open)}
-            >
-              <LayoutTemplate className="mr-1.5 h-3.5 w-3.5" /> templates
-            </Button>
-          )}
           {boundSlotCount > 0 && !onboardingColdStart && (
             <Button
               data-testid="overview-refresh-data"
               variant="outline"
-              size="sm"
-              className="h-9 flex-1 rounded-none px-3 sm:flex-none"
+              size="icon"
+              className="h-9 w-9 shrink-0 rounded-none"
               aria-label={refreshIsActive ? "loading data" : "refresh data"}
+              title={refreshIsActive ? "loading data" : "refresh data"}
               disabled={dashboardBusy}
               onClick={() => void refreshConnectedPipes(view)}
             >
               <RefreshCw
-                className={`mr-1.5 h-3.5 w-3.5 ${
+                className={`h-3.5 w-3.5 ${
                   refreshIsActive ? "animate-spin" : ""
                 }`}
               />
-              <span aria-hidden="true">refresh data</span>
-            </Button>
-          )}
-          {!onboardingColdStart && (
-            <Button
-              data-testid="overview-edit"
-              variant="outline"
-              size="sm"
-              className="h-9 flex-1 rounded-none px-3 sm:flex-none"
-              disabled={dashboardBusy}
-              onClick={beginEdit}
-            >
-              <SlidersHorizontal className="mr-1.5 h-3.5 w-3.5" /> customize
             </Button>
           )}
         </div>
