@@ -26,7 +26,8 @@ import { useDebounce } from "@/lib/hooks/use-debounce";
 import { format, isToday, isYesterday } from "date-fns";
 import { cn } from "@/lib/utils";
 import { commands } from "@/lib/utils/tauri";
-import { showChatWithPrefill, waitForChatReady } from "@/lib/chat-utils";
+import { showChatWithPrefill } from "@/lib/chat-utils";
+import { runSearchResultNavigation } from "@/lib/search-result-navigation";
 import { ThumbnailHighlightOverlay } from "./thumbnail-highlight-overlay";
 import { getFrameThumbnailSources } from "@/lib/frame-thumbnails";
 import { NearViewport } from "./near-viewport";
@@ -657,6 +658,7 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
   const [chatsPassPending, setChatsPassPending] = useState(false);
   const chatSearchRequestRef = useRef(0);
   const recentChatRequestRef = useRef(0);
+  const resultNavigationInFlightRef = useRef(false);
   // The query a chat load has already been dispatched for. Guards against
   // refetching the same query when only the scope changed. Seeded from the
   // prewarm cache, which holds the no-query list the Chats scope would ask for.
@@ -1497,14 +1499,34 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
 
   const handleOpenChatResult = useCallback(
     async (conversationId: string, selectionMethod: SearchSelectionMethod) => {
-      trackSearchResultSelected("chat", selectionMethod, "chat");
-      await commands.showWindowActivated({ Home: { page: "home" } });
-      await waitForChatReady("home");
-      await emit("chat-load-conversation", {
-        conversationId,
-        targetWindow: "home",
+      let homeShown = false;
+      await runSearchResultNavigation({
+        inFlightRef: resultNavigationInFlightRef,
+        navigate: async () => {
+          trackSearchResultSelected("chat", selectionMethod, "chat");
+          localStorage.setItem("pending-chat-conversation", conversationId);
+          try {
+            await commands.showWindowActivated({ Home: { page: "home" } });
+            homeShown = true;
+            await emit("chat-load-conversation", {
+              conversationId,
+              targetWindow: "home",
+            });
+          } catch (error) {
+            if (
+              !homeShown &&
+              localStorage.getItem("pending-chat-conversation") === conversationId
+            ) {
+              localStorage.removeItem("pending-chat-conversation");
+            }
+            throw error;
+          }
+        },
+        close: onClose,
+        onError: (phase, error) => {
+          console.error(`failed to ${phase} search chat result`, error);
+        },
       });
-      await onClose();
     },
     [onClose, trackSearchResultSelected],
   );
@@ -1705,16 +1727,20 @@ export function SearchModal({ isOpen, onClose, onNavigateToTimestamp, embedded =
     searchQuery?: string,
     closeAfterNavigation = true,
   ) => {
-    await onNavigateToTimestamp(
-      timestamp,
-      frameId,
-      searchTerms,
-      searchResultsJson,
-      searchQuery,
-    );
-    if (closeAfterNavigation) {
-      await onClose();
-    }
+    await runSearchResultNavigation({
+      inFlightRef: resultNavigationInFlightRef,
+      navigate: () => onNavigateToTimestamp(
+        timestamp,
+        frameId,
+        searchTerms,
+        searchResultsJson,
+        searchQuery,
+      ),
+      close: closeAfterNavigation ? onClose : undefined,
+      onError: (phase, error) => {
+        console.error(`failed to ${phase} search timeline result`, error);
+      },
+    });
   }, [onClose, onNavigateToTimestamp]);
 
   const handleSelectResult = useCallback(async (
