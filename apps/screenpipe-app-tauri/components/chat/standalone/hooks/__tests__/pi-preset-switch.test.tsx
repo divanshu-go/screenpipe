@@ -200,9 +200,24 @@ describe("send-time preset switch guard", () => {
     await expect(checkLivePiSession("session-1", setPiInfo, readPiInfo)).resolves.toEqual({
       running: false,
       error: "The AI assistant is not running",
+      indeterminate: false,
     });
     expect(readPiInfo).toHaveBeenCalledWith("session-1");
     expect(setPiInfo).toHaveBeenCalledWith(stoppedInfo);
+  });
+
+  it("marks a failed liveness query as indeterminate (does not claim not-running)", async () => {
+    const setPiInfo = vi.fn();
+    const readPiInfo = vi.fn(async () => ({ status: "error", error: "ipc timeout" } as const));
+
+    const result = await checkLivePiSession("session-1", setPiInfo, readPiInfo);
+    expect(result).toEqual({
+      running: false,
+      error: "ipc timeout",
+      indeterminate: true,
+    });
+    // A transient query failure must NOT nuke the render-time piInfo snapshot.
+    expect(setPiInfo).not.toHaveBeenCalled();
   });
 
   it("allows dispatch only after the live process manager reports running", async () => {

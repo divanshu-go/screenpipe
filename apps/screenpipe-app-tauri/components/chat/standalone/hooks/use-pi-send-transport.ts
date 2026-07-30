@@ -31,7 +31,10 @@ import type { PiSendTransportOptions } from "@/components/chat/standalone/hooks/
 
 type LivePiSessionCheck =
   | { running: true; info: PiInfo }
-  | { running: false; error: string };
+  // `indeterminate` = the piInfo query itself failed/threw, so liveness is
+  // unknown (transient IPC race), as opposed to a definitive "not running".
+  // Callers must not hard-abort a send on an indeterminate result.
+  | { running: false; error: string; indeterminate: boolean };
 
 export async function awaitPendingPiPresetSwitch(
   promiseRef: { current: Promise<void> | null },
@@ -49,19 +52,25 @@ export async function checkLivePiSession(
   try {
     const result = await readPiInfo(sessionId);
     if (result.status !== "ok") {
-      setPiInfo(null);
-      return { running: false, error: result.error || "Could not check the AI assistant" };
+      // Query failed — we could not determine liveness. Don't claim the
+      // session is down; mark indeterminate so callers don't hard-abort.
+      return {
+        running: false,
+        error: result.error || "Could not check the AI assistant",
+        indeterminate: true,
+      };
     }
     setPiInfo(result.data);
     if (!result.data.running) {
-      return { running: false, error: "The AI assistant is not running" };
+      // Definitive: the backend says the process is not running.
+      return { running: false, error: "The AI assistant is not running", indeterminate: false };
     }
     return { running: true, info: result.data };
   } catch (error) {
-    setPiInfo(null);
     return {
       running: false,
       error: error instanceof Error ? error.message : String(error),
+      indeterminate: true,
     };
   }
 }
@@ -399,9 +408,13 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     }
 
     // Verify once more after a possible start/wait immediately before mutating
-    // chat state or dispatching the prompt.
+    // chat state or dispatching the prompt. Only hard-abort on a DEFINITIVE
+    // not-running; if the liveness query itself failed (indeterminate, e.g. a
+    // transient IPC race), proceed with the send — the backend command surfaces
+    // a real error if the process is genuinely gone, rather than dropping a send
+    // that would have worked.
     liveSession = await checkLivePiSession(piSessionIdRef.current, setPiInfo);
-    if (!liveSession.running) {
+    if (!liveSession.running && !liveSession.indeterminate) {
       toast({
         title: "AI assistant is not ready",
         description: liveSession.error,
