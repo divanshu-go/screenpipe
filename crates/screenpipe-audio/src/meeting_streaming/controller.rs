@@ -938,7 +938,10 @@ mod tests {
     }
 
     /// Frame of constant-amplitude samples, so RMS equals `amplitude`.
-    fn test_frame(amplitude: f32, device_type: crate::core::device::DeviceType) -> MeetingAudioFrame {
+    fn test_frame(
+        amplitude: f32,
+        device_type: crate::core::device::DeviceType,
+    ) -> MeetingAudioFrame {
         MeetingAudioFrame {
             samples: Arc::new(vec![amplitude; 480]),
             device_name: "test device".to_string(),
@@ -972,19 +975,28 @@ mod tests {
         assert!(session.has_recent_voiced_audio(spoke_at));
 
         // The stamp ages out of the recency window rather than latching on.
-        assert!(!session
-            .has_recent_voiced_audio(spoke_at + STALL_VOICED_AUDIO_RECENCY + Duration::from_secs(1)));
+        assert!(!session.has_recent_voiced_audio(
+            spoke_at + STALL_VOICED_AUDIO_RECENCY + Duration::from_secs(1)
+        ));
 
         // Output taps use a lower floor than mics (system audio is quieter at
         // the tap), so the same amplitude counts as speech on one and not the
         // other. A regression here silently changes which meetings can warn.
         let quiet = 0.005;
         let mut output_session = test_session(now, true);
-        note_audio_frame(&mut output_session, &test_frame(quiet, DeviceType::Output), now);
+        note_audio_frame(
+            &mut output_session,
+            &test_frame(quiet, DeviceType::Output),
+            now,
+        );
         assert!(output_session.last_voiced_audio_at.is_some());
 
         let mut input_session = test_session(now, true);
-        note_audio_frame(&mut input_session, &test_frame(quiet, DeviceType::Input), now);
+        note_audio_frame(
+            &mut input_session,
+            &test_frame(quiet, DeviceType::Input),
+            now,
+        );
         assert!(input_session.last_voiced_audio_at.is_none());
 
         // Empty frames are counted but never treated as speech.
