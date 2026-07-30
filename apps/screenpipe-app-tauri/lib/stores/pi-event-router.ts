@@ -337,6 +337,11 @@ export function handleTerminated(payload: AgentTerminatedPayload) {
   // streaming dot.
   const sid = payload.sessionId;
   if (!sid) return;
+  // Snapshot the ACP resume id BEFORE clearing the live config: the crash
+  // persist below is async/queued and would otherwise read an already-cleared
+  // config, losing the resume id for a chat that crashed before its first
+  // agent_end wrote anything to disk.
+  const acpSessionIdSnapshot = useAcpSessionConfig.getState().sessions[sid]?.sessionId;
   useAcpSessionConfig.getState().clear(sid);
   const store = useChatStore.getState();
   if (!store.sessions[sid]) return;
@@ -357,7 +362,7 @@ export function handleTerminated(payload: AgentTerminatedPayload) {
   // was generated after the moment they navigated away. Foreground
   // session has its own pi_terminated handler in standalone-chat.
   if (store.currentId !== sid) {
-    void persistBackgroundSession(sid);
+    void persistBackgroundSession(sid, acpSessionIdSnapshot);
   }
 }
 
@@ -847,7 +852,13 @@ export async function flushPendingSaves(): Promise<void> {
  * data depending on where the save came from — confusing and a vector
  * for hard-to-reproduce bugs.
  */
-async function persistBackgroundSession(sid: string): Promise<void> {
+// `acpSessionIdOverride` lets callers that clear the live ACP config before the
+// (async, queued) persist runs — e.g. handleTerminated — pass the resume id
+// captured beforehand, so a crash mid-first-turn doesn't lose it.
+async function persistBackgroundSession(
+  sid: string,
+  acpSessionIdOverride?: string,
+): Promise<void> {
   const prev = saveQueue.get(sid) ?? Promise.resolve();
   const next = prev
     .catch(() => undefined)
@@ -874,7 +885,9 @@ async function persistBackgroundSession(sid: string): Promise<void> {
 
       const existing = await loadConversationFile(sid);
       const acpSessionId =
-        useAcpSessionConfig.getState().sessions[sid]?.sessionId ?? existing?.acpSessionId;
+        acpSessionIdOverride ??
+        useAcpSessionConfig.getState().sessions[sid]?.sessionId ??
+        existing?.acpSessionId;
       const browserState = resolveNewestBrowserState(
         existing?.browserState,
         getCachedBrowserStateEntry(sid),
