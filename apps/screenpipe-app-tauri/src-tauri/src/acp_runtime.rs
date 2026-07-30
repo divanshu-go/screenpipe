@@ -570,18 +570,26 @@ fn resolve_windows_program_in(
     PathBuf::from(program)
 }
 
+/// Sink for the newline-delimited JSON events the runtime streams to its
+/// parent. Boxed behind a mutex so the writer is stdout in production and a
+/// capture buffer under test; cloning shares the one sink.
 #[derive(Clone)]
-struct ParentOutput(Arc<Mutex<std::io::Stdout>>);
+struct ParentOutput(Arc<Mutex<Box<dyn std::io::Write + Send>>>);
 
 impl ParentOutput {
     fn new() -> Self {
-        Self(Arc::new(Mutex::new(std::io::stdout())))
+        Self(Arc::new(Mutex::new(Box::new(std::io::stdout()))))
+    }
+
+    #[cfg(test)]
+    fn with_writer(writer: Box<dyn std::io::Write + Send>) -> Self {
+        Self(Arc::new(Mutex::new(writer)))
     }
 
     fn send(&self, value: Value) {
-        if let Ok(mut stdout) = self.0.lock() {
-            let _ = writeln!(stdout, "{value}");
-            let _ = stdout.flush();
+        if let Ok(mut writer) = self.0.lock() {
+            let _ = writeln!(writer, "{value}");
+            let _ = writer.flush();
         }
     }
 }
@@ -3288,6 +3296,50 @@ mod tests {
             std::io::Error::last_os_error().raw_os_error(),
             Some(libc::ESRCH),
             "terminal process group should no longer exist"
+        );
+    }
+
+    /// A capture sink so a test can read the newline-JSON events the runtime
+    /// would otherwise stream to its parent over stdout.
+    #[derive(Clone)]
+    struct CaptureSink(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for CaptureSink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn agent_text_chunk_streams_as_a_text_delta_between_start_and_end() {
+        let captured = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let output = ParentOutput::with_writer(Box::new(CaptureSink(captured.clone())));
+        let state = RuntimeState::new(output, &runtime_config("claude-acp"));
+
+        // A turn: the prompt is in flight, the agent streams one text chunk,
+        // then the turn ends. This is the whole PR1 contract.
+        state.begin_prompt(Some("hi"));
+        state.handle_update(json!({
+            "sessionUpdate": "agent_message_chunk",
+            "content": { "type": "text", "text": "hello from the agent" }
+        }));
+        state.close_turn("end_turn");
+
+        let events = String::from_utf8(captured.lock().unwrap().clone()).unwrap();
+        // Opens the turn, streams the agent's text verbatim as a text_delta,
+        // and closes the turn.
+        assert!(events.contains("\"type\":\"agent_start\""), "missing agent_start in: {events}");
+        assert!(events.contains("\"type\":\"text_delta\""), "missing text_delta in: {events}");
+        assert!(events.contains("hello from the agent"), "text not streamed in: {events}");
+        assert!(events.contains("\"type\":\"agent_end\""), "missing agent_end in: {events}");
+        // text_delta must be emitted after the turn opens, never before.
+        assert!(
+            events.find("agent_start") < events.find("text_delta"),
+            "text streamed before the turn opened: {events}"
         );
     }
 }
