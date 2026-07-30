@@ -169,7 +169,7 @@ const INITIAL_DIAGNOSTICS: DiagnosticResults = {
 };
 
 export interface AIProviderCardProps {
-  type: "openai" | "openai-chatgpt" | "native-ollama" | "anthropic" | "custom" | "embedded" | "screenpipe-cloud";
+  type: "openai" | "openai-chatgpt" | "native-ollama" | "anthropic" | "custom" | "embedded" | "screenpipe-cloud" | "acp";
   title: string;
   description: string;
   imageSrc: string;
@@ -559,6 +559,7 @@ const AISection = ({
       "anthropic": "claude",
       "native-ollama": "ollama",
       "screenpipe-cloud": "screenpipe-cloud",
+      "acp": "claude code",
     };
 
     let newUrl = "";
@@ -586,9 +587,20 @@ const AISection = ({
         newUrl = ""; // Pi uses RPC mode, not HTTP
         newModel = "auto";
         break;
+      case "acp":
+        // The external adapter owns its own model/endpoint; the preset only
+        // records which adapter to launch.
+        newUrl = "";
+        newModel = "";
+        break;
     }
 
-    const updates: Partial<AIPreset> = { provider: newValue, url: newUrl, model: newModel };
+    const updates: Partial<AIPreset> = {
+      provider: newValue,
+      url: newUrl,
+      model: newModel,
+      acpAgent: newValue === "acp" ? { id: "claude-acp", args: [], env: {} } : undefined,
+    };
     // Auto-fill name only when creating a new preset (no existing id)
     if (!settingsPreset?.id && defaultNames[newValue]) {
       updates.id = defaultNames[newValue];
@@ -1252,6 +1264,15 @@ const AISection = ({
             imageSrc="/images/custom.png"
             selected={settingsPreset?.provider === "custom"}
             onClick={() => handleAiProviderChange("custom")}
+          />
+
+          <AIProviderCard
+            type="acp"
+            title="Claude Code"
+            description="Run Claude Code as your chat agent over the Agent Client Protocol."
+            imageSrc="/images/claude-ai.svg"
+            selected={settingsPreset?.provider === "acp"}
+            onClick={() => handleAiProviderChange("acp")}
           />
 
           <AIProviderCard

@@ -113,7 +113,10 @@ export function usePiSessionLifecycle({
   }, [aiPresets, isSettingsLoaded, setActivePreset, shouldFreezePresetSelection]);
 
   const hasPresets = Boolean(aiPresets && aiPresets.length > 0);
-  const hasValidModel = Boolean(activePreset?.model && activePreset.model.trim() !== "");
+  // An ACP preset has no model field; it is ready once an adapter is chosen.
+  const hasValidModel = activePreset?.provider === "acp"
+    ? Boolean(activePreset.acpAgent?.id?.trim())
+    : Boolean(activePreset?.model && activePreset.model.trim() !== "");
   const needsLogin = activePreset?.provider === "screenpipe-cloud" && !userToken;
   const canChat = hasPresets && hasValidModel && !piStarting;
 
@@ -135,7 +138,12 @@ export function usePiSessionLifecycle({
       connections: allConnectionItems,
     });
     const systemPrompt = `${buildSystemPrompt()}\n\n${presetPrompt}${connectionsCtx}${appAwarenessCtx}`.trim() || null;
+    const isAcp = p.provider === "acp";
     return {
+      // The acp backend launches the chosen external adapter instead of the
+      // native Pi RPC agent; everything downstream reads the same event stream.
+      backend: isAcp ? "acp" : null,
+      acpAgent: isAcp ? (p.acpAgent ?? null) : null,
       provider: p.provider,
       url: p.url || "",
       model: p.model || "",
@@ -144,6 +152,7 @@ export function usePiSessionLifecycle({
       systemPrompt,
     };
   }, [
+    activePreset?.acpAgent,
     activePreset?.apiKey,
     activePreset?.maxTokens,
     activePreset?.model,
