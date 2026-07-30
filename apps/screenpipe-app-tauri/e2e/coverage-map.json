@@ -255,6 +255,16 @@
       "notes": "The real new-chat shortcut opens a fresh chat from non-empty conversations and reuses one blank chat when pressed repeatedly."
     },
     {
+      "spec": "chat-new-session-stale-save.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["chat-ai", "real-ui-e2e", "storage-privacy"],
+      "features": ["chat", "chat-drafts"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "synthetic",
+      "notes": "Switching to a new Pi session binds its echoed user turn to the new conversation file and leaves the previous chat intact."
+    },
+    {
       "spec": "chat-sidebar-stub-dedup.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["chat-ai"],

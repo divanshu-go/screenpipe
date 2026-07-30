@@ -47,7 +47,7 @@ pass/fail/skip counts.
 | pipes | 4 specs / 14 tests / 14.0 pts | 4 specs / 14 tests / 14.0 pts | 4 specs / 14 tests / 14.0 pts |
 | real-ui-e2e | 42 specs / 128 tests / 102.8 pts | 44 specs / 115 tests / 92.3 pts | 39 specs / 108 tests / 90.0 pts |
 | settings | 13 specs / 33 tests / 30.6 pts | 15 specs / 28 tests / 24.3 pts | 12 specs / 25 tests / 22.6 pts |
-| storage-privacy | 6 specs / 21 tests / 20.1 pts | 5 specs / 13 tests / 12.1 pts | 4 specs / 13 tests / 12.1 pts |
+| storage-privacy | 7 specs / 22 tests / 21.1 pts | 6 specs / 14 tests / 13.1 pts | 5 specs / 14 tests / 13.1 pts |
 | tauri-command | 10 specs / 19 tests / 12.3 pts | 10 specs / 20 tests / 11.8 pts | 9 specs / 18 tests / 11.3 pts |
 | window-lifecycle | 17 specs / 61 tests / 51.6 pts | 17 specs / 42 tests / 30.0 pts | 12 specs / 37 tests / 28.5 pts |
 
@@ -108,6 +108,7 @@ pass/fail/skip counts.
 | chat-automation-card-duplicate.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat, chat-sidebar-dedupe | medium | partial | real-user-flow | 1 | Home automation card clicks must create exactly one persisted conversation per card, guarding the #4719 duplicate-row path. |
 | chat-composer-isolation.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat, chat-drafts | medium | partial | mixed | 1 | Composer draft isolation across conversations. |
 | chat-connections-context-duplicate.spec.ts | windows, macos | chat-ai | chat, chat-sidebar-dedupe | medium | partial | synthetic | 1 | QUARANTINED (#4689): connections-context wrapper stripping regression. The synthetic background-router event path never persists deterministically on Linux/macOS CI; re-enable once it drives a deterministic persisted session. |
+| chat-new-session-stale-save.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e, storage-privacy | chat, chat-drafts | high | strong | synthetic | 1 | Switching to a new Pi session binds its echoed user turn to the new conversation file and leaves the previous chat intact. |
 | chat-newchat-duplicate.spec.ts | windows, macos, linux | chat-ai | chat, chat-sidebar-dedupe | medium | partial | synthetic | 1 | Synthetic chat event regression for duplicate sidebar rows. |
 | chat-newchat-fresh.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat, chat-drafts | medium | partial | real-user-flow | 2 | The real new-chat shortcut opens a fresh chat from non-empty conversations and reuses one blank chat when pressed repeatedly. |
 | chat-parallel-jobs-duplicate.spec.ts | windows, macos, linux | chat-ai | chat, chat-sidebar-dedupe | medium | partial | synthetic | 1 | Parallel auto-send prefill dedupe regression. |
