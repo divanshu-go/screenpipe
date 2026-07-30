@@ -7,6 +7,7 @@ import { extractDomain } from "@/components/rewind/timeline/favicon-utils";
 import type { StreamTimeSeriesResponse } from "@/components/rewind/timeline";
 import type { Meeting } from "@/lib/hooks/use-meetings";
 import {
+	clampTimelineIndex,
 	findNextFrameIndex,
 	hasFrameVisualMedia,
 	snapFrameIndex,
@@ -112,7 +113,7 @@ export function useTimelineFilters(opts: {
 			return fromIndex;
 		}
 		if (selectedDeviceId === "all" || allDeviceIds.length <= 1) {
-			return findNextFrameIndex(frames, fromIndex, dir, hasFrameVisualMedia);
+			return clampTimelineIndex(fromIndex + dir, frames.length);
 		}
 		return findNextFrameIndex(
 			frames,
@@ -127,7 +128,7 @@ export function useTimelineFilters(opts: {
 	// Snap an arbitrary index to the nearest matching frame
 	const snapToDevice = useCallback((idx: number): number => {
 		if (selectedDeviceId === "all" || allDeviceIds.length <= 1) {
-			return snapFrameIndex(frames, idx, 1, hasFrameVisualMedia);
+			return clampTimelineIndex(idx, frames.length);
 		}
 		return snapFrameIndex(
 			frames,

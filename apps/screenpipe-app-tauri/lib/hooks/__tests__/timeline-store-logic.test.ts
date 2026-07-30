@@ -11,7 +11,9 @@
 import { describe, it, expect } from "bun:test";
 import { mergeTimelineFrames } from "../timeline-frame-merge";
 import {
+  clampTimelineIndex,
   findNextFrameIndex,
+  findTimelineDisplayFrame,
   hasFrameVisualMedia,
   snapFrameIndex,
 } from "../timeline-frame-navigation";
@@ -431,13 +433,13 @@ describe("Timeline Store Logic - Frame Refresh Bug Tests", () => {
   });
 });
 
-describe("Timeline visual frame navigation", () => {
+describe("Timeline frame navigation", () => {
   it("detects transcript-only timeline markers as non-visual", () => {
     expect(hasFrameVisualMedia(createMockFrame("2026-07-03T10:00:00Z"))).toBe(true);
     expect(hasFrameVisualMedia(createAudioOnlyFrame("2026-07-03T10:01:00Z"))).toBe(false);
   });
 
-  it("skips audio-only markers during default next/previous navigation", () => {
+  it("keeps audio-only markers reachable in unfiltered timeline navigation", () => {
     const frames = [
       createMockFrame("2026-07-03T10:03:00Z", "monitor_1", 3),
       createAudioOnlyFrame("2026-07-03T10:02:00Z", -2),
@@ -445,11 +447,12 @@ describe("Timeline visual frame navigation", () => {
       createMockFrame("2026-07-03T10:00:00Z", "monitor_1", 1),
     ];
 
-    expect(findNextFrameIndex(frames, 0, 1, hasFrameVisualMedia)).toBe(3);
-    expect(findNextFrameIndex(frames, 3, -1, hasFrameVisualMedia)).toBe(0);
+    expect(clampTimelineIndex(0 + 1, frames.length)).toBe(1);
+    expect(clampTimelineIndex(1 + 1, frames.length)).toBe(2);
+    expect(clampTimelineIndex(2 - 1, frames.length)).toBe(1);
   });
 
-  it("snaps wheel targets off audio-only markers toward the scroll direction", () => {
+  it("can still snap visual-only callers off audio markers", () => {
     const frames = [
       createMockFrame("2026-07-03T10:03:00Z", "monitor_1", 3),
       createAudioOnlyFrame("2026-07-03T10:02:00Z", -2),
@@ -459,6 +462,26 @@ describe("Timeline visual frame navigation", () => {
 
     expect(snapFrameIndex(frames, 1, 1, hasFrameVisualMedia)).toBe(2);
     expect(snapFrameIndex(frames, 1, -1, hasFrameVisualMedia)).toBe(0);
+  });
+
+  it("keeps the nearest screenshot visible while the playhead is on audio-only data", () => {
+    const newerVisual = createMockFrame("2026-07-03T10:03:00Z", "monitor_1", 3);
+    const audioOnly = createAudioOnlyFrame("2026-07-03T10:02:00Z", -2);
+    const olderVisual = createMockFrame("2026-07-03T09:00:00Z", "monitor_1", 2);
+    const frames = [newerVisual, audioOnly, olderVisual];
+
+    expect(findTimelineDisplayFrame(frames, 1)).toBe(newerVisual);
+    expect(findTimelineDisplayFrame([audioOnly], 0)).toBe(audioOnly);
+  });
+
+  it("prefers the last-seen screenshot when audio is exactly between two visuals", () => {
+    const newerVisual = createMockFrame("2026-07-03T10:03:00Z", "monitor_1", 3);
+    const audioOnly = createAudioOnlyFrame("2026-07-03T10:02:00Z", -2);
+    const olderVisual = createMockFrame("2026-07-03T10:01:00Z", "monitor_1", 2);
+
+    expect(
+      findTimelineDisplayFrame([newerVisual, audioOnly, olderVisual], 1),
+    ).toBe(newerVisual);
   });
 });
 

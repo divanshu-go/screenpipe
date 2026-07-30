@@ -9,6 +9,11 @@ type FramePredicate = (frame: StreamTimeSeriesResponse) => boolean;
 const clampIndex = (index: number, length: number): number =>
 	Math.max(0, Math.min(Math.floor(index), length - 1));
 
+export function clampTimelineIndex(index: number, length: number): number {
+	if (length === 0) return 0;
+	return clampIndex(index, length);
+}
+
 const stepFromDirection = (direction: number): 1 | -1 =>
 	direction < 0 ? -1 : 1;
 
@@ -19,6 +24,50 @@ export function hasFrameVisualMedia(
 		const filePath = device?.metadata?.file_path;
 		return typeof filePath === "string" && filePath.trim().length > 0;
 	});
+}
+
+export function findTimelineDisplayFrame(
+	frames: StreamTimeSeriesResponse[],
+	currentIndex: number,
+): StreamTimeSeriesResponse | null {
+	if (frames.length === 0) return null;
+	const clamped = clampTimelineIndex(currentIndex, frames.length);
+	const current = frames[clamped];
+	if (hasFrameVisualMedia(current)) return current;
+
+	let newerVisual: StreamTimeSeriesResponse | undefined;
+	let olderVisual: StreamTimeSeriesResponse | undefined;
+
+	for (let index = clamped - 1; index >= 0; index--) {
+		if (hasFrameVisualMedia(frames[index])) {
+			newerVisual = frames[index];
+			break;
+		}
+	}
+	for (let index = clamped + 1; index < frames.length; index++) {
+		if (hasFrameVisualMedia(frames[index])) {
+			olderVisual = frames[index];
+			break;
+		}
+	}
+
+	if (!newerVisual) return olderVisual ?? current;
+	if (!olderVisual) return newerVisual;
+
+	const currentTime = new Date(current.timestamp).getTime();
+	const newerTime = new Date(newerVisual.timestamp).getTime();
+	const olderTime = new Date(olderVisual.timestamp).getTime();
+	if (
+		Number.isNaN(currentTime) ||
+		Number.isNaN(newerTime) ||
+		Number.isNaN(olderTime)
+	) {
+		return newerVisual;
+	}
+
+	const newerDistance = Math.abs(newerTime - currentTime);
+	const olderDistance = Math.abs(olderTime - currentTime);
+	return newerDistance <= olderDistance ? newerVisual : olderVisual;
 }
 
 export function findNextFrameIndex(
