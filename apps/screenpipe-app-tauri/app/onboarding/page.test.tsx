@@ -326,6 +326,14 @@ describe("timeline slide sequencing", () => {
     );
     expect(await screen.findByText("timeline choice")).toBeInTheDocument();
     expect(screen.queryByText("engine")).not.toBeInTheDocument();
+    expect(mocks.capture).toHaveBeenCalledWith(
+      "onboarding_device_tier_evaluated",
+      {
+        device_tier: "low",
+        timeline_choice_eligible: true,
+        timeline_choice_policy_locked: false,
+      }
+    );
   });
 
   it.each(["mid", "high", undefined, null, "unknown", "LOW"])(
@@ -344,6 +352,16 @@ describe("timeline slide sequencing", () => {
       );
       expect(await screen.findByText("engine")).toBeInTheDocument();
       expect(screen.queryByText("timeline choice")).not.toBeInTheDocument();
+      expect(mocks.capture).toHaveBeenCalledWith(
+        "onboarding_device_tier_evaluated",
+        {
+          device_tier: ["mid", "high"].includes(deviceTier as string)
+            ? deviceTier
+            : "unknown",
+          timeline_choice_eligible: false,
+          timeline_choice_policy_locked: false,
+        }
+      );
     }
   );
 
@@ -363,6 +381,14 @@ describe("timeline slide sequencing", () => {
     );
     expect(await screen.findByText("engine")).toBeInTheDocument();
     expect(screen.queryByText("timeline choice")).not.toBeInTheDocument();
+    expect(mocks.capture).toHaveBeenCalledWith(
+      "onboarding_device_tier_evaluated",
+      {
+        device_tier: "low",
+        timeline_choice_eligible: false,
+        timeline_choice_policy_locked: true,
+      }
+    );
   });
 
   // The step writes disableTimeline AND disableScreenshots, so a policy owning

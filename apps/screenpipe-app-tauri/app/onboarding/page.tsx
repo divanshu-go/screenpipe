@@ -155,6 +155,12 @@ export default function OnboardingPage() {
     isSettingLocked("disableTimeline") || isSettingLocked("disableScreenshots");
   const timelineChoiceVisible =
     isConfidentLowEndDevice && !timelineChoiceLocked;
+  const deviceTierForAnalytics =
+    settings.deviceTier === "low" ||
+    settings.deviceTier === "mid" ||
+    settings.deviceTier === "high"
+      ? settings.deviceTier
+      : "unknown";
   const visibleOrder = useMemo(
     () => SLIDE_ORDER.filter((s) => s !== "timeline" || timelineChoiceVisible),
     [timelineChoiceVisible]
@@ -306,6 +312,18 @@ export default function OnboardingPage() {
       }
     }
 
+    // This event supplies the denominator for the low-tier fork. Keep the
+    // properties low-cardinality: native analytics already has the raw CPU and
+    // RAM measurements for detector audits, while this records the exact tier
+    // and policy decision that controlled onboarding.
+    if (currentSlide === "permissions") {
+      posthog.capture("onboarding_device_tier_evaluated", {
+        device_tier: deviceTierForAnalytics,
+        timeline_choice_eligible: timelineChoiceVisible,
+        timeline_choice_policy_locked: timelineChoiceLocked,
+      });
+    }
+
     // Walk SLIDE_ORDER (never the filtered list) so the index stays valid even
     // for a slide that policy hides, then land on the next visible slide.
     const nextSlide =
@@ -328,7 +346,10 @@ export default function OnboardingPage() {
   }, [
     completeOnboarding,
     currentSlide,
+    deviceTierForAnalytics,
     isManagedDeployment,
+    timelineChoiceLocked,
+    timelineChoiceVisible,
     visibleOrder,
   ]);
 
