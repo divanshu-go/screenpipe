@@ -4,8 +4,8 @@
 
 use screenpipe_semantic::{
     adapt_captured_accessibility_tree, parsers::builtin_parser_registry, render_semantic_context,
-    AppIdentity, CapturedAccessibilityNode, NodeBounds, OutputBudget, ParseContext, ParserRegistry,
-    Platform, TreeBudget, ValidatedParseOutcome,
+    AppIdentity, CapturedAccessibilityNode, OutputBudget, ParseContext, ParserRegistry, Platform,
+    TreeBudget, ValidatedParseOutcome,
 };
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, Read};
@@ -273,6 +273,7 @@ fn parse_args(args: Vec<String>) -> Result<(AppIdentity, u64), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use screenpipe_semantic::NodeBounds;
 
     #[test]
     fn metrics_never_serialize_captured_text() {

@@ -670,7 +670,7 @@ fn chromium_document_root(tree: &SemanticTree) -> Option<NodeId> {
     })
 }
 
-fn button_label<'a>(tree: &'a SemanticTree, node: NodeId) -> Option<&'a str> {
+fn button_label(tree: &SemanticTree, node: NodeId) -> Option<&str> {
     tree.role(node)
         .filter(|role| role.eq_ignore_ascii_case("Button"))?;
     node_content(tree, node)
@@ -803,7 +803,11 @@ fn joined_buffer_text(tree: &SemanticTree, buffer: &[NodeId]) -> Option<String> 
         let Some(content) = node_content(tree, node) else {
             continue;
         };
-        for line in content.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        for line in content
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+        {
             if lines.last() == Some(&line) {
                 continue;
             }

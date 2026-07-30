@@ -168,8 +168,12 @@ fn announcement_messages(tree: &SemanticTree) -> Option<Vec<(NodeId, &'static st
             break;
         }
     }
-    let has_user = announcements.iter().any(|(_, _, actor, _)| *actor == "[user]");
-    let has_assistant = announcements.iter().any(|(_, _, actor, _)| *actor == "Claude");
+    let has_user = announcements
+        .iter()
+        .any(|(_, _, actor, _)| *actor == "[user]");
+    let has_assistant = announcements
+        .iter()
+        .any(|(_, _, actor, _)| *actor == "Claude");
     if !has_user || !has_assistant {
         return None;
     }
@@ -195,7 +199,7 @@ fn announcement_messages(tree: &SemanticTree) -> Option<Vec<(NodeId, &'static st
     (!messages.is_empty()).then_some(messages)
 }
 
-fn announcement<'a>(tree: &'a SemanticTree, node: NodeId) -> Option<(&'static str, &'a str)> {
+fn announcement(tree: &SemanticTree, node: NodeId) -> Option<(&'static str, &str)> {
     if !tree.role(node).is_some_and(|role| {
         role.eq_ignore_ascii_case("Text") || role.eq_ignore_ascii_case("AXStaticText")
     }) {

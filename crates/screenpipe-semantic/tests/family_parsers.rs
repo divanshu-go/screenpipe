@@ -214,7 +214,8 @@ fn gmail_windows_fixture_extracts_list_rows_with_unread_state() {
     assert!(rows.iter().all(|row| row.actor.is_some()));
     assert!(rows.iter().all(|row| row.title.is_some()));
     assert!(
-        rows.iter().any(|row| row.status.as_deref() == Some("unread")),
+        rows.iter()
+            .any(|row| row.status.as_deref() == Some("unread")),
         "unread rows carry the zE class marker"
     );
     // Subject and snippet are split, never concatenated into the subject.
@@ -249,14 +250,19 @@ fn chatgpt_windows_fixture_extracts_turns_from_role_description_headings() {
             "Ask anything",
             "New Chrome available",
         ] {
-            assert!(!body.contains(chrome), "leaked browser/sidebar chrome: {chrome}");
+            assert!(
+                !body.contains(chrome),
+                "leaked browser/sidebar chrome: {chrome}"
+            );
         }
     }
 }
 
 #[test]
 fn chatgpt_windows_landing_surface_is_empty_not_abstained() {
-    let result = parse_fixture(include_str!("fixtures/families/chatgpt_windows_landing.json"));
+    let result = parse_fixture(include_str!(
+        "fixtures/families/chatgpt_windows_landing.json"
+    ));
     assert_eq!(
         result.selected_parser_id.as_deref(),
         Some("app.chatgpt.turn_markers")
