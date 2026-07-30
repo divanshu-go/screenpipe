@@ -247,10 +247,11 @@ export async function titleCreatedByAI(
   if (!selectedPreset) return null;
   const trimmed = content.trim();
   if (!trimmed) return null;
-  // Title generation is an internal, short-lived raw Pi session. Starting a
-  // second ACP harness here can reopen interactive auth and, without ACP
-  // config, previously fell through to Screenpipe Cloud. Let the caller use
-  // its normal title fallback for ACP conversations instead.
+  // Title generation runs its own short-lived raw Pi session, which an ACP
+  // preset has no local model/credential for — and spawning a second ACP
+  // harness could reopen interactive auth. Decline so the caller keeps its
+  // local fallback title for ACP conversations, and the chat's message is
+  // never routed to a different provider.
   if (selectedPreset.provider === "acp") return null;
 
   try {

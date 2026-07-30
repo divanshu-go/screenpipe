@@ -1796,9 +1796,9 @@ fn mcp_servers(config: &RuntimeConfig) -> Vec<McpServer> {
                 .args(args)
                 .env(env),
         ));
-        // Bundled companion server: the capabilities that used to live in Pi-only
-        // extensions (save_artifact, list_connections) as MCP tools, so every
-        // harness gets them. Additive next to the core screenpipe server above;
+        // Bundled companion server exposing save_artifact, list_connections,
+        // etc. as MCP tools so every harness gets them. Additive next to the
+        // core screenpipe server above;
         // shipped in-app (no npm fetch), talks only to the local engine.
         if let Some(tools_server) = ensure_tools_mcp_server(config) {
             let mut tools_env = Vec::new();
@@ -3068,10 +3068,9 @@ pub async fn run_from_env() -> Result<(), String> {
         }
     });
 
-    // Explicit EOF signal: SDK 1.2.0 never resolves the protocol future when
-    // the transport hits bare EOF (fixed upstream in #261), so a wedged
-    // adapter that closes stdout without exiting would hang every in-flight
-    // request forever without this.
+    // Explicit EOF signal: the ACP SDK's protocol future does not resolve on a
+    // bare transport EOF, so a wedged adapter that closes stdout without
+    // exiting would hang every in-flight request forever without this.
     let (stdout_eof_tx, mut stdout_eof_rx) = oneshot::channel::<()>();
     let incoming = futures::stream::unfold(
         (

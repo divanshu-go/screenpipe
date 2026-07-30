@@ -2288,10 +2288,10 @@ pub async fn pi_start_inner(
             warn!("failed to seed pi project trust for pi-acp: {}", e);
         }
 
-        // pi-acp uses the SAME isolated PI_CODING_AGENT_DIR as native pi, so a
-        // fresh Pi-over-ACP profile must get Screenpipe's provider setup and the
-        // required pi-subagents install exactly like native — otherwise it starts
-        // without them, and an existing raw-pi install would mask the regression.
+        // pi-acp uses the SAME isolated PI_CODING_AGENT_DIR as native pi, so it
+        // must get Screenpipe's provider setup and the required pi-subagents
+        // install exactly like native — a fresh profile would otherwise start
+        // without them.
         // These are ACP-safe: ensure_pi_config only merges into models.json /
         // auth.json (additive, never clobbering what the ACP session config
         // supplies) and registers the subagents setting; the package call then

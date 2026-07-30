@@ -33,8 +33,8 @@ import { titleCreatedByAI } from "@/lib/utils/generate-title-with-preset";
 describe("titleCreatedByAI — ACP no-leak guard", () => {
   it("never routes an ACP chat's message to a provider: returns null, starts no session", async () => {
     piStart.mockClear();
-    // The regression: an ACP chat's first prompt must not be sent anywhere for
-    // titling. Even with content present, no pi/title session may be started.
+    // An ACP chat's message must never be sent to another provider for
+    // titling: even with content present, no pi/title session may be started.
     const result = await titleCreatedByAI(
       "please summarize my private repo secrets",
       { provider: "acp", model: "" } as never,
