@@ -14,6 +14,7 @@ import ConnectApps from "@/components/onboarding/connect-apps";
 import FirstDashboard from "@/components/onboarding/first-dashboard";
 import { useOnboarding } from "@/lib/hooks/use-onboarding";
 import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
+import { useSettings } from "@/lib/hooks/use-settings";
 import { EnterpriseLicensePrompt } from "@/components/enterprise-license-prompt";
 import posthog from "posthog-js";
 import { commands } from "@/lib/utils/tauri";
@@ -36,8 +37,8 @@ const SLIDE_WINDOW_SIZES: Record<SlideKey, { width: number; height: number }> =
     "first-dashboard": { width: 500, height: 720 },
   };
 
-// The timeline choice sits before "engine" so disableTimeline is persisted
-// before the engine spawns and reads it — no restart needed.
+// When shown, the timeline choice sits before "engine" so disableTimeline is
+// persisted before the engine spawns and reads it — no restart needed.
 const SLIDE_ORDER: SlideKey[] = [
   "login",
   "permissions",
@@ -124,6 +125,7 @@ export default function OnboardingPage() {
     []
   );
   const { onboardingData, isLoading, completeOnboarding } = useOnboarding();
+  const { settings, isSettingsLoaded } = useSettings();
   const completedForHiddenUiRef = React.useRef(false);
   const transitioningRef = React.useRef(false);
   const {
@@ -137,23 +139,35 @@ export default function OnboardingPage() {
     policy: managedPolicy,
     isSettingLocked,
   } = useManagedPolicy();
+  // This intervention is intentionally narrow: only a canonical "low" tier
+  // written by the native hardware detector is enough evidence to show it.
+  // Missing, malformed, mid, and high tiers all skip it. We also wait for the
+  // settings store to hydrate below so its default/unknown state cannot be
+  // mistaken for hardware evidence.
+  const isConfidentLowEndDevice = settings.deviceTier === "low";
+
   // The timeline slide writes disableTimeline AND disableScreenshots, so a
   // policy owning either one already decides the outcome — showing the choice
-  // would let it contradict what the user picked. Drop the slide from the
-  // sequence in that case (which also keeps the progress bar count honest).
+  // would let it contradict what the user picked.
   const timelineChoiceLocked =
     isSettingLocked("disableTimeline") || isSettingLocked("disableScreenshots");
+  const timelineChoiceVisible =
+    isConfidentLowEndDevice && !timelineChoiceLocked;
   const visibleOrder = useMemo(
-    () => SLIDE_ORDER.filter((s) => s !== "timeline" || !timelineChoiceLocked),
-    [timelineChoiceLocked]
+    () => SLIDE_ORDER.filter((s) => s !== "timeline" || timelineChoiceVisible),
+    [timelineChoiceVisible]
   );
-  // Read by the mount-only restore effect below, which must not re-run when the
-  // policy resolves. Assigned during render, per the ref-mirror rule in CLAUDE.md.
-  const lockedRef = React.useRef(timelineChoiceLocked);
-  lockedRef.current = timelineChoiceLocked;
+  // Read by the hydration-gated restore effect below. Assigned during render,
+  // per the ref-mirror rule in CLAUDE.md.
+  const timelineChoiceVisibleRef = React.useRef(timelineChoiceVisible);
+  timelineChoiceVisibleRef.current = timelineChoiceVisible;
 
-  // Restore saved step on mount
+  // Restore only after both settings and managed policy hydrate. Otherwise a
+  // low-tier device can briefly look unknown and a saved timeline step would
+  // be skipped before the real hardware tier arrives.
   useEffect(() => {
+    if (!isSettingsLoaded || !isManagedDeploymentResolved) return;
+
     const init = async () => {
       const { loadOnboardingStatus } = useOnboarding.getState();
       await loadOnboardingStatus();
@@ -184,16 +198,18 @@ export default function OnboardingPage() {
         };
         const mapped = stepMap[step];
         if (mapped) {
-          // A step saved before policy took ownership must not resume onto a
-          // slide the policy now decides — skip to the next visible one.
+          // A saved step must not resume onto a slide that this device or its
+          // managed policy is no longer eligible to see.
           setCurrentSlide(
-            mapped === "timeline" && lockedRef.current ? "engine" : mapped
+            mapped === "timeline" && !timelineChoiceVisibleRef.current
+              ? "engine"
+              : mapped
           );
         }
       }
     };
     init();
-  }, []);
+  }, [isManagedDeploymentResolved, isSettingsLoaded]);
 
   // Set window size + track view when slide changes
   useEffect(() => {
@@ -309,7 +325,7 @@ export default function OnboardingPage() {
     handleNextSlide,
   ]);
 
-  if (isLoading || !isManagedDeploymentResolved) {
+  if (isLoading || !isSettingsLoaded || !isManagedDeploymentResolved) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-background">
         <div className="w-6 h-6 border border-foreground border-t-transparent rounded-full animate-spin" />

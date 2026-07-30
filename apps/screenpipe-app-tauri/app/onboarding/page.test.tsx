@@ -22,6 +22,8 @@ const mocks = vi.hoisted(() => ({
   completeOnboarding: vi.fn(async () => undefined),
   capture: vi.fn(),
   isSettingLocked: vi.fn((_key: string) => false),
+  settings: { deviceTier: "low" as string | null | undefined },
+  isSettingsLoaded: true,
 }));
 
 const onboardingData = { currentStep: "login", isCompleted: false };
@@ -47,6 +49,12 @@ vi.mock("@/lib/hooks/use-managed-policy", () => ({
     selectAuthenticationMethod: mocks.selectAuthenticationMethod,
     submitLicenseKey: mocks.submitLicenseKey,
     isSettingLocked: mocks.isSettingLocked,
+  }),
+}));
+vi.mock("@/lib/hooks/use-settings", () => ({
+  useSettings: () => ({
+    settings: mocks.settings,
+    isSettingsLoaded: mocks.isSettingsLoaded,
   }),
 }));
 vi.mock("@/components/onboarding/login-gate", () => ({
@@ -113,6 +121,8 @@ describe("enterprise onboarding authentication", () => {
     onboardingData.isCompleted = false;
     mocks.applyEnterpriseUiVisibility.mockResolvedValue(false);
     mocks.isSettingLocked.mockImplementation(() => false);
+    mocks.settings.deviceTier = "low";
+    mocks.isSettingsLoaded = true;
   });
 
   it("offers regular sign-in and Enterprise Key on the login step", () => {
@@ -272,9 +282,11 @@ describe("timeline slide sequencing", () => {
     onboardingData.isCompleted = false;
     mocks.applyEnterpriseUiVisibility.mockResolvedValue(false);
     mocks.isSettingLocked.mockImplementation(() => false);
+    mocks.settings.deviceTier = "low";
+    mocks.isSettingsLoaded = true;
   });
 
-  it("shows the timeline choice between permissions and engine", async () => {
+  it("shows the timeline choice between permissions and engine on a low-tier device", async () => {
     render(<OnboardingPage />);
 
     fireEvent.click(
@@ -287,6 +299,25 @@ describe("timeline slide sequencing", () => {
     expect(await screen.findByText("timeline choice")).toBeInTheDocument();
     expect(screen.queryByText("engine")).not.toBeInTheDocument();
   });
+
+  it.each(["mid", "high", undefined, null, "unknown", "LOW"])(
+    "skips the timeline choice when the device tier is %s",
+    async (deviceTier) => {
+      mocks.settings.deviceTier = deviceTier;
+
+      render(<OnboardingPage />);
+
+      fireEvent.click(
+        await screen.findByRole("button", { name: /finish permissions/i })
+      );
+
+      await waitFor(() =>
+        expect(mocks.setOnboardingStep).toHaveBeenCalledWith("engine")
+      );
+      expect(await screen.findByText("engine")).toBeInTheDocument();
+      expect(screen.queryByText("timeline choice")).not.toBeInTheDocument();
+    }
+  );
 
   it("skips straight to engine when policy manages disableTimeline", async () => {
     mocks.isSettingLocked.mockImplementation(
@@ -332,6 +363,33 @@ describe("timeline slide sequencing", () => {
     render(<OnboardingPage />);
 
     expect(await screen.findByText("timeline choice")).toBeInTheDocument();
+  });
+
+  it("does not resume a saved timeline step on a non-low-tier device", async () => {
+    onboardingData.currentStep = "timeline";
+    mocks.settings.deviceTier = "high";
+
+    render(<OnboardingPage />);
+
+    expect(await screen.findByText("engine")).toBeInTheDocument();
+    expect(screen.queryByText("timeline choice")).not.toBeInTheDocument();
+  });
+
+  it("waits for settings hydration before restoring a low-tier timeline step", async () => {
+    onboardingData.currentStep = "timeline";
+    mocks.settings.deviceTier = undefined;
+    mocks.isSettingsLoaded = false;
+
+    const view = render(<OnboardingPage />);
+    expect(screen.queryByText("timeline choice")).not.toBeInTheDocument();
+    expect(screen.queryByText("engine")).not.toBeInTheDocument();
+
+    mocks.settings.deviceTier = "low";
+    mocks.isSettingsLoaded = true;
+    view.rerender(<OnboardingPage />);
+
+    expect(await screen.findByText("timeline choice")).toBeInTheDocument();
+    expect(screen.queryByText("engine")).not.toBeInTheDocument();
   });
 
   it.each(["disableTimeline", "disableScreenshots"])(
