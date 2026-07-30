@@ -349,6 +349,7 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     await saveConversation(nextRowsAfterUserAppend, {
       refreshHistory: false,
       idOverride: turnSessionId,
+      turnState: { isLoading: true, isStreaming: false },
     });
     setInput("");
     if (inputRef.current) inputRef.current.style.height = "auto";

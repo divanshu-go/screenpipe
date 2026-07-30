@@ -12,7 +12,9 @@ use screenpipe_core::agents::pi::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use specta::Type;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Write};
 use tauri::Manager;
 use tokio::sync::oneshot;
@@ -613,6 +615,9 @@ pub struct PiManager {
     child: Option<Child>,
     stdin: Option<ChildStdin>,
     project_dir: Option<String>,
+    /// Hash of the spawn-time inputs. Multiple WebViews can request the same
+    /// session concurrently; identical starts must reuse the live child.
+    launch_fingerprint: Option<u64>,
     app_handle: AppHandle,
     last_activity: std::time::Instant,
     /// Guard: ensures only one `pi_terminated` event is emitted per session.
@@ -635,6 +640,7 @@ impl PiManager {
             child: None,
             stdin: None,
             project_dir: None,
+            launch_fingerprint: None,
             app_handle,
             last_activity: std::time::Instant::now(),
             terminated_emitted: Arc::new(AtomicBool::new(false)),
@@ -712,6 +718,7 @@ impl PiManager {
         self.stdin = None;
         self.project_dir = None;
         self.conversation_sync = PiConversationSync::new();
+        self.launch_fingerprint = None;
         // Drop all pending response channels so waiting callers get an error
         self.pending_responses.lock().unwrap().clear();
     }
@@ -1444,7 +1451,7 @@ fn ensure_connection_gate_extension(project_dir: &str) -> Result<(), String> {
 }
 
 /// Configuration for which AI provider Pi should use
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Hash, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct PiProviderConfig {
     /// Provider type: "openai", "native-ollama", "custom", "screenpipe-cloud"
@@ -1465,6 +1472,38 @@ pub struct PiProviderConfig {
 
 fn default_max_tokens() -> i32 {
     4096
+}
+
+fn pi_launch_fingerprint(
+    project_dir: &str,
+    user_token: Option<&str>,
+    provider_config: Option<&PiProviderConfig>,
+) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    project_dir.hash(&mut hasher);
+    user_token.hash(&mut hasher);
+    if let Some(config) = provider_config {
+        // buildSystemPrompt adds exact wall-clock lines. Home and standalone
+        // Chat build those a few milliseconds apart, but that is not a real
+        // configuration change and must not churn the shared Pi child.
+        let normalized_system_prompt = config.system_prompt.as_deref().map(|prompt| {
+            prompt
+                .lines()
+                .filter(|line| {
+                    !line.starts_with("Current time: ") && !line.starts_with("User's local time: ")
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        });
+        PiProviderConfig {
+            system_prompt: normalized_system_prompt,
+            ..config.clone()
+        }
+        .hash(&mut hasher);
+    } else {
+        Option::<u8>::None.hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 fn model_supports_reasoning(provider: &str, model: &str) -> bool {
@@ -1899,6 +1938,28 @@ pub async fn pi_start_inner(
     if project_dir.is_empty() {
         return Err("Project directory is required".to_string());
     }
+    let launch_fingerprint = pi_launch_fingerprint(
+        &project_dir,
+        user_token.as_deref(),
+        provider_config.as_ref(),
+    );
+    let sid = session_id.to_string();
+
+    // Fast path before provider discovery/config writes. Home and standalone
+    // Chat can both observe a stale local `piInfo` and request the same start;
+    // once either WebView has spawned the child, the other should return it.
+    {
+        let mut pool = state.0.lock().await;
+        if let Some(manager) = pool.sessions.get_mut(&sid) {
+            if manager.is_running() && manager.launch_fingerprint == Some(launch_fingerprint) {
+                info!(
+                    "Reusing existing pi instance for identical start of session '{}'",
+                    sid
+                );
+                return Ok(manager.snapshot(&sid));
+            }
+        }
+    }
 
     // Create project directory if it doesn't exist
     std::fs::create_dir_all(&project_dir)
@@ -1945,7 +2006,6 @@ pub async fn pi_start_inner(
         None => ("screenpipe".to_string(), "auto".to_string()),
     };
 
-    let sid = session_id.to_string();
     let mut pool = state.0.lock().await;
 
     // Stop existing instance for this session if running
@@ -1953,6 +2013,13 @@ pub async fn pi_start_inner(
     if let Some(m) = pool.sessions.get_mut(&sid) {
         if m.is_running() {
             let old_pid = m.child.as_ref().map(|c| c.id());
+            if m.launch_fingerprint == Some(launch_fingerprint) {
+                info!(
+                    "Reusing existing pi instance (pid {:?}) for identical start of session '{}'",
+                    old_pid, sid
+                );
+                return Ok(m.snapshot(&sid));
+            }
             if m.has_in_flight_work() {
                 warn!(
                     "Refusing to restart busy pi instance (pid {:?}) for session '{}'",
@@ -2336,6 +2403,7 @@ pub async fn pi_start_inner(
         m.child = Some(child);
         m.stdin = None; // stdin is now owned by the queue
         m.project_dir = Some(project_dir.clone());
+        m.launch_fingerprint = Some(launch_fingerprint);
         m.last_activity = std::time::Instant::now();
         // Fresh flag for this session — old reader threads keep their own Arc
         m.terminated_emitted = terminated_emitted.clone();
@@ -4166,6 +4234,43 @@ mod tests {
         let restarted_process = super::PiConversationSync::new();
         assert!(!running_process.is_same_process(&restarted_process));
         assert_eq!(*restarted_process.lock().await, NeedsRecovery);
+    }
+
+    #[test]
+    fn identical_pi_launches_share_a_fingerprint() {
+        let config = super::PiProviderConfig {
+            provider: "screenpipe-cloud".to_string(),
+            url: String::new(),
+            model: "auto".to_string(),
+            api_key: None,
+            max_tokens: 4096,
+            system_prompt: Some("system context".to_string()),
+        };
+        let first = super::pi_launch_fingerprint("/tmp/pi-chat", Some("token"), Some(&config));
+        let duplicate = super::pi_launch_fingerprint("/tmp/pi-chat", Some("token"), Some(&config));
+        assert_eq!(first, duplicate);
+
+        let mut changed = config.clone();
+        changed.system_prompt = Some("new system context".to_string());
+        assert_ne!(
+            first,
+            super::pi_launch_fingerprint("/tmp/pi-chat", Some("token"), Some(&changed),)
+        );
+
+        let mut first_time = config.clone();
+        first_time.system_prompt = Some(
+            "stable context\nCurrent time: 2026-07-29T23:55:01.000Z\nUser's timezone: America/Los_Angeles (UTC-7)\nUser's local time: 7/29/2026, 4:55:01 PM"
+                .to_string(),
+        );
+        let mut second_time = config;
+        second_time.system_prompt = Some(
+            "stable context\nCurrent time: 2026-07-29T23:55:02.000Z\nUser's timezone: America/Los_Angeles (UTC-7)\nUser's local time: 7/29/2026, 4:55:02 PM"
+                .to_string(),
+        );
+        assert_eq!(
+            super::pi_launch_fingerprint("/tmp/pi-chat", Some("token"), Some(&first_time),),
+            super::pi_launch_fingerprint("/tmp/pi-chat", Some("token"), Some(&second_time),)
+        );
     }
 
     #[test]
