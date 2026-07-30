@@ -582,7 +582,7 @@ async fn get_connection(
     response
 }
 
-/// PUT /connections/:id — save credentials.
+/// PUT/POST /connections/:id — save credentials.
 async fn connect_integration(
     State(state): State<ConnectionsState>,
     Path(id): Path<String>,
@@ -649,7 +649,8 @@ async fn list_instances(
         .is_some();
 
     if is_oauth {
-        let instances = oauth_store::list_oauth_instances(state.secret_store.as_deref(), &id).await;
+        let instances =
+            oauth_store::list_connected_oauth_instances(state.secret_store.as_deref(), &id).await;
         let mut items = Vec::new();
         for inst in instances {
             let token =
@@ -3397,7 +3398,12 @@ where
         .route(
             "/:id",
             get(get_connection)
+                // Keep POST as an alias for agent/tool callers. The UI and
+                // older clients use PUT, but the public connection contract
+                // describes configuration as POST /connections/:id. Both
+                // paths share the same credential-safe handler.
                 .put(connect_integration)
+                .post(connect_integration)
                 .delete(disconnect_integration),
         )
         .route("/:id/test", post(test_connection))
