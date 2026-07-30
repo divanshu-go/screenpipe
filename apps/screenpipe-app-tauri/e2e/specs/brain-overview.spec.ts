@@ -242,9 +242,7 @@ async function resizeCanvasBlockBottomRight(
   );
 
   const geometry = (await browser.execute((id) => {
-    const block = document.querySelector<HTMLElement>(
-      `[data-testid="${id}"]`,
-    );
+    const block = document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
     const handle = block?.querySelector<HTMLElement>(
       ".react-flow__resize-control.handle.bottom.right",
     );
@@ -265,9 +263,19 @@ async function resizeCanvasBlockBottomRight(
   expect(geometry).not.toBeNull();
 
   const dragError = (await browser.execute(
-    (drag: { startX: number; startY: number; endX: number; endY: number }) => {
+    (drag: {
+      testId: string;
+      startX: number;
+      startY: number;
+      endX: number;
+      endY: number;
+    }) => {
       try {
-        const handle = document.elementFromPoint(drag.startX, drag.startY);
+        const handle = document
+          .querySelector<HTMLElement>(`[data-testid="${drag.testId}"]`)
+          ?.querySelector<HTMLElement>(
+            ".react-flow__resize-control.handle.bottom.right",
+          );
         if (!(handle instanceof HTMLElement)) {
           return "resize handle is not available at the drag origin";
         }
@@ -307,6 +315,7 @@ async function resizeCanvasBlockBottomRight(
       }
     },
     {
+      testId,
       startX: Math.round(geometry!.handle.x),
       startY: Math.round(geometry!.handle.y),
       endX: Math.round(geometry!.handle.x + delta.x),
@@ -753,9 +762,7 @@ Refresh the assigned Live View output targets from source-backed activity.
       "canvas-block-time-by-app",
       { x: 96, y: 64 },
     );
-    let chartAfterResize:
-      | CanvasDocument["blocks"][number]
-      | undefined;
+    let chartAfterResize: CanvasDocument["blocks"][number] | undefined;
     await browser.waitUntil(
       async () => {
         const saved = await invokeOrThrow<CanvasDocument | null>(
@@ -767,8 +774,8 @@ Refresh the assigned Live View output targets from source-backed activity.
         );
         return Boolean(
           chartAfterResize &&
-            chartAfterResize.width >= chartBeforeResize.width + 80 &&
-            chartAfterResize.height >= chartBeforeResize.height + 48,
+          chartAfterResize.width >= chartBeforeResize.width + 80 &&
+          chartAfterResize.height >= chartBeforeResize.height + 48,
         );
       },
       {
@@ -872,8 +879,7 @@ Refresh the assigned Live View output targets from source-backed activity.
               candidate.fromId === "block:focus-time" &&
               candidate.toId === "block:time-by-app",
           ) &&
-          saved.blocks.find((block) => block.slotId === "focus-time")?.x ===
-            96,
+          saved.blocks.find((block) => block.slotId === "focus-time")?.x === 96,
         );
       },
       {

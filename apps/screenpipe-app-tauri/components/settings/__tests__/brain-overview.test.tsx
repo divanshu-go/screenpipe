@@ -205,6 +205,7 @@ const populatedView: ViewDefinition = {
       intent: "Calculate focused work time",
       binding: { pipeName: "daily-summary" },
       feedback: { upCount: 0, downCount: 0, current: null },
+      itemActions: { items: [] },
       value: {
         payload: { value: 4.5, unit: "hours", delta: "+45m" },
         evidence: [
@@ -220,6 +221,42 @@ const populatedView: ViewDefinition = {
         artifactOutputId: 88,
         artifactVersion: 2,
         updatedAt: "2026-07-23T17:00:00Z",
+      },
+    },
+  ],
+};
+
+const interactiveListView: ViewDefinition = {
+  ...populatedView,
+  id: "commitments",
+  title: "Commitments",
+  slots: [
+    {
+      id: "needs-attention",
+      title: "Needs attention",
+      component: "list.v1",
+      width: 12,
+      order: 0,
+      intent: "Show unresolved commitments",
+      binding: { pipeName: "daily-summary" },
+      feedback: { upCount: 0, downCount: 0, current: null },
+      itemActions: { items: [] },
+      value: {
+        payload: {
+          items: [
+            {
+              id: "customer-recap",
+              title: "Send the customer recap",
+              subtitle: "Promised after the discovery call",
+              actions: ["resolve", "snooze", "correct", "dismiss", "handoff"],
+            },
+          ],
+        },
+        evidence: [],
+        sourcePipe: "daily-summary",
+        artifactOutputId: 99,
+        artifactVersion: 3,
+        updatedAt: "2026-07-29T20:00:00Z",
       },
     },
   ],
@@ -1246,6 +1283,7 @@ describe("BrainOverview", () => {
         ...slot,
         value: null,
         feedback: { upCount: 0, downCount: 0, current: null },
+        itemActions: { items: [] },
       })),
     };
     mocks.listBrainViews.mockResolvedValue({
@@ -1270,6 +1308,7 @@ describe("BrainOverview", () => {
           ...slot,
           value: null,
           feedback: { upCount: 0, downCount: 0, current: null },
+          itemActions: { items: [] },
         })),
       },
     }));
@@ -1308,6 +1347,20 @@ describe("BrainOverview", () => {
         kitId: "daily-memory",
         targetViewId: "my-overview",
         expectedRevision: 3,
+      }),
+    );
+    expect(mocks.localFetch).toHaveBeenCalledWith(
+      "/pipes/day-recap/enable",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ enabled: true }),
+      }),
+    );
+    expect(mocks.localFetch).toHaveBeenCalledWith(
+      "/pipes/missed-todos/enable",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ enabled: true }),
       }),
     );
     expect(await screen.findByTestId("overview-undo-banner")).toBeTruthy();
@@ -1619,6 +1672,7 @@ describe("BrainOverview", () => {
           ...slot,
           value: null,
           feedback: { upCount: 0, downCount: 0, current: null },
+          itemActions: { items: [] },
         })),
       },
     }));
@@ -1693,6 +1747,7 @@ describe("BrainOverview", () => {
           ...slot,
           value: null,
           feedback: { upCount: 0, downCount: 0, current: null },
+          itemActions: { items: [] },
         })),
       },
     }));
@@ -1866,6 +1921,85 @@ describe("BrainOverview", () => {
       }),
     );
   });
+
+  it("persists a declared list-item action and renders its reversible receipt", async () => {
+    let actionPersisted = false;
+    const apiResolvedAction = {
+      item_id: "customer-recap",
+      disposition: "resolved" as const,
+      updated_at: "2026-07-29T20:05:00Z",
+    };
+    const persistedResolvedAction = {
+      itemId: "customer-recap",
+      disposition: "resolved" as const,
+      snoozedUntil: null,
+      correction: null,
+      updatedAt: "2026-07-29T20:05:00Z",
+    };
+    mocks.localFetch.mockImplementation(async (path: string) => {
+      if (path.endsWith("/actions")) actionPersisted = true;
+      return {
+        ok: true,
+        status: 200,
+        json: async () =>
+          path.endsWith("/actions")
+            ? { item_actions: { items: [apiResolvedAction] } }
+            : { success: true },
+      };
+    });
+    mocks.listBrainViews.mockImplementation(async () => ({
+      status: "ok" as const,
+      data: actionPersisted
+        ? [
+            {
+              ...interactiveListView,
+              slots: interactiveListView.slots.map((slot) => ({
+                ...slot,
+                itemActions: { items: [persistedResolvedAction] },
+              })),
+            },
+          ]
+        : [interactiveListView],
+    }));
+    render(<BrainOverview />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "done Send the customer recap",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("1 handled · show")).toBeTruthy(),
+    );
+    const actionCall = mocks.localFetch.mock.calls.find(([path]) =>
+      String(path).endsWith("/actions"),
+    );
+    expect(actionCall?.[0]).toBe(
+      "/outputs/targets/live-view%3Acommitments%3Aneeds-attention/items/customer-recap/actions",
+    );
+    expect(JSON.parse(actionCall?.[1].body)).toEqual({
+      artifact_output_id: 99,
+      artifact_version: 3,
+      action: "resolve",
+      snoozed_until: null,
+      correction: null,
+    });
+    await waitFor(() =>
+      expect(
+        mocks.localFetch.mock.calls.some(
+          ([path]) => path === "/pipes/daily-summary/run",
+        ),
+      ).toBe(true),
+    );
+
+    fireEvent.click(screen.getByText("1 handled · show"));
+    expect(
+      await screen.findByRole("button", {
+        name: "reopen Send the customer recap",
+      }),
+    ).toBeTruthy();
+  }, 15_000);
 
   it("lets a user explain a down rating so the Pipe can correct its next output", async () => {
     mocks.localFetch.mockResolvedValue({
