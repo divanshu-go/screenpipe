@@ -76,6 +76,10 @@ const APP_PID_FILE = resolve(E2E_DATA_DIR, 'app.pid');
 // specs (namespaced "vector" frames; the empty-state spec uses its own query).
 // `sck-enumeration-hang-once` is a debug-only macOS fault injection used by the
 // opt-in SCK startup recovery spec; the first monitor callback never returns.
+// `visual-check-hang-once` is a debug-only macOS fault injection used by the
+// opt-in capture-loop liveness spec; the first visual-change probe hangs far
+// past VISUAL_PROBE_TIMEOUT so the spec can assert the loop stays live
+// (attempts keep advancing, /health stays "ok") instead of freezing.
 export const E2E_SEED_FLAGS =
   process.env.SCREENPIPE_E2E_SEED ?? 'onboarding,no-recording,search-fixture';
 
