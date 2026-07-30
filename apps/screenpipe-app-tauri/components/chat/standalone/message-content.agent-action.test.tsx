@@ -5,8 +5,8 @@
 import * as React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { ContentBlock } from "@/lib/chat/types";
-import { InlineAgentActionCard } from "./message-content";
+import type { ContentBlock, Message } from "@/lib/chat/types";
+import { InlineAgentActionCard, MessageContent } from "./message-content";
 
 function actionBlock(
   overrides: Partial<Extract<ContentBlock, { type: "agent_action" }>> = {},
@@ -71,5 +71,19 @@ describe("InlineAgentActionCard", () => {
 
     expect(await screen.findByText("that did not work. please try again.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Sign in in browser" })).toBeEnabled();
+  });
+});
+
+describe("MessageContent tool-result placeholder", () => {
+  it("never renders the (tool result) placeholder as an assistant bubble", () => {
+    const message = {
+      id: "m1",
+      role: "assistant",
+      content: "(tool result)",
+      timestamp: 0,
+    } as unknown as Message;
+    const { container } = render(<MessageContent message={message} />);
+    expect(screen.queryByText("(tool result)")).not.toBeInTheDocument();
+    expect(container).toBeEmptyDOMElement();
   });
 });

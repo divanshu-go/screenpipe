@@ -944,11 +944,13 @@ async function persistBackgroundSession(
         messages: messages.map((m: any) => {
           let content: string = m.content || "";
           if (!content && m.contentBlocks?.length) {
-            content =
-              m.contentBlocks
-                .filter((b: any) => b.type === "text")
-                .map((b: any) => b.text)
-                .join("\n") || "(tool result)";
+            // Tool-only messages have no text; leave content empty (the tool
+            // activity persists via contentBlocks) rather than a placeholder
+            // that would render as an assistant text bubble.
+            content = m.contentBlocks
+              .filter((b: any) => b.type === "text")
+              .map((b: any) => b.text)
+              .join("\n");
           }
           // A tool still marked running at persist time never reported
           // completion: the turn was cut off (crash or app quit), since a
