@@ -1947,6 +1947,46 @@ describe("BrainOverview", () => {
     );
   });
 
+  it("counts persisted positive onboarding feedback as accepted first value", async () => {
+    startOnboardingLiveViewActivation(populatedView.id, "work_memory");
+    mocks.localFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        feedback: {
+          up_count: 1,
+          down_count: 0,
+          current: {
+            rating: "up",
+            artifact_output_id: 88,
+            artifact_version: 2,
+            created_at: "2026-07-24T18:00:00Z",
+          },
+        },
+      }),
+    });
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [populatedView],
+    });
+    render(<BrainOverview />);
+
+    const useful = await screen.findByRole("button", {
+      name: "mark Focus time useful",
+    });
+    mocks.capture.mockClear();
+    fireEvent.click(useful);
+
+    await waitFor(() =>
+      expect(mocks.capture).toHaveBeenCalledWith("onboarding_funnel_step", {
+        funnel_version: "onboarding_ui_v1",
+        step: "first_result_accepted",
+        goal_category: "work_memory",
+        acceptance_action: "positive_feedback",
+      }),
+    );
+  });
+
   it("persists a declared list-item action and renders its reversible receipt", async () => {
     let actionPersisted = false;
     const apiResolvedAction = {
@@ -2009,6 +2049,15 @@ describe("BrainOverview", () => {
       action: "resolve",
       snoozed_until: null,
       correction: null,
+    });
+    expect(mocks.capture).toHaveBeenCalledWith("qualified_value_event", {
+      metric_version: "repeat_value_d7_v1",
+      surface: "app",
+      action: "artifact",
+      value_strength: "accepted",
+      user_initiated: true,
+      success: true,
+      result_non_empty: true,
     });
     await waitFor(() =>
       expect(

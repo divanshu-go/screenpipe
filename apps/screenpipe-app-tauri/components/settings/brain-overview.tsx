@@ -13,6 +13,7 @@ import React, {
 import dynamic from "next/dynamic";
 import posthog from "posthog-js";
 import { qualifiedValue } from "@/lib/analytics/qualified-value";
+import { onboardingFunnel } from "@/lib/analytics/onboarding-funnel";
 import {
   AlertCircle,
   CheckCircle2,
@@ -969,6 +970,7 @@ export function BrainOverview({
         pipe_count: onboardingPipeNames.length,
         capture_state: captureReadiness,
       });
+      onboardingFunnel.brainHandoffViewed(onboardingActivation.goalCategory);
     }
     if (!onboardingHasResult || onboardingActivation.firstResultAt) return;
     const updated = markOnboardingLiveViewFirstResult(
@@ -980,6 +982,7 @@ export function BrainOverview({
       goal_category: onboardingActivation.goalCategory,
       pipe_count: onboardingPipeNames.length,
     });
+    onboardingFunnel.firstResultVisible(onboardingActivation.goalCategory);
   }, [
     captureReadiness,
     onboardingActivation,
@@ -1502,6 +1505,12 @@ export function BrainOverview({
       });
       if (rating === "up" && persistedFeedback.current?.rating === "up") {
         qualifiedValue.liveViewResultAccepted();
+        if (onboardingActivation) {
+          onboardingFunnel.firstResultAccepted(
+            onboardingActivation.goalCategory,
+            "positive_feedback",
+          );
+        }
       }
       if (rating) finishOnboardingActivation("feedback");
       return true;
@@ -1556,6 +1565,14 @@ export function BrainOverview({
         has_pipe: Boolean(slot.binding),
         has_correction: Boolean(request.correction?.trim()),
       });
+      if (qualifiedValue.liveViewItemActionCompleted(request.action)) {
+        if (onboardingActivation) {
+          onboardingFunnel.firstResultAccepted(
+            onboardingActivation.goalCategory,
+            "item_action",
+          );
+        }
+      }
       // The row changes immediately from persisted local state. Reconcile the
       // whole dashboard in the background so metrics, timelines, and context
       // blocks cannot remain out of step with the list.
