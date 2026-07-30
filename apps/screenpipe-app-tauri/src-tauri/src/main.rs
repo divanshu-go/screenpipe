@@ -107,6 +107,8 @@ mod voice_training;
 mod window;
 mod windows_ca_bundle;
 #[cfg(target_os = "windows")]
+mod windows_crash_dump;
+#[cfg(target_os = "windows")]
 mod windows_overlay;
 #[cfg(target_os = "windows")]
 mod windows_webview_env;
@@ -424,6 +426,12 @@ async fn main() {
             }
         }
     }
+
+    // Register the WER helper DLL that writes a local minidump for fail-fast
+    // crashes such as 0xc0000409, which bypass Rust panic/Sentry hooks, and
+    // recover dumps produced by a previous run.
+    #[cfg(target_os = "windows")]
+    windows_crash_dump::install();
 
     // Check if telemetry is disabled via store setting (analyticsEnabled)
     let store_path = screenpipe_core::paths::default_screenpipe_data_dir().join("store.bin");
