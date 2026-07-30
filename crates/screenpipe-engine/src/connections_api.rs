@@ -1854,7 +1854,7 @@ fn resolve_auth(
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                if user.is_empty() && pass.is_empty() {
+                if user.is_empty() || pass.is_empty() {
                     ResolvedAuth::None
                 } else {
                     ResolvedAuth::Basic(user, pass)
@@ -3609,7 +3609,7 @@ mod calendar_error_response_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use screenpipe_connect::connections::ProxyAuth;
+    use screenpipe_connect::connections::{lexi::Lexi, Integration, ProxyAuth};
     use serde_json::json;
 
     use axum::body::{to_bytes, Body};
@@ -4063,6 +4063,52 @@ mod tests {
         let creds = Map::new(); // no email or api_token
         assert!(matches!(
             resolve_auth(&auth_cfg, Some(&creds), None, None),
+            ResolvedAuth::None
+        ));
+    }
+
+    #[test]
+    fn test_resolve_auth_basic_requires_both_credentials() {
+        let auth_cfg = ProxyAuth::BasicAuth {
+            username_key: "username",
+            password_key: "password",
+        };
+
+        for creds in [
+            Map::from_iter([("username".into(), json!("user"))]),
+            Map::from_iter([("password".into(), json!("secret"))]),
+        ] {
+            assert!(matches!(
+                resolve_auth(&auth_cfg, Some(&creds), None, None),
+                ResolvedAuth::None
+            ));
+        }
+    }
+
+    #[test]
+    fn leexi_proxy_resolves_complete_credentials_as_basic() {
+        let config = Lexi.proxy_config().expect("Leexi should support proxying");
+        let creds = Map::from_iter([
+            ("api_key_id".into(), json!("key-id")),
+            ("key_secret".into(), json!("key-secret")),
+        ]);
+
+        match resolve_auth(&config.auth, Some(&creds), None, None) {
+            ResolvedAuth::Basic(user, pass) => {
+                assert_eq!(user, "key-id");
+                assert_eq!(pass, "key-secret");
+            }
+            _ => panic!("expected complete Leexi credentials to resolve as Basic auth"),
+        }
+    }
+
+    #[test]
+    fn leexi_proxy_does_not_reinterpret_legacy_api_key() {
+        let config = Lexi.proxy_config().expect("Leexi should support proxying");
+        let creds = Map::from_iter([("api_key".into(), json!("legacy-secret"))]);
+
+        assert!(matches!(
+            resolve_auth(&config.auth, Some(&creds), None, None),
             ResolvedAuth::None
         ));
     }
