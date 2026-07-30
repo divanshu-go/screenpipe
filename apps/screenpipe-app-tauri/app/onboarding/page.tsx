@@ -18,6 +18,7 @@ import { useSettings } from "@/lib/hooks/use-settings";
 import { EnterpriseLicensePrompt } from "@/components/enterprise-license-prompt";
 import posthog from "posthog-js";
 import { commands } from "@/lib/utils/tauri";
+import { onboardingFunnel } from "@/lib/analytics/onboarding-funnel";
 
 type SlideKey =
   | "login"
@@ -128,6 +129,7 @@ export default function OnboardingPage() {
   const { settings, isSettingsLoaded } = useSettings();
   const completedForHiddenUiRef = React.useRef(false);
   const transitioningRef = React.useRef(false);
+  const funnelStartedRef = React.useRef(false);
   const {
     isManagedDeployment,
     isManagedDeploymentResolved,
@@ -210,6 +212,32 @@ export default function OnboardingPage() {
     };
     init();
   }, [isManagedDeploymentResolved, isSettingsLoaded]);
+
+  useEffect(() => {
+    const persistedStep = onboardingData.currentStep;
+    const isNewEntry =
+      persistedStep === null ||
+      persistedStep === "login" ||
+      persistedStep === "welcome";
+    if (
+      isLoading ||
+      !isManagedDeploymentResolved ||
+      isManagedDeployment ||
+      onboardingData.isCompleted ||
+      !isNewEntry ||
+      funnelStartedRef.current
+    ) {
+      return;
+    }
+    funnelStartedRef.current = true;
+    onboardingFunnel.started();
+  }, [
+    isLoading,
+    isManagedDeployment,
+    isManagedDeploymentResolved,
+    onboardingData.currentStep,
+    onboardingData.isCompleted,
+  ]);
 
   // Set window size + track view when slide changes
   useEffect(() => {
