@@ -6,9 +6,9 @@ and layer declared in the manifest, weighted by confidence and criticality.
 
 - Manifest: `e2e/coverage-map.json`
 - Specs directory: `e2e/specs`
-- Mapped specs: 74
-- Declared test blocks: 224
-- Weighted coverage points: 173.7
+- Mapped specs: 76
+- Declared test blocks: 226
+- Weighted coverage points: 175.1
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -19,9 +19,9 @@ can execute more runtime cases than this number shows.
 
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
-| windows | 63 | 209 | 168.0 | 15 | 68 | 93% |
-| macos | 70 | 188 | 144.9 | 17 | 69 | 89% |
-| linux | 54 | 171 | 138.6 | 13 | 64 | 87% |
+| windows | 64 | 210 | 169.0 | 15 | 68 | 93% |
+| macos | 72 | 190 | 146.3 | 17 | 69 | 89% |
+| linux | 55 | 172 | 139.6 | 13 | 64 | 87% |
 
 ## Runtime Results
 
@@ -36,18 +36,18 @@ pass/fail/skip counts.
 | audio-device | 2 specs / 27 tests / 19.8 pts | 2 specs / 2 tests / 1.3 pts | - |
 | auth | - | 1 specs / 1 tests / 1.0 pts | - |
 | billing | 4 specs / 6 tests / 5.7 pts | 4 specs / 6 tests / 5.7 pts | 4 specs / 6 tests / 5.7 pts |
-| capture-ocr | 2 specs / 15 tests / 6.0 pts | 4 specs / 6 tests / 2.4 pts | 1 specs / 3 tests / 1.2 pts |
-| chat-ai | 18 specs / 31 tests / 22.4 pts | 21 specs / 35 tests / 23.7 pts | 17 specs / 30 tests / 21.9 pts |
+| capture-ocr | 2 specs / 15 tests / 6.0 pts | 5 specs / 7 tests / 2.8 pts | 1 specs / 3 tests / 1.2 pts |
+| chat-ai | 19 specs / 32 tests / 23.4 pts | 22 specs / 36 tests / 24.7 pts | 18 specs / 31 tests / 22.9 pts |
 | entitlement | - | 1 specs / 1 tests / 1.0 pts | - |
-| local-api | 15 specs / 96 tests / 80.0 pts | 15 specs / 71 tests / 61.0 pts | 12 specs / 69 tests / 60.2 pts |
+| local-api | 15 specs / 96 tests / 80.0 pts | 16 specs / 72 tests / 61.4 pts | 12 specs / 69 tests / 60.2 pts |
 | notifications | 2 specs / 11 tests / 10.1 pts | 2 specs / 4 tests / 2.4 pts | 1 specs / 3 tests / 2.1 pts |
 | onboarding | 2 specs / 7 tests / 4.6 pts | 2 specs / 7 tests / 4.6 pts | 2 specs / 7 tests / 4.6 pts |
-| os-integration | 5 specs / 17 tests / 16.1 pts | 5 specs / 4 tests / 1.3 pts | - |
+| os-integration | 5 specs / 17 tests / 16.1 pts | 6 specs / 5 tests / 1.7 pts | - |
 | performance | 2 specs / 44 tests / 44.0 pts | 4 specs / 34 tests / 30.5 pts | 1 specs / 29 tests / 29.0 pts |
 | pipes | 4 specs / 14 tests / 14.0 pts | 4 specs / 14 tests / 14.0 pts | 4 specs / 14 tests / 14.0 pts |
-| real-ui-e2e | 41 specs / 127 tests / 101.8 pts | 43 specs / 114 tests / 91.3 pts | 38 specs / 107 tests / 89.0 pts |
+| real-ui-e2e | 42 specs / 128 tests / 102.8 pts | 44 specs / 115 tests / 92.3 pts | 39 specs / 108 tests / 90.0 pts |
 | settings | 13 specs / 33 tests / 30.6 pts | 15 specs / 28 tests / 24.3 pts | 12 specs / 25 tests / 22.6 pts |
-| storage-privacy | 6 specs / 21 tests / 20.1 pts | 5 specs / 13 tests / 12.1 pts | 4 specs / 13 tests / 12.1 pts |
+| storage-privacy | 7 specs / 22 tests / 21.1 pts | 6 specs / 14 tests / 13.1 pts | 5 specs / 14 tests / 13.1 pts |
 | tauri-command | 10 specs / 19 tests / 12.3 pts | 10 specs / 20 tests / 11.8 pts | 9 specs / 18 tests / 11.3 pts |
 | window-lifecycle | 17 specs / 61 tests / 51.6 pts | 17 specs / 42 tests / 30.0 pts | 12 specs / 37 tests / 28.5 pts |
 
@@ -103,10 +103,12 @@ pass/fail/skip counts.
 | brain-overview.spec.ts | windows, macos, linux | real-ui-e2e, local-api, pipes | brain, brain-overview, brain-canvas, artifacts, pipes | high | strong | real-user-flow | 2 | Creates the first-open starter dashboard, renders source-backed selectable and fixed-period Live Views, verifies dashboard switching stays available during refresh, omits fixed-period controls from view and Customize, exercises durable Canvas notes, connections, keyboard movement, navigation restore, deletion cleanup, and checks layout bounds from 800x600 through 1920x1080. |
 | brain-section.spec.ts | windows, macos, linux | real-ui-e2e | brain, artifacts, memories, viewer-deeplink | medium | strong | real-user-flow | 10 | Brain coverage for filters, search, delete flows, selection pruning, add memory, and inline artifact markdown preview. |
 | capture-frequency-floor.spec.ts | macos | capture-ocr, settings, real-ui-e2e | capture-ocr, settings-recording, restart-flow | high | conditional | real-user-flow | 1 | macOS fixed screenshot cadence regression: persists the 1s setting before immediate Apply & Restart, then verifies real capture attempts and frame writes. |
+| capture-loop-liveness.spec.ts | macos | capture-ocr, local-api, os-integration | app-launch, capture-ocr | high | conditional | api | 1 | Opt-in macOS fault injection wedges a visual-change probe; asserts the bounded probe keeps the capture loop and its /health heartbeat live (no false stale/incident). |
 | chat-ask-user-tool-card.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat, chat-tools, pi-ask-user | medium | partial | mixed | 1 | Synthetic assistant tool block renders the Pi ask_user dropdown and sends the selected answer through the normal chat reply path. |
 | chat-automation-card-duplicate.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat, chat-sidebar-dedupe | medium | partial | real-user-flow | 1 | Home automation card clicks must create exactly one persisted conversation per card, guarding the #4719 duplicate-row path. |
 | chat-composer-isolation.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat, chat-drafts | medium | partial | mixed | 1 | Composer draft isolation across conversations. |
 | chat-connections-context-duplicate.spec.ts | windows, macos | chat-ai | chat, chat-sidebar-dedupe | medium | partial | synthetic | 1 | QUARANTINED (#4689): connections-context wrapper stripping regression. The synthetic background-router event path never persists deterministically on Linux/macOS CI; re-enable once it drives a deterministic persisted session. |
+| chat-new-session-stale-save.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e, storage-privacy | chat, chat-drafts | high | strong | synthetic | 1 | Switching to a new Pi session binds its echoed user turn to the new conversation file and leaves the previous chat intact. |
 | chat-newchat-duplicate.spec.ts | windows, macos, linux | chat-ai | chat, chat-sidebar-dedupe | medium | partial | synthetic | 1 | Synthetic chat event regression for duplicate sidebar rows. |
 | chat-newchat-fresh.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat, chat-drafts | medium | partial | real-user-flow | 2 | The real new-chat shortcut opens a fresh chat from non-empty conversations and reuses one blank chat when pressed repeatedly. |
 | chat-parallel-jobs-duplicate.spec.ts | windows, macos, linux | chat-ai | chat, chat-sidebar-dedupe | medium | partial | synthetic | 1 | Parallel auto-send prefill dedupe regression. |
@@ -115,6 +117,7 @@ pass/fail/skip counts.
 | chat-settings-background-stream.spec.ts | windows, macos, linux | chat-ai, settings, real-ui-e2e | chat, chat-streaming, settings | high | strong | real-user-flow | 1 | Opening the standalone Settings route mid-stream must not abort the chat: a long synthetic stream keeps running while the user round-trips to Settings, remains live in Recents, and restores the full response (early + final tokens) after the row is clicked. |
 | chat-sidebar-groups.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat, chat-sidebar-groups | medium | strong | real-user-flow | 9 | Pipe auto-grouping (collapse, badge, expand/collapse, localStorage persistence) and manual sidebar groups (move-to-group, section headers, remove-from-group cleanup). 8 tests. |
 | chat-sidebar-pipe-inventory.spec.ts | windows, macos, linux | chat-ai, pipes, real-ui-e2e | chat, pipes, chat-sidebar-groups | high | strong | mixed | 1 | A collapsed Pipes section loads nothing; expanding it lists a compact execution-backed activity page, expanding a pipe lazily loads its newest 10 executions, and older runs paginate on demand. |
+| chat-sidebar-repeated-prompt.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat, chat-sidebar-dedupe | high | strong | real-user-flow | 1 | Two distinct chats sent with the same opening prompt stay visible in the left sidebar. |
 | chat-sidebar-stub-dedup.spec.ts | windows, macos, linux | chat-ai | chat, chat-sidebar-dedupe | medium | partial | synthetic | 1 | Listener-order regression for metadata-only sidebar stubs gaining dedup keys. |
 | chat-source-file-preview.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat | medium | strong | real-user-flow | 1 | Clicking a chat file source opens it in the preview sidebar with rendered markdown + syntax-highlighted code. |
 | chat-streaming-performance.spec.ts | macos | chat-ai, performance | chat, chat-streaming | medium | conditional | performance | 2 | macOS-only chat streaming responsiveness. |
