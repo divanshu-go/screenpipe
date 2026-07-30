@@ -1403,14 +1403,24 @@ function ToolCallGroup({
             <div className="pl-1 pt-1" data-testid="tool-activity-list">
               {(() => {
                 // Subagent child calls (parentToolCallId) nest under their
-                // spawning Task row instead of cluttering the rail as
-                // siblings. One level deep, matching the wire format.
+                // spawning Task row instead of cluttering the rail as siblings.
+                // Nesting is one level deep: a call nests only under a
+                // top-level parent. A call whose parent is itself nested is
+                // promoted to top-level rather than dropped, so no tool row can
+                // silently disappear from the rail.
                 const ids = new Set(toolCalls.map((tc) => tc.id));
+                const resolvedParent = (tc: ToolCall): string | undefined => {
+                  const parent = tc.parentToolCallId;
+                  return parent && parent !== tc.id && ids.has(parent) ? parent : undefined;
+                };
+                const parentById = new Map<string, string | undefined>();
+                for (const tc of toolCalls) parentById.set(tc.id, resolvedParent(tc));
+                const isTopLevelId = (id: string) => !parentById.get(id);
                 const childrenByParent = new Map<string, ToolCall[]>();
                 const topLevel: ToolCall[] = [];
                 for (const tc of toolCalls) {
-                  const parent = tc.parentToolCallId;
-                  if (parent && parent !== tc.id && ids.has(parent)) {
+                  const parent = parentById.get(tc.id);
+                  if (parent && isTopLevelId(parent)) {
                     const siblings = childrenByParent.get(parent) ?? [];
                     siblings.push(tc);
                     childrenByParent.set(parent, siblings);
