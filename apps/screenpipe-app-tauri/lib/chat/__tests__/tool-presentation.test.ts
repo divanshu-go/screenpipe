@@ -248,19 +248,31 @@ describe("presentToolActivity", () => {
       completedLabel: "Completed a background step",
     });
 
-    // An unknown non-bash tool surfaces its humanized NAME (more useful than a
-    // generic step for ACP agents) but never its args.
+    // A tool with no `kind` and no mcp__ prefix keeps the coarse generic label,
+    // so an internal tool name is never surfaced.
     const tool = presentToolActivity({
       toolName: "unfamiliar_internal_tool",
       args: { payload: "SUPER_SECRET_VALUE" },
     });
     expect(tool).toEqual({
+      runningLabel: "Working on your request",
+      completedLabel: "Completed a background step",
+    });
+
+    // An agent-provided tool (carries a `kind`) surfaces its humanized name,
+    // but still never its args.
+    const acpTool = presentToolActivity({
+      toolName: "unfamiliar_internal_tool",
+      kind: "other",
+      args: { payload: "SUPER_SECRET_VALUE" },
+    });
+    expect(acpTool).toEqual({
       runningLabel: "Unfamiliar internal tool",
       completedLabel: "Unfamiliar internal tool",
     });
 
-    // Neither path leaks the args into the label.
-    expect(JSON.stringify([command, tool])).not.toContain("SUPER_SECRET_VALUE");
+    // None of the paths leak the args into the label.
+    expect(JSON.stringify([command, tool, acpTool])).not.toContain("SUPER_SECRET_VALUE");
   });
 
   it("hides file paths while preserving broad read and write intent", () => {

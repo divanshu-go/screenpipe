@@ -812,11 +812,15 @@ export function presentToolActivity(toolCall: PresentableToolCall): ToolActivity
     if (byKind) return byKind;
   }
 
-  // Last resort: surface the agent-provided tool name humanized, rather than a
-  // generic "background step".
-  const humanized = humanizeToolName(rawName);
-  if (humanized && humanized !== "Unknown" && humanized !== "Tool") {
-    return activity(humanized, humanized);
+  // Humanize the raw tool name only for agent-provided tools — ACP tools carry
+  // a `kind`, and MCP tools carry an `mcp__server__` prefix. Tools with neither
+  // keep the coarse generic label, so internal tool names are never surfaced to
+  // the user.
+  if (kind || MCP_PREFIX_RE.test(rawName)) {
+    const humanized = humanizeToolName(rawName);
+    if (humanized && humanized !== "Unknown" && humanized !== "Tool") {
+      return activity(humanized, humanized);
+    }
   }
   return GENERIC_ACTIVITY;
 }
