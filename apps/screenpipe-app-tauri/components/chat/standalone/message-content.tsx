@@ -1343,50 +1343,49 @@ function ToolCallGroup({
     <div className="w-full min-w-0 self-stretch">
       {!hideSummary && (
         <div className="mb-2 w-full min-w-full">
-          {/* Header — plain text while working, clickable with chevron when done */}
-          {isWorking ? (
-            <div
-              className="w-full flex items-center gap-1.5 py-1 text-left min-w-0"
-              data-testid="tool-activity-summary"
-            >
-              {/* Keep a testid'd running indicator so the collapsed-running
-                  state has a visible loading affordance (and satisfies the
-                  activity-spinner E2E contract), alongside the heartbeat text. */}
+          {/* Header toggles the tool list open/closed. It stays interactive
+              while the model is working so the user can inspect steps mid-turn:
+              the running spinner + live step progress show while active, the
+              summary + any failure count once idle. */}
+          <button
+            onClick={() => setManualExpand(isExpanded ? false : true)}
+            className="w-full flex items-center gap-1.5 py-1 text-left min-w-0 group cursor-pointer disabled:cursor-default focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground"
+            data-testid="tool-activity-summary"
+            aria-expanded={isExpanded}
+            disabled={forceCollapsed || hasInteractiveTool}
+          >
+            {isWorking && (
               <RefreshCw
                 className="h-3 w-3 shrink-0 animate-spin text-foreground/40"
                 data-testid="tool-activity-running-indicator"
                 aria-hidden="true"
               />
-              <span className="truncate text-xs font-mono text-foreground/50">
-                <WorkSummaryText text={runningSummary} animateRunningDuration />
-                {total > 1 && (
-                  <span className="text-foreground/30">
-                    {" "}· {toolCalls.filter((tc) => !tc.isRunning).length}/{total} done
-                  </span>
-                )}
-              </span>
-            </div>
-          ) : (
-            <button
-              onClick={() => setManualExpand(isExpanded ? false : true)}
-              className="w-full flex items-center gap-1.5 py-1 text-left min-w-0 group cursor-pointer disabled:cursor-default focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground"
-              data-testid="tool-activity-summary"
-              aria-expanded={isExpanded}
-              disabled={forceCollapsed || hasInteractiveTool}
-            >
-              <span className="truncate text-xs font-mono text-foreground/50 group-hover:text-foreground/80 transition-colors duration-150">
-                <WorkSummaryText text={summary || `${total} steps`} animateRunningDuration={false} />
-                {hasError && (
-                  <span className="ml-1.5 text-foreground/30">· {toolCalls.filter(tc => tc.isError).length} failed</span>
-                )}
-              </span>
-              {!forceCollapsed && !hasInteractiveTool && (isExpanded ? (
-                <ChevronDown className="h-3.5 w-3.5 flex-shrink-0 text-foreground/30 group-hover:text-foreground/60 transition-colors duration-150" />
+            )}
+            <span className="truncate text-xs font-mono text-foreground/50 group-hover:text-foreground/80 transition-colors duration-150">
+              {isWorking ? (
+                <>
+                  <WorkSummaryText text={runningSummary} animateRunningDuration />
+                  {total > 1 && (
+                    <span className="text-foreground/30">
+                      {" "}· {toolCalls.filter((tc) => !tc.isRunning).length}/{total} done
+                    </span>
+                  )}
+                </>
               ) : (
-                <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-foreground/30 group-hover:text-foreground/60 transition-colors duration-150" />
-              ))}
-            </button>
-          )}
+                <>
+                  <WorkSummaryText text={summary || `${total} steps`} animateRunningDuration={false} />
+                  {hasError && (
+                    <span className="ml-1.5 text-foreground/30">· {toolCalls.filter(tc => tc.isError).length} failed</span>
+                  )}
+                </>
+              )}
+            </span>
+            {!forceCollapsed && !hasInteractiveTool && (isExpanded ? (
+              <ChevronDown className="h-3.5 w-3.5 flex-shrink-0 text-foreground/30 group-hover:text-foreground/60 transition-colors duration-150" />
+            ) : (
+              <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-foreground/30 group-hover:text-foreground/60 transition-colors duration-150" />
+            ))}
+          </button>
           <div className="w-full min-w-full border-t border-border/50" />
         </div>
       )}
