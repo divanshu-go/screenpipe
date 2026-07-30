@@ -6,12 +6,22 @@
 
 use futures::StreamExt;
 use screenpipe_events::DiskSpaceLowEvent;
+use serde::Serialize;
 use tauri::{AppHandle, Manager};
-use tracing::{info, warn};
+use tracing::{debug, warn};
 
 use crate::notifications::client;
 use crate::recording::RecordingState;
 use crate::store::SettingsStore;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum DiskPressureOutcome {
+    GuardDisabled,
+    CaptureAlreadyStopped,
+    CaptureStopped,
+    StopFailed,
+}
 
 pub fn start(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
@@ -20,28 +30,32 @@ pub fn start(app: AppHandle) {
         );
 
         while let Some(event) = events.next().await {
-            handle(&app, event.data).await;
+            let _ = handle(&app, event.data).await;
         }
     });
 }
 
-async fn handle(app: &AppHandle, event: DiskSpaceLowEvent) {
+pub(crate) async fn handle(
+    app: &AppHandle,
+    event: DiskSpaceLowEvent,
+) -> DiskPressureOutcome {
     if !guard_enabled(app) {
-        info!(
+        debug!(
             available_bytes = event.available_bytes,
             "low-disk recording guard is disabled; leaving capture running"
         );
-        return;
+        return DiskPressureOutcome::GuardDisabled;
     }
 
     let state = app.state::<RecordingState>();
-    if !state.capture_intended() {
-        return;
+    let capture_session_running = state.capture.lock().await.is_some();
+    if !state.capture_intended() && !capture_session_running {
+        return DiskPressureOutcome::CaptureAlreadyStopped;
     }
 
     if let Err(error) = crate::recording::stop_capture(state, app.clone()).await {
         warn!("failed to stop capture after disk_space_low event: {error}");
-        return;
+        return DiskPressureOutcome::StopFailed;
     }
 
     crate::health::set_recording_status(crate::health::RecordingStatus::Paused);
@@ -55,9 +69,10 @@ async fn handle(app: &AppHandle, event: DiskSpaceLowEvent) {
              {threshold}). free disk space, then start recording again. search and existing \
              data remain available."
         ),
-        "system",
+        crate::notifications::gate::DISK_PRESSURE_NOTIFICATION_TYPE,
         None,
     );
+    DiskPressureOutcome::CaptureStopped
 }
 
 fn guard_enabled(app: &AppHandle) -> bool {

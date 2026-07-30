@@ -44,6 +44,7 @@ import {
   hasFreePlanPolicy,
 } from "@/lib/app-entitlement";
 import { cn } from "@/lib/utils";
+import { commands } from "@/lib/utils/tauri";
 
 type RetentionMode = "media" | "lean" | "all";
 type EffectiveMode = "off" | RetentionMode;
@@ -120,6 +121,9 @@ export function RetentionSettings({
   const [deletingRecent, setDeletingRecent] = useState(false);
   const [pendingCompact, setPendingCompact] = useState(false);
   const [compacting, setCompacting] = useState(false);
+  const [lowDiskThreshold, setLowDiskThreshold] = useState<string>(
+    "the safety reserve",
+  );
 
   const isFreePlan = hasFreePlanPolicy(settings.user as any);
   const enabled = isFreePlan ? true : (settings.localRetentionEnabled ?? false);
@@ -155,6 +159,23 @@ export function RetentionSettings({
     fetchStatus();
   }, [fetchStatus]);
   useInterval(fetchStatus, 10000);
+
+  useEffect(() => {
+    let cancelled = false;
+    void commands
+      .getLowDiskGuardConfig()
+      .then((config) => {
+        if (!cancelled) {
+          setLowDiskThreshold(formatBytes(config.thresholdBytes));
+        }
+      })
+      .catch(() => {
+        // The fallback stays accurate without inventing a second threshold.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Pull a fresh disk-preview whenever a confirmation opens or retentionDays
   // changes while pending. Cheap query, no debounce needed at human pace.
@@ -409,10 +430,13 @@ export function RetentionSettings({
                 <p className="text-sm font-medium">
                   stop recording before disk is full
                 </p>
-                <p className="text-xs text-muted-foreground">
-                  when free space falls to 20 GB, stop capture and notify you.
-                  search, pipes, and existing data stay available. off by
-                  default.
+                <p
+                  className="text-xs text-muted-foreground"
+                  data-testid="low-disk-recording-guard-copy"
+                >
+                  when free space falls to {lowDiskThreshold}, stop capture and
+                  notify you. search, pipes, and existing data stay available.
+                  off by default.
                 </p>
               </div>
             </div>
