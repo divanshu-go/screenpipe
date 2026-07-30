@@ -4412,12 +4412,76 @@ mod tests {
     /// accepts a prompt but never emits RPC stdout, its queue closes after the
     /// start watchdog, then a fresh child acknowledges a retry and runs longer
     /// than that watchdog before completing normally.
-    #[cfg(unix)]
     #[tokio::test]
     async fn pi_prompt_watchdog_recovers_with_fresh_process_e2e() {
         use std::process::{ChildStdout, Command as StdCommand};
         use std::sync::Arc;
         use tokio::sync::Mutex;
+
+        /// Fake Pi that reads stdin forever and never emits RPC stdout.
+        fn spawn_silent_fake_pi() -> std::process::Child {
+            #[cfg(unix)]
+            let mut cmd = {
+                let mut c = StdCommand::new("sh");
+                c.args(["-c", "while IFS= read -r _line; do :; done"]);
+                c
+            };
+            #[cfg(windows)]
+            let mut cmd = {
+                let mut c = StdCommand::new("powershell");
+                c.args([
+                    "-NoProfile",
+                    "-Command",
+                    "while ($null -ne [Console]::In.ReadLine()) {}",
+                ]);
+                c
+            };
+            cmd.stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("spawn silent fake Pi process")
+        }
+
+        /// Fake Pi that acks the first prompt, starts a 2s turn, then ends it.
+        fn spawn_healthy_fake_pi() -> std::process::Child {
+            #[cfg(unix)]
+            let mut cmd = {
+                let mut c = StdCommand::new("sh");
+                c.args([
+                    "-c",
+                    r#"
+IFS= read -r _line
+printf '%s\n' '{"type":"response","id":"req_1","success":true}'
+printf '%s\n' '{"type":"agent_start"}'
+sleep 2
+printf '%s\n' '{"type":"agent_end"}'
+"#,
+                ]);
+                c
+            };
+            #[cfg(windows)]
+            let mut cmd = {
+                let mut c = StdCommand::new("powershell");
+                c.args([
+                    "-NoProfile",
+                    "-Command",
+                    concat!(
+                        "$null = [Console]::In.ReadLine(); ",
+                        "[Console]::Out.WriteLine('{\"type\":\"response\",\"id\":\"req_1\",\"success\":true}'); ",
+                        "[Console]::Out.WriteLine('{\"type\":\"agent_start\"}'); ",
+                        "Start-Sleep -Seconds 2; ",
+                        "[Console]::Out.WriteLine('{\"type\":\"agent_end\"}')",
+                    ),
+                ]);
+                c
+            };
+            cmd.stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("spawn healthy fake Pi process")
+        }
 
         fn spawn_reader(
             stdout: ChildStdout,
@@ -4434,14 +4498,15 @@ mod tests {
             })
         }
 
-        let start_timeout = Duration::from_secs(1);
-        let mut silent_child = StdCommand::new("sh")
-            .args(["-c", "while IFS= read -r _line; do :; done"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawn silent fake Pi process");
+        // Windows gets a longer watchdog: the PowerShell fake Pi needs longer
+        // to boot on loaded CI runners than `sh` does, and a boot slower than
+        // the watchdog would trip it and fail the healthy-path half below.
+        let start_timeout = if cfg!(windows) {
+            Duration::from_secs(3)
+        } else {
+            Duration::from_secs(1)
+        };
+        let mut silent_child = spawn_silent_fake_pi();
         let silent_stdin = Arc::new(Mutex::new(
             silent_child.stdin.take().expect("silent child stdin"),
         ));
@@ -4477,10 +4542,11 @@ mod tests {
             .await
             .expect("enqueue follow-up behind silent prompt");
 
-        let silent_result = tokio::time::timeout(Duration::from_secs(3), silent_reply)
-            .await
-            .expect("silent prompt must hit the start watchdog")
-            .expect("silent reply channel stayed open");
+        let silent_result =
+            tokio::time::timeout(start_timeout + Duration::from_secs(3), silent_reply)
+                .await
+                .expect("silent prompt must hit the start watchdog")
+                .expect("silent reply channel stayed open");
         assert_eq!(
             silent_result,
             Err(crate::pi_command_queue::PROMPT_START_TIMEOUT_ERROR.to_string())
@@ -4500,20 +4566,7 @@ mod tests {
         silent_child.wait().expect("reap silent fake Pi process");
         silent_reader.join().expect("join silent stdout reader");
 
-        let healthy_script = r#"
-IFS= read -r _line
-printf '%s\n' '{"type":"response","id":"req_1","success":true}'
-printf '%s\n' '{"type":"agent_start"}'
-sleep 2
-printf '%s\n' '{"type":"agent_end"}'
-"#;
-        let mut healthy_child = StdCommand::new("sh")
-            .args(["-c", healthy_script])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawn healthy fake Pi process");
+        let mut healthy_child = spawn_healthy_fake_pi();
         let healthy_stdin = Arc::new(Mutex::new(
             healthy_child.stdin.take().expect("healthy child stdin"),
         ));
@@ -4539,10 +4592,11 @@ printf '%s\n' '{"type":"agent_end"}'
             )
             .await
             .expect("enqueue retry on fresh process");
-        let retry_result = tokio::time::timeout(Duration::from_secs(2), retry_reply)
-            .await
-            .expect("fresh process must acknowledge retry")
-            .expect("retry reply channel stayed open");
+        let retry_result =
+            tokio::time::timeout(start_timeout + Duration::from_secs(2), retry_reply)
+                .await
+                .expect("fresh process must acknowledge retry")
+                .expect("retry reply channel stayed open");
         assert_eq!(retry_result, Ok(()));
 
         tokio::time::sleep(Duration::from_millis(1_200)).await;
