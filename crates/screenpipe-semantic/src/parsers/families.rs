@@ -650,9 +650,14 @@ fn mail_row_cell_text<'a>(tree: &'a SemanticTree, row: NodeId, class: &str) -> O
 
 struct LabeledTurns {
     title: String,
-    messages: Vec<(NodeId, String, String)>,
+    /// Same shape the marker path produces: node, actor, actor evidence,
+    /// time label, body.
+    messages: Vec<(NodeId, String, &'static str, Option<String>, String)>,
 }
 
+/// Actor evidence for turns identified by their per-turn action controls
+/// rather than by direction state or an explicit author label.
+const CONTROL_ANCHOR: &str = "control_anchor";
 const UIA_CONTENT_ROLES: &[&str] = &["Text", "Heading", "Link", "Paragraph", "ListItem"];
 const MAX_UIA_BUFFER_NODES: usize = 1024;
 const MAX_UIA_BODY_BYTES: usize = 48 * 1024;
@@ -692,7 +697,7 @@ fn labeled_uia_turns(profile: &BuiltinAppProfile, tree: &SemanticTree) -> Option
         return None;
     }
 
-    let mut messages: Vec<(NodeId, String, String)> = Vec::new();
+    let mut messages: Vec<(NodeId, String, &'static str, Option<String>, String)> = Vec::new();
     let mut buffer: Vec<NodeId> = Vec::new();
     let mut title: Option<String> = None;
     let mut last_text: Option<NodeId> = None;
@@ -720,7 +725,7 @@ fn labeled_uia_turns(profile: &BuiltinAppProfile, tree: &SemanticTree) -> Option
                 buffer.clear();
                 if let Some(body) = collect_text(tree, node) {
                     if messages.len() < MAX_STRUCTURAL_CANDIDATES {
-                        messages.push((node, "[user]".to_owned(), body));
+                        messages.push((node, "[user]".to_owned(), CONTROL_ANCHOR, None, body));
                     }
                 }
                 skip_under = Some(node);
@@ -738,7 +743,13 @@ fn labeled_uia_turns(profile: &BuiltinAppProfile, tree: &SemanticTree) -> Option
             } else if label.eq_ignore_ascii_case("Good response") {
                 if !buffer.is_empty() && messages.len() < MAX_STRUCTURAL_CANDIDATES {
                     if let Some(body) = joined_buffer_text(tree, &buffer) {
-                        messages.push((buffer[0], profile.display_name.to_owned(), body));
+                        messages.push((
+                            buffer[0],
+                            profile.display_name.to_owned(),
+                            CONTROL_ANCHOR,
+                            None,
+                            body,
+                        ));
                     }
                 }
                 buffer.clear();
@@ -754,7 +765,18 @@ fn labeled_uia_turns(profile: &BuiltinAppProfile, tree: &SemanticTree) -> Option
         {
             continue;
         }
-        if node_content(tree, node).is_none() {
+        let Some(content) = node_content(tree, node) else {
+            continue;
+        };
+        // These surfaces render the turn time as a bare Text sibling right
+        // after the turn's own controls. Attach it to the turn just closed
+        // and keep it out of the body.
+        if content.len() <= 96 && is_message_time_label(content) {
+            if let Some(last) = messages.last_mut() {
+                last.3.get_or_insert_with(|| {
+                    content.replace(['\u{00a0}', '\u{202f}'], " ").to_owned()
+                });
+            }
             continue;
         }
         if role.eq_ignore_ascii_case("Text") {

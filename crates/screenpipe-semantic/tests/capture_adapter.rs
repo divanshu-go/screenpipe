@@ -105,6 +105,14 @@ fn suppresses_known_offscreen_content_without_dropping_structure() {
             value: Some("hidden value".into()),
             help_text: Some("hidden description".into()),
             on_screen: Some(false),
+            // Scrolled above the viewport: known geometry, off-window. This is
+            // the shape suppression exists for.
+            bounds: Some(NodeBounds {
+                left: 0.1,
+                top: -0.8,
+                width: 0.5,
+                height: 0.2,
+            }),
             automation_id: Some("message-container".into()),
             class_name: Some("message assistant".into()),
             ..Default::default()
@@ -136,6 +144,32 @@ fn suppresses_known_offscreen_content_without_dropping_structure() {
     assert_eq!(adapted.stats.suppressed_offscreen_content_nodes, 1);
     assert_eq!(adapted.stats.suppressed_offscreen_content_bytes, 50);
     assert_eq!(adapted.stats.value_nodes, 0);
+}
+
+#[test]
+fn keeps_content_for_offscreen_nodes_that_have_no_geometry() {
+    // Screen-reader affordances (aria-live announcements, visually-hidden
+    // labels) render no pixels anywhere, so the platform reports them as not
+    // on screen with no usable rect. They describe content that IS visible,
+    // so they are unknown visibility rather than scrollback, and fail open.
+    let nodes = vec![CapturedAccessibilityNode {
+        role: "AXStaticText".into(),
+        text: "You said: ship the parser".into(),
+        on_screen: Some(false),
+        bounds: None,
+        class_name: Some("sr-only select-none".into()),
+        ..Default::default()
+    }];
+    let adapted = adapt_captured_accessibility_tree(&nodes, TreeBudget::default()).unwrap();
+    let root = adapted.tree.roots().next().unwrap();
+
+    assert_eq!(adapted.tree.text(root), Some("You said: ship the parser"));
+    assert_eq!(adapted.stats.known_offscreen_nodes, 0);
+    assert_eq!(adapted.stats.suppressed_offscreen_content_nodes, 0);
+    // Structure and flags still record what the platform reported.
+    let flags = adapted.tree.flags(root).unwrap();
+    assert_ne!(flags & CapturedNodeFlags::ON_SCREEN_KNOWN, 0);
+    assert_eq!(flags & CapturedNodeFlags::ON_SCREEN, 0);
 }
 
 #[test]

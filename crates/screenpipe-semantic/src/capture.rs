@@ -99,6 +99,16 @@ pub struct AdaptedSemanticTree {
 /// off-screen retain structural fields and flags, but human-readable content is
 /// withheld so scrollback and hidden overflow cannot become semantic memory.
 /// Unknown visibility remains fail-open.
+///
+/// Suppression additionally requires retained geometry, because `on_screen`
+/// alone does not distinguish the two ways a node can miss the window. A node
+/// with bounds that lie off-window is scrollback — exactly what suppression is
+/// for. A node with no bounds at all renders no pixels anywhere and tells us
+/// nothing about where its content sits; screen-reader affordances
+/// (`aria-live` regions, visually-hidden labels) land here and describe what
+/// IS on screen, so treating them as scrollback deleted visible content. On
+/// real Windows captures that cost ~85% of Claude desktop conversation
+/// extraction. No geometry is therefore unknown visibility, and fails open.
 pub fn adapt_captured_accessibility_tree(
     nodes: &[CapturedAccessibilityNode],
     budget: TreeBudget,
@@ -152,7 +162,7 @@ pub fn adapt_captured_accessibility_tree(
             class_count += 1;
         }
         let classes = &class_buffer[..class_count];
-        let known_offscreen = node.on_screen == Some(false);
+        let known_offscreen = node.on_screen == Some(false) && node.bounds.is_some();
         let source_description = node
             .help_text
             .as_deref()

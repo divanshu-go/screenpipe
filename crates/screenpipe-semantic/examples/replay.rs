@@ -4,8 +4,8 @@
 
 use screenpipe_semantic::{
     adapt_captured_accessibility_tree, parsers::builtin_parser_registry, render_semantic_context,
-    AppIdentity, CapturedAccessibilityNode, OutputBudget, ParseContext, ParserRegistry, Platform,
-    TreeBudget, ValidatedParseOutcome,
+    AppIdentity, CapturedAccessibilityNode, NodeBounds, OutputBudget, ParseContext, ParserRegistry,
+    Platform, TreeBudget, ValidatedParseOutcome,
 };
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, Read};
@@ -295,6 +295,14 @@ mod tests {
                 role: "AXStaticText".into(),
                 text: "private offscreen sentinel".into(),
                 on_screen: Some(false),
+                // Off-window with known geometry: suppression requires that
+                // evidence, so keep the sentinel in the suppressed shape.
+                bounds: Some(NodeBounds {
+                    left: 0.1,
+                    top: -0.9,
+                    width: 0.6,
+                    height: 0.15,
+                }),
                 ..Default::default()
             },
         ];
