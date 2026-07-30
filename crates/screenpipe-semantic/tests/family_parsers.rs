@@ -174,6 +174,10 @@ fn windows_terminal_fixture_extracts_session_from_termcontrol_pane() {
     assert_eq!(items[0].kind, SemanticKind::Document);
     assert_eq!(items[0].item_key, "windowsterminal:terminal");
     assert_eq!(items[0].title.as_deref(), Some("Dev Shell"));
+    // The walker does not read TermControl's text pattern yet, so the pane
+    // carries only its tab title: record identity, never echo the title as
+    // captured buffer content.
+    assert_eq!(items[0].body, None);
     assert_eq!(
         items[0].metadata.get("app").map(String::as_str),
         Some("Windows Terminal")

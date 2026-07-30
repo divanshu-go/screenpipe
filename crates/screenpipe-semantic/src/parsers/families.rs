@@ -539,8 +539,12 @@ fn parse_windows_terminal(profile: &BuiltinAppProfile, tree: &SemanticTree) -> V
         format!("{}:terminal", profile.id),
         IdentityQuality::Ephemeral,
     );
+    let body = bodies.join("\n");
+    // Until the walker reads TermControl's UIA TextPattern, the only text on
+    // the pane is its tab title. Echoing it as the body would advertise
+    // buffer content that was never captured, so record identity alone.
+    terminal.body = (body != title).then_some(body);
     terminal.title = Some(title);
-    terminal.body = Some(bodies.join("\n"));
     terminal
         .metadata
         .insert("app".into(), profile.display_name.into());
