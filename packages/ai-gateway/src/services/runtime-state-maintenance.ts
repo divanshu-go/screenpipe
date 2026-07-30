@@ -23,7 +23,13 @@ export async function pruneRuntimeState(env: Env): Promise<void> {
                     WHERE bucket_epoch < (CAST(strftime('%s', 'now') AS INTEGER) - 3600) / 10`),
     env.DB.prepare(`DELETE FROM usage WHERE device_id IN (
                       SELECT device_id FROM usage
-                      WHERE tier IN ('ip_tracking', 'free_chat_in_flight_v1')
+                      WHERE tier = 'ip_tracking'
+                        AND last_reset < date('now', ?)
+                      LIMIT ?
+                    )`).bind(`-${EPHEMERAL_USAGE_RETENTION_DAYS} days`, MAINTENANCE_DELETE_BATCH),
+    env.DB.prepare(`DELETE FROM usage WHERE device_id IN (
+                      SELECT device_id FROM usage
+                      WHERE tier = 'free_chat_in_flight_v1'
                         AND updated_at < datetime('now', ?)
                       LIMIT ?
                     )`).bind(`-${EPHEMERAL_USAGE_RETENTION_DAYS} days`, MAINTENANCE_DELETE_BATCH),

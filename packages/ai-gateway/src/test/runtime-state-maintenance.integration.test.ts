@@ -78,7 +78,7 @@ describe('runtime state maintenance against workerd D1', () => {
       env.DB.prepare(`INSERT INTO model_health_window (bucket_epoch,model,outcome,requests)
         VALUES (CAST(strftime('%s','now') AS INTEGER)/10,'current','ok',1)`),
       env.DB.prepare(`INSERT INTO usage (device_id,last_reset,tier,updated_at)
-        VALUES ('old-ip',date('now'),'ip_tracking',datetime('now','-8 days'))`),
+        VALUES ('old-ip',date('now','-8 days'),'ip_tracking',datetime('now','-8 days'))`),
       env.DB.prepare(`INSERT INTO usage (device_id,last_reset,tier,updated_at)
         VALUES ('current-ip',date('now'),'ip_tracking',datetime('now'))`),
       env.DB.prepare(`INSERT INTO usage (device_id,last_reset,tier,updated_at)
