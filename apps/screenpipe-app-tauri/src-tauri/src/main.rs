@@ -860,7 +860,10 @@ async fn main() {
         // single-instance plugin uses zbus::blocking on Linux which panics
         // inside an existing tokio runtime (nested block_on), so skip it on Linux
         ;
-    #[cfg(not(target_os = "linux"))]
+    // E2E instances already use isolated focus, API, WebDriver, and data
+    // ports. Registering the OS-wide single-instance plugin would still make
+    // an unrelated developer or CI app silently win before WebDriver starts.
+    #[cfg(all(not(target_os = "linux"), not(feature = "e2e")))]
     let app = app.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
         // Defer off event stack: plugin may invoke this from run loop (nounwind).
         let app_for_closure = app.clone();

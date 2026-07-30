@@ -37,7 +37,11 @@ import {
   LiveViewAiComposer,
   type LiveViewGenerationIntent,
 } from "@/components/settings/live-view-ai-composer";
-import { LiveViewCard as OverviewCard } from "@/components/settings/live-view-card";
+import {
+  LiveViewCard as OverviewCard,
+  type LiveViewItemActionRequest,
+  type LiveViewListItem,
+} from "@/components/settings/live-view-card";
 import { LiveViewCreateDashboardDialog } from "@/components/settings/live-view-create-dashboard-dialog";
 import { LiveViewDashboardSwitcher } from "@/components/settings/live-view-dashboard-switcher";
 import { LiveViewLayoutEditor } from "@/components/settings/live-view-layout-editor";
@@ -63,6 +67,10 @@ import { useHealthCheck } from "@/lib/hooks/use-health-check";
 import { useToast } from "@/components/ui/use-toast";
 import { localFetch } from "@/lib/api";
 import { showChatWithPrefill } from "@/lib/chat-utils";
+import {
+  buildLiveViewItemHandoff,
+  persistLiveViewItemAction,
+} from "@/lib/live-views/item-actions";
 import {
   readActiveAiPresetId,
   resolveActiveAiPreset,
@@ -154,6 +162,7 @@ type LiveViewRefreshTrigger =
   | "dashboard_duplicated"
   | "undo"
   | "card_regenerated"
+  | "item_changed"
   | "card_ai_edit";
 
 type PreviewSource =
@@ -197,8 +206,7 @@ function liveViewAnalyticsProperties(
     time_range: targetView.timeRange,
     has_result: resultSlots.length > 0,
     all_bound_blocks_have_results:
-      boundSlots.length > 0 &&
-      boundSlots.every((slot) => slot.value !== null),
+      boundSlots.length > 0 && boundSlots.every((slot) => slot.value !== null),
     reviewed_block_count:
       positiveFeedbackBlockCount + negativeFeedbackBlockCount,
     positive_feedback_block_count: positiveFeedbackBlockCount,
@@ -332,6 +340,7 @@ function generatedSlots(
       binding: block.pipeName ? { pipeName: block.pipeName } : null,
       value: null,
       feedback: { upCount: 0, downCount: 0, current: null },
+      itemActions: { items: [] },
     };
   });
 }
@@ -359,6 +368,7 @@ function kitSlots(kit: BrainViewTemplateKit): ViewSlot[] {
     ...slot,
     value: null,
     feedback: { upCount: 0, downCount: 0, current: null },
+    itemActions: { items: [] },
   }));
 }
 
@@ -737,8 +747,7 @@ export function BrainOverview({
       ...liveViewAnalyticsProperties(view, views.length),
       entry_method,
       is_onboarding: Boolean(onboardingActivation),
-      onboarding_goal_category:
-        onboardingActivation?.goalCategory ?? "unknown",
+      onboarding_goal_category: onboardingActivation?.goalCategory ?? "unknown",
     });
   }, [onboardingActivation, view, views.length]);
 
@@ -750,10 +759,7 @@ export function BrainOverview({
     const captureVisibleResult = () => {
       if (document.visibilityState === "hidden") return;
       const previous = lastViewedResultRef.current;
-      if (
-        previous?.viewId === view.id &&
-        previous.signature === signature
-      ) {
+      if (previous?.viewId === view.id && previous.signature === signature) {
         return;
       }
       const entryMethod = !previous
@@ -837,9 +843,7 @@ export function BrainOverview({
         trigger,
         requested_block_count: boundSlots.length,
         requested_pipe_count: pipeNames.length,
-        is_onboarding: Boolean(
-          getOnboardingLiveViewActivation(targetView.id),
-        ),
+        is_onboarding: Boolean(getOnboardingLiveViewActivation(targetView.id)),
       };
       posthog.capture("live_view_refresh_requested", analyticsProperties);
       if (pipeNames.length === 0) {
@@ -1524,6 +1528,86 @@ export function BrainOverview({
     }
   };
 
+  const recordItemAction = async (
+    slot: ViewSlot,
+    request: LiveViewItemActionRequest,
+  ): Promise<boolean> => {
+    if (!view || !slot.value) return false;
+    try {
+      const persistedItemActions = await persistLiveViewItemAction({
+        viewId: view.id,
+        slot,
+        request,
+      });
+      setView((current) =>
+        current
+          ? {
+              ...current,
+              slots: current.slots.map((candidate) =>
+                candidate.id === slot.id
+                  ? { ...candidate, itemActions: persistedItemActions }
+                  : candidate,
+              ),
+            }
+          : current,
+      );
+      posthog.capture("live_view_item_action", {
+        ...liveViewAnalyticsProperties(view, views.length),
+        action: request.action,
+        component: slot.component,
+        has_pipe: Boolean(slot.binding),
+        has_correction: Boolean(request.correction?.trim()),
+      });
+      // The row changes immediately from persisted local state. Reconcile the
+      // whole dashboard in the background so metrics, timelines, and context
+      // blocks cannot remain out of step with the list.
+      void refreshConnectedPipes(view, undefined, "item_changed");
+      return true;
+    } catch (actionError) {
+      posthog.capture("live_view_item_action_failed", {
+        analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
+        action: request.action,
+        component: slot.component,
+        failure_type: analyticsErrorType(actionError),
+      });
+      toast({
+        title: "could not update this item",
+        description:
+          actionError instanceof Error
+            ? actionError.message
+            : String(actionError),
+        variant: "destructive",
+      });
+      return false;
+    }
+  };
+
+  const handoffItem = async (slot: ViewSlot, item: LiveViewListItem) => {
+    if (!view) return;
+    const handoff = buildLiveViewItemHandoff({
+      viewTitle: view.title,
+      slotTitle: slot.title,
+      item,
+    });
+    try {
+      await showChatWithPrefill({
+        ...handoff,
+        autoSend: true,
+        source: "live-view-item-handoff",
+        useHomeChat: true,
+      });
+    } catch (handoffError) {
+      toast({
+        title: "could not open the handoff",
+        description:
+          handoffError instanceof Error
+            ? handoffError.message
+            : String(handoffError),
+        variant: "destructive",
+      });
+    }
+  };
+
   const editSlotWithAi = async (
     slot: ViewSlot,
     prompt: string,
@@ -1780,6 +1864,29 @@ export function BrainOverview({
           throw new Error(renameResult.error);
         installedView = renameResult.data;
       }
+      const pipeEnableFailures: string[] = [];
+      await Promise.all(
+        kit.pipes.map(async (pipe) => {
+          try {
+            const response = await localFetch(
+              `/pipes/${encodeURIComponent(pipe.name)}/enable`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ enabled: true }),
+              },
+            );
+            const body = (await response.json().catch(() => ({}))) as {
+              error?: string;
+            };
+            if (!response.ok || body.error) {
+              throw new Error(body.error || `HTTP ${response.status}`);
+            }
+          } catch {
+            pipeEnableFailures.push(pipe.name);
+          }
+        }),
+      );
       setView(installedView);
       setUndoView(previousView);
       setUndoRevision(previousView ? installedView.revision : null);
@@ -1794,6 +1901,10 @@ export function BrainOverview({
         title: creatingNew
           ? `${installedView.title} created`
           : `${installedView.title} replaced`,
+        description:
+          pipeEnableFailures.length > 0
+            ? `Open Pipes to enable continuous updates for ${pipeEnableFailures.join(", ")}.`
+            : undefined,
       });
       posthog.capture("live_view_dashboard_saved", {
         ...liveViewAnalyticsProperties(
@@ -1805,11 +1916,7 @@ export function BrainOverview({
         template_id: kit.id,
         refresh_requested: true,
       });
-      void refreshConnectedPipes(
-        installedView,
-        undefined,
-        "template_applied",
-      );
+      void refreshConnectedPipes(installedView, undefined, "template_applied");
     } catch (installError) {
       posthog.capture("live_view_dashboard_save_failed", {
         analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
@@ -2762,6 +2869,8 @@ export function BrainOverview({
             void refreshConnectedPipes(view, [slot], "card_regenerated")
           }
           onAiEdit={editSlotWithAi}
+          onItemAction={recordItemAction}
+          onItemHandoff={handoffItem}
         />
       ) : (
         <div
@@ -2781,13 +2890,11 @@ export function BrainOverview({
                 recordCardFeedback(slot, rating, correction)
               }
               onRegenerate={() =>
-                void refreshConnectedPipes(
-                  view,
-                  [slot],
-                  "card_regenerated",
-                )
+                void refreshConnectedPipes(view, [slot], "card_regenerated")
               }
               onAiEdit={(prompt) => editSlotWithAi(slot, prompt)}
+              onItemAction={(request) => recordItemAction(slot, request)}
+              onItemHandoff={(item) => void handoffItem(slot, item)}
             />
           ))}
         </div>
