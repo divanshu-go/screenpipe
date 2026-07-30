@@ -1705,16 +1705,22 @@ fn spawn_terminal(state: &RuntimeState, request: CreateTerminalRequest) -> Resul
         );
     std::thread::spawn(move || {
         let status = wait_for_terminal_and_cleanup(&mut child, &process_tree_for_wait);
-        // A process can exit before its pipe-reader threads consume the final
-        // kernel-buffered bytes. Publish terminal exit only after both streams
-        // reach EOF so terminal/wait followed by terminal/output is complete.
-        for reader in readers {
-            let _ = reader.join();
-        }
+        // Publish the exit status as soon as the command's own process exits.
+        // We must NOT block this on the reader threads reaching EOF: a command
+        // that backgrounds a process (e.g. `sleep 300 &`, or a daemon) leaves
+        // the inherited stdout/stderr pipe open after the direct child exits,
+        // so the readers would not EOF for the grandchild's whole lifetime —
+        // hanging every terminal/wait and leaking its blocking-pool worker.
         let (lock, ready) = &*exit_for_wait;
         if let Ok(mut value) = lock.lock() {
             *value = Some(status);
             ready.notify_all();
+        }
+        // Best-effort drain of any remaining buffered output. The wait has
+        // already resolved, so nothing is blocked on this; the readers end on
+        // EOF (or when the process tree is terminated on release).
+        for reader in readers {
+            let _ = reader.join();
         }
     });
     Ok(terminal_id)
