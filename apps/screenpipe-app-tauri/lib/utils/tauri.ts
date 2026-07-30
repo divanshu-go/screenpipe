@@ -3015,9 +3015,6 @@ downloaded: boolean;
  * True when download failed with 401/403 — user must sign in.
  */
 auth_required: boolean }
-/**
- * Configuration for which AI provider Pi should use
- */
 export type PiBackend = "acp"
 export type PiCheckResult = { available: boolean; path: string | null }
 export type PiExtensionPackage = { source: string; scope: string; filtered: boolean; installed: boolean }
@@ -3031,6 +3028,11 @@ export type PiInfo = { running: boolean; projectDir: string | null; pid: number 
  * Genuine process/configuration failures still use the command error.
  */
 startupError: string | null }
+/**
+ * Configuration for which AI provider Pi should use.
+ * Not `Hash` (it carries an `env: HashMap` via the ACP agent config); the
+ * launch fingerprint hashes a canonical serialization instead.
+ */
 export type PiProviderConfig = {
 /**
  * Transport backend. Omitted keeps the native Pi RPC implementation;

@@ -1687,11 +1687,17 @@ fn pi_launch_fingerprint(
                 .collect::<Vec<_>>()
                 .join("\n")
         });
-        PiProviderConfig {
+        let normalized = PiProviderConfig {
             system_prompt: normalized_system_prompt,
             ..config.clone()
-        }
-        .hash(&mut hasher);
+        };
+        // PiProviderConfig isn't `Hash` (its ACP agent config carries an
+        // `env: HashMap`). Hash a canonical serialization instead: two
+        // concurrent identical spawn requests clone the same config, which
+        // serializes identically, so they still share a fingerprint.
+        serde_json::to_string(&normalized)
+            .unwrap_or_default()
+            .hash(&mut hasher);
     } else {
         Option::<u8>::None.hash(&mut hasher);
     }
@@ -5042,12 +5048,15 @@ mod tests {
     #[test]
     fn identical_pi_launches_share_a_fingerprint() {
         let config = super::PiProviderConfig {
+            backend: None,
+            acp_agent: None,
             provider: "screenpipe-cloud".to_string(),
             url: String::new(),
             model: "auto".to_string(),
             api_key: None,
             max_tokens: 4096,
             system_prompt: Some("system context".to_string()),
+            resume_session_id: None,
         };
         let first = super::pi_launch_fingerprint("/tmp/pi-chat", Some("token"), Some(&config));
         let duplicate = super::pi_launch_fingerprint("/tmp/pi-chat", Some("token"), Some(&config));
