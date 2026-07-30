@@ -493,6 +493,11 @@ function removeAgentActionsFromSession(sid: string): void {
   // A backgrounded session's messages all belong to it, so strip every
   // agent-action block (predicate always true). Shared with the panel.
   const next = stripAgentActionBlocks(session.messages as unknown as Message[], () => true);
+  // stripAgentActionBlocks returns the SAME array reference when nothing
+  // matched (the common case — most sessions have no agent-action blocks).
+  // Skip the store write then, or we rebuild the session + sessions map and
+  // force redundant subscriber re-renders on every agent_end / terminate.
+  if ((next as unknown) === session.messages) return;
   store.actions.setMessages(sid, next as unknown as MutableMessage[]);
 }
 
