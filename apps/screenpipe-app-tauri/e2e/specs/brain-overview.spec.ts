@@ -967,7 +967,9 @@ Refresh the assigned Live View output targets from source-backed activity.
     expect(await $("[data-testid^='canvas-arrow-']").isExisting()).toBe(true);
 
     await setCssWindowSize(1440, 900);
-    await $("[data-testid='overview-mode-dashboard']").click();
+    const dashboardMode = await $("[data-testid='overview-mode-dashboard']");
+    await dashboardMode.waitForEnabled({ timeout: t(15_000) });
+    await dashboardMode.click();
     await waitForTestId("brain-overview-grid", 10_000);
 
     await $("[data-testid='overview-edit']").click();
