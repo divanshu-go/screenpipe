@@ -1475,10 +1475,45 @@ fn ensure_connection_gate_extension(project_dir: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Configuration for which AI provider Pi should use
-#[derive(Debug, Clone, Hash, Serialize, Deserialize, Type)]
+/// Which transport backend Pi uses. Absent means the native Pi RPC agent;
+/// `acp` runs an external Agent Client Protocol adapter through the hidden
+/// runtime (see acp_runtime.rs).
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "lowercase")]
+pub enum PiBackend {
+    Acp,
+}
+
+/// The external ACP adapter to launch when `backend` is `acp`.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpAgentConfig {
+    /// Catalog id (for example `claude-acp`) or `custom`.
+    pub id: String,
+    /// Executable for a custom adapter; built-in ids resolve by id when absent.
+    #[serde(default)]
+    pub command: Option<String>,
+    /// Arguments passed to the adapter verbatim, without a shell.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Environment passed only to the supervised adapter process.
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+}
+
+/// Configuration for which AI provider Pi should use.
+/// Not `Hash`: the ACP agent config carries an `env` map, so the launch
+/// fingerprint hashes a canonical serialization instead.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct PiProviderConfig {
+    /// Transport backend. Absent keeps the native Pi RPC agent; `acp` runs an
+    /// external adapter through the hidden ACP runtime.
+    #[serde(default)]
+    pub backend: Option<PiBackend>,
+    /// Adapter configuration, required when `backend` is `acp`.
+    #[serde(default)]
+    pub acp_agent: Option<AcpAgentConfig>,
     /// Provider type: "openai", "native-ollama", "custom", "screenpipe-cloud"
     pub provider: String,
     /// Base URL for the provider API
@@ -1497,6 +1532,14 @@ pub struct PiProviderConfig {
 
 fn default_max_tokens() -> i32 {
     4096
+}
+
+/// True when the preset selects the ACP transport backend.
+fn uses_acp_backend(config: Option<&PiProviderConfig>) -> bool {
+    matches!(
+        config.and_then(|value| value.backend.as_ref()),
+        Some(PiBackend::Acp)
+    )
 }
 
 fn pi_launch_fingerprint(
@@ -1520,11 +1563,16 @@ fn pi_launch_fingerprint(
                 .collect::<Vec<_>>()
                 .join("\n")
         });
-        PiProviderConfig {
+        // PiProviderConfig is not Hash (the ACP env map), so hash a canonical
+        // serialization. Cloned configs serialize identically, so concurrent
+        // identical launches still share a fingerprint.
+        let normalized = PiProviderConfig {
             system_prompt: normalized_system_prompt,
             ..config.clone()
-        }
-        .hash(&mut hasher);
+        };
+        serde_json::to_string(&normalized)
+            .unwrap_or_default()
+            .hash(&mut hasher);
     } else {
         Option::<u8>::None.hash(&mut hasher);
     }
@@ -2199,20 +2247,90 @@ pub async fn pi_start_inner(
     );
 
     // Build command — use cmd.exe /C wrapper for .cmd files on Windows (Rust 1.77+ CVE fix)
-    let mut cmd = build_command_for_path(&pi_path);
-    cmd.current_dir(&project_dir).args([
-        "--mode",
-        "rpc",
-        // pi 0.80 gates project-dir .pi/extensions behind a trust prompt that
-        // rpc mode can never answer — without --approve, mcp-bridge and
-        // connection-gate silently don't load. The project dir is created and
-        // populated exclusively by screenpipe, so it is trusted by definition.
-        "--approve",
-        "--provider",
-        &pi_provider,
-        "--model",
-        &pi_model,
-    ]);
+    // ACP re-enters this same executable in the hidden runtime mode, which
+    // supervises the selected external adapter and speaks the same stdin
+    // commands / stdout JSON events the native Pi RPC agent does, so the reader
+    // and command queue below drive both without change. Native Pi stays direct.
+    let use_acp = uses_acp_backend(provider_config.as_ref());
+    let mut cmd = if use_acp {
+        if bun_path == "NOT FOUND" {
+            return Err("ACP requires the bundled Bun runtime, but it was not found".to_string());
+        }
+        let executable = std::env::current_exe()
+            .map_err(|error| format!("Failed to locate the screenpipe ACP runtime: {error}"))?;
+        let mut command = build_command_for_path(&executable.to_string_lossy());
+        command.arg(crate::acp_runtime::RUNTIME_ARG);
+        command.current_dir(&project_dir);
+        command
+    } else {
+        let mut command = build_command_for_path(&pi_path);
+        command.current_dir(&project_dir).args([
+            "--mode",
+            "rpc",
+            // pi 0.80 gates project-dir .pi/extensions behind a trust prompt that
+            // rpc mode can never answer — without --approve, mcp-bridge and
+            // connection-gate silently don't load. The project dir is created and
+            // populated exclusively by screenpipe, so it is trusted by definition.
+            "--approve",
+            "--provider",
+            &pi_provider,
+            "--model",
+            &pi_model,
+        ]);
+        command
+    };
+
+    // Isolate the hidden runtime into its own process group so a crash cleans up
+    // the adapter it supervises without touching the desktop process group.
+    #[cfg(unix)]
+    if use_acp {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+
+    // Tell the runtime which adapter to launch and with what environment. Only
+    // the launch inputs are passed here; the runtime resolves the rest. Secret
+    // runtime-only vars are stripped from the adapter's environment by the
+    // runtime itself before it spawns the adapter.
+    if use_acp {
+        let acp = provider_config
+            .as_ref()
+            .and_then(|config| config.acp_agent.as_ref())
+            .ok_or("ACP backend requires an acpAgent configuration")?;
+        let resolved_env = acp
+            .env
+            .iter()
+            .filter(|(name, _)| !crate::acp_runtime::is_forbidden_acp_env(name))
+            .filter_map(|(name, value)| {
+                let resolved = if value.is_empty() {
+                    std::env::var(name).ok()?
+                } else {
+                    value.clone()
+                };
+                Some((name.clone(), resolved))
+            })
+            .collect::<HashMap<_, _>>();
+        cmd.env("SCREENPIPE_ACP_ID", acp.id.trim())
+            .env("SCREENPIPE_ACP_CWD", &project_dir)
+            .env("SCREENPIPE_BUN_PATH", &bun_path)
+            .env(
+                "SCREENPIPE_ACP_ARGS_JSON",
+                serde_json::to_string(&acp.args).map_err(|e| e.to_string())?,
+            )
+            .env(
+                "SCREENPIPE_ACP_ENV_JSON",
+                serde_json::to_string(&resolved_env).map_err(|e| e.to_string())?,
+            );
+        if let Some(command) = acp
+            .command
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            cmd.env("SCREENPIPE_ACP_COMMAND", command);
+        } else {
+            cmd.env_remove("SCREENPIPE_ACP_COMMAND");
+        }
+    }
 
     // Ensure bun is discoverable by pi.exe shim: the bun global-install shim (pi.exe)
     // needs to find bun.exe to execute the actual JS. If bun isn't in PATH (common on
@@ -2303,21 +2421,27 @@ pub async fn pi_start_inner(
         }
     }
 
-    // For local/small models (Ollama, custom), explicitly tell them to read the
-    // screenpipe-api skill file — they often skip reading skills on their own.
-    let is_local_model = matches!(pi_provider.as_str(), "ollama" | "custom");
-    if is_local_model {
-        let api_hint = "IMPORTANT: You MUST read the screenpipe-api skill file BEFORE making any API calls. It contains authentication instructions, endpoint docs, and examples. Without reading it first, your API calls will fail with 403 unauthorized.";
-        cmd.args(["--append-system-prompt", api_hint]);
-    }
+    // `--append-system-prompt` is a native Pi RPC flag; the ACP runtime takes
+    // its inputs via env, so these only apply to the native path.
+    if !use_acp {
+        // For local/small models (Ollama, custom), explicitly tell them to read
+        // the screenpipe-api skill file — they often skip reading skills on
+        // their own.
+        let is_local_model = matches!(pi_provider.as_str(), "ollama" | "custom");
+        if is_local_model {
+            let api_hint = "IMPORTANT: You MUST read the screenpipe-api skill file BEFORE making any API calls. It contains authentication instructions, endpoint docs, and examples. Without reading it first, your API calls will fail with 403 unauthorized.";
+            cmd.args(["--append-system-prompt", api_hint]);
+        }
 
-    // Append the user's AI preset system prompt (enables Anthropic prompt caching —
-    // Pi's built-in system prompt + this text form the cached prefix, reducing
-    // input costs by 90% on subsequent messages in the same conversation)
-    if let Some(ref config) = provider_config {
-        if let Some(ref prompt) = config.system_prompt {
-            if !prompt.is_empty() {
-                cmd.args(["--append-system-prompt", prompt]);
+        // Append the user's AI preset system prompt (enables Anthropic prompt
+        // caching — Pi's built-in system prompt + this text form the cached
+        // prefix, reducing input costs on subsequent messages in the same
+        // conversation).
+        if let Some(ref config) = provider_config {
+            if let Some(ref prompt) = config.system_prompt {
+                if !prompt.is_empty() {
+                    cmd.args(["--append-system-prompt", prompt]);
+                }
             }
         }
     }
@@ -4318,6 +4442,8 @@ mod tests {
     #[test]
     fn identical_pi_launches_share_a_fingerprint() {
         let config = super::PiProviderConfig {
+            backend: None,
+            acp_agent: None,
             provider: "screenpipe-cloud".to_string(),
             url: String::new(),
             model: "auto".to_string(),
@@ -5495,6 +5621,8 @@ error: InstallFailed extracting tarball"#;
 
     fn make_provider_config(provider: &str, model: &str) -> PiProviderConfig {
         PiProviderConfig {
+            backend: None,
+            acp_agent: None,
             provider: provider.to_string(),
             url: String::new(),
             model: model.to_string(),
