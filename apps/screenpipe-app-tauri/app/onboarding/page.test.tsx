@@ -129,8 +129,12 @@ describe("enterprise onboarding authentication", () => {
     render(<OnboardingPage />);
 
     expect(screen.getByText("regular sign in")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /use enterprise key/i }));
-    expect(mocks.selectAuthenticationMethod).toHaveBeenCalledWith("license_key");
+    fireEvent.click(
+      screen.getByRole("button", { name: /use enterprise key/i }),
+    );
+    expect(mocks.selectAuthenticationMethod).toHaveBeenCalledWith(
+      "license_key",
+    );
   });
 
   it("renders Enterprise Key entry on the onboarding login step", () => {
@@ -148,7 +152,9 @@ describe("enterprise onboarding authentication", () => {
     render(<OnboardingPage />);
 
     expect(screen.getByText("regular sign in")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /use enterprise key/i })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /use enterprise key/i }),
+    ).not.toBeInTheDocument();
     expect(mocks.capture).toHaveBeenCalledWith("onboarding_funnel_step", {
       funnel_version: "onboarding_ui_v1",
       step: "started",
@@ -198,7 +204,9 @@ describe("enterprise onboarding authentication", () => {
 
     render(<OnboardingPage />);
 
-    await waitFor(() => expect(mocks.setOnboardingStep).toHaveBeenCalledWith("permissions"));
+    await waitFor(() =>
+      expect(mocks.setOnboardingStep).toHaveBeenCalledWith("permissions"),
+    );
   });
 
   it("keeps a rejected enterprise account on login with the key alternative", () => {
@@ -208,9 +216,13 @@ describe("enterprise onboarding authentication", () => {
 
     render(<OnboardingPage />);
 
-    expect(screen.getByText(/not associated with the enterprise organization/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/not associated with the enterprise organization/i),
+    ).toBeInTheDocument();
     expect(screen.getByText("regular sign in")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /use enterprise key/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /use enterprise key/i }),
+    ).toBeInTheDocument();
   });
 
   it("completes onboarding after permissions when enterprise app UI is hidden", async () => {
@@ -220,7 +232,7 @@ describe("enterprise onboarding authentication", () => {
     render(<OnboardingPage />);
 
     fireEvent.click(
-      await screen.findByRole("button", { name: /finish permissions/i })
+      await screen.findByRole("button", { name: /finish permissions/i }),
     );
 
     await waitFor(() =>
@@ -238,11 +250,11 @@ describe("enterprise onboarding authentication", () => {
     render(<OnboardingPage />);
 
     fireEvent.click(
-      await screen.findByRole("button", { name: /finish permissions/i })
+      await screen.findByRole("button", { name: /finish permissions/i }),
     );
 
     await waitFor(() =>
-      expect(mocks.setOnboardingStep).toHaveBeenCalledWith("timeline")
+      expect(mocks.setOnboardingStep).toHaveBeenCalledWith("timeline"),
     );
     expect(mocks.completeOnboarding).not.toHaveBeenCalled();
   });
@@ -276,14 +288,18 @@ describe("enterprise onboarding authentication", () => {
   it("never enters UI-only steps when hidden onboarding completion fails", async () => {
     onboardingData.currentStep = "permissions";
     mocks.applyEnterpriseUiVisibility.mockResolvedValue(true);
-    mocks.completeOnboarding.mockRejectedValueOnce(new Error("store unavailable"));
+    mocks.completeOnboarding.mockRejectedValueOnce(
+      new Error("store unavailable"),
+    );
     const closeWindow = vi.spyOn(window, "close").mockImplementation(() => {});
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
 
     render(<OnboardingPage />);
 
     fireEvent.click(
-      await screen.findByRole("button", { name: /finish permissions/i })
+      await screen.findByRole("button", { name: /finish permissions/i }),
     );
 
     await waitFor(() => expect(closeWindow).toHaveBeenCalledTimes(1));
@@ -318,11 +334,11 @@ describe("timeline slide sequencing", () => {
     render(<OnboardingPage />);
 
     fireEvent.click(
-      await screen.findByRole("button", { name: /finish permissions/i })
+      await screen.findByRole("button", { name: /finish permissions/i }),
     );
 
     await waitFor(() =>
-      expect(mocks.setOnboardingStep).toHaveBeenCalledWith("timeline")
+      expect(mocks.setOnboardingStep).toHaveBeenCalledWith("timeline"),
     );
     expect(await screen.findByText("timeline choice")).toBeInTheDocument();
     expect(screen.queryByText("engine")).not.toBeInTheDocument();
@@ -332,7 +348,7 @@ describe("timeline slide sequencing", () => {
         device_tier: "low",
         timeline_choice_eligible: true,
         timeline_choice_policy_locked: false,
-      }
+      },
     );
   });
 
@@ -344,11 +360,11 @@ describe("timeline slide sequencing", () => {
       render(<OnboardingPage />);
 
       fireEvent.click(
-        await screen.findByRole("button", { name: /finish permissions/i })
+        await screen.findByRole("button", { name: /finish permissions/i }),
       );
 
       await waitFor(() =>
-        expect(mocks.setOnboardingStep).toHaveBeenCalledWith("engine")
+        expect(mocks.setOnboardingStep).toHaveBeenCalledWith("engine"),
       );
       expect(await screen.findByText("engine")).toBeInTheDocument();
       expect(screen.queryByText("timeline choice")).not.toBeInTheDocument();
@@ -360,24 +376,24 @@ describe("timeline slide sequencing", () => {
             : "unknown",
           timeline_choice_eligible: false,
           timeline_choice_policy_locked: false,
-        }
+        },
       );
-    }
+    },
   );
 
   it("skips straight to engine when policy manages disableTimeline", async () => {
     mocks.isSettingLocked.mockImplementation(
-      (key: string) => key === "disableTimeline"
+      (key: string) => key === "disableTimeline",
     );
 
     render(<OnboardingPage />);
 
     fireEvent.click(
-      await screen.findByRole("button", { name: /finish permissions/i })
+      await screen.findByRole("button", { name: /finish permissions/i }),
     );
 
     await waitFor(() =>
-      expect(mocks.setOnboardingStep).toHaveBeenCalledWith("engine")
+      expect(mocks.setOnboardingStep).toHaveBeenCalledWith("engine"),
     );
     expect(await screen.findByText("engine")).toBeInTheDocument();
     expect(screen.queryByText("timeline choice")).not.toBeInTheDocument();
@@ -387,7 +403,7 @@ describe("timeline slide sequencing", () => {
         device_tier: "low",
         timeline_choice_eligible: false,
         timeline_choice_policy_locked: true,
-      }
+      },
     );
   });
 
@@ -395,17 +411,17 @@ describe("timeline slide sequencing", () => {
   // either one already decides the outcome and the choice must not be offered.
   it("skips straight to engine when policy manages disableScreenshots only", async () => {
     mocks.isSettingLocked.mockImplementation(
-      (key: string) => key === "disableScreenshots"
+      (key: string) => key === "disableScreenshots",
     );
 
     render(<OnboardingPage />);
 
     fireEvent.click(
-      await screen.findByRole("button", { name: /finish permissions/i })
+      await screen.findByRole("button", { name: /finish permissions/i }),
     );
 
     await waitFor(() =>
-      expect(mocks.setOnboardingStep).toHaveBeenCalledWith("engine")
+      expect(mocks.setOnboardingStep).toHaveBeenCalledWith("engine"),
     );
     expect(await screen.findByText("engine")).toBeInTheDocument();
     expect(screen.queryByText("timeline choice")).not.toBeInTheDocument();
@@ -450,12 +466,14 @@ describe("timeline slide sequencing", () => {
     "does not resume onto the timeline slide when policy manages %s",
     async (lockedKey) => {
       onboardingData.currentStep = "timeline";
-      mocks.isSettingLocked.mockImplementation((key: string) => key === lockedKey);
+      mocks.isSettingLocked.mockImplementation(
+        (key: string) => key === lockedKey,
+      );
 
       render(<OnboardingPage />);
 
       expect(await screen.findByText("engine")).toBeInTheDocument();
       expect(screen.queryByText("timeline choice")).not.toBeInTheDocument();
-    }
+    },
   );
 });

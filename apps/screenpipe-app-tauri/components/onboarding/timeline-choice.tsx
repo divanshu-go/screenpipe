@@ -187,7 +187,9 @@ function restartRunningEngine(): void {
 // capture flag is enterprise-policy-managed the slide sequencer in
 // app/onboarding/page.tsx leaves this slide out entirely.
 
-export default function TimelineChoice({ handleNextSlide }: TimelineChoiceProps) {
+export default function TimelineChoice({
+  handleNextSlide,
+}: TimelineChoiceProps) {
   const { settings, updateSettings } = useSettings();
   const mountTimeRef = useRef(Date.now());
   const hasAdvanced = useRef(false);
@@ -231,7 +233,9 @@ export default function TimelineChoice({ handleNextSlide }: TimelineChoiceProps)
       });
     } catch (e) {
       console.error("failed to save timeline choice:", e);
-      posthog.capture("onboarding_timeline_choice_failed", { stage: "persist" });
+      posthog.capture("onboarding_timeline_choice_failed", {
+        stage: "persist",
+      });
       setError("couldn't save that choice. check disk space and try again.");
       inFlight.current = false;
       setPending(null);
@@ -323,11 +327,11 @@ export default function TimelineChoice({ handleNextSlide }: TimelineChoiceProps)
             heads-up: this device has limited ram/cores
           </p>
           <p className="font-mono text-[10px] text-muted-foreground/70 mt-1 leading-snug">
-            the timeline can take a real toll on machines like this one.
-            keeping it off saves memory, cpu and disk. the text screenpipe
-            reads from your apps stays recorded and searchable — you lose the
-            visual rewind, and apps that don&apos;t expose their text stop
-            being captured.
+            the timeline can take a real toll on machines like this one. keeping
+            it off saves memory, cpu and disk. the text screenpipe reads from
+            your apps stays recorded and searchable — you lose the visual
+            rewind, and apps that don&apos;t expose their text stop being
+            captured.
           </p>
         </motion.div>
       )}

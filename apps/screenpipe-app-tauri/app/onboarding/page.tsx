@@ -97,7 +97,7 @@ const EndowedProgress = ({
                   : "bg-border"
             }`}
           />
-        )
+        ),
       )}
     </div>
   </div>
@@ -123,7 +123,7 @@ export default function OnboardingPage() {
   } | null>(null);
   const handlePermissionsProgress = useCallback(
     (done: number, total: number) => setPermissionsProgress({ done, total }),
-    []
+    [],
   );
   const { onboardingData, isLoading, completeOnboarding } = useOnboarding();
   const { settings, isSettingsLoaded } = useSettings();
@@ -163,7 +163,7 @@ export default function OnboardingPage() {
       : "unknown";
   const visibleOrder = useMemo(
     () => SLIDE_ORDER.filter((s) => s !== "timeline" || timelineChoiceVisible),
-    [timelineChoiceVisible]
+    [timelineChoiceVisible],
   );
   // Read by the hydration-gated restore effect below. Assigned during render,
   // per the ref-mirror rule in CLAUDE.md.
@@ -211,7 +211,7 @@ export default function OnboardingPage() {
           setCurrentSlide(
             mapped === "timeline" && !timelineChoiceVisibleRef.current
               ? "engine"
-              : mapped
+              : mapped,
           );
         }
       }
@@ -292,7 +292,7 @@ export default function OnboardingPage() {
       } catch (error) {
         console.warn(
           "failed to resolve enterprise UI visibility after permissions:",
-          error
+          error,
         );
       }
 
@@ -327,9 +327,8 @@ export default function OnboardingPage() {
     // Walk SLIDE_ORDER (never the filtered list) so the index stays valid even
     // for a slide that policy hides, then land on the next visible slide.
     const nextSlide =
-      SLIDE_ORDER.slice(currentIdx + 1).find((s) =>
-        visibleOrder.includes(s)
-      ) || "first-dashboard";
+      SLIDE_ORDER.slice(currentIdx + 1).find((s) => visibleOrder.includes(s)) ||
+      "first-dashboard";
     try {
       await commands.setOnboardingStep(nextSlide);
     } catch {
@@ -405,11 +404,13 @@ export default function OnboardingPage() {
               sub={currentSlide === "permissions" ? permissionsProgress : null}
             />
           )}
-          {currentSlide === "login" && (
-            isManagedDeployment ? (
+          {currentSlide === "login" &&
+            (isManagedDeployment ? (
               authenticationState === "license_key" ? (
                 <div className="mx-auto w-full max-w-sm">
-                  <h2 className="mb-1 text-lg font-semibold">activate this device</h2>
+                  <h2 className="mb-1 text-lg font-semibold">
+                    activate this device
+                  </h2>
                   <p className="mb-4 text-sm text-muted-foreground">
                     enter the enterprise key provided by your administrator
                   </p>
@@ -448,8 +449,7 @@ export default function OnboardingPage() {
               )
             ) : (
               <OnboardingLogin handleNextSlide={handleNextSlide} />
-            )
-          )}
+            ))}
           {currentSlide === "permissions" && (
             <PermissionsStep
               handleNextSlide={handleNextSlide}

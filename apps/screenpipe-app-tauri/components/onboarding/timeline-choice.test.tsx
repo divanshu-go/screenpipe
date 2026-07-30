@@ -280,7 +280,9 @@ describe("TimelineChoice", () => {
     mocks.settings.deviceTier = "low";
     mocks.localFetch.mockResolvedValue({ ok: true, status: 200 });
     mocks.spawnScreenpipe.mockRejectedValue(new Error("spawn failed"));
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
     const handleNextSlide = vi.fn();
     render(<TimelineChoice handleNextSlide={handleNextSlide} />);
 
