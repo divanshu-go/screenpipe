@@ -42,6 +42,11 @@ const LIVE_COVERAGE_WINDOW_SECS: f64 = 15.0;
 /// looks broken" notification (once per session, per condition) so the user
 /// doesn't sit through a silent meeting wondering why nothing is appearing.
 const STALL_NOTIFY_THRESHOLD: Duration = Duration::from_secs(60);
+/// How recently voiced audio must have arrived for a missing transcript to
+/// count as a stall. Sized above `LIVE_INACTIVITY_CHECK_INTERVAL` so voiced
+/// audio landing anywhere between two checks still counts — otherwise the
+/// notification would depend on where the tick happened to fall.
+const STALL_VOICED_AUDIO_RECENCY: Duration = Duration::from_secs(45);
 
 #[derive(Debug)]
 struct ActiveMeetingStream {
@@ -53,18 +58,27 @@ struct ActiveMeetingStream {
     audio_frames_seen: u64,
     audio_samples_seen: u64,
     last_audio_activity_at: Instant,
-    // Latched true the first time a frame's RMS clears the voice-activity
-    // threshold. Used to suppress the "transcript not flowing" notification
-    // when the room is just silent (e.g. user alone waiting for others to
-    // join) — no transcript is expected from silence, so warning the user is
-    // a false positive.
-    voiced_audio_seen: bool,
+    // When a frame's RMS last cleared the voice-activity threshold. Gates the
+    // "transcript not flowing" notification: silence produces no transcript by
+    // design, so warning about it is a false positive. Tracked as a timestamp
+    // rather than a latched bool because a meeting that had speech and then
+    // went quiet is still silence — the latch kept firing on it.
+    last_voiced_audio_at: Option<Instant>,
     live_transcript_seen: bool,
     last_live_transcript_at: Option<Instant>,
     notified_audio_stall: bool,
     notified_transcript_stall: bool,
     device_senders: HashMap<String, mpsc::Sender<MeetingAudioFrame>>,
     device_retry_after: HashMap<String, Instant>,
+}
+
+impl ActiveMeetingStream {
+    /// Whether speech-level audio arrived recently enough that a missing
+    /// transcript means something is broken rather than that nobody is talking.
+    fn has_recent_voiced_audio(&self, now: Instant) -> bool {
+        self.last_voiced_audio_at
+            .is_some_and(|at| now.duration_since(at) <= STALL_VOICED_AUDIO_RECENCY)
+    }
 }
 
 /// Start the meeting-streaming lifecycle coordinator.
@@ -226,8 +240,9 @@ pub fn start_meeting_streaming_loop(
                                 session.audio_frames_seen += 1;
                                 session.audio_samples_seen += frame.samples.len() as u64;
                                 if frame_has_audio_activity(&frame) {
-                                    session.last_audio_activity_at = Instant::now();
-                                    session.voiced_audio_seen = true;
+                                    let now = Instant::now();
+                                    session.last_audio_activity_at = now;
+                                    session.last_voiced_audio_at = Some(now);
                                 }
                                 if session.live_transcription_enabled {
                                     route_frame_to_provider(
@@ -335,7 +350,7 @@ async fn start_streaming_session(
         audio_frames_seen: 0,
         audio_samples_seen: 0,
         last_audio_activity_at: Instant::now(),
-        voiced_audio_seen: false,
+        last_voiced_audio_at: None,
         live_transcript_seen: false,
         last_live_transcript_at: None,
         notified_audio_stall: false,
@@ -735,7 +750,7 @@ fn check_and_emit_stall_notifications(session: &mut ActiveMeetingStream, now: In
         );
     } else if !session.notified_transcript_stall
         && session.audio_frames_seen > 0
-        && session.voiced_audio_seen
+        && session.has_recent_voiced_audio(now)
         && !session.live_transcript_seen
     {
         session.notified_transcript_stall = true;
@@ -900,7 +915,7 @@ mod tests {
             audio_frames_seen: 0,
             audio_samples_seen: 0,
             last_audio_activity_at: now,
-            voiced_audio_seen: false,
+            last_voiced_audio_at: None,
             live_transcript_seen: false,
             last_live_transcript_at: None,
             notified_audio_stall: false,
@@ -939,7 +954,7 @@ mod tests {
         // is the field itself, not a flag we manage from outside).
         let mut session = test_session(now, true);
         session.audio_frames_seen = 42;
-        session.voiced_audio_seen = true;
+        session.last_voiced_audio_at = Some(now + STALL_NOTIFY_THRESHOLD);
         check_and_emit_stall_notifications(&mut session, now + STALL_NOTIFY_THRESHOLD);
         assert!(!session.notified_audio_stall);
         assert!(session.notified_transcript_stall);
@@ -953,10 +968,40 @@ mod tests {
         // there is nothing to transcribe, so warning them is a false positive.
         let mut session = test_session(now, true);
         session.audio_frames_seen = 200;
-        // voiced_audio_seen stays false
+        // last_voiced_audio_at stays None
         check_and_emit_stall_notifications(&mut session, now + STALL_NOTIFY_THRESHOLD * 3);
         assert!(!session.notified_audio_stall);
         assert!(!session.notified_transcript_stall);
+
+        // Speech happened, then the room went quiet past the recency window —
+        // still a false positive. The meeting is silent now, so the absent
+        // transcript says nothing about whether the provider is healthy.
+        let mut session = test_session(now, true);
+        session.audio_frames_seen = 5_000;
+        let last_speech = now + STALL_NOTIFY_THRESHOLD / 2;
+        session.last_voiced_audio_at = Some(last_speech);
+        check_and_emit_stall_notifications(
+            &mut session,
+            last_speech + STALL_VOICED_AUDIO_RECENCY + Duration::from_secs(1),
+        );
+        assert!(!session.notified_transcript_stall);
+
+        // Same session once speech resumes — now it fires, because voiced audio
+        // is producing no transcript in the present.
+        session.last_voiced_audio_at = Some(now + STALL_NOTIFY_THRESHOLD * 2);
+        check_and_emit_stall_notifications(&mut session, now + STALL_NOTIFY_THRESHOLD * 2);
+        assert!(session.notified_transcript_stall);
+
+        // Voiced audio anywhere inside the check interval still counts, so the
+        // notification never depends on where the 30s tick happens to land.
+        let mut session = test_session(now, true);
+        session.audio_frames_seen = 5_000;
+        session.last_voiced_audio_at = Some(now + STALL_NOTIFY_THRESHOLD);
+        check_and_emit_stall_notifications(
+            &mut session,
+            now + STALL_NOTIFY_THRESHOLD + LIVE_INACTIVITY_CHECK_INTERVAL,
+        );
+        assert!(session.notified_transcript_stall);
 
         // Pure background sessions (no live transcription) never fire — their
         // audio tap is intentionally inactive so audio_frames_seen=0 is
