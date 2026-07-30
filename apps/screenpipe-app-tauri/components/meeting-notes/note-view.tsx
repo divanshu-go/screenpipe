@@ -72,7 +72,6 @@ import {
   extractImageDataUrlsFromMarkdown,
   extractPipePromptBody,
   buildMeetingSummarizeDisplayLabel,
-  buildMeetingMarkdown,
   fetchMeetingAudio,
   fetchMeetingContext,
   type MeetingContext,
@@ -104,6 +103,7 @@ import {
 } from "./note-save-queue";
 import { listenTyped, TAURI_EVENTS } from "@/lib/events/tauri-events";
 import { writeBrowserLogNow } from "@/lib/logging/browser-log";
+import { copyMeetingToClipboard } from "./copy-meeting";
 
 const AUTOSAVE_DEBOUNCE_MS = 800;
 
@@ -187,7 +187,6 @@ export function NoteView({
     initialTranscriptOpen || readTranscriptOpenPreference(meeting.id),
   );
   const [transcriptRefreshKey, setTranscriptRefreshKey] = useState(0);
-  const [nowMs, setNowMs] = useState(() => Date.now());
   const [audioStatusDevices, setAudioStatusDevices] = useState<
     AudioStatusDevice[]
   >([]);
@@ -417,13 +416,6 @@ export function NoteView({
   useEffect(() => {
     if (initialTranscriptOpen) setTranscriptOpen(true);
   }, [initialTranscriptOpen, setTranscriptOpen, transcriptOpenRequestKey]);
-
-  useEffect(() => {
-    if (!isLive) return;
-    setNowMs(Date.now());
-    const handle = window.setInterval(() => setNowMs(Date.now()), 1000);
-    return () => window.clearInterval(handle);
-  }, [isLive]);
 
   useEffect(() => {
     let cancelled = false;
@@ -866,40 +858,8 @@ export function NoteView({
       // Re-fetch context + transcript so the clipboard reflects what the
       // user sees right now (live meetings update; speaker rename can
       // happen without re-rendering ReplayStrip).
-      const [ctx, allTranscript] = await Promise.all([
-        fetchMeetingContext(fresh),
-        fetchMeetingAudio(
-          new Date(meeting.meeting_start).toISOString(),
-          (meeting.meeting_end
-            ? new Date(meeting.meeting_end)
-            : new Date()
-          ).toISOString(),
-          1000,
-          meeting.id,
-        ).catch(() => []),
-      ]);
+      const ctx = await copyMeetingToClipboard(fresh);
       setMeetingCtx(ctx);
-
-      // Prefer meeting-routed (live) transcript over background search noise.
-      // For manual meetings (no routed audio), fall back to input-device-only
-      // entries (the user's mic) to avoid including YouTube/podcast noise.
-      const liveChunks = allTranscript.filter((c) => c.source === "live");
-      const inputChunks = allTranscript.filter((c) => c.isInput);
-      const transcript = liveChunks.length > 0
-        ? liveChunks
-        : inputChunks.length > 0
-          ? inputChunks
-          : allTranscript;
-
-      const md = buildMeetingMarkdown({
-        meeting: fresh,
-        context: ctx,
-        transcript,
-      });
-      // Use Tauri's native clipboard API (arboard) instead of
-      // navigator.clipboard.writeText which fails after async operations
-      // due to WebKit's user-activation timeout.
-      await commands.copyTextToClipboard(md);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 2000);
       toast({ title: "copied to clipboard" });
@@ -935,9 +895,6 @@ export function NoteView({
   const attendeeCount = parseAttendees(attendees).length;
   const englishOnly =
     settings.languages.length === 1 && settings.languages[0] === "english";
-  const dockDuration = isLive
-    ? formatElapsed(meeting.meeting_start, nowMs)
-    : formatDuration(meeting.meeting_start, meeting.meeting_end);
   const meetingDateLabel = formatDateOnly(meeting.meeting_start);
   const meetingStartClock = formatClock(meeting.meeting_start);
   const meetingEndClock = meeting.meeting_end
@@ -1316,7 +1273,13 @@ export function NoteView({
                   </span>
                 </div>
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
-                  <span>{dockDuration}</span>
+                  <span>
+                    <MeetingDuration
+                      startIso={meeting.meeting_start}
+                      endIso={meeting.meeting_end}
+                      isLive={isLive}
+                    />
+                  </span>
                   {hasSaveStatus && (
                     <>
                       <span aria-hidden>·</span>
@@ -1847,6 +1810,29 @@ function SaveIndicator({ state }: { state: SaveState }) {
     return <span className="text-destructive">offline — will retry</span>;
   }
   return <span aria-hidden>&nbsp;</span>;
+}
+
+function MeetingDuration({
+  startIso,
+  endIso,
+  isLive,
+}: {
+  startIso: string;
+  endIso: string | null;
+  isLive: boolean;
+}) {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!isLive) return;
+    setNowMs(Date.now());
+    const handle = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(handle);
+  }, [isLive]);
+
+  return isLive
+    ? formatElapsed(startIso, nowMs)
+    : formatDuration(startIso, endIso);
 }
 
 function formatElapsed(startIso: string, nowMs: number): string {

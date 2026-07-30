@@ -80,6 +80,7 @@ import {
   type LiveViewGenerationScope,
 } from "@/lib/live-views/generate-live-view-with-pi";
 import { createOnboardingLiveView } from "@/lib/live-views/onboarding-live-view";
+import { buildLiveViewPipeAgentPrompt } from "@/lib/live-views/pipe-agent-prompt";
 import {
   allowedLiveViewTimeRanges,
   buildLiveViewTimeContext,
@@ -1391,30 +1392,10 @@ export function BrainOverview({
         prompt_length: prompt.length,
       });
 
-      const liveViewReference = view
-        ? JSON.stringify({
-            id: view.id,
-            title: view.title,
-            revision: view.revision,
-          })
-        : "none; the user has not created a Live View yet";
-      const agentPrompt = `The user started this request from Brain > Live Views.
-
-Current Live View reference: ${liveViewReference}
-
-User request:
-${prompt}
-
-Use the screenpipe-cli skill for Pipe creation or editing and the screenpipe_live_view tool for Live View work.
-- Read the screenpipe-cli skill before changing a Pipe.
-- Load the current Live View lazily by id. Do not ask the app to inject its contents into chat context.
-- Treat this submitted request as explicit authorization to make the requested Pipe and Live View changes. Do not ask the user to approve those requested actions again.
-- It is okay to create a new disabled/manual Pipe draft and run it once for testing.
-- Test a changed Pipe with pipe run before binding it to the Live View.
-- After the Pipe works, save the smallest relevant Live View Block additions or edits directly. Preserve every unrelated Block; do not replace the whole dashboard, show a preview, or ask whether to replace it.
-- Ask one short question only when essential ambiguity remains or an action goes beyond the request: deleting a Pipe, overwriting a name collision when the user asked for a new Pipe, installing external code or a connection, or enabling a schedule the user did not request.
-- Use ask_user for that exceptional question when it is available; otherwise ask in chat and wait.
-- Do not publish anything to the Pipe Store.`;
+      const agentPrompt = buildLiveViewPipeAgentPrompt({
+        request: prompt,
+        view,
+      });
 
       try {
         await showChatWithPrefill({
