@@ -316,7 +316,11 @@ fn ensure_frontend_dist() {
 }
 
 fn main() {
-    tauri_helper::generate_command_file(tauri_helper::TauriHelperOptions::default());
+    // Force-scan the app crate. tauri-helper skips "." when [workspace].members
+    // is a non-empty list that omits it (e.g. only wer-dump-helper).
+    tauri_helper::generate_command_file(tauri_helper::TauriHelperOptions::new(Some(vec![
+        ".".to_string(),
+    ])));
 
     ensure_frontend_dist();
 
