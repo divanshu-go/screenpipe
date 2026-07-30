@@ -36,14 +36,22 @@ static DEF: IntegrationDef = IntegrationDef {
 
 pub struct Lexi;
 
+fn require_non_empty_str<'a>(creds: &'a Map<String, Value>, key: &str) -> Result<&'a str> {
+    let value = require_str(creds, key)?;
+    if value.is_empty() {
+        anyhow::bail!("missing required field: {}", key);
+    }
+    Ok(value)
+}
+
 impl Lexi {
     async fn test_against_base_url(
         client: &reqwest::Client,
         creds: &Map<String, Value>,
         base_url: &str,
     ) -> Result<String> {
-        let api_key_id = require_str(creds, "api_key_id")?;
-        let key_secret = require_str(creds, "key_secret")?;
+        let api_key_id = require_non_empty_str(creds, "api_key_id")?;
+        let key_secret = require_non_empty_str(creds, "key_secret")?;
         let endpoint = format!("{}/v1/users", base_url.trim_end_matches('/'));
         let resp = client
             .get(&endpoint)
@@ -74,9 +82,11 @@ impl Lexi {
 
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            let redacted = body
-                .replace(api_key_id, "[redacted]")
-                .replace(key_secret, "[redacted]");
+            let mut credentials = [api_key_id, key_secret];
+            credentials.sort_by_key(|value| std::cmp::Reverse(value.len()));
+            let redacted = credentials.into_iter().fold(body, |text, credential| {
+                text.replace(credential, "[redacted]")
+            });
             let summary: String = redacted.chars().take(500).collect();
             anyhow::bail!("Leexi returned {}: {}", status, summary);
         }
@@ -235,9 +245,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_rejects_empty_key_id_before_network() {
+        let server = MockServer::start().await;
+        let creds = Map::from_iter([
+            ("api_key_id".into(), Value::String(String::new())),
+            ("key_secret".into(), Value::String("key-secret".into())),
+        ]);
+
+        let error = Lexi::test_against_base_url(&reqwest::Client::new(), &creds, &server.uri())
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("missing required field: api_key_id"));
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn test_rejects_missing_key_secret_before_network() {
         let server = MockServer::start().await;
         let creds = Map::from_iter([("api_key_id".into(), Value::String("key-id".into()))]);
+
+        let error = Lexi::test_against_base_url(&reqwest::Client::new(), &creds, &server.uri())
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("missing required field: key_secret"));
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_rejects_empty_key_secret_before_network() {
+        let server = MockServer::start().await;
+        let creds = Map::from_iter([
+            ("api_key_id".into(), Value::String("key-id".into())),
+            ("key_secret".into(), Value::String(String::new())),
+        ]);
 
         let error = Lexi::test_against_base_url(&reqwest::Client::new(), &creds, &server.uri())
             .await
@@ -362,5 +406,27 @@ mod tests {
         assert!(!error.contains("key-id"));
         assert!(!error.contains("key-secret"));
         assert!(error.len() < 600);
+    }
+
+    #[tokio::test]
+    async fn test_unexpected_error_redacts_overlapping_credentials() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/users"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("abcdef"))
+            .mount(&server)
+            .await;
+        let creds = Map::from_iter([
+            ("api_key_id".into(), Value::String("abc".into())),
+            ("key_secret".into(), Value::String("abcdef".into())),
+        ]);
+
+        let error = Lexi::test_against_base_url(&reqwest::Client::new(), &creds, &server.uri())
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(!error.contains("def"));
+        assert!(error.contains("[redacted]"));
     }
 }

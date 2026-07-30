@@ -1863,6 +1863,12 @@ fn resolve_auth(
                 ResolvedAuth::None
             }
         }
+        ProxyAuth::BasicAuthEmptyPassword { username_key } => creds
+            .and_then(|c| c.get(*username_key))
+            .and_then(Value::as_str)
+            .filter(|user| !user.is_empty())
+            .map(|user| ResolvedAuth::Basic(user.to_string(), String::new()))
+            .unwrap_or(ResolvedAuth::None),
         ProxyAuth::None => ResolvedAuth::None,
     }
 }
@@ -3609,7 +3615,7 @@ mod calendar_error_response_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use screenpipe_connect::connections::{lexi::Lexi, Integration, ProxyAuth};
+    use screenpipe_connect::connections::{lexi::Lexi, mochi::Mochi, Integration, ProxyAuth};
     use serde_json::json;
 
     use axum::body::{to_bytes, Body};
@@ -4086,6 +4092,20 @@ mod tests {
     }
 
     #[test]
+    fn mochi_proxy_resolves_api_key_with_empty_password() {
+        let config = Mochi.proxy_config().expect("Mochi should support proxying");
+        let creds = Map::from_iter([("api_key".into(), json!("mochi-api-key"))]);
+
+        match resolve_auth(&config.auth, Some(&creds), None, None) {
+            ResolvedAuth::Basic(user, pass) => {
+                assert_eq!(user, "mochi-api-key");
+                assert!(pass.is_empty());
+            }
+            _ => panic!("expected Mochi API key to resolve with an empty Basic password"),
+        }
+    }
+
+    #[test]
     fn leexi_proxy_resolves_complete_credentials_as_basic() {
         let config = Lexi.proxy_config().expect("Leexi should support proxying");
         let creds = Map::from_iter([
@@ -4099,6 +4119,29 @@ mod tests {
                 assert_eq!(pass, "key-secret");
             }
             _ => panic!("expected complete Leexi credentials to resolve as Basic auth"),
+        }
+    }
+
+    #[test]
+    fn leexi_proxy_rejects_partial_or_empty_credentials() {
+        let config = Lexi.proxy_config().expect("Leexi should support proxying");
+
+        for creds in [
+            Map::from_iter([("api_key_id".into(), json!("key-id"))]),
+            Map::from_iter([("key_secret".into(), json!("key-secret"))]),
+            Map::from_iter([
+                ("api_key_id".into(), json!("")),
+                ("key_secret".into(), json!("key-secret")),
+            ]),
+            Map::from_iter([
+                ("api_key_id".into(), json!("key-id")),
+                ("key_secret".into(), json!("")),
+            ]),
+        ] {
+            assert!(matches!(
+                resolve_auth(&config.auth, Some(&creds), None, None),
+                ResolvedAuth::None
+            ));
         }
     }
 
