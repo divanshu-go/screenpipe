@@ -162,9 +162,14 @@ export function formatSourceCitationsMarkdown(citations: SourceCitation[]): stri
 function sourceCitationsFromToolCall(toolCall: ToolCallLike | undefined): SourceCitation[] {
   if (!toolCall || toolCall.isError === true || toolCall.isRunning === true) return [];
 
-  const toolName = normalizeToolName(
-    typeof toolCall.toolName === "string" ? toolCall.toolName : "unknown"
-  );
+  const rawToolName = typeof toolCall.toolName === "string" ? toolCall.toolName : "unknown";
+  const toolName = normalizeToolName(rawToolName);
+  // Which MCP server (if any) produced this call. A tool from a THIRD-PARTY MCP
+  // server (e.g. mcp__tavily__search) must never be attributed to the local
+  // Screenpipe timeline just because its bare name collides with a screenpipe
+  // endpoint ("search"). null = raw pi / non-MCP (its bare names are trusted).
+  const mcpServer = rawToolName.match(/^mcp__([a-z0-9_-]+)__/i)?.[1]?.toLowerCase() ?? null;
+  const isForeignMcp = mcpServer !== null && mcpServer !== "screenpipe";
   const args = isObject(toolCall.args) ? toolCall.args : {};
   const resultText = resultToText(toolCall.result);
 
@@ -181,16 +186,19 @@ function sourceCitationsFromToolCall(toolCall: ToolCallLike | undefined): Source
 
   // screenpipe MCP tools (ACP agents surface them as mcp__screenpipe__<name>,
   // normalized above) mirror the local screen/audio search + activity endpoints.
+  // Skip when the call came from a third-party MCP server, so a foreign tool
+  // whose bare name collides ("search") is not mislabeled as a local recording.
   if (
-    toolName === "search-content" ||
-    toolName === "keyword-search" ||
-    toolName === "search" ||
-    toolName === "screenpipe" ||
-    toolName === "team-search" ||
-    toolName === "activity-summary" ||
-    toolName === "search-elements" ||
-    toolName === "get-frame-elements" ||
-    toolName === "frame-context"
+    !isForeignMcp &&
+    (toolName === "search-content" ||
+      toolName === "keyword-search" ||
+      toolName === "search" ||
+      toolName === "screenpipe" ||
+      toolName === "team-search" ||
+      toolName === "activity-summary" ||
+      toolName === "search-elements" ||
+      toolName === "get-frame-elements" ||
+      toolName === "frame-context")
   ) {
     return [screenpipeToolCitation(args)];
   }

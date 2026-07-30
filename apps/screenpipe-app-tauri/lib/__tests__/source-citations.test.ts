@@ -736,6 +736,28 @@ describe("ACP / mcp__ tool citations", () => {
     expect(citations.length).toBeGreaterThan(0);
   });
 
+  it("does NOT attribute a third-party MCP 'search' tool to the local timeline", () => {
+    // mcp__tavily__search normalizes to bare "search" — it must not be routed
+    // to a screenpipe (local screen-recording) citation, which would mislabel
+    // an external web query as the user's private timeline and deep-link into it.
+    const citations = sourceCitationsFromMessage({
+      contentBlocks: [
+        {
+          type: "tool",
+          toolCall: {
+            toolName: "mcp__tavily__search",
+            args: { query: "weather tomorrow" },
+            result: { content: [{ type: "text", text: "sunny" }] },
+            isRunning: false,
+          },
+        },
+      ],
+    } as any);
+    expect(
+      citations.some((c: { kind?: string }) => c.kind === "screenpipe"),
+    ).toBe(false);
+  });
+
   it("matches a humanized coding-tool title after normalization", () => {
     const citations = sourceCitationsFromMessage({
       contentBlocks: [
