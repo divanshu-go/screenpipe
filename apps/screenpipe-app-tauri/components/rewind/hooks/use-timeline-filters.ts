@@ -11,6 +11,7 @@ import {
 	findNextFrameIndex,
 	hasFrameVisualMedia,
 	snapFrameIndex,
+	snapFrameIndexToDevice,
 } from "@/lib/hooks/timeline-frame-navigation";
 
 export function useTimelineFilters(opts: {
@@ -112,7 +113,7 @@ export function useTimelineFilters(opts: {
 			}
 			return fromIndex;
 		}
-		if (selectedDeviceId === "all" || allDeviceIds.length <= 1) {
+		if (selectedDeviceId === "all") {
 			return clampTimelineIndex(fromIndex + dir, frames.length);
 		}
 		return findNextFrameIndex(
@@ -123,22 +124,15 @@ export function useTimelineFilters(opts: {
 				hasFrameVisualMedia(frame) &&
 				frame.devices.some((d) => d.device_id === selectedDeviceId),
 		);
-	}, [selectedDeviceId, allDeviceIds.length, frames, matchingIndices]);
+	}, [selectedDeviceId, frames, matchingIndices]);
 
 	// Snap an arbitrary index to the nearest matching frame
-	const snapToDevice = useCallback((idx: number): number => {
-		if (selectedDeviceId === "all" || allDeviceIds.length <= 1) {
-			return clampTimelineIndex(idx, frames.length);
-		}
-		return snapFrameIndex(
-			frames,
-			idx,
-			1,
-			(frame) =>
-				hasFrameVisualMedia(frame) &&
-				frame.devices.some((d) => d.device_id === selectedDeviceId),
-		);
-	}, [selectedDeviceId, allDeviceIds.length, frames]);
+	const snapToDevice = useCallback((
+		idx: number,
+		deviceId: string = selectedDeviceId,
+	): number => (
+		snapFrameIndexToDevice(frames, idx, deviceId)
+	), [selectedDeviceId, frames]);
 
 	// Snap an index to the nearest frame matching ALL active filters.
 	// Used by the scroll/click handler so the user can't land on dimmed frames.
@@ -158,7 +152,7 @@ export function useTimelineFilters(opts: {
 	const handleDeviceChange = useCallback((deviceId: string) => {
 		setSelectedDeviceId(deviceId);
 		if (deviceId === "all") return;
-		const snapped = snapToDevice(currentIndex);
+		const snapped = snapToDevice(currentIndex, deviceId);
 		if (snapped !== currentIndex) {
 			setCurrentIndex(snapped);
 			setCurrentFrame(frames[snapped]);

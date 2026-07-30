@@ -16,6 +16,7 @@ import {
   findTimelineDisplayFrame,
   hasFrameVisualMedia,
   snapFrameIndex,
+  snapFrameIndexToDevice,
 } from "../timeline-frame-navigation";
 
 // Define the types we need for testing
@@ -464,6 +465,24 @@ describe("Timeline frame navigation", () => {
     expect(snapFrameIndex(frames, 1, -1, hasFrameVisualMedia)).toBe(0);
   });
 
+  it("snaps an audio marker to the newly requested monitor", () => {
+    const audioOnly = createAudioOnlyFrame("2026-07-03T10:03:00Z", -2);
+    const monitorTwo = createMockFrame(
+      "2026-07-03T10:02:00Z",
+      "monitor_2",
+      2,
+    );
+    const monitorOne = createMockFrame(
+      "2026-07-03T10:01:00Z",
+      "monitor_1",
+      1,
+    );
+    const frames = [audioOnly, monitorTwo, monitorOne];
+
+    expect(snapFrameIndexToDevice(frames, 0, "monitor_1")).toBe(2);
+    expect(snapFrameIndexToDevice(frames, 0, "all")).toBe(0);
+  });
+
   it("keeps the nearest screenshot visible while the playhead is on audio-only data", () => {
     const newerVisual = createMockFrame("2026-07-03T10:03:00Z", "monitor_1", 3);
     const audioOnly = createAudioOnlyFrame("2026-07-03T10:02:00Z", -2);
@@ -520,6 +539,31 @@ describe("Timeline frame navigation", () => {
         new Date(2026, 6, 29),
       ),
     ).toBe(sameDayVisual);
+  });
+
+  it("keeps rendering when the marker crosses a day before the store date updates", () => {
+    const previousDayVisual = createMockFrame(
+      "2026-07-29T23:59:00",
+      "monitor_1",
+      2,
+    );
+    const currentDayAudio = createAudioOnlyFrame(
+      "2026-07-30T00:01:00",
+      -2,
+    );
+    const currentDayVisual = createMockFrame(
+      "2026-07-30T00:02:00",
+      "monitor_1",
+      3,
+    );
+
+    expect(
+      findTimelineDisplayFrame(
+        [currentDayVisual, currentDayAudio, previousDayVisual],
+        1,
+        new Date(currentDayAudio.timestamp),
+      ),
+    ).toBe(currentDayVisual);
   });
 });
 

@@ -45,9 +45,9 @@ export function findTimelineDisplayFrame(
 		);
 	};
 
-	// Date navigation intentionally keeps the previous day's frames mounted
-	// until the new batch arrives. Never render one of those retained frames
-	// under the newly selected calendar date.
+	// Keep screenshot fallback within the selected marker's local day. This
+	// prevents a nearby frame from leaking across midnight while currentDate
+	// catches up after ordinary cross-day scrolling.
 	if (!isOnSelectedDate(current)) return null;
 	if (hasFrameVisualMedia(current)) return current;
 
@@ -129,4 +129,22 @@ export function snapFrameIndex(
 	}
 
 	return clamped;
+}
+
+export function snapFrameIndexToDevice(
+	frames: StreamTimeSeriesResponse[],
+	targetIndex: number,
+	deviceId: string,
+): number {
+	if (deviceId === "all") {
+		return clampTimelineIndex(targetIndex, frames.length);
+	}
+	return snapFrameIndex(
+		frames,
+		targetIndex,
+		1,
+		(frame) =>
+			hasFrameVisualMedia(frame) &&
+			frame.devices.some((device) => device.device_id === deviceId),
+	);
 }

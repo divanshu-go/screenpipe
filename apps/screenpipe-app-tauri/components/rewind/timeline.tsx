@@ -196,7 +196,12 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 	// transition after the final visual frame.
 	const visualFrame = useMemo(() => {
 		if (!currentFrame) return null;
-		return findTimelineDisplayFrame(frames, currentIndex, currentDate);
+		const markerDate = new Date(currentFrame.timestamp);
+		return findTimelineDisplayFrame(
+			frames,
+			currentIndex,
+			Number.isNaN(markerDate.getTime()) ? currentDate : markerDate,
+		);
 	}, [currentFrame, currentDate, currentIndex, frames]);
 
 	const { meetings } = useMeetings(frames);
