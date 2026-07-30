@@ -237,13 +237,7 @@ pub fn start_meeting_streaming_loop(
                     match frame {
                         Ok(frame) => {
                             if let Some(session) = active.as_mut() {
-                                session.audio_frames_seen += 1;
-                                session.audio_samples_seen += frame.samples.len() as u64;
-                                if frame_has_audio_activity(&frame) {
-                                    let now = Instant::now();
-                                    session.last_audio_activity_at = now;
-                                    session.last_voiced_audio_at = Some(now);
-                                }
+                                note_audio_frame(session, &frame, Instant::now());
                                 if session.live_transcription_enabled {
                                     route_frame_to_provider(
                                         &audio_tap,
@@ -700,6 +694,19 @@ fn device_stream_key(frame: &MeetingAudioFrame) -> String {
     format!("{}::{}", frame.device_name, device_type)
 }
 
+/// Fold one captured frame into the session's audio counters, stamping the
+/// voice-activity clock when the frame carries speech. Split out of the
+/// coordinator's `select!` arm so the stall detector's inputs are testable —
+/// the recency check is only as good as this timestamp being written.
+fn note_audio_frame(session: &mut ActiveMeetingStream, frame: &MeetingAudioFrame, now: Instant) {
+    session.audio_frames_seen += 1;
+    session.audio_samples_seen += frame.samples.len() as u64;
+    if frame_has_audio_activity(frame) {
+        session.last_audio_activity_at = now;
+        session.last_voiced_audio_at = Some(now);
+    }
+}
+
 fn frame_has_audio_activity(frame: &MeetingAudioFrame) -> bool {
     if frame.samples.is_empty() {
         return false;
@@ -928,6 +935,65 @@ mod tests {
     fn test_audio_tap() -> MeetingAudioTap {
         let (tx, _) = broadcast::channel(8);
         MeetingAudioTap::new(tx, Arc::new(std::sync::atomic::AtomicBool::new(false)))
+    }
+
+    /// Frame of constant-amplitude samples, so RMS equals `amplitude`.
+    fn test_frame(amplitude: f32, device_type: crate::core::device::DeviceType) -> MeetingAudioFrame {
+        MeetingAudioFrame {
+            samples: Arc::new(vec![amplitude; 480]),
+            device_name: "test device".to_string(),
+            device_type,
+            sample_rate: 16_000,
+            channels: 1,
+            captured_at_unix_ms: 0,
+        }
+    }
+
+    #[test]
+    fn note_audio_frame_stamps_voice_clock_only_for_speech() {
+        use crate::core::device::DeviceType;
+
+        let now = Instant::now();
+        let mut session = test_session(now, true);
+
+        // Silence advances the counters but must not stamp the voice clock —
+        // that is what keeps the stall notification off silent meetings.
+        note_audio_frame(&mut session, &test_frame(0.0, DeviceType::Output), now);
+        assert_eq!(session.audio_frames_seen, 1);
+        assert_eq!(session.audio_samples_seen, 480);
+        assert!(session.last_voiced_audio_at.is_none());
+        assert!(!session.has_recent_voiced_audio(now));
+
+        // Speech stamps it, and the stamp is the time the frame arrived.
+        let spoke_at = now + Duration::from_secs(5);
+        note_audio_frame(&mut session, &test_frame(0.3, DeviceType::Output), spoke_at);
+        assert_eq!(session.audio_frames_seen, 2);
+        assert_eq!(session.last_voiced_audio_at, Some(spoke_at));
+        assert!(session.has_recent_voiced_audio(spoke_at));
+
+        // The stamp ages out of the recency window rather than latching on.
+        assert!(!session
+            .has_recent_voiced_audio(spoke_at + STALL_VOICED_AUDIO_RECENCY + Duration::from_secs(1)));
+
+        // Output taps use a lower floor than mics (system audio is quieter at
+        // the tap), so the same amplitude counts as speech on one and not the
+        // other. A regression here silently changes which meetings can warn.
+        let quiet = 0.005;
+        let mut output_session = test_session(now, true);
+        note_audio_frame(&mut output_session, &test_frame(quiet, DeviceType::Output), now);
+        assert!(output_session.last_voiced_audio_at.is_some());
+
+        let mut input_session = test_session(now, true);
+        note_audio_frame(&mut input_session, &test_frame(quiet, DeviceType::Input), now);
+        assert!(input_session.last_voiced_audio_at.is_none());
+
+        // Empty frames are counted but never treated as speech.
+        let mut empty_session = test_session(now, true);
+        let mut empty = test_frame(0.5, DeviceType::Output);
+        empty.samples = Arc::new(Vec::new());
+        note_audio_frame(&mut empty_session, &empty, now);
+        assert_eq!(empty_session.audio_frames_seen, 1);
+        assert!(empty_session.last_voiced_audio_at.is_none());
     }
 
     // `check_and_emit_stall_notifications` calls `screenpipe_events::send_event`,
