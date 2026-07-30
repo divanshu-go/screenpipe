@@ -1,5 +1,5 @@
 [workspace]
-members = ["wer-dump-helper"]
+members = [".", "wer-dump-helper"]
 
 [package]
 name = "screenpipe-app"
