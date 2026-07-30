@@ -15,6 +15,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/components/ui/use-toast";
 import {
   Trash2,
@@ -399,7 +400,35 @@ export function RetentionSettings({
           </div>
         </div>
 
-        {/* Card 2 — ongoing retention policy (distinct from the manual purge above) */}
+        {/* Card 2 — opt-in guard against SQLite/capture writes filling the disk */}
+        <div className="rounded border border-border p-3">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+              <div>
+                <p className="text-sm font-medium">
+                  stop recording before disk is full
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  when free space falls to 20 GB, stop capture and notify you.
+                  search, pipes, and existing data stay available. off by
+                  default.
+                </p>
+              </div>
+            </div>
+            <Switch
+              id="stop-recording-on-low-disk"
+              data-testid="low-disk-recording-guard-toggle"
+              aria-label="stop recording before disk is full"
+              checked={settings.stopRecordingOnLowDisk ?? false}
+              onCheckedChange={(checked) =>
+                updateSettings({ stopRecordingOnLowDisk: checked })
+              }
+            />
+          </div>
+        </div>
+
+        {/* Card 3 — ongoing retention policy (distinct from the manual purge above) */}
         <div className="space-y-3 rounded border border-border p-3">
           <div className="flex items-center gap-2">
             <Trash2 className="h-4 w-4 text-muted-foreground" />

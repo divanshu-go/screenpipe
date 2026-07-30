@@ -5,6 +5,26 @@
 import { existsSync } from 'node:fs';
 import { waitForAppReady, openHomeWindow, t } from '../helpers/test-utils.js';
 import { saveScreenshot } from '../helpers/screenshot-utils.js';
+import { invokeOrThrow } from '../helpers/tauri.js';
+
+const FOCUS_PORT = Number(process.env.SCREENPIPE_FOCUS_PORT ?? '11436');
+const NOTIFICATIONS_URL = `http://127.0.0.1:${FOCUS_PORT}/notifications`;
+
+interface NotificationHistoryEntry {
+  title?: string;
+  body?: string;
+}
+
+async function readNotifications(): Promise<NotificationHistoryEntry[]> {
+  return (await browser.executeAsync(
+    (url: string, done: (entries: NotificationHistoryEntry[]) => void) => {
+      void fetch(url)
+        .then(async (response) => done((await response.json()) as NotificationHistoryEntry[]))
+        .catch(() => done([]));
+    },
+    NOTIFICATIONS_URL,
+  )) as NotificationHistoryEntry[];
+}
 
 /**
  * Settings Sections E2E
@@ -232,6 +252,76 @@ describe('Settings sections', () => {
 
     const filepath = await saveScreenshot('settings-storage');
     expect(existsSync(filepath)).toBe(true);
+  });
+
+  it('keeps the low-disk guard off by default, then stops capture and persists a notification when enabled', async () => {
+    const navStorage = await $('[data-testid="settings-nav-storage"]');
+    await navStorage.click();
+
+    const toggle = await $('[data-testid="low-disk-recording-guard-toggle"]');
+    await toggle.waitForExist({ timeout: t(8_000) });
+    expect(await toggle.getAttribute('data-state')).toBe('unchecked');
+    expect(await invokeOrThrow<boolean>('e2e_low_disk_guard_enabled')).toBe(false);
+
+    // Model active capture without depending on a real display or audio device.
+    await invokeOrThrow('e2e_mark_capture_intended');
+    expect(await invokeOrThrow<boolean>('is_capture_paused')).toBe(false);
+    await invokeOrThrow('e2e_emit_disk_space_low', {
+      availableBytes: 1024 * 1024 * 1024,
+    });
+    await browser.pause(750);
+    expect(await invokeOrThrow<boolean>('is_capture_paused')).toBe(false);
+    expect((await readNotifications()).some(
+      (entry) => entry.title === 'recording stopped — disk almost full'
+    )).toBe(false);
+
+    await toggle.click();
+    await browser.waitUntil(
+      async () => await invokeOrThrow<boolean>('e2e_low_disk_guard_enabled'),
+      {
+        timeout: t(8_000),
+        interval: 200,
+        timeoutMsg: 'low-disk guard setting was not persisted',
+      },
+    );
+
+    await invokeOrThrow('e2e_emit_disk_space_low', {
+      availableBytes: 1024 * 1024 * 1024,
+    });
+    await browser.waitUntil(
+      async () => await invokeOrThrow<boolean>('is_capture_paused'),
+      {
+        timeout: t(20_000),
+        interval: 250,
+        timeoutMsg: 'capture intent stayed active after low-disk event',
+      },
+    );
+    await browser.waitUntil(
+      async () => (await readNotifications()).some(
+        (entry) => entry.title === 'recording stopped — disk almost full'
+      ),
+      {
+        timeout: t(10_000),
+        interval: 250,
+        timeoutMsg: 'low-disk notification was not persisted',
+      },
+    );
+
+    const notification = (await readNotifications()).find(
+      (entry) => entry.title === 'recording stopped — disk almost full'
+    );
+    expect(notification?.body).toContain('only 1.0 GB is free');
+    expect(notification?.body).toContain('search and existing data remain available');
+
+    const filepath = await saveScreenshot('settings-low-disk-recording-guard');
+    expect(existsSync(filepath)).toBe(true);
+
+    // Leave the isolated E2E store at its production default for later specs.
+    await toggle.click();
+    await browser.waitUntil(
+      async () => !(await invokeOrThrow<boolean>('e2e_low_disk_guard_enabled')),
+      { timeout: t(8_000), interval: 200 },
+    );
   });
 
   it('Privacy section renders api auth + keychain controls (covers 729247599, 4253ed2bd, recent encryption-toggle UX)', async () => {

@@ -1159,6 +1159,47 @@ pub fn e2e_main_overlay_visible(app_handle: tauri::AppHandle) -> bool {
     }
 }
 
+/// E2E helper: model an active capture intent without requiring physical
+/// screen/audio devices on the CI runner.
+#[tauri::command]
+#[specta::specta]
+pub fn e2e_mark_capture_intended(
+    state: tauri::State<'_, crate::recording::RecordingState>,
+) -> Result<(), String> {
+    if !cfg!(feature = "e2e") {
+        return Err("E2E feature is disabled".to_string());
+    }
+    state.set_capture_intent(true);
+    Ok(())
+}
+
+/// E2E helper: publish the same typed core event as the real disk probe.
+#[tauri::command]
+#[specta::specta]
+pub fn e2e_emit_disk_space_low(available_bytes: u64) -> Result<(), String> {
+    if !cfg!(feature = "e2e") {
+        return Err("E2E feature is disabled".to_string());
+    }
+
+    let event = screenpipe_events::DiskSpaceLowEvent::new(
+        available_bytes,
+        ".e2e".to_string(),
+    );
+    screenpipe_events::send_event(event.event_name(), event).map_err(|error| error.to_string())
+}
+
+/// E2E helper: read back the persisted guard value before publishing an event.
+#[tauri::command]
+#[specta::specta]
+pub fn e2e_low_disk_guard_enabled(app_handle: tauri::AppHandle) -> Result<bool, String> {
+    if !cfg!(feature = "e2e") {
+        return Err("E2E feature is disabled".to_string());
+    }
+    Ok(SettingsStore::get(&app_handle)?
+        .unwrap_or_default()
+        .stop_recording_on_low_disk)
+}
+
 /// E2E helper: drive the health-to-native-tray status transition.
 #[tauri::command]
 #[specta::specta]

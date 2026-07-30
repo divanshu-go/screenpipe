@@ -72,6 +72,11 @@ impl CaptureSession {
         let (shutdown_tx, _) = broadcast::channel::<()>(1);
         reconfigure_audio_manager(server, config).await?;
 
+        screenpipe_engine::disk_pressure::start_disk_pressure_monitor(
+            server.data_path.clone(),
+            shutdown_tx.subscribe(),
+        );
+
         // --- Capture trigger sender (set by VisionManager, consumed by UI recorder) ---
         let mut capture_trigger_tx: Option<screenpipe_engine::event_driven_capture::TriggerSender> =
             None;

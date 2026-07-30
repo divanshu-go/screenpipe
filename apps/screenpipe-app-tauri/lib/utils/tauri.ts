@@ -399,6 +399,17 @@ async e2eEmitAgentStream(sessionId: string, deltaCount: number) : Promise<Result
 }
 },
 /**
+ * E2E helper: publish the same typed core event as the real disk probe.
+ */
+async e2eEmitDiskSpaceLow(availableBytes: number) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("e2e_emit_disk_space_low", { availableBytes }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * E2E helper for the scheduled-pipe path: feed synthetic pipe stdout
  * through the same Rust-side callback adapter production uses, then let the
  * frontend's default pipe handlers record it as a completed pipe run.
@@ -438,6 +449,17 @@ async e2eInstalledTrayRecordingStatus() : Promise<Result<string | null, string>>
 }
 },
 /**
+ * E2E helper: read back the persisted guard value before publishing an event.
+ */
+async e2eLowDiskGuardEnabled() : Promise<Result<boolean, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("e2e_low_disk_guard_enabled") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * E2E helper: report whether the main overlay is logically visible.
  *
  * The main window uses platform-specific "hide" semantics (macOS NSPanel with
@@ -446,6 +468,18 @@ async e2eInstalledTrayRecordingStatus() : Promise<Result<string | null, string>>
  */
 async e2eMainOverlayVisible() : Promise<boolean> {
     return await TAURI_INVOKE("e2e_main_overlay_visible");
+},
+/**
+ * E2E helper: model an active capture intent without requiring physical
+ * screen/audio devices on the CI runner.
+ */
+async e2eMarkCaptureIntended() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("e2e_mark_capture_intended") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 },
 /**
  * E2E-only: detach and close the owned-browser child webview, resetting the
@@ -3560,6 +3594,11 @@ chatAlwaysOnTop?: boolean;
  * detector is more reliable.
  */
 showRestartNotifications?: boolean;
+/**
+ * Stop capture before the data volume is completely full. Search, pipes,
+ * and the local API remain available. Explicitly opt-in for now.
+ */
+stopRecordingOnLowDisk?: boolean;
 /**
  * When true, apply macOS vibrancy effect to the sidebar for a translucent look.
  */
