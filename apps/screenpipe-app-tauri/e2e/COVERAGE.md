@@ -7,8 +7,8 @@ and layer declared in the manifest, weighted by confidence and criticality.
 - Manifest: `e2e/coverage-map.json`
 - Specs directory: `e2e/specs`
 - Mapped specs: 81
-- Declared test blocks: 235
-- Weighted coverage points: 180.4
+- Declared test blocks: 236
+- Weighted coverage points: 181.1
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -19,9 +19,9 @@ can execute more runtime cases than this number shows.
 
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
-| windows | 69 | 215 | 173.1 | 15 | 70 | 90% |
-| macos | 77 | 199 | 151.6 | 17 | 71 | 88% |
-| linux | 59 | 176 | 143.3 | 13 | 65 | 87% |
+| windows | 69 | 216 | 173.8 | 15 | 71 | 90% |
+| macos | 77 | 200 | 152.3 | 17 | 72 | 88% |
+| linux | 59 | 177 | 144.0 | 13 | 66 | 87% |
 
 ## Runtime Results
 
@@ -45,8 +45,8 @@ pass/fail/skip counts.
 | os-integration | 5 specs / 17 tests / 16.1 pts | 6 specs / 5 tests / 1.7 pts | - |
 | performance | 2 specs / 44 tests / 44.0 pts | 4 specs / 34 tests / 30.5 pts | 1 specs / 29 tests / 29.0 pts |
 | pipes | 5 specs / 15 tests / 15.0 pts | 5 specs / 15 tests / 15.0 pts | 5 specs / 15 tests / 15.0 pts |
-| real-ui-e2e | 47 specs / 133 tests / 106.9 pts | 49 specs / 120 tests / 96.4 pts | 43 specs / 112 tests / 93.7 pts |
-| settings | 13 specs / 33 tests / 30.6 pts | 15 specs / 28 tests / 24.3 pts | 12 specs / 25 tests / 22.6 pts |
+| real-ui-e2e | 47 specs / 134 tests / 107.6 pts | 49 specs / 121 tests / 97.1 pts | 43 specs / 113 tests / 94.4 pts |
+| settings | 14 specs / 35 tests / 32.0 pts | 16 specs / 30 tests / 25.7 pts | 13 specs / 27 tests / 24.0 pts |
 | storage-privacy | 7 specs / 22 tests / 21.1 pts | 6 specs / 14 tests / 13.1 pts | 5 specs / 14 tests / 13.1 pts |
 | tauri-command | 10 specs / 19 tests / 12.3 pts | 10 specs / 20 tests / 11.8 pts | 9 specs / 18 tests / 11.3 pts |
 | window-lifecycle | 18 specs / 62 tests / 52.6 pts | 18 specs / 43 tests / 31.0 pts | 13 specs / 38 tests / 29.5 pts |
@@ -160,7 +160,7 @@ pass/fail/skip counts.
 | timeline.spec.ts | windows, macos, linux | real-ui-e2e, capture-ocr | timeline, capture-ocr | high | conditional | real-user-flow | 3 | Timeline shell always runs; seeded frame assertion skips under no-recording. |
 | tray-recording-status.spec.ts | windows | os-integration, tauri-command | tray-recording-status | high | strong | command | 1 | Drives Starting to Recording and reads back the status item from the successfully installed native tray menu. |
 | tray-search.spec.ts | windows, macos, linux | window-lifecycle, tauri-command, real-ui-e2e | tray-search, home-search, window-lifecycle | high | partial | command | 2 | Invokes open_search_window and verifies focused floating Search. |
-| updater-banner.spec.ts | windows, macos, linux | real-ui-e2e | update-surfacing | high | partial | synthetic | 1 | Synthetic update-available event surfaces the restart-to-update banner (no relaunch). Real check/download/install + rollback stay manual via e2e/mock-updates; the debug e2e build disables the updater check under cfg!(debug_assertions). |
+| updater-banner.spec.ts | windows, macos, linux | real-ui-e2e, settings | update-surfacing, settings-persistence | high | partial | mixed | 2 | Synthetic update-available event surfaces the restart-to-update banner. A real Auto-update toggle plus delayed store save verifies restart waits for preference persistence and survives settings-store re-hydration; an E2E-only handoff suppresses the destructive relaunch. Real check/download/install + rollback stay manual via e2e/mock-updates because the debug E2E build disables updater checks. |
 | viewer-deeplink.spec.ts | windows, macos, linux | window-lifecycle, tauri-command | viewer-deeplink, window-lifecycle | medium | partial | command | 3 | Viewer window creation and per-path dedupe. |
 | window-activation.spec.ts | macos | window-lifecycle, tauri-command, real-ui-e2e | window-lifecycle, chat | medium | conditional | real-user-flow | 2 | macOS-only show_window_activated focus coverage. |
 | window-lifecycle.spec.ts | windows, macos, linux | window-lifecycle, tauri-command, real-ui-e2e | window-lifecycle, onboarding, tray-search | high | strong | mixed | 3 | Home, Search, and onboarding window routing. |
