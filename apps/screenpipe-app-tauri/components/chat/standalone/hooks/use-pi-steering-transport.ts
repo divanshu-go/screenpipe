@@ -453,7 +453,7 @@ export function usePiSteeringTransport(
         const interruptedAssistantId =
           latest.interruptedAssistantId ?? null;
 
-        void commands
+        await commands
           .piSteer(
             sid,
             prompt,

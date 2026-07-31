@@ -245,6 +245,11 @@ async checkPermission(permission: OSPermission) : Promise<OSPermissionStatus> {
  * clicked anything. It must use preflight directly: the broader core Tauri
  * check may perform a real capture probe in debug builds, which macOS treats
  * as a permission request.
+ *
+ * It honors the engine's enumeration verdict for the same reason
+ * `do_permissions_check` does — otherwise onboarding renders screen recording
+ * green in the exact lapsed-grant state where the permission banner and the
+ * recovery window say denied.
  */
 async checkScreenRecordingPermission() : Promise<OSPermissionStatus> {
     return await TAURI_INVOKE("check_screen_recording_permission");
@@ -309,6 +314,14 @@ async copyFrameToClipboard(frameId: number) : Promise<Result<null, string>> {
 async copyTextToClipboard(text: string) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("copy_text_to_clipboard", { text }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async deleteBrainView(id: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("delete_brain_view", { id }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -677,14 +690,14 @@ async getDiskUsage(forceRefresh: boolean | null, dataDir: string | null) : Promi
 async getE2eSeedFlags() : Promise<string[]> {
     return await TAURI_INVOKE("get_e2e_seed_flags");
 },
+async getEnterpriseHostIdentity() : Promise<EnterpriseHostIdentity> {
+    return await TAURI_INVOKE("get_enterprise_host_identity");
+},
 async getEnterpriseInstallMetadata() : Promise<EnterpriseInstallMetadata> {
     return await TAURI_INVOKE("get_enterprise_install_metadata");
 },
 /**
  * Read the enterprise license key from `enterprise.json`.
- * Checks in order:
- * 1. Next to executable (pushed via Intune/MDM to Program Files / .app bundle)
- * 2. `~/.screenpipe/enterprise.json` (entered manually by employee via in-app prompt)
  * Returns None if no file is found or is invalid.
  */
 async getEnterpriseLicenseKey() : Promise<string | null> {
@@ -922,6 +935,14 @@ async initSync(password: string) : Promise<Result<boolean, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async installBrainViewTemplateKit(request: InstallBrainViewTemplateKitRequest) : Promise<Result<BrainViewDefinition, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("install_brain_view_template_kit", { request }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Install the two built-in screenpipe skills into a supported external agent.
  * MCP registration stays in the frontend because that path uses the app's
@@ -968,6 +989,22 @@ async isOverlayClickThrough() : Promise<boolean> {
 async isServerRunning() : Promise<Result<boolean, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("is_server_running") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async listBrainViewTemplateKits() : Promise<Result<BrainViewTemplateKit[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("list_brain_view_template_kits") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async listBrainViews() : Promise<Result<BrainViewDefinition[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("list_brain_views") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1089,6 +1126,14 @@ async livetextSetGuardRect(key: string, x: number, y: number, w: number, h: numb
 async livetextUpdatePosition(frameId: string, x: number, y: number, w: number, h: number) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("livetext_update_position", { frameId, x, y, w, h }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async loadBrainViewCanvas(viewId: string) : Promise<Result<BrainViewCanvasDocument | null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("load_brain_view_canvas", { viewId }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1608,7 +1653,8 @@ async piUpdateConfig(userToken: string | null, providerConfig: PiProviderConfig 
 }
 },
 /**
- * Read bundle ID, display name, and icon from a `.app` bundle selected in Finder.
+ * Read the platform app identifier, display name, and icon from an app picked
+ * in Finder (macOS) or an executable picked in Explorer (Windows).
  */
 async readAppBundleMetadata(path: string) : Promise<Result<ExcludedApp, string>> {
     try {
@@ -1627,6 +1673,20 @@ async readAppBundleMetadata(path: string) : Promise<Result<ExcludedApp, string>>
 async readAudioExclusions() : Promise<Result<ExcludedApp[], string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("read_audio_exclusions") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Read text from the system clipboard (native API — navigator.clipboard.readText()
+ * is not permitted in the Tauri webview). Returns empty string when the
+ * clipboard has no text. Used by the IMAP card to auto-detect a copied
+ * Gmail app password.
+ */
+async readClipboardText() : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("read_clipboard_text") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1953,6 +2013,22 @@ async rollbackToVersion(version: string) : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async saveBrainView(request: SaveBrainViewRequest) : Promise<Result<BrainViewDefinition, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("save_brain_view", { request }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async saveBrainViewCanvas(request: SaveBrainViewCanvasRequest) : Promise<Result<BrainViewCanvasDocument, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("save_brain_view_canvas", { request }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Save the enterprise license key to `~/.screenpipe/enterprise.json`.
  * Used by the in-app prompt when enterprise.json is not deployed via MDM.
@@ -1966,8 +2042,9 @@ async saveEnterpriseLicenseKey(licenseKey: string) : Promise<Result<null, string
 }
 },
 /**
- * Persist the user's enterprise admin status + team API token so the
- * pi-agent's `screenpipe-team` skill knows whether to install itself.
+ * Persist the user's enterprise admin status, team API token, and the org's
+ * team API base URL so the pi-agent's `screenpipe-team` skill knows whether
+ * to install itself and where to point.
  *
  * Called by the frontend right after a policy fetch confirms admin
  * role. Storing this alongside the license key in `enterprise.json`
@@ -1979,9 +2056,9 @@ async saveEnterpriseLicenseKey(licenseKey: string) : Promise<Result<null, string
  * just the token after a rotation. To FORCE a field to null, pass
  * an empty string for strings or `false` for `is_admin`/`license_active`.
  */
-async saveEnterpriseTeamConfig(isAdmin: boolean | null, licenseActive: boolean | null, teamApiToken: string | null) : Promise<Result<null, string>> {
+async saveEnterpriseTeamConfig(isAdmin: boolean | null, licenseActive: boolean | null, teamApiToken: string | null, gatewayUrl: string | null) : Promise<Result<null, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("save_enterprise_team_config", { isAdmin, licenseActive, teamApiToken }) };
+    return { status: "ok", data: await TAURI_INVOKE("save_enterprise_team_config", { isAdmin, licenseActive, teamApiToken, gatewayUrl }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -2366,6 +2443,20 @@ async suspendGlobalShortcuts() : Promise<Result<null, string>> {
 }
 },
 /**
+ * Verifies an OpenAI-compatible endpoint with the exact request path and
+ * audio encoding used by the recording engine. A successful response is
+ * required before the settings UI can activate this engine, so recordings
+ * cannot silently accumulate without searchable audio transcripts.
+ */
+async testOpenaiCompatibleTranscription(endpoint: string, apiKey: string | null, model: string, headers: { [key in string]: string } | null, rawAudio: boolean) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("test_openai_compatible_transcription", { endpoint, apiKey, model, headers, rawAudio }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Tauri command: start voice training. Spawns a background task that polls
  * until audio is transcribed, then assigns the speaker. Returns immediately.
  */
@@ -2553,6 +2644,31 @@ error: string | null;
  * show "X minutes" on slow migrations.
  */
 sinceEpochSecs: number }
+export type BrainViewBinding = { pipeName: string }
+export type BrainViewCanvasArrow = { id: string; fromId: string; toId: string; label: string | null }
+export type BrainViewCanvasBlock = { slotId: string; x: number; y: number; width: number; height: number }
+export type BrainViewCanvasDocument = { schema: string; viewId: string; revision: number; mode: BrainViewDisplayMode; viewport: BrainViewCanvasViewport; blocks: BrainViewCanvasBlock[]; notes: BrainViewCanvasNote[]; arrows: BrainViewCanvasArrow[]; strokes: BrainViewCanvasStroke[]; updatedAt: string }
+export type BrainViewCanvasNote = { id: string; text: string; x: number; y: number; width: number; height: number }
+export type BrainViewCanvasPoint = { x: number; y: number }
+export type BrainViewCanvasStroke = { id: string; points: BrainViewCanvasPoint[] }
+export type BrainViewCanvasViewport = { x: number; y: number; zoom: number }
+export type BrainViewComponent = "metric.v1" | "list.v1" | "bar-chart.v1" | "line-chart.v1" | "table.v1" | "timeline.v1" | "markdown.v1"
+export type BrainViewDefinition = { id: string; title: string; revision: number; timeRange: BrainViewTimeRange; periodPolicy: BrainViewPeriodPolicy; slots: BrainViewSlot[]; createdAt: string; updatedAt: string }
+export type BrainViewDisplayMode = "dashboard" | "canvas"
+export type BrainViewEvidenceRef = { eventId: number | null; frameId: number | null; transcriptionId: number | null; ts: string | null; deviceId: string | null }
+export type BrainViewFeedback = { rating: BrainViewFeedbackRating; artifactOutputId: number; artifactVersion: number; correction: string | null; createdAt: string }
+export type BrainViewFeedbackRating = "up" | "down"
+export type BrainViewFeedbackSummary = { upCount: number; downCount: number; current: BrainViewFeedback | null }
+export type BrainViewItemActionSummary = { items: BrainViewItemState[] }
+export type BrainViewItemDisposition = "active" | "resolved" | "snoozed" | "dismissed"
+export type BrainViewItemState = { itemId: string; disposition: BrainViewItemDisposition; snoozedUntil: string | null; correction: string | null; updatedAt: string }
+export type BrainViewPeriodPolicy = { type: "fixed.v1"; value: BrainViewTimeRange } | { type: "selectable.v1"; values: BrainViewTimeRange[] }
+export type BrainViewSlot = { id: string; title: string; component: BrainViewComponent; width: number; order: number; intent: string | null; binding: BrainViewBinding | null; value: BrainViewValue | null; feedback: BrainViewFeedbackSummary; itemActions: BrainViewItemActionSummary }
+export type BrainViewSlotInput = { id: string; title: string; component: BrainViewComponent; width: number; order: number; intent: string | null; binding: BrainViewBinding | null }
+export type BrainViewTemplateKit = { id: string; title: string; description: string; version: number; timeRange: BrainViewTimeRange; periodPolicy: BrainViewPeriodPolicy; pipes: BrainViewTemplatePipe[]; slots: BrainViewSlotInput[] }
+export type BrainViewTemplatePipe = { name: string; distribution: string }
+export type BrainViewTimeRange = "today" | "24h" | "7d" | "30d"
+export type BrainViewValue = { payload: JsonValue; evidence: BrainViewEvidenceRef[]; sourcePipe: string; artifactOutputId: number; artifactVersion: number; updatedAt: string }
 /**
  * Per-browser automation status: "granted", "denied", or "not_asked".
  * Also includes whether the browser is currently running.
@@ -2633,6 +2749,7 @@ alias?: string | null }
 export type E2eAgentStreamResult = { emitted_deltas: number; emit_ms: number }
 export type EmbeddedLLM = { enabled: boolean; model: string; port: number }
 export type EngineEvent = { name: string; data: JsonValue }
+export type EnterpriseHostIdentity = { machine_id_hash: string | null; os_user_id_hash: string | null }
 export type EnterpriseInstallMetadata = { install_source: string; update_manager: string; managed: boolean; detected_by: string[] }
 export type ExcludedApp = { bundleId: string; name: string | null; icon: string | null }
 export type ExportEvent = { kind: "started"; jobId: string; request: ExportRequestInfo } | { kind: "completed"; jobId: string; request: ExportRequestInfo; summary: MeetingExportSummary } | { kind: "failed"; jobId: string; request: ExportRequestInfo; error: string }
@@ -2647,6 +2764,7 @@ export type ImportedSkill = { name: string; description: string;
  * Absolute path inside `<data_dir>/skills/`.
  */
 path: string }
+export type InstallBrainViewTemplateKitRequest = { kitId: string; targetViewId: string; expectedRevision: number | null }
 export type JobEvent = { kind: "started"; jobId: string; label: string; message: string | null } | { kind: "progress"; jobId: string; label: string; progress: number; message: string | null } | { kind: "completed"; jobId: string; label: string; outputPath: string | null; message: string | null } | { kind: "failed"; jobId: string; label: string; error: string }
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue }
 export type KeychainStatus = { state: string }
@@ -2806,6 +2924,8 @@ export type RemoteSyncConfig = { host: string; port: number; user: string; key_p
  * Result of a sync operation.
  */
 export type RemoteSyncResult = { ok: boolean; files_transferred: number; bytes_transferred: number; error: string | null }
+export type SaveBrainViewCanvasRequest = { viewId: string; expectedRevision: number | null; mode: BrainViewDisplayMode; viewport: BrainViewCanvasViewport; blocks: BrainViewCanvasBlock[]; notes: BrainViewCanvasNote[]; arrows: BrainViewCanvasArrow[]; strokes: BrainViewCanvasStroke[] }
+export type SaveBrainViewRequest = { id: string; title: string; expectedRevision: number | null; timeRange: BrainViewTimeRange; periodPolicy: BrainViewPeriodPolicy; slots: BrainViewSlotInput[] }
 /**
  * A single schedule rule: a day-of-week + time range + what to record.
  */
@@ -2827,6 +2947,16 @@ endTime: string;
  */
 recordMode: string }
 export type SchedulerStatus = { running: boolean; last_sync: string | null; last_error: string | null }
+/**
+ * Which AI projection to build from the existing screen/accessibility stream.
+ *
+ * `Memory` preserves the original semantic-parser behavior. `ComputerUse` is
+ * shown to users as automation: it keeps capture action-oriented and skips the
+ * semantic parser worker. `Both` is shown as memory + automation and derives
+ * both views from the same captured tree; it never starts a second screen
+ * recorder or stores a duplicate raw accessibility tree.
+ */
+export type SemanticContextMode = "memory" | "computerUse" | "both"
 export type SettingsStore =
 /**
  * All recording/capture config lives here. Flattened so the JSON shape
@@ -2976,6 +3106,18 @@ disableVision: boolean;
  */
 disableScreenshots?: boolean;
 /**
+ * Build normalized semantic context from captured accessibility trees.
+ * Experimental and opt-in. False preserves the historical capture path
+ * without starting a parser worker or writing semantic tables.
+ */
+enableSemanticContext?: boolean;
+/**
+ * Select the AI view derived from the single captured accessibility tree.
+ * Missing values default to memory so existing opt-in users retain the
+ * exact behavior they selected before this setting existed.
+ */
+semanticContextMode?: SemanticContextMode;
+/**
  * Disable the timeline / rewind feature. When true, the engine skips
  * timeline-only work: warming the hot frame cache from the DB at startup
  * and buffering captured frames/audio into the in-memory hot cache that
@@ -3119,6 +3261,11 @@ ignoredUrls?: string[];
  * Automatically detect and skip incognito / private browsing windows.
  */
 ignoreIncognitoWindows: boolean;
+/**
+ * Use browser-native APIs for more reliable incognito detection on macOS.
+ * This requires Automation permission for supported Chromium browsers.
+ */
+enhancedIncognitoDetection?: boolean;
 /**
  * Experimental: pause screen capture when a DRM-protected streaming app
  * (Netflix, Disney+, etc.) or a remote-desktop client (Omnissa/VMware
