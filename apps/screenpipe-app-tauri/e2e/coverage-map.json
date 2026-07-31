@@ -69,6 +69,12 @@
       "layers": ["audio-device"]
     },
     {
+      "id": "meetings-only-audio-lifecycle",
+      "label": "Meetings-only audio device ownership",
+      "platforms": ["windows", "macos"],
+      "layers": ["audio-device", "local-api", "real-ui-e2e"]
+    },
+    {
       "id": "window-lifecycle",
       "label": "Window lifecycle, focus, and dedupe",
       "platforms": ["windows", "macos", "linux"],
@@ -415,6 +421,16 @@
       "notes": "Opens Chat and focuses the composer for typing."
     },
     {
+      "spec": "chat-cross-window-transcript-sync.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["chat-ai", "window-lifecycle", "real-ui-e2e"],
+      "features": ["chat", "chat-streaming", "window-lifecycle"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "mixed",
+      "notes": "Both Home and standalone Chat show persistent pending feedback, then hydrate a completed disk transcript and clear stop state from the real cross-window save event without calling a provider."
+    },
+    {
       "spec": "chat-source-file-preview.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["chat-ai", "real-ui-e2e"],
@@ -543,6 +559,16 @@
       "confidence": "strong",
       "ux": "real-user-flow",
       "notes": "Seeds and opens a long meeting note, checks editor shell click focus behavior, then clicks the bottom editor line."
+    },
+    {
+      "spec": "meetings-only-audio-lifecycle.spec.ts",
+      "platforms": ["windows", "macos"],
+      "layers": ["audio-device", "local-api", "real-ui-e2e"],
+      "features": ["meetings-only-audio-lifecycle", "audio-device-health"],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "real-user-flow",
+      "notes": "Opt-in real-audio lifecycle lane: configured devices stay closed outside meetings and open only across a manual meeting edge."
     },
     {
       "spec": "notification-viewer-link.spec.ts",
@@ -787,12 +813,12 @@
     {
       "spec": "updater-banner.spec.ts",
       "platforms": ["windows", "macos", "linux"],
-      "layers": ["real-ui-e2e"],
-      "features": ["update-surfacing"],
+      "layers": ["real-ui-e2e", "settings"],
+      "features": ["update-surfacing", "settings-persistence"],
       "criticality": "high",
       "confidence": "partial",
-      "ux": "synthetic",
-      "notes": "Synthetic update-available event surfaces the restart-to-update banner (no relaunch). Real check/download/install + rollback stay manual via e2e/mock-updates; the debug e2e build disables the updater check under cfg!(debug_assertions)."
+      "ux": "mixed",
+      "notes": "Synthetic update-available event surfaces the restart-to-update banner. A real Auto-update toggle plus delayed store save verifies restart waits for preference persistence and survives settings-store re-hydration; an E2E-only handoff suppresses the destructive relaunch. Real check/download/install + rollback stay manual via e2e/mock-updates because the debug E2E build disables updater checks."
     },
     {
       "spec": "privacy-installed-apps.spec.ts",
