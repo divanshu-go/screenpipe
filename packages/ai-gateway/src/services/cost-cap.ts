@@ -65,38 +65,34 @@ export async function getDailyUserCostForCapOrThrow(
 
 	const day = utcDay(now);
 	const baselineKey = `daily-cost:baseline:v1:${await sha256Hex(`${epoch}:${deviceId}`)}`;
-	const readBaseline = () => env.DB.prepare(`
-		SELECT daily_cost_usd AS baseline
-		FROM usage
-		WHERE device_id = ? AND tier = ? AND cost_day = ?
-	`).bind(baselineKey, COST_BASELINE_TIER, day).first<{ baseline: number }>();
-
-	let baselineRow = await readBaseline();
-	if (!baselineRow) {
-		const currentCost = await getDailyUserCostOrThrow(env, deviceId);
-		// Reuse the epoch row on later UTC days, but never overwrite a baseline
-		// that another request already established for this day.
-		await env.DB.prepare(`
-			UPDATE usage
-			SET user_id = ?, daily_count = 0, last_reset = ?, cost_day = ?,
-				daily_cost_usd = ?, updated_at = CURRENT_TIMESTAMP
-			WHERE device_id = ? AND tier = ?
-				AND (cost_day IS NULL OR cost_day <> ?)
-		`).bind(
-			deviceId, day, day, currentCost, baselineKey, COST_BASELINE_TIER, day,
-		).run();
-		await env.DB.prepare(`
-			INSERT OR IGNORE INTO usage
-				(device_id, user_id, daily_count, last_reset, tier, cost_day, daily_cost_usd)
-			VALUES (?, ?, 0, ?, ?, ?, ?)
-		`).bind(
-			baselineKey, deviceId, day, COST_BASELINE_TIER, day, currentCost,
-		).run();
-		baselineRow = await readBaseline();
-		if (!baselineRow) throw new Error('daily cost baseline unavailable');
-	}
-
 	const currentCost = await getDailyUserCostOrThrow(env, deviceId);
+	// One statement both establishes and returns the baseline. Separate
+	// INSERT-then-SELECT operations can observe different D1 replicas and make
+	// the first post-deploy request fail closed even though the insert succeeded.
+	const baselineRow = await env.DB.prepare(`
+		INSERT INTO usage
+			(device_id, user_id, daily_count, last_reset, tier, cost_day, daily_cost_usd)
+		VALUES (?, ?, 0, ?, ?, ?, ?)
+		ON CONFLICT(device_id) DO UPDATE SET
+			user_id = excluded.user_id,
+			daily_count = 0,
+			last_reset = excluded.last_reset,
+			tier = excluded.tier,
+			daily_cost_usd = CASE
+				WHEN usage.cost_day = excluded.cost_day THEN usage.daily_cost_usd
+				ELSE excluded.daily_cost_usd
+			END,
+			updated_at = CASE
+				WHEN usage.cost_day = excluded.cost_day THEN usage.updated_at
+				ELSE CURRENT_TIMESTAMP
+			END,
+			cost_day = excluded.cost_day
+		RETURNING daily_cost_usd AS baseline
+	`).bind(
+		baselineKey, deviceId, day, COST_BASELINE_TIER, day, currentCost,
+	).first<{ baseline: number }>();
+	if (!baselineRow) throw new Error('daily cost baseline unavailable');
+
 	return Math.max(0, currentCost - Number(baselineRow.baseline || 0));
 }
 
