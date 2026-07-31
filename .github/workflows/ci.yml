@@ -306,7 +306,7 @@ jobs:
 
       - name: Run specific Windows OCR cargo test
         env:
-          RUSTFLAGS: "-C link-arg=/LTCG"
+          RUSTFLAGS: ""  # LTCG removed: aligns CI test codegen with release builds (LTCG could emit AVX-512 on Xeon runners)
           # Link ONNX Runtime via ort's download-binaries (pyke prebuilt), same as the
           # green release-app.yml. Setting ORT_LIB_LOCATION forces ort-sys into system
           # static-linking, which needs onnxruntime_common.lib + the static _deps tree
@@ -323,7 +323,7 @@ jobs:
 
       - name: Run PII removal tests
         env:
-          RUSTFLAGS: "-C link-arg=/LTCG"
+          RUSTFLAGS: ""  # LTCG removed: aligns CI test codegen with release builds (LTCG could emit AVX-512 on Xeon runners)
           # Link ONNX Runtime via ort's download-binaries (pyke prebuilt), same as the
           # green release-app.yml. Setting ORT_LIB_LOCATION forces ort-sys into system
           # static-linking, which needs onnxruntime_common.lib + the static _deps tree
@@ -337,7 +337,7 @@ jobs:
 
       - name: Run PII redaction tests
         env:
-          RUSTFLAGS: "-C link-arg=/LTCG"
+          RUSTFLAGS: ""  # LTCG removed: aligns CI test codegen with release builds (LTCG could emit AVX-512 on Xeon runners)
           # Link ONNX Runtime via ort's download-binaries (pyke prebuilt), same as the
           # green release-app.yml. Setting ORT_LIB_LOCATION forces ort-sys into system
           # static-linking, which needs onnxruntime_common.lib + the static _deps tree
