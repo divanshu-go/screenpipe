@@ -40,6 +40,17 @@ fn screen_recording_permission_state_from_checks(
     }
 }
 
+fn should_request_screen_recording(state: ScreenRecordingPermissionState) -> bool {
+    matches!(
+        state,
+        ScreenRecordingPermissionState::Denied | ScreenRecordingPermissionState::RevokedButCached
+    )
+}
+
+fn should_restart_after_screen_recording_grant(state: ScreenRecordingPermissionState) -> bool {
+    state == ScreenRecordingPermissionState::GrantedNeedsRestart
+}
+
 /// Returns the current process's Screen Recording permission state.
 ///
 /// `CGPreflightScreenCaptureAccess` can return the result cached by SkyLight
@@ -83,6 +94,59 @@ pub fn screen_recording_permission_state() -> ScreenRecordingPermissionState {
     };
 
     screen_recording_permission_state_from_checks(cached_preflight, live_preflight)
+}
+
+/// Relaunch after macOS applies a Screen Recording grant to TCC but the
+/// running process still holds the old denied result.
+///
+/// This is called from the existing macOS window-focus handler. Waiting for
+/// focus return is intentional: the live TCC row changes before macOS's
+/// Restart/Later dialog is necessarily gone, so relaunching from the passive
+/// onboarding poll could preempt that native choice. If the user chooses the
+/// OS restart action, this process exits before focus returns. If they choose
+/// Later and return to Screenpipe, the mismatch is still present and we safely
+/// relaunch here.
+#[cfg(target_os = "macos")]
+pub(crate) async fn restart_after_screen_recording_grant_if_needed(app: tauri::AppHandle) -> bool {
+    use crate::recording::{bounded_teardown, TeardownOutcome, PRE_EXIT_TEARDOWN_TIMEOUT};
+
+    if !should_restart_after_screen_recording_grant(screen_recording_permission_state()) {
+        return false;
+    }
+
+    static RESTART_IN_FLIGHT: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+    if RESTART_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        debug!("screen recording permission relaunch already in flight");
+        return true;
+    }
+
+    info!("Screen Recording permission was granted after process start — relaunching to apply it");
+    match bounded_teardown(PRE_EXIT_TEARDOWN_TIMEOUT, async {
+        crate::process_exit::run_pre_exit_teardown(&app).await;
+        Ok(())
+    })
+    .await
+    {
+        TeardownOutcome::Completed => {}
+        TeardownOutcome::Failed(error) => {
+            warn!("screen recording permission relaunch teardown failed: {error}")
+        }
+        TeardownOutcome::TimedOut => warn!(
+            "screen recording permission relaunch teardown exceeded {}s; relaunching anyway",
+            PRE_EXIT_TEARDOWN_TIMEOUT.as_secs()
+        ),
+    }
+
+    crate::process_exit::request_app_relaunch(
+        app,
+        "screen recording permission grant",
+        std::time::Duration::from_millis(250),
+    );
+    true
 }
 
 #[cfg(target_os = "macos")]
@@ -139,7 +203,10 @@ pub async fn request_permission(app: tauri::AppHandle, permission: OSPermission)
         match permission {
             OSPermission::ScreenRecording => {
                 use core_graphics_helmer_fork::access::ScreenCaptureAccess;
-                if !ScreenCaptureAccess.preflight() {
+                // This branch is reached only after an explicit user action.
+                // Do not call request() again when live TCC already sees the
+                // grant but this process still has the old denied result.
+                if should_request_screen_recording(screen_recording_permission_state()) {
                     // Open System Settings first so it's in the background,
                     // then request() shows the native modal on top (macOS 15+).
                     // If the user dismisses the modal, Settings is already open.
@@ -436,21 +503,12 @@ pub fn check_microphone_permission() -> OSPermissionStatus {
     core_to_os_status(screenpipe_core::permissions::check_microphone())
 }
 
-#[cfg(any(target_os = "macos", test))]
-fn screen_recording_preflight_status(granted: bool) -> OSPermissionStatus {
-    if granted {
-        OSPermissionStatus::Granted
-    } else {
-        OSPermissionStatus::Denied
-    }
-}
-
 /// Check only screen recording permission without triggering a dialog.
 ///
 /// This command is polled as soon as onboarding renders, before the user has
-/// clicked anything. It must use preflight directly: the broader core Tauri
-/// check may perform a real capture probe in debug builds, which macOS treats
-/// as a permission request.
+/// clicked anything. Both checks used by `screen_recording_permission_state`
+/// are silent preflights: this must not perform a real capture probe or call
+/// the request API, either of which can surface the system prompt out of order.
 ///
 /// It honors the engine's enumeration verdict for the same reason
 /// `do_permissions_check` does — otherwise onboarding renders screen recording
@@ -461,10 +519,10 @@ fn screen_recording_preflight_status(granted: bool) -> OSPermissionStatus {
 pub fn check_screen_recording_permission() -> OSPermissionStatus {
     #[cfg(target_os = "macos")]
     {
-        use core_graphics_helmer_fork::access::ScreenCaptureAccess;
-        screen_recording_preflight_status(
-            ScreenCaptureAccess.preflight()
-                && !screenpipe_engine::permission_monitor::screen_enumeration_denied(),
+        screen_recording_status(
+            screen_recording_permission_state(),
+            screenpipe_engine::permission_monitor::screen_enumeration_denied(),
+            false,
         )
     }
 
@@ -750,23 +808,21 @@ pub fn get_missing_permissions() -> Vec<OSPermission> {
     }
 }
 
-/// Combine the TCC preflight answer with the engine's enumeration verdict.
+/// Combine the process's cached/live TCC state with the engine's enumeration
+/// verdict.
 ///
-/// `CGPreflightScreenCaptureAccess` keeps answering `true` in the macOS
-/// lapsed-grant state (periodic re-approval missed / grant invalidated by an
-/// update) while display enumeration fails — observed live in the wild:
-/// the recovery window opened on the enumeration-reported loss, then this
-/// check's preflight-only answer read as "restored" one second later, closed
-/// the window, restarted capture, and landed back in the same silent failure.
-/// The enumeration verdict outranks a positive preflight; it clears only when
-/// enumeration actually succeeds again (`report_screen_enumeration(true)`).
+/// Even when both TCC checks report a grant, ScreenCaptureKit enumeration can
+/// prove capture is broken in the macOS lapsed-grant state. That runtime
+/// verdict therefore outranks `Granted`; it clears only when enumeration
+/// actually succeeds again (`report_screen_enumeration(true)`).
 #[cfg(any(target_os = "macos", test))]
 fn screen_recording_status(
-    preflight_granted: bool,
+    process_state: ScreenRecordingPermissionState,
     enumeration_denied: bool,
     initial_check: bool,
 ) -> OSPermissionStatus {
-    match (preflight_granted && !enumeration_denied, initial_check) {
+    let granted = process_state == ScreenRecordingPermissionState::Granted && !enumeration_denied;
+    match (granted, initial_check) {
         (true, _) => OSPermissionStatus::Granted,
         (false, true) => OSPermissionStatus::Empty,
         (false, false) => OSPermissionStatus::Denied,
@@ -799,14 +855,11 @@ pub fn do_permissions_check(initial_check: bool) -> OSPermissionsCheck {
         }
 
         OSPermissionsCheck {
-            screen_recording: {
-                use core_graphics_helmer_fork::access::ScreenCaptureAccess;
-                screen_recording_status(
-                    ScreenCaptureAccess.preflight(),
-                    screenpipe_engine::permission_monitor::screen_enumeration_denied(),
-                    initial_check,
-                )
-            },
+            screen_recording: screen_recording_status(
+                screen_recording_permission_state(),
+                screenpipe_engine::permission_monitor::screen_enumeration_denied(),
+                initial_check,
+            ),
             microphone: check_av_permission(AVMediaType::Audio),
             accessibility: check_accessibility_permission(),
         }
@@ -1331,7 +1384,7 @@ pub fn request_arc_automation_permission(_app: tauri::AppHandle) -> bool {
 // and the preflight startup check.
 
 #[cfg(test)]
-mod screen_recording_preflight_tests {
+mod screen_recording_state_tests {
     use super::*;
 
     #[test]
@@ -1371,15 +1424,57 @@ mod screen_recording_preflight_tests {
     }
 
     #[test]
-    fn maps_silent_preflight_result_without_needing_a_capture_probe() {
+    fn only_requests_when_live_tcc_is_not_granted() {
+        assert!(should_request_screen_recording(
+            ScreenRecordingPermissionState::Denied
+        ));
+        assert!(should_request_screen_recording(
+            ScreenRecordingPermissionState::RevokedButCached
+        ));
+        assert!(!should_request_screen_recording(
+            ScreenRecordingPermissionState::Granted
+        ));
+        assert!(!should_request_screen_recording(
+            ScreenRecordingPermissionState::GrantedNeedsRestart
+        ));
+    }
+
+    #[test]
+    fn only_restarts_for_a_new_live_grant_held_stale_by_the_process() {
+        assert!(!should_restart_after_screen_recording_grant(
+            ScreenRecordingPermissionState::Denied
+        ));
+        assert!(!should_restart_after_screen_recording_grant(
+            ScreenRecordingPermissionState::Granted
+        ));
+        assert!(should_restart_after_screen_recording_grant(
+            ScreenRecordingPermissionState::GrantedNeedsRestart
+        ));
+        assert!(!should_restart_after_screen_recording_grant(
+            ScreenRecordingPermissionState::RevokedButCached
+        ));
+    }
+
+    #[test]
+    fn passive_checks_only_accept_a_fully_applied_grant() {
         assert_eq!(
-            screen_recording_preflight_status(true),
+            screen_recording_status(ScreenRecordingPermissionState::Granted, false, false),
             OSPermissionStatus::Granted
         );
-        assert_eq!(
-            screen_recording_preflight_status(false),
-            OSPermissionStatus::Denied
-        );
+        for state in [
+            ScreenRecordingPermissionState::Denied,
+            ScreenRecordingPermissionState::GrantedNeedsRestart,
+            ScreenRecordingPermissionState::RevokedButCached,
+        ] {
+            assert_eq!(
+                screen_recording_status(state, false, false),
+                OSPermissionStatus::Denied
+            );
+            assert_eq!(
+                screen_recording_status(state, false, true),
+                OSPermissionStatus::Empty
+            );
+        }
     }
 
     /// Regression for the lapsed-grant loop: preflight answers `true` (stale)
@@ -1393,22 +1488,22 @@ mod screen_recording_preflight_tests {
     #[test]
     fn stale_positive_preflight_does_not_read_as_granted_while_enumeration_denied() {
         assert_eq!(
-            screen_recording_status(true, true, false),
+            screen_recording_status(ScreenRecordingPermissionState::Granted, true, false),
             OSPermissionStatus::Denied
         );
         // Onboarding variant (initial_check) reads as not-yet-determined.
         assert_eq!(
-            screen_recording_status(true, true, true),
+            screen_recording_status(ScreenRecordingPermissionState::Granted, true, true),
             OSPermissionStatus::Empty
         );
         // Verdict cleared (enumeration succeeded) → preflight trusted again.
         assert_eq!(
-            screen_recording_status(true, false, false),
+            screen_recording_status(ScreenRecordingPermissionState::Granted, false, false),
             OSPermissionStatus::Granted
         );
         // Real denial still maps as before.
         assert_eq!(
-            screen_recording_status(false, false, false),
+            screen_recording_status(ScreenRecordingPermissionState::Denied, false, false),
             OSPermissionStatus::Denied
         );
     }
