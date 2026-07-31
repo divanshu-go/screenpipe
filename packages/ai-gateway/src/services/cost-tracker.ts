@@ -184,6 +184,24 @@ export function getModelCost(
   return inCost + outCost;
 }
 
+/**
+ * Price stream usage without treating an absent final usage event as $0.
+ * Providers normally report both sides at completion; cancellation may expose
+ * only partial or zero counters, in which case the conservative model estimate
+ * is safer than releasing the spend lease with no recorded cost.
+ */
+export function getStreamModelCost(
+  model: string | null | undefined,
+  inputTokens: number,
+  outputTokens: number,
+  cache?: CacheUsage,
+): number {
+  if (inputTokens <= 0 || outputTokens <= 0) {
+    return getModelCost(model, null, null);
+  }
+  return getModelCost(model, inputTokens, outputTokens, cache);
+}
+
 export interface CostLogEntry {
   device_id?: string;
   user_id?: string;
@@ -220,10 +238,11 @@ function utcToday(): string {
  * the (device_id, timestamp) index that would have made the SUM cheap
  * can't even build at that size (SQLITE_NOMEM).
  *
- * Best-effort: failure (e.g. migration not applied yet) must never block
- * the request — getDailyUserCost falls back to the legacy SUM in that case.
+ * The write still falls back independently from cost_log insertion. Callers
+ * that hold a priced-request lease use the boolean result to remain closed;
+ * read-only status callers retain the legacy fail-open behavior.
  */
-async function bumpDailyCostAccumulator(env: Env, deviceId: string, cost: number): Promise<void> {
+async function bumpDailyCostAccumulator(env: Env, deviceId: string, cost: number): Promise<boolean> {
   const today = utcToday();
   try {
     await env.DB.prepare(
@@ -233,8 +252,10 @@ async function bumpDailyCostAccumulator(env: Env, deviceId: string, cost: number
          daily_cost_usd = CASE WHEN usage.cost_day = ?2 THEN usage.daily_cost_usd + ?3 ELSE ?3 END,
          cost_day = ?2`
     ).bind(deviceId, today, cost).run();
+    return true;
   } catch (error) {
     console.warn('daily cost accumulator update failed:', error);
+    return false;
   }
 }
 
@@ -245,9 +266,10 @@ async function bumpDailyCostAccumulator(env: Env, deviceId: string, cost: number
  * 0004 haven't been applied yet, so a deploy/migration ordering mismatch
  * never drops cost rows.
  */
-export async function logCost(env: Env, entry: CostLogEntry): Promise<void> {
+export async function logCost(env: Env, entry: CostLogEntry): Promise<boolean> {
+  let accumulatorRecorded = true;
   if (entry.device_id && entry.estimated_cost_usd > 0) {
-    await bumpDailyCostAccumulator(env, entry.device_id, entry.estimated_cost_usd);
+    accumulatorRecorded = await bumpDailyCostAccumulator(env, entry.device_id, entry.estimated_cost_usd);
   }
   try {
     // Newest column set (migration 0007: + latency_ms, router_tier).
@@ -318,6 +340,7 @@ export async function logCost(env: Env, entry: CostLogEntry): Promise<void> {
     }
    }
   }
+  return accumulatorRecorded;
 }
 
 /**
@@ -398,6 +421,16 @@ export function getTierDailyCostCap(tier: string, env?: Env): number {
  * D1's CPU limit at scale (SCREENPIPE-AI-PROXY-1T/-1X/-1E).
  */
 export async function getDailyUserCost(env: Env, deviceId: string): Promise<number> {
+  try {
+    return await getDailyUserCostOrThrow(env, deviceId);
+  } catch (error) {
+    console.error('getDailyUserCost failed:', error);
+    return 0;
+  }
+}
+
+/** Same lookup as getDailyUserCost, but lets spend enforcement fail closed. */
+export async function getDailyUserCostOrThrow(env: Env, deviceId: string): Promise<number> {
   const today = utcToday();
   try {
     const row = await env.DB.prepare(
@@ -416,8 +449,8 @@ export async function getDailyUserCost(env: Env, deviceId: string): Promise<numb
     ).bind(deviceId, today + ' 00:00:00').first<{ daily_cost: number }>();
     return result?.daily_cost ?? 0;
   } catch (error) {
-    console.error('getDailyUserCost failed:', error);
-    return 0; // On error, allow the request
+    console.error('daily cost fallback read failed:', error);
+    throw new Error('daily cost accounting unavailable');
   }
 }
 

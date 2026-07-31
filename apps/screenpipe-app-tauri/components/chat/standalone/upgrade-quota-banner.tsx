@@ -27,13 +27,12 @@ import { screenpipeWebUrl } from "@/lib/web-url";
 export function UpgradeQuotaBanner() {
   const { settings } = useSettings();
   const usage = useUsageStatus();
-  const upsellEnabled = useModelUpsellGating();
+  const upsellEnabled = useModelUpsellGating(usage?.upgrade_eligible);
   const [dismissed, setDismissed] = useState(false);
   const [busy, setBusy] = useState(false);
 
   if (dismissed) return null;
-  // Missing flag configuration defaults on. Explicit false kills the UI;
-  // Business/Team/Enterprise and unknown paid truth remain suppressed.
+  // Settings, PostHog, and server plan truth must all resolve affirmatively.
   if (!upsellEnabled) return null;
   if (!usage) return null;
   if (usage.tier === "subscribed") return null;

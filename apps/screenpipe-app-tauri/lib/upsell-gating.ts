@@ -9,18 +9,19 @@ import {
 
 /**
  * PostHog flag that gates the *proactive* model-gating upsell UI — the greyed
- * "Business" model picker and the at-the-cap banner. The hook defaults an
- * absent flag ON; an explicit false still kills the UI with no app release.
+ * "Business" model picker and the at-the-cap banner. The UI waits for the
+ * flag to resolve; an explicit false kills it with no app release.
  *
  * Note: this only controls the *display*. The hard enforcement (the gateway's
  * 403 model_not_allowed) is separate and controlled by the gateway's
- * MODEL_GATING_ENABLED env. Display fails open; enforcement stays strict.
+ * MODEL_GATING_ENABLED env. Display waits for affirmative truth; enforcement
+ * stays strict.
  */
 export const MODEL_UPSELL_FLAG = "model_gating_upsell";
 
-/** Missing PostHog configuration must not silently remove the upgrade path. */
+/** Never flash an upsell while PostHog is still resolving the flag. */
 export function isModelUpsellFlagEnabled(flag: boolean | undefined): boolean {
-  return flag !== false;
+  return flag === true;
 }
 
 /**
@@ -28,14 +29,15 @@ export function isModelUpsellFlagEnabled(flag: boolean | undefined): boolean {
  *
  * Basic and Lifetime are upgrade-eligible: Lifetime is the non-expiring app
  * license whose hosted-AI allowance is Basic. Business, Team, and Enterprise
- * stay hidden. Unknown persisted paid evidence still fails open so transient
+ * stay hidden. Unknown persisted paid evidence also stays hidden so transient
  * or partial entitlement hydration never nags a customer we cannot classify.
  */
 export function shouldShowModelUpsell(
   user: AppUser | null | undefined,
   flagEnabled: boolean,
+  gatewayEligible: boolean | null | undefined,
 ): boolean {
-  if (!flagEnabled) return false;
+  if (!flagEnabled || gatewayEligible !== true) return false;
 
   if (user?.cloud_subscribed === true) return false;
 

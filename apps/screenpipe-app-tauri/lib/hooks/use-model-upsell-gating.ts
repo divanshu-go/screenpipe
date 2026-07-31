@@ -14,15 +14,19 @@ import {
 
 /**
  * Whether to surface the proactive model-gating upsell UI (greyed "Business"
- * picker + at-the-cap banner). An absent PostHog flag defaults ON so Basic and
- * Lifetime users get the Business path; an explicit false remains a remote
- * kill-switch. `shouldShowModelUpsell` still fails open on unknown paid truth.
+ * picker + at-the-cap banner). Rendering waits for settings, PostHog, and the
+ * gateway's account-plan decision so startup or token refreshes cannot briefly
+ * show an upgrade prompt to Business, Team, or Enterprise customers.
  */
-export function useModelUpsellGating(): boolean {
+export function useModelUpsellGating(
+  gatewayEligible: boolean | null | undefined,
+): boolean {
   const flag = useFeatureFlagEnabled(MODEL_UPSELL_FLAG);
-  const { settings } = useSettings();
+  const { settings, isSettingsLoaded } = useSettings();
+  if (!isSettingsLoaded) return false;
   return shouldShowModelUpsell(
     settings.user as AppUser | null | undefined,
     isModelUpsellFlagEnabled(flag),
+    gatewayEligible,
   );
 }
