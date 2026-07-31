@@ -154,12 +154,12 @@ export async function proxyToAnthropic(
 			console.log('proxyToAnthropic: normalized model', original, '->', body.model);
 		}
 
-		// Emergency spend containment: preserve Fable presets and Anthropic-format
-		// clients, but never send another Fable request to the provider. The
+		// Emergency spend containment: preserve Fable/Opus presets and Anthropic-format
+		// clients, but serve them with Sonnet. The
 		// OpenAI-compatible route applies the same alias before policy/metering.
 		if (body.model && (
-			body.model.toLowerCase() === 'claude-fable-5' ||
-			body.model.toLowerCase().startsWith('claude-fable-5-')
+			body.model.toLowerCase().startsWith('claude-fable-') ||
+			body.model.toLowerCase().startsWith('claude-opus-')
 		)) {
 			console.log('proxyToAnthropic: emergency model', body.model, '-> claude-sonnet-5');
 			body.model = 'claude-sonnet-5';
@@ -320,6 +320,7 @@ export async function listAnthropicModels(
 			.filter((model) => !(
 				model.id.includes('haiku') ||
 				model.id.includes('fable') ||
+				model.id.includes('opus') ||
 				model.id.includes('sonnet-4') ||
 				model.id.includes('3-5-sonnet') ||
 				model.id.includes('3-7-sonnet')
@@ -341,11 +342,6 @@ export async function listAnthropicModels(
  */
 function getFallbackModels(): { id: string; object: string; created: number; owned_by: string }[] {
 	return [
-		{ id: 'claude-opus-5', object: 'model', created: 1784851200, owned_by: 'anthropic' },
 		{ id: 'claude-sonnet-5', object: 'model', created: 1782864000, owned_by: 'anthropic' },
-		{ id: 'claude-opus-4-8', object: 'model', created: 1738800000, owned_by: 'anthropic' },
-		{ id: 'claude-opus-4-7', object: 'model', created: 1738800000, owned_by: 'anthropic' },
-		{ id: 'claude-opus-4-6', object: 'model', created: 1738800000, owned_by: 'anthropic' },
-		{ id: 'claude-opus-4-5-20251101', object: 'model', created: 1730419200, owned_by: 'anthropic' },
 	];
 }

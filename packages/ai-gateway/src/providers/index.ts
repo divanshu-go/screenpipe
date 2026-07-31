@@ -13,7 +13,7 @@ import { Env } from '../types';
 // and cost attribution, so callers transparently receive a current model and we
 // never send another request to the old Google/OpenRouter/Tinfoil lanes.
 export const RETIRED_HOSTED_MODEL_FALLBACK = 'gpt-5.6-luna';
-export const EMERGENCY_FABLE_FALLBACK = 'claude-sonnet-5';
+export const EMERGENCY_ANTHROPIC_FALLBACK = 'claude-sonnet-5';
 
 const RETIRED_HOSTED_MODEL_IDS = new Set([
 	// Retired Anthropic shortcuts used by older presets and integrations.
@@ -53,12 +53,12 @@ const RETIRED_HOSTED_MODEL_IDS = new Set([
  */
 export function resolveModelAlias(model: string): string {
 	const lower = model.toLowerCase();
-	// Fable produced an abnormal provider-spend incident on 2026-07-31. Keep
-	// saved presets working, but serve the substantially cheaper current Claude
-	// model until cancellation-safe accounting and global breakers are live.
-	if (lower === 'claude-fable-5' || lower.startsWith('claude-fable-5-')) {
-		console.log(`[router] emergency hosted model ${model} → ${EMERGENCY_FABLE_FALLBACK}`);
-		return EMERGENCY_FABLE_FALLBACK;
+	// Fable and Opus produced an abnormal provider-spend incident on 2026-07-31.
+	// Keep saved presets working, but serve the substantially cheaper current
+	// Claude model until cancellation-safe accounting and global breakers are live.
+	if (lower.startsWith('claude-fable-') || lower.startsWith('claude-opus-')) {
+		console.log(`[router] emergency hosted model ${model} → ${EMERGENCY_ANTHROPIC_FALLBACK}`);
+		return EMERGENCY_ANTHROPIC_FALLBACK;
 	}
 	if (isRetiredHostedModel(lower)) {
 		console.log(`[router] retired hosted model ${model} → ${RETIRED_HOSTED_MODEL_FALLBACK}`);

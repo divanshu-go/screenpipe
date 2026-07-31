@@ -4,7 +4,7 @@
 
 import { describe, it, expect } from 'bun:test';
 import {
-	EMERGENCY_FABLE_FALLBACK,
+	EMERGENCY_ANTHROPIC_FALLBACK,
 	resolveModelAlias,
 	RETIRED_HOSTED_MODEL_FALLBACK,
 } from '../providers';
@@ -50,9 +50,16 @@ describe('resolveModelAlias', () => {
 		expect(resolveModelAlias('gemma4-e4b')).toBe('gemma4-e4b');
 	});
 
-	it('routes Fable aliases to Sonnet during emergency spend containment', () => {
-		for (const model of ['claude-fable-5', 'Claude-Fable-5', 'claude-fable-5-20260701']) {
-			expect(resolveModelAlias(model)).toBe(EMERGENCY_FABLE_FALLBACK);
+	it('routes Fable and Opus aliases to Sonnet during emergency spend containment', () => {
+		for (const model of [
+			'claude-fable-5',
+			'Claude-Fable-5',
+			'claude-fable-5-20260701',
+			'claude-opus-5',
+			'Claude-Opus-4-8',
+			'claude-opus-4-6-20260205',
+		]) {
+			expect(resolveModelAlias(model)).toBe(EMERGENCY_ANTHROPIC_FALLBACK);
 		}
 	});
 
