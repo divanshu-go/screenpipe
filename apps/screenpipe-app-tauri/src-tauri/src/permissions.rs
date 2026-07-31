@@ -9,6 +9,10 @@ use specta::Type;
 use std::sync::atomic::Ordering;
 use tracing::{debug, error, info, warn};
 
+#[cfg(target_os = "macos")]
+pub(crate) const SCREEN_RECORDING_PREFLIGHT_HELPER_ARG: &str =
+    "--screen-recording-preflight-helper";
+
 #[derive(Serialize, Deserialize, Type, Clone)]
 #[serde(rename_all = "camelCase")]
 pub enum OSPermission {
@@ -54,63 +58,119 @@ fn should_restart_after_screen_recording_grant(state: ScreenRecordingPermissionS
 /// Returns the current process's Screen Recording permission state.
 ///
 /// `CGPreflightScreenCaptureAccess` can return the result cached by SkyLight
-/// when this process requested permission. Calling TCC's preflight function
-/// directly bypasses that process-local cache, so a disagreement identifies
-/// a grant or revocation that happened after the cached result was recorded.
+/// when this process requested permission. TCC's own preflight can also keep
+/// returning that process's old answer, so the live half of this check runs in
+/// a short-lived invocation of this same executable. A disagreement identifies
+/// a grant or revocation that happened after the running process cached its
+/// result.
 #[cfg(target_os = "macos")]
 pub fn screen_recording_permission_state() -> ScreenRecordingPermissionState {
     use core_graphics_helmer_fork::access::ScreenCaptureAccess;
+
+    let cached_preflight = ScreenCaptureAccess.preflight();
+    let live_preflight = fresh_process_screen_recording_preflight().unwrap_or_else(|error| {
+        warn!(
+            "fresh-process Screen Recording preflight failed ({error}); falling back to the current process"
+        );
+        direct_tcc_screen_recording_preflight().unwrap_or(cached_preflight)
+    });
+
+    screen_recording_permission_state_from_checks(cached_preflight, live_preflight)
+}
+
+#[cfg(target_os = "macos")]
+fn direct_tcc_screen_recording_preflight() -> Result<bool, String> {
     use std::ffi::c_void;
 
-    type TccAccessPreflight = unsafe extern "C" fn(*const c_void, *const c_void) -> u32;
+    type TccAccessPreflight = unsafe extern "C" fn(*const c_void) -> u32;
 
     const TCC_FRAMEWORK: &[u8] = b"/System/Library/PrivateFrameworks/TCC.framework/TCC\0";
     const PREFLIGHT_SYMBOL: &[u8] = b"TCCAccessPreflight\0";
     const SCREEN_CAPTURE_SERVICE_SYMBOL: &[u8] = b"kTCCServiceScreenCapture\0";
     const TCC_PREFLIGHT_GRANTED: u32 = 0;
 
-    let cached_preflight = ScreenCaptureAccess.preflight();
-
-    let live_preflight = unsafe {
+    unsafe {
         let handle = libc::dlopen(
             TCC_FRAMEWORK.as_ptr().cast(),
             libc::RTLD_LAZY | libc::RTLD_LOCAL,
         );
-        assert!(!handle.is_null(), "failed to load the macOS TCC framework");
+        if handle.is_null() {
+            return Err("failed to load TCC.framework".to_string());
+        }
 
         let preflight_symbol = libc::dlsym(handle, PREFLIGHT_SYMBOL.as_ptr().cast());
         let service_symbol = libc::dlsym(handle, SCREEN_CAPTURE_SERVICE_SYMBOL.as_ptr().cast());
-        assert!(
-            !preflight_symbol.is_null() && !service_symbol.is_null(),
-            "required macOS TCC symbols are unavailable"
-        );
+        if preflight_symbol.is_null() || service_symbol.is_null() {
+            libc::dlclose(handle);
+            return Err("required TCC.framework symbols are unavailable".to_string());
+        }
 
         let preflight: TccAccessPreflight = std::mem::transmute(preflight_symbol);
         let service = *(service_symbol as *const *const c_void);
-        let result = preflight(service, std::ptr::null());
+        let result = preflight(service);
         libc::dlclose(handle);
+        Ok(result == TCC_PREFLIGHT_GRANTED)
+    }
+}
 
-        result == TCC_PREFLIGHT_GRANTED
-    };
+#[cfg(target_os = "macos")]
+fn parse_screen_recording_preflight_helper_output(output: &[u8]) -> Result<bool, String> {
+    match std::str::from_utf8(output).map(str::trim) {
+        Ok("granted") => Ok(true),
+        Ok("not_granted") => Ok(false),
+        Ok(other) => Err(format!("unexpected helper output: {other:?}")),
+        Err(error) => Err(format!("helper output was not UTF-8: {error}")),
+    }
+}
 
-    screen_recording_permission_state_from_checks(cached_preflight, live_preflight)
+#[cfg(target_os = "macos")]
+fn fresh_process_screen_recording_preflight() -> Result<bool, String> {
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("failed to resolve current executable: {error}"))?;
+    let output = std::process::Command::new(executable)
+        .arg(SCREEN_RECORDING_PREFLIGHT_HELPER_ARG)
+        .output()
+        .map_err(|error| format!("failed to start preflight helper: {error}"))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "preflight helper exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+
+    parse_screen_recording_preflight_helper_output(&output.stdout)
+}
+
+/// Runs before Tauri and the single-instance handoff in the helper process.
+/// It must stay limited to a silent preflight: requesting permission here
+/// would allow a background poll to reorder macOS permission prompts.
+#[cfg(target_os = "macos")]
+pub(crate) fn run_screen_recording_preflight_helper() -> Result<(), String> {
+    if direct_tcc_screen_recording_preflight()? {
+        println!("granted");
+    } else {
+        println!("not_granted");
+    }
+    Ok(())
 }
 
 /// Relaunch after macOS applies a Screen Recording grant to TCC but the
 /// running process still holds the old denied result.
 ///
-/// This is called from the existing macOS window-focus handler. Waiting for
-/// focus return is intentional: the live TCC row changes before macOS's
-/// Restart/Later dialog is necessarily gone, so relaunching from the passive
-/// onboarding poll could preempt that native choice. If the user chooses the
-/// OS restart action, this process exits before focus returns. If they choose
-/// Later and return to Screenpipe, the mismatch is still present and we safely
-/// relaunch here.
 #[cfg(target_os = "macos")]
 pub(crate) async fn restart_after_screen_recording_grant_if_needed(app: tauri::AppHandle) -> bool {
     use crate::recording::{bounded_teardown, TeardownOutcome, PRE_EXIT_TEARDOWN_TIMEOUT};
 
-    if !should_restart_after_screen_recording_grant(screen_recording_permission_state()) {
+    let state = match tokio::task::spawn_blocking(screen_recording_permission_state).await {
+        Ok(state) => state,
+        Err(error) => {
+            warn!("Screen Recording permission preflight task failed: {error}");
+            return false;
+        }
+    };
+    if !should_restart_after_screen_recording_grant(state) {
         return false;
     }
 
@@ -147,6 +207,42 @@ pub(crate) async fn restart_after_screen_recording_grant_if_needed(app: tauri::A
         std::time::Duration::from_millis(250),
     );
     true
+}
+
+/// Silently watch for a Screen Recording grant that the running process has
+/// not picked up yet. This never invokes a permission request API, so it can
+/// run alongside onboarding without changing the order of system prompts.
+#[cfg(target_os = "macos")]
+pub(crate) fn start_screen_recording_permission_restart_monitor(app: tauri::AppHandle) {
+    static MONITOR_RUNNING: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
+    if MONITOR_RUNNING
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return;
+    }
+
+    tauri::async_runtime::spawn(async move {
+        let started_at = tokio::time::Instant::now();
+
+        loop {
+            if restart_after_screen_recording_grant_if_needed(app.clone()).await {
+                return;
+            }
+
+            // Keep the common onboarding path responsive. If the user leaves
+            // Settings open or cancels, back off rather than spawning a helper
+            // every second forever; a later grant is still detected.
+            let delay = if started_at.elapsed() < std::time::Duration::from_secs(10 * 60) {
+                std::time::Duration::from_secs(1)
+            } else {
+                std::time::Duration::from_secs(5)
+            };
+            tokio::time::sleep(delay).await;
+        }
+    });
 }
 
 #[cfg(target_os = "macos")]
@@ -203,6 +299,7 @@ pub async fn request_permission(app: tauri::AppHandle, permission: OSPermission)
         match permission {
             OSPermission::ScreenRecording => {
                 use core_graphics_helmer_fork::access::ScreenCaptureAccess;
+                start_screen_recording_permission_restart_monitor(app.clone());
                 // This branch is reached only after an explicit user action.
                 // Do not call request() again when live TCC already sees the
                 // grant but this process still has the old denied result.
@@ -702,6 +799,10 @@ pub async fn reset_permission(
                 service,
                 stderr.trim()
             ));
+        }
+
+        if matches!(&permission, OSPermission::ScreenRecording) {
+            start_screen_recording_permission_restart_monitor(app.clone());
         }
 
         if matches!(permission, OSPermission::Calendar) {
@@ -1413,14 +1514,22 @@ mod screen_recording_state_tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn reads_the_current_process_screen_recording_state() {
-        assert!(matches!(
-            screen_recording_permission_state(),
-            ScreenRecordingPermissionState::Denied
-                | ScreenRecordingPermissionState::Granted
-                | ScreenRecordingPermissionState::GrantedNeedsRestart
-                | ScreenRecordingPermissionState::RevokedButCached
-        ));
+    fn reads_the_current_process_tcc_preflight() {
+        assert!(direct_tcc_screen_recording_preflight().is_ok());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn parses_fresh_process_preflight_output_strictly() {
+        assert_eq!(
+            parse_screen_recording_preflight_helper_output(b"granted\n"),
+            Ok(true)
+        );
+        assert_eq!(
+            parse_screen_recording_preflight_helper_output(b"not_granted\n"),
+            Ok(false)
+        );
+        assert!(parse_screen_recording_preflight_helper_output(b"granted later").is_err());
     }
 
     #[test]

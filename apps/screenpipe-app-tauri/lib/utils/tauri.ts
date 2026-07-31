@@ -249,9 +249,9 @@ async checkPermission(permission: OSPermission) : Promise<OSPermissionStatus> {
  * Check only screen recording permission without triggering a dialog.
  *
  * This command is polled as soon as onboarding renders, before the user has
- * clicked anything. It must use preflight directly: the broader core Tauri
- * check may perform a real capture probe in debug builds, which macOS treats
- * as a permission request.
+ * clicked anything. Both checks used by `screen_recording_permission_state`
+ * are silent preflights: this must not perform a real capture probe or call
+ * the request API, either of which can surface the system prompt out of order.
  *
  * It honors the engine's enumeration verdict for the same reason
  * `do_permissions_check` does — otherwise onboarding renders screen recording

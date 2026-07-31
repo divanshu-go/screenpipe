@@ -334,6 +334,15 @@ async fn main() {
         std::process::exit(exit_code);
     }
 
+    #[cfg(target_os = "macos")]
+    if std::env::args().any(|arg| arg == permissions::SCREEN_RECORDING_PREFLIGHT_HELPER_ARG) {
+        if let Err(error) = permissions::run_screen_recording_preflight_helper() {
+            eprintln!("screen recording preflight helper failed: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     #[cfg(target_os = "linux")]
     linux_webkit_env::configure();
 
@@ -802,16 +811,6 @@ async fn main() {
             tauri::WindowEvent::Focused(true) => {
                 let app = window.app_handle().clone();
                 tauri::async_runtime::spawn(async move {
-                    // TCC records a Screen Recording grant before macOS's
-                    // Restart/Later dialog has necessarily closed. Checking on
-                    // focus return preserves that native choice: Restart exits
-                    // us first; Later returns here and gets a safe relaunch.
-                    if permissions::restart_after_screen_recording_grant_if_needed(app.clone())
-                        .await
-                    {
-                        return;
-                    }
-
                     let permission_granted =
                         permissions::check_microphone_permission().permitted();
                     let audio_devices_empty = health::get_audio_device_status().is_empty();
