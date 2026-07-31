@@ -3197,14 +3197,17 @@ pub async fn show_notification_inbox(app_handle: tauri::AppHandle) -> Result<(),
                     app_handle.try_state::<std::sync::Arc<crate::analytics::AnalyticsManager>>()
                 {
                     let analytics = std::sync::Arc::clone(&analytics);
-                    let unread = entries.iter().filter(|e| !e.read).count();
+                    let unread = entries
+                        .iter()
+                        .filter(|entry| !entry.read && entry.is_high_priority())
+                        .count();
                     let total = entries.len();
                     tauri::async_runtime::spawn(async move {
                         let _ = analytics
                             .send_event(
                                 "notification_bell_opened",
                                 Some(serde_json::json!({
-                                    "unread_count": unread,
+                                    "high_priority_unread_count": unread,
                                     "total_count": total,
                                     "surface": "native_overlay",
                                 })),
