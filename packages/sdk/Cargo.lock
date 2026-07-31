@@ -6897,6 +6897,7 @@ name = "screenpipe-config"
 version = "0.4.32"
 dependencies = [
  "dirs 6.0.0",
+ "screenpipe-cpu-features",
  "serde",
  "serde_json",
  "sysinfo",
@@ -6975,10 +6976,12 @@ dependencies = [
  "rand 0.9.4",
  "regex",
  "reqwest",
+ "screenpipe-cpu-features",
  "screenpipe-events",
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2 0.10.9",
  "tempfile",
  "tokio",
  "tracing",
@@ -6987,6 +6990,10 @@ dependencies = [
  "which 7.0.3",
  "windows-sys 0.59.0",
 ]
+
+[[package]]
+name = "screenpipe-cpu-features"
+version = "0.4.32"
 
 [[package]]
 name = "screenpipe-db"
