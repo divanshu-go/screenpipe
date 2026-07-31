@@ -6,12 +6,14 @@ import { Env } from '../types';
 import { addCorsHeaders, createErrorResponse } from '../utils/cors';
 import { withResponseFinalizer } from '../utils/response-finalizer';
 import {
+	getDailyUserCost,
 	getDailyUserCostOrThrow,
 	getTierDailyCostCap,
 	isZeroCostModel,
 } from './cost-tracker';
 
 const COST_LEASE_TIER = 'daily_cost_in_flight_v1';
+const COST_BASELINE_TIER = 'daily_cost_baseline_v1';
 export const DAILY_COST_LEASE_SECONDS = 10 * 60;
 
 export type DailyCostLease = {
@@ -32,6 +34,81 @@ async function sha256Hex(value: string): Promise<string> {
 	const bytes = new TextEncoder().encode(value);
 	const digest = await crypto.subtle.digest('SHA-256', bytes);
 	return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function utcDay(now: Date = new Date()): string {
+	return now.toISOString().slice(0, 10);
+}
+
+function configuredCostCapEpoch(env: Env): string | null {
+	const epoch = env.COST_CAP_EPOCH?.trim();
+	return epoch && epoch.length <= 128 ? epoch : null;
+}
+
+/**
+ * Return spend incurred after the configured cash-cap epoch.
+ *
+ * Emergency model/cap changes can otherwise strand every account that already
+ * spent above the new ceiling earlier in the same UTC day. We preserve the
+ * original per-account accumulator for audit and snapshot it into a separate
+ * namespaced usage row. Future decisions subtract that immutable daily
+ * baseline. Changing COST_CAP_EPOCH starts another reversible budget epoch;
+ * removing it restores the full UTC-day accounting view.
+ */
+export async function getDailyUserCostForCapOrThrow(
+	env: Env,
+	deviceId: string,
+	now: Date = new Date(),
+): Promise<number> {
+	const epoch = configuredCostCapEpoch(env);
+	if (!epoch) return getDailyUserCostOrThrow(env, deviceId);
+
+	const day = utcDay(now);
+	const baselineKey = `daily-cost:baseline:v1:${await sha256Hex(`${epoch}:${deviceId}`)}`;
+	const readBaseline = () => env.DB.prepare(`
+		SELECT daily_cost_usd AS baseline
+		FROM usage
+		WHERE device_id = ? AND tier = ? AND cost_day = ?
+	`).bind(baselineKey, COST_BASELINE_TIER, day).first<{ baseline: number }>();
+
+	let baselineRow = await readBaseline();
+	if (!baselineRow) {
+		const currentCost = await getDailyUserCostOrThrow(env, deviceId);
+		// Reuse the epoch row on later UTC days, but never overwrite a baseline
+		// that another request already established for this day.
+		await env.DB.prepare(`
+			UPDATE usage
+			SET user_id = ?, daily_count = 0, last_reset = ?, cost_day = ?,
+				daily_cost_usd = ?, updated_at = CURRENT_TIMESTAMP
+			WHERE device_id = ? AND tier = ?
+				AND (cost_day IS NULL OR cost_day <> ?)
+		`).bind(
+			deviceId, day, day, currentCost, baselineKey, COST_BASELINE_TIER, day,
+		).run();
+		await env.DB.prepare(`
+			INSERT OR IGNORE INTO usage
+				(device_id, user_id, daily_count, last_reset, tier, cost_day, daily_cost_usd)
+			VALUES (?, ?, 0, ?, ?, ?, ?)
+		`).bind(
+			baselineKey, deviceId, day, COST_BASELINE_TIER, day, currentCost,
+		).run();
+		baselineRow = await readBaseline();
+		if (!baselineRow) throw new Error('daily cost baseline unavailable');
+	}
+
+	const currentCost = await getDailyUserCostOrThrow(env, deviceId);
+	return Math.max(0, currentCost - Number(baselineRow.baseline || 0));
+}
+
+export async function getDailyUserCostForCap(env: Env, deviceId: string): Promise<number> {
+	try {
+		return await getDailyUserCostForCapOrThrow(env, deviceId);
+	} catch (error) {
+		console.error('effective daily cost read failed', error);
+		// Keep the status endpoint available with the legacy full-day view. Actual
+		// request admission still uses the throwing helper above and fails closed.
+		return getDailyUserCost(env, deviceId);
+	}
 }
 
 function capResponse(tier: string): Response {
@@ -87,7 +164,8 @@ export async function reserveDailyCostCap(
 
 	let lease: DailyCostLease | null = null;
 	try {
-		const key = `daily-cost:lease:v1:${await sha256Hex(deviceId)}`;
+		const leaseEpoch = configuredCostCapEpoch(env) ?? 'legacy';
+		const key = `daily-cost:lease:v1:${await sha256Hex(`${leaseEpoch}:${deviceId}`)}`;
 		const nowIso = now.toISOString();
 		const expiresAt = new Date(now.getTime() + DAILY_COST_LEASE_SECONDS * 1000).toISOString();
 		const claim = async () => env.DB.prepare(`
@@ -116,7 +194,7 @@ export async function reserveDailyCostCap(
 		}
 
 		lease = { key, deviceId, expiresAt };
-		const dailyCost = await getDailyUserCostOrThrow(env, deviceId);
+		const dailyCost = await getDailyUserCostForCapOrThrow(env, deviceId, now);
 		if (dailyCost >= getTierDailyCostCap(tier, env)) {
 			await releaseDailyCostLease(env, lease);
 			return { allowed: false, response: capResponse(tier) };
@@ -169,7 +247,7 @@ export async function enforceDailyCostCap(
 ): Promise<Response | null> {
 	if (isZeroCostModel(model)) return null;
 	try {
-		const dailyCost = await getDailyUserCostOrThrow(env, deviceId);
+		const dailyCost = await getDailyUserCostForCapOrThrow(env, deviceId);
 		return dailyCost >= getTierDailyCostCap(tier, env) ? capResponse(tier) : null;
 	} catch {
 		return unavailableResponse();

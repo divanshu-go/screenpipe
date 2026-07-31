@@ -209,6 +209,13 @@ export interface Env {
 	LIMIT_SUBSCRIBED_DAILY?: string;
 	LIMIT_SUBSCRIBED_RPM?: string;
 	LIMIT_IP_DAILY?: string;
+	/**
+	 * Stable incident/repricing identifier for text-AI cash caps. When changed,
+	 * the gateway snapshots each account's existing UTC-day spend and enforces
+	 * the new cap only on spend incurred after that snapshot.
+	 */
+	COST_CAP_EPOCH?: string;
+	MAX_DAILY_COST_PER_USER?: string;
 	// Per-minute RPM for free (weight-0) models — a separate, much higher bucket
 	// so heavy free usage never trips the low paid-model limit. Tunable per tier.
 	LIMIT_ANONYMOUS_FREE_RPM?: string;
