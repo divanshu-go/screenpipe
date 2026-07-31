@@ -618,6 +618,10 @@ impl PiConversationLease {
         prompt_for_pi_session(message, *self.state)
     }
 
+    fn is_synced(&self) -> bool {
+        matches!(*self.state, PiConversationSyncState::Synced)
+    }
+
     fn mark_synced(&mut self) {
         *self.state = PiConversationSyncState::Synced;
     }
@@ -3003,6 +3007,27 @@ pub async fn pi_queue_prompt(
         .await?;
     let state_for_watchdog = state.inner().clone();
     let sid_for_watchdog = sid.clone();
+    if conversation.is_synced() {
+        // Warm process: the history-wrapper decision is already settled, so
+        // holding the lease until this prompt starts would only serialize
+        // later sends behind the whole active turn (one visible queued card
+        // at a time, every other enqueue blocked). Release it now; the
+        // watchdog only needs the receiver for the failure log.
+        drop(conversation);
+        tokio::spawn(async move {
+            if let Err(error) = await_prompt_start(&state_for_watchdog, &sid_for_watchdog, rx).await
+            {
+                warn!(
+                    "queued Pi prompt failed before it started for session {}: {}",
+                    sid_for_watchdog, error
+                );
+            }
+        });
+        return Ok(queue_id);
+    }
+    // Cold process: an immediate follow-up must not decide its wrapper until
+    // this prompt is acknowledged (issue #3636), so the lease rides in the
+    // watchdog and is released by the acknowledgement.
     tokio::spawn(async move {
         match await_prompt_start(&state_for_watchdog, &sid_for_watchdog, rx).await {
             Ok(()) => conversation.mark_synced(),
