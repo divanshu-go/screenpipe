@@ -216,6 +216,7 @@ export interface Env {
 	 */
 	COST_CAP_EPOCH?: string;
 	MAX_DAILY_TEXT_COST_PER_USER?: string;
+	MAX_DAILY_SUBSCRIBED_TEXT_COST?: string;
 	// Legacy/transcription base cap. Text falls back to this only when its
 	// dedicated override is absent.
 	MAX_DAILY_COST_PER_USER?: string;

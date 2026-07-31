@@ -19,6 +19,7 @@
 
 import { describe, it, expect } from 'bun:test';
 import {
+	FAILED_SETTLEMENT_LEASE_SECONDS,
 	enforceDailyCostCap,
 	releaseDailyCostLease,
 	reserveDailyCostCap,
@@ -150,6 +151,18 @@ class LeaseD1 {
 						}
 						return { meta: { changes: 0 } };
 					}
+					if (normalized.includes('SET last_reset = ?')) {
+						const [retryAt, key, userId, tier, expiresAt] = args;
+						const row = this.rows.get(key);
+						if (
+							row && row.userId === userId && row.tier === tier &&
+							row.dailyCount === 1 && row.lastReset === expiresAt
+						) {
+							row.lastReset = retryAt;
+							return { meta: { changes: 1 } };
+						}
+						return { meta: { changes: 0 } };
+					}
 					return { meta: { changes: 0 } };
 				},
 				first: async () => {
@@ -261,10 +274,10 @@ describe('reserveDailyCostCap', () => {
 		)).allowed).toBe(true);
 	});
 
-	it('retains the lease when the accumulator write fails', async () => {
+	it('uses a short quarantine when the accumulator write fails', async () => {
 		const db = new LeaseD1();
 		const env = leaseEnv(db);
-		const now = new Date('2026-07-30T12:00:00Z');
+		const now = new Date();
 		const first = await reserveDailyCostCap(env, 'user_7', 'subscribed', 'gpt-5.6-sol', now);
 		if (!first.allowed || !first.lease) throw new Error('expected lease');
 
@@ -275,9 +288,18 @@ describe('reserveDailyCostCap', () => {
 			Promise.resolve(false),
 		).text();
 		const overlap = await reserveDailyCostCap(
-			env, 'user_7', 'subscribed', 'gpt-5.6-sol', new Date('2026-07-30T12:00:01Z'),
+			env, 'user_7', 'subscribed', 'gpt-5.6-sol', new Date(now.getTime() + 1000),
 		);
 		expect(overlap.allowed).toBe(false);
 		if (!overlap.allowed) expect(await overlap.response.text()).toContain('priced_request_in_flight');
+
+		const retry = await reserveDailyCostCap(
+			env,
+			'user_7',
+			'subscribed',
+			'gpt-5.6-sol',
+			new Date(now.getTime() + (FAILED_SETTLEMENT_LEASE_SECONDS + 1) * 1000),
+		);
+		expect(retry.allowed).toBe(true);
 	});
 });
