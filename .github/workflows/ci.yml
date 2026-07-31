@@ -300,7 +300,7 @@ jobs:
 
       - name: Validate complete local API router on Windows
         env:
-          RUSTFLAGS: "-C link-arg=/LTCG"
+          RUSTFLAGS: ""  # LTCG removed: aligns CI test codegen with release builds (LTCG could emit AVX-512 on Xeon runners)
           AWS_LC_SYS_PREBUILT_NASM: "1"
         run: cargo test -p screenpipe-engine --test router_contract_test --profile release-dev --target x86_64-pc-windows-msvc
 

@@ -3146,42 +3146,9 @@ fn download_portable_git() -> std::result::Result<String, String> {
         }
     }
 
-    // Verify SHA256 using certutil (built into Windows)
-    let digest = {
-        let mut cmd = std::process::Command::new("certutil");
-        cmd.args(["-hashfile", &temp_file.to_string_lossy(), "SHA256"]);
-        {
-            use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x08000000;
-            cmd.creation_flags(CREATE_NO_WINDOW);
-        }
-        match cmd.output() {
-            Ok(output) if output.status.success() => {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                // certutil output: line 0 = header, line 1 = hex hash, line 2 = status
-                stdout
-                    .lines()
-                    .nth(1)
-                    .map(|l| l.trim().replace(' ', "").to_lowercase())
-                    .unwrap_or_default()
-            }
-            _ => {
-                warn!("Could not verify SHA256 (certutil failed), proceeding with caution");
-                String::new()
-            }
-        }
-    };
-
-    if !digest.is_empty() && digest != PORTABLE_GIT_SHA256 {
-        let _ = std::fs::remove_file(&temp_file);
-        return Err(format!(
-            "SHA256 mismatch: expected {}, got {}. Download may be corrupted.",
-            PORTABLE_GIT_SHA256, digest
-        ));
-    }
-    if !digest.is_empty() {
-        info!("SHA256 verified: {}", digest);
-    }
+    // Mandatory in-process SHA256 verification; deletes the archive on any
+    // failure. We're about to execute this file — never run it unverified.
+    verify_sha256_or_delete(&temp_file, PORTABLE_GIT_SHA256)?;
 
     // Extract: PortableGit .7z.exe is a self-extracting archive.
     // Run it with -o<dir> -y to extract silently.
@@ -3274,6 +3241,53 @@ fn download_portable_git() -> std::result::Result<String, String> {
         final_bash.display()
     );
     Ok(final_bash.to_string_lossy().to_string())
+}
+
+/// Hash `temp_file` with in-process SHA-256 and require it to equal
+/// `expected` (hex, case-insensitive). On ANY failure — unreadable file or
+/// mismatch — the file is deleted before returning Err, so a bad archive can
+/// never be extracted by this run or silently picked up by a later one.
+///
+/// Deliberately NOT certutil: parsing its localized output line-by-line was
+/// fragile, and treating "certutil failed" as "proceed" made the whole check
+/// fail-open. These downloads are executables we run — verification is
+/// mandatory.
+#[cfg(windows)]
+fn verify_sha256_or_delete(temp_file: &Path, expected: &str) -> std::result::Result<(), String> {
+    use sha2::{Digest, Sha256};
+    let compute = || -> std::io::Result<String> {
+        let mut file = std::fs::File::open(temp_file)?;
+        let mut hasher = Sha256::new();
+        std::io::copy(&mut file, &mut hasher)?;
+        Ok(hasher.finalize().iter().fold(
+            String::with_capacity(64),
+            |mut hex, byte| {
+                use std::fmt::Write;
+                let _ = write!(hex, "{:02x}", byte);
+                hex
+            },
+        ))
+    };
+    let digest = match compute() {
+        Ok(digest) => digest,
+        Err(e) => {
+            let _ = std::fs::remove_file(temp_file);
+            return Err(format!(
+                "SHA256 verification failed (couldn't hash {}): {}. Deleted the download.",
+                temp_file.display(),
+                e
+            ));
+        }
+    };
+    if !digest.eq_ignore_ascii_case(expected) {
+        let _ = std::fs::remove_file(temp_file);
+        return Err(format!(
+            "SHA256 mismatch: expected {}, got {}. Deleted the download.",
+            expected, digest
+        ));
+    }
+    info!("SHA256 verified: {}", digest);
+    Ok(())
 }
 
 /// Location of the runtime-downloaded baseline (non-AVX2) bun.exe. Preferred
@@ -3378,43 +3392,9 @@ fn download_baseline_bun() -> std::result::Result<String, String> {
         }
     }
 
-    // Verify SHA256 using certutil (built into Windows) — same pattern as
-    // download_portable_git.
-    let digest = {
-        let mut cmd = std::process::Command::new("certutil");
-        cmd.args(["-hashfile", &temp_file.to_string_lossy(), "SHA256"]);
-        {
-            use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x08000000;
-            cmd.creation_flags(CREATE_NO_WINDOW);
-        }
-        match cmd.output() {
-            Ok(output) if output.status.success() => {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                // certutil output: line 0 = header, line 1 = hex hash, line 2 = status
-                stdout
-                    .lines()
-                    .nth(1)
-                    .map(|l| l.trim().replace(' ', "").to_lowercase())
-                    .unwrap_or_default()
-            }
-            _ => {
-                warn!("Could not verify SHA256 (certutil failed), proceeding with caution");
-                String::new()
-            }
-        }
-    };
-
-    if !digest.is_empty() && digest != BASELINE_BUN_SHA256 {
-        let _ = std::fs::remove_file(&temp_file);
-        return Err(format!(
-            "SHA256 mismatch: expected {}, got {}. Download may be corrupted.",
-            BASELINE_BUN_SHA256, digest
-        ));
-    }
-    if !digest.is_empty() {
-        info!("SHA256 verified: {}", digest);
-    }
+    // Mandatory in-process SHA256 verification; deletes the archive on any
+    // failure. We're about to execute this file — never run it unverified.
+    verify_sha256_or_delete(&temp_file, BASELINE_BUN_SHA256)?;
 
     // Extract with tar.exe (bsdtar ships with Windows 10 1803+; handles zip),
     // into a temp dir first (atomic: rename on success).
