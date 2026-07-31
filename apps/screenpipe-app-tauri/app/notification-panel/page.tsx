@@ -24,6 +24,7 @@ import {
 import { notificationAnalyticsProperties } from "@/lib/notification-analytics";
 import { qualifiedValue } from "@/lib/analytics/qualified-value";
 import { NotificationActionButton } from "@/components/notification-action-button";
+import { NotificationFeedback } from "@/components/notification-feedback";
 
 interface NotificationPayload {
   id: string;
@@ -741,6 +742,8 @@ export default function NotificationPanelPage() {
             )}
           </div>
         )}
+
+        <NotificationFeedback key={payload.id} notification={payload} />
 
         {/* Popup utility footer */}
         <div
