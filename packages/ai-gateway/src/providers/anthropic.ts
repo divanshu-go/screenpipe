@@ -581,11 +581,6 @@ export class AnthropicProvider implements AIProvider {
 					provider: 'anthropic',
 				},
 				{
-					id: 'claude-fable-5',
-					name: 'Claude Fable 5',
-					provider: 'anthropic',
-				},
-				{
 					id: 'claude-opus-4-8',
 					name: 'Claude Opus 4.8',
 					provider: 'anthropic',

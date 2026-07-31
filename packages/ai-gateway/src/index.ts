@@ -720,7 +720,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			let parsedStream = false;
 			try {
 				const body = (await clonedRequest.json()) as { model?: string; stream?: boolean };
-				parsedModel = body.model || parsedModel;
+				parsedModel = resolveModelAlias(body.model || parsedModel);
 				parsedStream = body.stream === true;
 				if (!isModelAllowed(parsedModel, authResult.tier, env)) {
 					const allowedModels = getTierConfig(env)[authResult.tier].allowedModels;
@@ -851,7 +851,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			try {
 				const clonedReq = request.clone();
 				const reqBody = await clonedReq.json() as { model?: string; stream?: boolean };
-				ocModel = reqBody.model || ocModel;
+				ocModel = resolveModelAlias(reqBody.model || ocModel);
 				ocStream = reqBody.stream === true;
 			} catch (e) {
 				// body parse failure — proceed with defaults

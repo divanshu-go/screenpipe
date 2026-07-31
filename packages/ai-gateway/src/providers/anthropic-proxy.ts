@@ -154,6 +154,17 @@ export async function proxyToAnthropic(
 			console.log('proxyToAnthropic: normalized model', original, '->', body.model);
 		}
 
+		// Emergency spend containment: preserve Fable presets and Anthropic-format
+		// clients, but never send another Fable request to the provider. The
+		// OpenAI-compatible route applies the same alias before policy/metering.
+		if (body.model && (
+			body.model.toLowerCase() === 'claude-fable-5' ||
+			body.model.toLowerCase().startsWith('claude-fable-5-')
+		)) {
+			console.log('proxyToAnthropic: emergency model', body.model, '-> claude-sonnet-5');
+			body.model = 'claude-sonnet-5';
+		}
+
 		// Saved presets from older apps must keep working without serving the
 		// retired Haiku/Sonnet 4 families. This Anthropic-compatible endpoint
 		// cannot route to Luna, so use the current Sonnet model instead.
@@ -308,6 +319,7 @@ export async function listAnthropicModels(
 		return data.data
 			.filter((model) => !(
 				model.id.includes('haiku') ||
+				model.id.includes('fable') ||
 				model.id.includes('sonnet-4') ||
 				model.id.includes('3-5-sonnet') ||
 				model.id.includes('3-7-sonnet')
