@@ -639,6 +639,20 @@ jobs:
         #   modern hosts' system DLLs execute AVX, so emulating pre-AVX
         #   faults in the OS, not our code. The no-AVX floor is covered by
         #   baseline codegen + the runtime AVX2 gates.
+        # - -chip_check_exe_only (same conclusion google/XNNPACK reached):
+        #   MS runtime DLLs (VCRUNTIME140 etc.) dispatch via OS feature
+        #   checks SDE cannot spoof, so on an AVX-512 HOST the bundled
+        #   VCRUNTIME picks AVX-512 paths under emulation and trips the SNB
+        #   chip check (reproduced locally: kmovq fault in VCRUNTIME140.dll;
+        #   on real non-AVX2 hardware the OS reports truthfully and those
+        #   DLLs pick baseline paths — pure emulation artifact, host-CPU
+        #   dependent = flaky). The flag scopes the chip CHECK to the main
+        #   image — where /arch:AVX2 poisoning and AVX2-static-lib
+        #   regressions actually land — while still emulating + spoofing
+        #   CPUID for every DLL (onnxruntime's MLAS keys off in-process
+        #   CPUID, which SDE does spoof). Negative control re-verified WITH
+        #   the flag: stock AVX2 bun.exe still faults (vinserti128, main
+        #   image) under -snb -chip_check_exe_only.
         # - Hard timeout per invocation + job timeout: a wedged emulator must
         #   fail fast and loud, never eat runner-hours.
         # - Intel rotates mirrors (9.44.0's died 2026-07-31, run 30651369680).
@@ -676,7 +690,7 @@ jobs:
           # 0xC000001D static-init crash class (global /arch:AVX2 CFLAGS,
           # AVX2 static onnxruntime, eager ggml init...).
           Write-Host "=== SDE -snb — screenpipe.exe --version (8 min timeout; ~2s native) ==="
-          $p = Start-Process -FilePath $sde -ArgumentList @('-snb','--',$exe,'--version') `
+          $p = Start-Process -FilePath $sde -ArgumentList @('-snb','-chip_check_exe_only','--',$exe,'--version') `
             -NoNewWindow -PassThru -RedirectStandardOutput sde-out.txt -RedirectStandardError sde-err.txt
           if (-not $p.WaitForExit(480000)) {
             taskkill /PID $($p.Id) /T /F | Out-Null
@@ -695,7 +709,7 @@ jobs:
           # VAD/diarization/PII.
           Write-Host "=== SDE -snb — ort-smoke (8 min timeout; probe deadline 420s) ==="
           $env:ORT_SMOKE_DEADLINE_SECS = "420"
-          $p2 = Start-Process -FilePath $sde -ArgumentList @('-snb','--',(Resolve-Path "smoke-probes/ort-smoke.exe").Path) `
+          $p2 = Start-Process -FilePath $sde -ArgumentList @('-snb','-chip_check_exe_only','--',(Resolve-Path "smoke-probes/ort-smoke.exe").Path) `
             -NoNewWindow -PassThru -RedirectStandardOutput ort-sde-out.txt -RedirectStandardError ort-sde-err.txt
           if (-not $p2.WaitForExit(480000)) {
             taskkill /PID $($p2.Id) /T /F | Out-Null
