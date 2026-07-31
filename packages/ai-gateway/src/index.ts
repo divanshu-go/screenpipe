@@ -24,6 +24,7 @@ import {
 	releaseDailyCostLease,
 	reserveDailyCostCap,
 	withDailyCostSettlement,
+	getDailyUserCostForCap,
 } from './services/cost-cap';
 import {
 	FREE_CHAT_MAX_PROVIDER_CALLS_PER_MESSAGE,
@@ -223,7 +224,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			// are our internal margin and shouldn't leak to any client/user).
 			// Stored query credits do not raise the cash ceiling. Credit-funded
 			// provider spend needs consumptive accounting before it can safely do so.
-			const dailyCost = await getDailyUserCost(env, authResult.deviceId);
+			const dailyCost = await getDailyUserCostForCap(env, authResult.deviceId);
 			const maxCost = getTierDailyCostCap(authResult.tier, env);
 			const enriched = {
 				...status,
@@ -720,7 +721,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			let parsedStream = false;
 			try {
 				const body = (await clonedRequest.json()) as { model?: string; stream?: boolean };
-				parsedModel = body.model || parsedModel;
+				parsedModel = resolveModelAlias(body.model || parsedModel);
 				parsedStream = body.stream === true;
 				if (!isModelAllowed(parsedModel, authResult.tier, env)) {
 					const allowedModels = getTierConfig(env)[authResult.tier].allowedModels;
@@ -851,7 +852,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			try {
 				const clonedReq = request.clone();
 				const reqBody = await clonedReq.json() as { model?: string; stream?: boolean };
-				ocModel = reqBody.model || ocModel;
+				ocModel = resolveModelAlias(reqBody.model || ocModel);
 				ocStream = reqBody.stream === true;
 			} catch (e) {
 				// body parse failure — proceed with defaults
