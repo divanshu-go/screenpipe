@@ -107,6 +107,8 @@ mod voice_training;
 mod window;
 mod windows_ca_bundle;
 #[cfg(target_os = "windows")]
+mod windows_crash_dump;
+#[cfg(target_os = "windows")]
 mod windows_overlay;
 #[cfg(target_os = "windows")]
 mod windows_webview_env;
@@ -424,6 +426,12 @@ async fn main() {
             }
         }
     }
+
+    // Register the WER helper DLL that writes a local minidump for fail-fast
+    // crashes such as 0xc0000409, which bypass Rust panic/Sentry hooks, and
+    // recover dumps produced by a previous run.
+    #[cfg(target_os = "windows")]
+    windows_crash_dump::install();
 
     // Check if telemetry is disabled via store setting (analyticsEnabled)
     let store_path = screenpipe_core::paths::default_screenpipe_data_dir().join("store.bin");
@@ -1154,6 +1162,20 @@ async fn main() {
                     .extra
                     .insert("_proCloudMigrationDone".to_string(), json!(true));
                 info!("E2E seed: screenpipe cloud audio fallback");
+            }
+            if e2e_flags.iter().any(|f| f == "meetings-only-audio") {
+                // Real audio lifecycle lane for meetings-only capture. Keep
+                // vision and transcription disabled so the spec isolates OS
+                // device ownership without loading OCR/STT models.
+                store.recording.disable_audio = false;
+                store.recording.disable_vision = true;
+                store.recording.audio_capture_mode = "meetings-only".to_string();
+                store.recording.audio_transcription_engine = "disabled".to_string();
+                // Emit a real segment quickly enough for the lifecycle spec to
+                // verify the first capture callback without a 30-second wait.
+                store.recording.audio_chunk_duration = 5;
+                store.recording.experimental_meeting_piggyback = false;
+                info!("E2E seed: meetings-only audio device lifecycle");
             }
 
             // The frontend reads settings from the Tauri store rather than the
