@@ -20,6 +20,71 @@ pub enum OSPermission {
     Calendar,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScreenRecordingPermissionState {
+    Denied,
+    Granted,
+    GrantedNeedsRestart,
+    RevokedButCached,
+}
+
+fn screen_recording_permission_state_from_checks(
+    cached_preflight: bool,
+    live_preflight: bool,
+) -> ScreenRecordingPermissionState {
+    match (cached_preflight, live_preflight) {
+        (false, false) => ScreenRecordingPermissionState::Denied,
+        (true, true) => ScreenRecordingPermissionState::Granted,
+        (false, true) => ScreenRecordingPermissionState::GrantedNeedsRestart,
+        (true, false) => ScreenRecordingPermissionState::RevokedButCached,
+    }
+}
+
+/// Returns the current process's Screen Recording permission state.
+///
+/// `CGPreflightScreenCaptureAccess` can return the result cached by SkyLight
+/// when this process requested permission. Calling TCC's preflight function
+/// directly bypasses that process-local cache, so a disagreement identifies
+/// a grant or revocation that happened after the cached result was recorded.
+#[cfg(target_os = "macos")]
+pub fn screen_recording_permission_state() -> ScreenRecordingPermissionState {
+    use core_graphics_helmer_fork::access::ScreenCaptureAccess;
+    use std::ffi::c_void;
+
+    type TccAccessPreflight = unsafe extern "C" fn(*const c_void, *const c_void) -> u32;
+
+    const TCC_FRAMEWORK: &[u8] = b"/System/Library/PrivateFrameworks/TCC.framework/TCC\0";
+    const PREFLIGHT_SYMBOL: &[u8] = b"TCCAccessPreflight\0";
+    const SCREEN_CAPTURE_SERVICE_SYMBOL: &[u8] = b"kTCCServiceScreenCapture\0";
+    const TCC_PREFLIGHT_GRANTED: u32 = 0;
+
+    let cached_preflight = ScreenCaptureAccess.preflight();
+
+    let live_preflight = unsafe {
+        let handle = libc::dlopen(
+            TCC_FRAMEWORK.as_ptr().cast(),
+            libc::RTLD_LAZY | libc::RTLD_LOCAL,
+        );
+        assert!(!handle.is_null(), "failed to load the macOS TCC framework");
+
+        let preflight_symbol = libc::dlsym(handle, PREFLIGHT_SYMBOL.as_ptr().cast());
+        let service_symbol = libc::dlsym(handle, SCREEN_CAPTURE_SERVICE_SYMBOL.as_ptr().cast());
+        assert!(
+            !preflight_symbol.is_null() && !service_symbol.is_null(),
+            "required macOS TCC symbols are unavailable"
+        );
+
+        let preflight: TccAccessPreflight = std::mem::transmute(preflight_symbol);
+        let service = *(service_symbol as *const *const c_void);
+        let result = preflight(service, std::ptr::null());
+        libc::dlclose(handle);
+
+        result == TCC_PREFLIGHT_GRANTED
+    };
+
+    screen_recording_permission_state_from_checks(cached_preflight, live_preflight)
+}
+
 #[cfg(target_os = "macos")]
 const MACOS_OPEN_COMMAND: &str = "/usr/bin/open";
 
@@ -1268,6 +1333,42 @@ pub fn request_arc_automation_permission(_app: tauri::AppHandle) -> bool {
 #[cfg(test)]
 mod screen_recording_preflight_tests {
     use super::*;
+
+    #[test]
+    fn maps_matching_live_and_cached_screen_recording_results() {
+        assert_eq!(
+            screen_recording_permission_state_from_checks(false, false),
+            ScreenRecordingPermissionState::Denied
+        );
+        assert_eq!(
+            screen_recording_permission_state_from_checks(true, true),
+            ScreenRecordingPermissionState::Granted
+        );
+    }
+
+    #[test]
+    fn maps_mismatched_live_and_cached_screen_recording_results() {
+        assert_eq!(
+            screen_recording_permission_state_from_checks(false, true),
+            ScreenRecordingPermissionState::GrantedNeedsRestart
+        );
+        assert_eq!(
+            screen_recording_permission_state_from_checks(true, false),
+            ScreenRecordingPermissionState::RevokedButCached
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn reads_the_current_process_screen_recording_state() {
+        assert!(matches!(
+            screen_recording_permission_state(),
+            ScreenRecordingPermissionState::Denied
+                | ScreenRecordingPermissionState::Granted
+                | ScreenRecordingPermissionState::GrantedNeedsRestart
+                | ScreenRecordingPermissionState::RevokedButCached
+        ));
+    }
 
     #[test]
     fn maps_silent_preflight_result_without_needing_a_capture_probe() {
