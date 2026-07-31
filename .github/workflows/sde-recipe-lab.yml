@@ -15,13 +15,16 @@
 # ~5-minute run, reusing the already-built artifacts from run 30656467860.
 name: SDE recipe lab
 
+# push-triggered (scoped to this file on the PR branch): workflow_dispatch
+# can't target a workflow that doesn't exist on the default branch. Touch
+# this file and push to re-run.
 on:
-  workflow_dispatch:
-    inputs:
-      artifact_run_id:
-        description: "release-cli run id to pull screenpipe-windows + ort-smoke-windows artifacts from"
-        default: "30656467860"
-        required: true
+  push:
+    branches: [claude/avx-issue-investigation-997d0f]
+    paths: [".github/workflows/sde-recipe-lab.yml"]
+
+env:
+  ARTIFACT_RUN_ID: "30656467860"
 
 jobs:
   lab:
@@ -32,7 +35,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: screenpipe-windows
-          run-id: ${{ inputs.artifact_run_id }}
+          run-id: ${{ env.ARTIFACT_RUN_ID }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download smoke probes
@@ -40,7 +43,7 @@ jobs:
         with:
           name: ort-smoke-windows
           path: smoke-probes
-          run-id: ${{ inputs.artifact_run_id }}
+          run-id: ${{ env.ARTIFACT_RUN_ID }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract package
