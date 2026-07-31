@@ -20,6 +20,12 @@ describe('getModelCost — cache-aware pricing', () => {
 			getModelCost('gpt-5.6-sol', null, null),
 		);
 		expect(getStreamModelCost('gpt-5.6-sol', 0, 0)).toBeGreaterThan(0);
+		expect(getStreamModelCost('gpt-5.6-sol', 100_000, 0)).toBe(
+			getModelCost('gpt-5.6-sol', 100_000, 500),
+		);
+		expect(getStreamModelCost('gpt-5.6-sol', 100_000, 0)).toBeGreaterThan(
+			getModelCost('gpt-5.6-sol', null, null),
+		);
 	});
 	it('uses the exact Opus 5 standard price and cache rates', () => {
 		const uncached = getModelCost('claude-opus-5', 100_000, 1_000);

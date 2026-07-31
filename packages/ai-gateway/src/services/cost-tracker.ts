@@ -197,7 +197,15 @@ export function getStreamModelCost(
   cache?: CacheUsage,
 ): number {
   if (inputTokens <= 0 || outputTokens <= 0) {
-    return getModelCost(model, null, null);
+    // Preserve any large partial counter already observed. Falling all the way
+    // back to the average would undercount a cancelled 100k-token prompt just
+    // because its final output usage event never arrived.
+    return getModelCost(
+      model,
+      Math.max(inputTokens, DEFAULT_INPUT_TOKENS),
+      Math.max(outputTokens, DEFAULT_OUTPUT_TOKENS),
+      cache,
+    );
   }
   return getModelCost(model, inputTokens, outputTokens, cache);
 }
