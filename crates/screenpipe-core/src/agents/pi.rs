@@ -3259,14 +3259,14 @@ fn verify_sha256_or_delete(temp_file: &Path, expected: &str) -> std::result::Res
         let mut file = std::fs::File::open(temp_file)?;
         let mut hasher = Sha256::new();
         std::io::copy(&mut file, &mut hasher)?;
-        Ok(hasher.finalize().iter().fold(
-            String::with_capacity(64),
-            |mut hex, byte| {
+        Ok(hasher
+            .finalize()
+            .iter()
+            .fold(String::with_capacity(64), |mut hex, byte| {
                 use std::fmt::Write;
                 let _ = write!(hex, "{:02x}", byte);
                 hex
-            },
-        ))
+            }))
     };
     let digest = match compute() {
         Ok(digest) => digest,
@@ -3511,6 +3511,47 @@ mod tests {
         let s = describe_exit_status_code(-1073741795);
         assert!(s.contains("illegal instruction"));
         assert!(s.to_lowercase().contains("avx2"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn verify_sha256_accepts_matching_digest_case_insensitively() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("payload.bin");
+        std::fs::write(&file, b"abc").unwrap();
+        // NIST test vector: SHA-256("abc")
+        const ABC: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        verify_sha256_or_delete(&file, ABC).expect("exact-case match");
+        assert!(file.exists(), "matching digest must not delete the file");
+        verify_sha256_or_delete(&file, &ABC.to_uppercase()).expect("uppercase pin matches too");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn verify_sha256_rejects_mismatch_and_deletes_the_download() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("payload.bin");
+        std::fs::write(&file, b"tampered").unwrap();
+        let err = verify_sha256_or_delete(
+            &file,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        )
+        .expect_err("mismatch must fail");
+        assert!(err.contains("SHA256 mismatch"));
+        assert!(!file.exists(), "mismatched download must be deleted");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn verify_sha256_fails_closed_when_the_file_is_unreadable() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("never-downloaded.bin");
+        let err = verify_sha256_or_delete(
+            &missing,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        )
+        .expect_err("unreadable file must fail, not proceed");
+        assert!(err.contains("couldn't hash"));
     }
 
     #[test]

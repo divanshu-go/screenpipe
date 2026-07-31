@@ -484,6 +484,7 @@ commits: `b3628788`, `738178da`
 
 commits: `eea0c865`, `fe9060db`, `c99c3967`, `aeaa446b`, `5a219688`, `caae1ebc`, `67caf1d1`, `ff4af7b5`
 
+- [ ] **non-AVX2 CPU launch (compatibility mode)** — (#3125) On x86-64 CPUs without AVX2 (pre-2013 Intel, Atom-line Celeron/Pentium, QEMU `-cpu qemu64`), the app and CLI must LAUNCH and RECORD instead of dying with `0xC000001D STATUS_ILLEGAL_INSTRUCTION`. Local whisper/qwen3 STT is disabled at runtime (AVX2-compiled kernels); parakeet + cloud engines keep working; onboarding shows a "compatibility mode" notice. Guards: never set global `CFLAGS/CXXFLAGS=/arch:AVX2` in Windows release workflows (it poisons every cc/cmake dep incl. bundled SQLite → crash in static initializers before main); ONNX Runtime must stay on the MS DirectML DLL (import-table link, runtime CPUID dispatch) — pyke's `download-binaries` static libs are AVX2-only. CI: `release-cli.yml` runs the packaged exe under Intel SDE `-snb` (Sandy Bridge, no AVX2) on every Windows CLI build; reproduce locally with `sde -snb -- screenpipe.exe --version`, or QEMU `-cpu qemu64` for the app. Pipes/AI chat on such CPUs use bun's official `windows-x64-baseline` build (runtime-downloaded, mandatory SHA-256).
 - [ ] **COM thread conflict** — audio and vision threads don't conflict on COM initialization (`eea0c865`).
 - [ ] **high-DPI display (150%, 200%)** — OCR captures at correct resolution.
 - [ ] **multiple monitors** — all detected and recorded.
