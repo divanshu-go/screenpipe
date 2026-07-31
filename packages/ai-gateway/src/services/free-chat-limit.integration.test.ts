@@ -205,6 +205,25 @@ describe('usage reservations against workerd D1', () => {
 		)).allowed).toBe(true);
 	});
 
+	it('grants one priced-request lease in each foreground/background lane', async () => {
+		const now = new Date('2026-07-14T12:00:00.000Z');
+		const background = await reserveDailyCostCap(
+			env, 'user-d1-cost-lanes', 'subscribed', 'claude-sonnet-5', now, 'background',
+		);
+		const interactive = await reserveDailyCostCap(
+			env, 'user-d1-cost-lanes', 'subscribed', 'claude-sonnet-5', now, 'interactive',
+		);
+		const overlap = await reserveDailyCostCap(
+			env, 'user-d1-cost-lanes', 'subscribed', 'claude-sonnet-5', now, 'background',
+		);
+
+		expect(background.allowed).toBe(true);
+		expect(interactive.allowed).toBe(true);
+		expect(overlap.allowed).toBe(false);
+		if (background.allowed && background.lease) await releaseDailyCostLease(env, background.lease);
+		if (interactive.allowed && interactive.lease) await releaseDailyCostLease(env, interactive.lease);
+	});
+
 	it('reclaims an expired priced-request lease without accepting its stale release', async () => {
 		const start = new Date('2026-07-14T12:00:00.000Z');
 		const first = await reserveDailyCostCap(env, 'user-d1-cost-expired', 'subscribed', 'gpt-5.6-sol', start);
