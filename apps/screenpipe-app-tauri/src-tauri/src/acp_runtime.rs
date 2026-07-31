@@ -52,6 +52,7 @@ pub(crate) const CLOUD_API_KEY_ENV: &str = "SCREENPIPE_API_KEY";
 /// out). `CLOUD_API_KEY_ENV` is the signed-in user's cloud JWT.
 const RUNTIME_ONLY_ENV: &[&str] = &[
     CLOUD_API_KEY_ENV,
+    "CLAUDE_CODE_OAUTH_TOKEN",
     "SCREENPIPE_ACP_ENV_JSON",
     "SCREENPIPE_ACP_USER_MCP_JSON",
     "SCREENPIPE_ACP_SESSION_CONFIG_JSON",
@@ -236,9 +237,7 @@ impl RuntimeConfig {
             project_dir,
             bun_path,
             preferred_auth_method: env_nonempty("SCREENPIPE_ACP_AUTH_METHOD"),
-            // No first-turn context is injected: this cut ships no screenpipe
-            // tools, so there is nothing to tell the agent to prefer.
-            system_context: None,
+            system_context: env_nonempty("SCREENPIPE_ACP_SYSTEM_PROMPT"),
             session_defaults: parse_json_env::<SessionDefaults>(
                 "SCREENPIPE_ACP_SESSION_CONFIG_JSON",
             )?
@@ -274,10 +273,12 @@ fn is_process_guard_env(name: &str) -> bool {
 }
 
 pub(crate) fn is_forbidden_acp_env(name: &str) -> bool {
-    // This is the signed-in user's Screenpipe cloud JWT, not the local API
-    // key. ACP adapters and client-created terminals never need it. Compare
-    // case-insensitively because Windows environment keys are case-insensitive.
+    // The Screenpipe cloud JWT and Claude subscription token must never be
+    // supplied by an ACP preset or agent-created terminal. The built-in Claude
+    // adapter is intentionally API-key-only. Compare case-insensitively because
+    // Windows environment keys are case-insensitive.
     name.eq_ignore_ascii_case(CLOUD_API_KEY_ENV)
+        || name.eq_ignore_ascii_case("CLAUDE_CODE_OAUTH_TOKEN")
 }
 
 fn parse_json_env<T: serde::de::DeserializeOwned>(name: &str) -> Result<Option<T>, String> {
@@ -1706,9 +1707,10 @@ fn spawn_terminal(state: &RuntimeState, request: CreateTerminalRequest) -> Resul
     Ok(terminal_id)
 }
 
-/// Screenpipe's own tools (search, memory, artifacts, connections) are not part
-/// of this cut: an ACP agent gets only its own tools plus a text turn. Returning
-/// no servers keeps session/new free of any screenpipe MCP surface.
+/// Screenpipe's own tools (search, memory, artifacts, connections) are not yet
+/// exposed over ACP. The adapter retains its own tools and the client-advertised
+/// workspace file and terminal callbacks. Returning no servers keeps
+/// session/new free of any Screenpipe MCP surface.
 fn mcp_servers(_config: &RuntimeConfig) -> Vec<McpServer> {
     Vec::new()
 }
@@ -2973,6 +2975,7 @@ mod tests {
         assert!(claude
             .iter()
             .any(|arg| arg.starts_with("@agentclientprotocol/claude-agent-acp@")));
+        assert!(claude.iter().any(|arg| arg == "--hide-claude-auth"));
 
         // Unknown ids don't resolve.
         assert!(builtin_agent("not-a-real-agent", "/bun").is_none());
@@ -2996,6 +2999,8 @@ mod tests {
     fn cloud_token_is_forbidden_from_acp_processes() {
         assert!(is_forbidden_acp_env("SCREENPIPE_API_KEY"));
         assert!(is_forbidden_acp_env("screenpipe_api_key"));
+        assert!(is_forbidden_acp_env("CLAUDE_CODE_OAUTH_TOKEN"));
+        assert!(is_forbidden_acp_env("claude_code_oauth_token"));
         assert!(!is_forbidden_acp_env("SCREENPIPE_LOCAL_API_KEY"));
         assert!(!is_forbidden_acp_env("ANTHROPIC_API_KEY"));
     }
@@ -3008,6 +3013,7 @@ mod tests {
         // terminal could `env` the value out).
         for required in [
             CLOUD_API_KEY_ENV,
+            "CLAUDE_CODE_OAUTH_TOKEN",
             "SCREENPIPE_ACP_ENV_JSON",
             "SCREENPIPE_ACP_USER_MCP_JSON",
             "SCREENPIPE_ACP_SESSION_CONFIG_JSON",
@@ -3321,7 +3327,7 @@ mod tests {
         let state = RuntimeState::new(output, &runtime_config("claude-acp"));
 
         // A turn: the prompt is in flight, the agent streams one text chunk,
-        // then the turn ends. This is the whole PR1 contract.
+        // then the turn ends. This is the core streaming contract.
         state.begin_prompt(Some("hi"));
         state.handle_update(json!({
             "sessionUpdate": "agent_message_chunk",

@@ -113,9 +113,9 @@ export function usePiSessionLifecycle({
   }, [aiPresets, isSettingsLoaded, setActivePreset, shouldFreezePresetSelection]);
 
   const hasPresets = Boolean(aiPresets && aiPresets.length > 0);
-  // An ACP preset has no model field; it is ready once an adapter is chosen.
+  // The built-in Claude ACP adapter is API-key-only and has no model field.
   const hasValidModel = activePreset?.provider === "acp"
-    ? Boolean(activePreset.acpAgent?.id?.trim())
+    ? Boolean(activePreset.acpAgent?.id?.trim() && activePreset.apiKey?.trim())
     : Boolean(activePreset?.model && activePreset.model.trim() !== "");
   const needsLogin = activePreset?.provider === "screenpipe-cloud" && !userToken;
   const canChat = hasPresets && hasValidModel && !piStarting;
@@ -123,7 +123,11 @@ export function usePiSessionLifecycle({
   const disabledReason = (() => {
     if (!hasPresets) return "No AI presets configured";
     if (!activePreset) return "No preset selected";
-    if (!hasValidModel) return `No model selected in "${activePreset.id}" preset`;
+    if (!hasValidModel) {
+      return activePreset.provider === "acp"
+        ? `Anthropic API key required in "${activePreset.id}" preset`
+        : `No model selected in "${activePreset.id}" preset`;
+    }
     if (piStarting) return "Starting Pi agent...";
     return null;
   })();
