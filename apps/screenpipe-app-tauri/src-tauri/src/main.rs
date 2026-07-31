@@ -396,6 +396,23 @@ async fn main() {
             );
             health::set_cpu_compat_mode(true);
         }
+
+        // Hidden CI probe: `screenpipe-app.exe --cpu-smoke` exits 0 here,
+        // after every static initializer and the CPU detection above have
+        // run but before any Tauri/WebView/window work. release-app.yml runs
+        // this natively post-build so the GUI binary itself — its static
+        // init + import table (onnxruntime.dll → MSVCP/VCRUNTIME) — is
+        // proven to reach main() (issue #3125: the old /arch:AVX2 builds
+        // died in static init with 0xC000001D before any code here could
+        // run). Non-AVX2 (Intel SDE) coverage lives in release-cli.yml's
+        // smoke-windows job, which compiles the identical workspace crates
+        // under the identical flags. A GUI binary can't be probed with
+        // --version: it has no console output path, and booting the full
+        // app headless in CI is flaky by design.
+        if std::env::args().any(|a| a == "--cpu-smoke") {
+            eprintln!("cpu-smoke: static init ok; {}", cpu.as_log_string());
+            std::process::exit(0);
+        }
     }
 
     // Handle --check-arc-automation / --trigger-arc-automation flags early,

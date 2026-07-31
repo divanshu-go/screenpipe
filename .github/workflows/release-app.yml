@@ -993,6 +993,42 @@ jobs:
           # ort-sys chokes on them.
         run: bunx tauri build --verbose ${{ matrix.tauri-args }}
 
+      # The app exe now import-table-links the MS onnxruntime.dll — a
+      # missing/incompatible DLL or an AVX2-poisoned static initializer kills
+      # the process before main() with no UI and nothing in Sentry (#3125).
+      # --cpu-smoke (hidden flag in main.rs) exits 0 right after static init
+      # + CPU detection, so this catches that whole class natively. The
+      # staged ORT lib dir is already on PATH (Download ONNX Runtime step).
+      # Non-AVX2 (Intel SDE) coverage lives in release-cli.yml's
+      # smoke-windows job — same workspace crates, same flags; SDE's Pin
+      # injector is broken on windows-2022 anyway (pincrt4.dll, run
+      # 30653241813). x64 only: the arm64 exe is cross-compiled and cannot
+      # run on this x64 runner.
+      - name: App launch sanity probe (static init + import table)
+        if: matrix.os_type == 'windows' && matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $targetDir = "apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release"
+          # tauri v2 renames the built binary to the bundle's mainBinaryName;
+          # accept either name so config drift can't silently skip the probe.
+          $exe = Get-ChildItem $targetDir -Filter "screenpipe*.exe" |
+            Where-Object { $_.Name -in @('screenpipe-app.exe', 'screenpipe.exe', 'screenpipe - Development.exe') } |
+            Select-Object -First 1
+          if (-not $exe) { throw "app exe not found in $targetDir" }
+          Write-Host "=== native — $($exe.Name) --cpu-smoke ==="
+          # GUI-subsystem binary: `&` would return immediately without the
+          # exit code — Start-Process + .ExitCode is the reliable path. The
+          # 4-min wait is belt-and-braces; healthy runs exit in <1s.
+          $p = Start-Process -FilePath $exe.FullName -ArgumentList '--cpu-smoke' `
+            -NoNewWindow -PassThru -RedirectStandardError cpu-smoke-err.txt
+          if (-not $p.WaitForExit(240000)) {
+            taskkill /PID $($p.Id) /T /F | Out-Null
+            throw "app exe hung on --cpu-smoke (should exit in <1s) — static init or early main is wedged"
+          }
+          Get-Content cpu-smoke-err.txt -ErrorAction SilentlyContinue
+          if ($p.ExitCode -ne 0) { throw "app exe failed --cpu-smoke (exit $($p.ExitCode)) — static init or a load-time DLL import is broken; customers would see a silent launch failure" }
+
       - name: Sign NSIS installer with SSL.com EV (Windows)
         # Tauri's signCommand handles inner binaries, but the final NSIS
         # installer is built AFTER signCommand runs - so we sign it here
