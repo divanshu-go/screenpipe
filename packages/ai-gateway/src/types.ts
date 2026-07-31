@@ -208,6 +208,10 @@ export interface Env {
 	LIMIT_LOGGED_IN_RPM?: string;
 	LIMIT_SUBSCRIBED_DAILY?: string;
 	LIMIT_SUBSCRIBED_RPM?: string;
+	LIMIT_BUSINESS_MAX_DAILY?: string;
+	LIMIT_BUSINESS_MAX_RPM?: string;
+	LIMIT_BUSINESS_ULTRA_DAILY?: string;
+	LIMIT_BUSINESS_ULTRA_RPM?: string;
 	LIMIT_IP_DAILY?: string;
 	/**
 	 * Stable incident/repricing identifier for text-AI cash caps. When changed,
@@ -239,10 +243,18 @@ export interface Env {
 	LIMIT_ANONYMOUS_FREE_RPM?: string;
 	LIMIT_LOGGED_IN_FREE_RPM?: string;
 	LIMIT_SUBSCRIBED_FREE_RPM?: string;
+	LIMIT_BUSINESS_MAX_FREE_RPM?: string;
+	LIMIT_BUSINESS_ULTRA_FREE_RPM?: string;
 }
 
 // User tier for rate limiting and model access
 export type UserTier = 'anonymous' | 'logged_in' | 'subscribed';
+
+// Capacity is deliberately separate from model access. All Business plans use
+// the subscribed model policy; Max and Ultra only receive larger usage/RPM
+// buckets. Cash-cost admission remains keyed to UserTier as another independent
+// safety boundary.
+export type UsageTier = UserTier | 'business_max' | 'business_ultra';
 
 // Server-verified commercial plan. This is intentionally separate from
 // UserTier: Free and paid Basic both keep the existing `logged_in` model/rate
@@ -251,6 +263,8 @@ export type AccountPlan =
 	| 'free'
 	| 'basic'
 	| 'business'
+	| 'business_max'
+	| 'business_ultra'
 	| 'team'
 	| 'enterprise'
 	| 'unknown';
@@ -259,6 +273,8 @@ export type AccountPlan =
 export interface AuthResult {
 	isValid: boolean;
 	tier: UserTier;
+	/** Present on current auth results; optional for older internal callers. */
+	usageTier?: UsageTier;
 	accountPlan: AccountPlan;
 	/** Server-verified temporary profile or subscription trial. */
 	hostedAiTrial?: boolean;
@@ -298,7 +314,7 @@ export interface UsageResult {
 
 // Usage status response
 export interface UsageStatus {
-	tier: UserTier;
+	tier: UsageTier;
 	used_today: number;
 	limit_today: number;
 	remaining: number;

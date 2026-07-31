@@ -410,6 +410,35 @@ describe('/v1/chat/completions free-plan route policy', () => {
 		expect(await errorCode(response)).toBe('cost_control_unavailable');
 	});
 
+	it('returns the Max capacity tier from the authenticated usage route', async () => {
+		verifyTokenMock.mockImplementation(async () => ({ sub: 'user_pro_max' }) as any);
+		globalThis.fetch = mock(async () => new Response(JSON.stringify({
+			success: true,
+			user: {
+				clerk_id: 'user_pro_max',
+				cloud_subscribed: true,
+				app_entitled: true,
+				subscription_plan: 'pro_max',
+				entitlement: { active: true, plan: 'pro_max', features: { app: true } },
+			},
+		}), { status: 200 })) as typeof fetch;
+
+		const response = await handleRequest(new Request('https://gateway.test/v1/usage', {
+			headers: { Authorization: 'Bearer eyJ.pro-max.paid' },
+		}), env, ctx);
+		const body = await response.json() as Record<string, unknown>;
+
+		expect(response.status).toBe(200);
+		expect(body).toMatchObject({
+			tier: 'business_max',
+			limit_today: 120,
+			remaining: 120,
+			upsell_banner: false,
+			upgrade_eligible: false,
+			cost_limit_reached: false,
+		});
+	});
+
 	it('normalizes a removed model before gating and reaches the fallback provider', async () => {
 		globalThis.fetch = mock(async (input: RequestInfo | URL) => {
 			const url = typeof input === 'string' || input instanceof URL ? String(input) : input.url;

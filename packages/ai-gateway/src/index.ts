@@ -273,7 +273,12 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 
 		// Authenticate and get tier info for all other endpoints
 		const authResult = await validateAuth(request, env);
-		console.log('auth result:', { tier: authResult.tier, deviceId: authResult.deviceId });
+		const usageTier = authResult.usageTier ?? authResult.tier;
+		console.log('auth result:', {
+			tier: authResult.tier,
+			usageTier,
+			deviceId: authResult.deviceId,
+		});
 
 		// Check rate limit with tier info. Chat completions are checked inside
 		// their own block instead — there we know the model, so free (weight-0)
@@ -292,7 +297,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			const status = await getUsageStatus(
 				env,
 				authResult.deviceId,
-				authResult.tier,
+				usageTier,
 				authResult.userId,
 				authResult.accountPlan,
 			);
@@ -494,7 +499,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 
 			// Track usage and check daily limit (includes IP-based abuse prevention)
 			const ipAddress = request.headers.get('cf-connecting-ip') || undefined;
-			const usage = await trackUsage(env, authResult.deviceId, authResult.tier, authResult.userId, ipAddress, body.model);
+			const usage = await trackUsage(env, authResult.deviceId, usageTier, authResult.userId, ipAddress, body.model);
 			if (!usage.allowed) {
 				const creditsExhausted = (usage.creditsRemaining ?? 0) <= 0;
 				return addCorsHeaders(createErrorResponse(429, JSON.stringify({
@@ -505,7 +510,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 					used_today: usage.used,
 					limit_today: usage.limit,
 					resets_at: usage.resetsAt,
-					tier: authResult.tier,
+					tier: usageTier,
 					credits_remaining: usage.creditsRemaining ?? 0,
 					upgrade_options: {
 						buy_credits: {
@@ -711,7 +716,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			if (gate) return gate;
 			// Track usage (counts as 1 query, web search uses gemini flash)
 			const ipAddress = request.headers.get('cf-connecting-ip') || undefined;
-			const usage = await trackUsage(env, authResult.deviceId, authResult.tier, authResult.userId, ipAddress, 'gemini-2.5-flash');
+			const usage = await trackUsage(env, authResult.deviceId, usageTier, authResult.userId, ipAddress, 'gemini-2.5-flash');
 			if (!usage.allowed) {
 				return addCorsHeaders(createErrorResponse(429, JSON.stringify({
 					error: (usage.creditsRemaining ?? 0) <= 0 ? 'credits_exhausted' : 'daily_limit_exceeded',
@@ -719,7 +724,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 					used_today: usage.used,
 					limit_today: usage.limit,
 					resets_at: usage.resetsAt,
-					tier: authResult.tier,
+					tier: usageTier,
 					credits_remaining: usage.creditsRemaining ?? 0,
 				})));
 			}
@@ -937,7 +942,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 
 			// Track usage and check daily limit (weighted by model)
 			const ipAddress = request.headers.get('cf-connecting-ip') || undefined;
-			const usage = await trackUsage(env, authResult.deviceId, authResult.tier, authResult.userId, ipAddress, parsedModel);
+			const usage = await trackUsage(env, authResult.deviceId, usageTier, authResult.userId, ipAddress, parsedModel);
 			if (!usage.allowed) {
 				return addCorsHeaders(createErrorResponse(429, JSON.stringify({
 					error: (usage.creditsRemaining ?? 0) <= 0 ? 'credits_exhausted' : 'daily_limit_exceeded',
@@ -945,7 +950,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 					used_today: usage.used,
 					limit_today: usage.limit,
 					resets_at: usage.resetsAt,
-					tier: authResult.tier,
+					tier: usageTier,
 					credits_remaining: usage.creditsRemaining ?? 0,
 				})));
 			}
@@ -1085,7 +1090,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 
 			// Track usage for OpenCode requests (weighted by model)
 			const ipAddress = request.headers.get('cf-connecting-ip') || undefined;
-			const usage = await trackUsage(env, authResult.deviceId, authResult.tier, authResult.userId, ipAddress, ocModel);
+			const usage = await trackUsage(env, authResult.deviceId, usageTier, authResult.userId, ipAddress, ocModel);
 			if (!usage.allowed) {
 				return addCorsHeaders(createErrorResponse(429, JSON.stringify({
 					error: (usage.creditsRemaining ?? 0) <= 0 ? 'credits_exhausted' : 'daily_limit_exceeded',
@@ -1093,7 +1098,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 					used_today: usage.used,
 					limit_today: usage.limit,
 					resets_at: usage.resetsAt,
-					tier: authResult.tier,
+					tier: usageTier,
 					credits_remaining: usage.creditsRemaining ?? 0,
 				})));
 			}
