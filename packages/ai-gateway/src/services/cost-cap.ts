@@ -23,6 +23,8 @@ export type DailyCostLease = {
 	expiresAt: string;
 };
 
+export type DailyCostLane = 'interactive' | 'background';
+
 export type DailyCostReservation =
 	| { allowed: true; lease: DailyCostLease | null }
 	| { allowed: false; response: Response };
@@ -176,13 +178,18 @@ export async function reserveDailyCostCap(
 	tier: string,
 	model: string,
 	now: Date = new Date(),
+	lane: DailyCostLane = 'interactive',
 ): Promise<DailyCostReservation> {
 	if (isZeroCostModel(model)) return { allowed: true, lease: null };
 
 	let lease: DailyCostLease | null = null;
 	try {
 		const leaseEpoch = configuredCostCapEpoch(env) ?? 'legacy';
-		const key = `daily-cost:lease:v1:${await sha256Hex(`${leaseEpoch}:${deviceId}`)}`;
+		// Foreground chat must not be rejected merely because a scheduled pipe is
+		// running. Keep one priced request per lane: background remains serialized,
+		// while an interactive request can proceed alongside it. The account-wide
+		// cash accumulator and cap remain shared across both lanes.
+		const key = `daily-cost:lease:v2:${await sha256Hex(`${leaseEpoch}:${deviceId}:${lane}`)}`;
 		const nowIso = now.toISOString();
 		const expiresAt = new Date(now.getTime() + DAILY_COST_LEASE_SECONDS * 1000).toISOString();
 		const claim = async () => env.DB.prepare(`
@@ -205,7 +212,9 @@ export async function reserveDailyCostCap(
 				allowed: false,
 				response: addCorsHeaders(createErrorResponse(429, JSON.stringify({
 					error: 'priced_request_in_flight',
-					message: 'Another hosted AI request is still running for this account. Wait for it to finish before retrying.',
+					message: lane === 'background'
+						? 'Another hosted AI background request is still running for this account. Wait for it to finish before retrying.'
+						: 'Another hosted AI chat request is still running for this account. Wait for it to finish before retrying.',
 				}))),
 			};
 		}

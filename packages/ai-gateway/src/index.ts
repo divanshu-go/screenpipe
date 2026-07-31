@@ -122,7 +122,14 @@ async function handleMeteredTinfoilRequest(
 	subPath: '/v1/chat/completions' | '/v1/responses',
 ): Promise<Response> {
 	const model = 'gemma4-31b';
-	const reservation = await reserveDailyCostCap(env, auth.deviceId, auth.tier, model);
+	const reservation = await reserveDailyCostCap(
+		env,
+		auth.deviceId,
+		auth.tier,
+		model,
+		new Date(),
+		isBackgroundRequest(request) ? 'background' : 'interactive',
+	);
 	if (!reservation.allowed) return reservation.response;
 	let response: Response;
 	try {
@@ -158,7 +165,14 @@ async function handleMeteredVoiceAiRequest(
 	endpoint: '/v1/voice/query' | '/v1/voice/chat',
 ): Promise<Response> {
 	const model = request.headers.get('ai-model') || 'gpt-5.4';
-	const reservation = await reserveDailyCostCap(env, auth.deviceId, auth.tier, model);
+	const reservation = await reserveDailyCostCap(
+		env,
+		auth.deviceId,
+		auth.tier,
+		model,
+		new Date(),
+		isBackgroundRequest(request) ? 'background' : 'interactive',
+	);
 	if (!reservation.allowed) return reservation.response;
 	let response: Response;
 	try {
@@ -410,13 +424,16 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				freeChatLease = reservation.lease;
 			}
 
-			// Serialize the account's priced read/inference/write interval. Acquiring
-			// this only after every non-cost gate avoids holding it for rejected work.
+			// Serialize priced work within its foreground/background lane. A scheduled
+			// pipe must not block a user who is actively waiting in chat.
+			const latency = resolveLatencyClass(request, body, env);
 			const costReservation = await reserveDailyCostCap(
 				env,
 				authResult.deviceId,
 				authResult.tier,
 				body.model,
+				new Date(),
+				isBackgroundRequest(request) ? 'background' : 'interactive',
 			);
 			if (!costReservation.allowed) {
 				if (freeChatLease) await releaseFreeChatLease(env, freeChatLease);
@@ -425,7 +442,6 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			const dailyCostLease = costReservation.lease;
 
 			// Route latency-tolerant (background) traffic to the cheaper flex tier.
-			const latency = resolveLatencyClass(request, body, env);
 			let leaseReleased = false;
 			const releaseLease = async () => {
 				if (!freeChatLease || leaseReleased) return;
@@ -576,6 +592,8 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				authResult.deviceId,
 				authResult.tier,
 				'gemini-2.5-flash',
+				new Date(),
+				isBackgroundRequest(request) ? 'background' : 'interactive',
 			);
 			if (!costReservation.allowed) return costReservation.response;
 			const webSearchResponse = await handleWebSearch(request, env);
@@ -755,6 +773,8 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				authResult.deviceId,
 				authResult.tier,
 				parsedModel,
+				new Date(),
+				isBackgroundRequest(request) ? 'background' : 'interactive',
 			);
 			if (!costReservation.allowed) return costReservation.response;
 
@@ -891,6 +911,8 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				authResult.deviceId,
 				authResult.tier,
 				ocModel,
+				new Date(),
+				isBackgroundRequest(request) ? 'background' : 'interactive',
 			);
 			if (!costReservation.allowed) return costReservation.response;
 

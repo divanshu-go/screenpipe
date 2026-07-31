@@ -202,6 +202,28 @@ describe('reserveDailyCostCap', () => {
 		}
 	});
 
+	it('lets foreground chat proceed while a background pipe is running', async () => {
+		const db = new LeaseD1();
+		const env = leaseEnv(db);
+		const now = new Date('2026-07-30T12:00:00.000Z');
+		const background = await reserveDailyCostCap(
+			env, 'user_lanes', 'subscribed', 'claude-sonnet-5', now, 'background',
+		);
+		const interactive = await reserveDailyCostCap(
+			env, 'user_lanes', 'subscribed', 'claude-sonnet-5', now, 'interactive',
+		);
+		const secondBackground = await reserveDailyCostCap(
+			env, 'user_lanes', 'subscribed', 'claude-sonnet-5', now, 'background',
+		);
+
+		expect(background.allowed).toBe(true);
+		expect(interactive.allowed).toBe(true);
+		expect(secondBackground.allowed).toBe(false);
+		if (!secondBackground.allowed) {
+			expect(await secondBackground.response.text()).toContain('background request');
+		}
+	});
+
 	it('allows the next request only after the exact lease generation releases', async () => {
 		const db = new LeaseD1();
 		const env = leaseEnv(db);
