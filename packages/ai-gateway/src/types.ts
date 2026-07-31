@@ -215,6 +215,9 @@ export interface Env {
 	 * the new cap only on spend incurred after that snapshot.
 	 */
 	COST_CAP_EPOCH?: string;
+	MAX_DAILY_TEXT_COST_PER_USER?: string;
+	// Legacy/transcription base cap. Text falls back to this only when its
+	// dedicated override is absent.
 	MAX_DAILY_COST_PER_USER?: string;
 	// Per-minute RPM for free (weight-0) models — a separate, much higher bucket
 	// so heavy free usage never trips the low paid-model limit. Tunable per tier.

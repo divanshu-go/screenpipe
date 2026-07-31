@@ -239,7 +239,7 @@ describe('usage reservations against workerd D1', () => {
 		const day = new Date().toISOString().slice(0, 10);
 		const now = new Date();
 		env.COST_CAP_EPOCH = 'incident-v2';
-		env.MAX_DAILY_COST_PER_USER = '0.5'; // subscribed cap = $3.50
+		env.MAX_DAILY_TEXT_COST_PER_USER = '0.5'; // subscribed cap = $3.50
 		await env.DB.prepare(`
 			INSERT INTO usage (device_id, last_reset, tier, cost_day, daily_cost_usd)
 			VALUES (?, ?, 'subscribed', ?, 40)
