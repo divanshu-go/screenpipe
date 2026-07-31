@@ -416,7 +416,7 @@ function getMaxDailyTextCostPerUser(env?: Env): number {
 export function getTierDailyCostCap(tier: string, env?: Env): number {
   const baseCap = getMaxDailyTextCostPerUser(env);
   switch (tier) {
-    case 'subscribed': return baseCap * 7;   // $35
+    case 'subscribed': return parseFloat(env?.MAX_DAILY_SUBSCRIBED_TEXT_COST || '') || baseCap * 7;
     case 'logged_in':  return baseCap * 0.64; // $3.20
     default:           return baseCap * 0.32; // $1.60 (anonymous)
   }

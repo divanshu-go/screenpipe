@@ -15,6 +15,7 @@ import {
 const COST_LEASE_TIER = 'daily_cost_in_flight_v1';
 const COST_BASELINE_TIER = 'daily_cost_baseline_v1';
 export const DAILY_COST_LEASE_SECONDS = 10 * 60;
+export const FAILED_SETTLEMENT_LEASE_SECONDS = 60;
 
 export type DailyCostLease = {
 	key: string;
@@ -141,6 +142,26 @@ export async function releaseDailyCostLease(env: Env, lease: DailyCostLease): Pr
 }
 
 /**
+ * Keep a short fail-closed quarantine after accounting fails without blocking
+ * the account for the full active-request TTL. Match the exact generation so a
+ * delayed finalizer can never shorten a newer request's lease.
+ */
+async function shortenFailedSettlementLease(env: Env, lease: DailyCostLease): Promise<void> {
+	try {
+		const retryAt = new Date(Date.now() + FAILED_SETTLEMENT_LEASE_SECONDS * 1000).toISOString();
+		await env.DB.prepare(`
+			UPDATE usage
+			SET last_reset = ?, updated_at = CURRENT_TIMESTAMP
+			WHERE device_id = ? AND user_id = ? AND tier = ?
+				AND daily_count = 1 AND last_reset = ?
+		`).bind(retryAt, lease.key, lease.deviceId, COST_LEASE_TIER, lease.expiresAt).run();
+	} catch (error) {
+		// If shortening fails, preserve the original bounded fail-closed lease.
+		console.error('failed settlement lease shortening failed', error);
+	}
+}
+
+/**
  * Atomically serialize priced upstream work for an account, then read its cap.
  *
  * The old check read daily spend before inference and logged it after inference;
@@ -224,9 +245,10 @@ export function withDailyCostSettlement(
 		if (recorded) {
 			await releaseDailyCostLease(env, lease);
 		} else {
-			// Keep the bounded lease closed after an accounting failure. Its TTL is
-			// the crash-recovery escape hatch; do not immediately allow unmetered work.
-			console.error('daily cost was not recorded; retaining spend lease until expiry');
+			// Keep a short fail-closed quarantine after an accounting failure, but do
+			// not strand every chat for the full active-request crash-recovery TTL.
+			console.error('daily cost was not recorded; shortening spend lease quarantine');
+			await shortenFailedSettlementLease(env, lease);
 		}
 	};
 	return withResponseFinalizer(response, finalize, (error) => {

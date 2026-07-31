@@ -81,8 +81,12 @@ describe('daily cost cap', () => {
   });
 
   it('keeps emergency text caps separate from transcription', () => {
-    const env = { MAX_DAILY_TEXT_COST_PER_USER: '0.5' } as any;
-    expect(getTierDailyCostCap('subscribed', env)).toBe(3.5);
+    const env = {
+      MAX_DAILY_TEXT_COST_PER_USER: '0.5',
+      MAX_DAILY_SUBSCRIBED_TEXT_COST: '35',
+    } as any;
+    expect(getTierDailyCostCap('logged_in', env)).toBe(0.32);
+    expect(getTierDailyCostCap('subscribed', env)).toBe(35);
     expect(getMaxDailyCostPerUser(env)).toBe(5.0);
   });
 });
