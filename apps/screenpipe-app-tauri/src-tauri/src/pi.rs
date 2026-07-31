@@ -486,21 +486,6 @@ fn sync_queue_state_from_event(
 ) {
     let event_type = event.get("type").and_then(|value| value.as_str());
 
-    if event_type == Some("response") {
-        if let Some(request_id) = event.get("id").and_then(|id| id.as_str()) {
-            let rejected =
-                event.get("success").and_then(|success| success.as_bool()) == Some(false);
-            let error = rejected.then(|| {
-                event
-                    .get("error")
-                    .and_then(|error| error.as_str())
-                    .unwrap_or("Pi rejected the prompt before it started")
-                    .to_string()
-            });
-            queue_state.signal_rpc_response(request_id, error);
-        }
-    }
-
     match event_type {
         Some("agent_start") => {
             queue_state.mark_agent_active();
@@ -554,10 +539,21 @@ fn sync_queue_state_from_event(
                 _ => {}
             }
         }
-        Some("message_update") | Some("tool_execution_start") => {
+        Some("message_update") => {
+            // Text/thinking deltas reset the silence idle deadline.
+            queue_state.record_activity();
             for id in event_tool_call_ids(event) {
                 queue_state.mark_tool_active(id);
             }
+        }
+        Some("tool_execution_start") => {
+            for id in event_tool_call_ids(event) {
+                queue_state.mark_tool_active(id);
+            }
+        }
+        Some("tool_execution_progress") => {
+            // Tool progress resets the silence idle deadline.
+            queue_state.record_activity();
         }
         Some("tool_execution_end") => {
             for id in event_tool_call_ids(event) {
@@ -566,14 +562,22 @@ fn sync_queue_state_from_event(
             queue_state.signal_done_if_idle();
         }
         Some("response") => {
-            if !queue_state.has_active_turn_work() {
-                // Non-prompt commands do not emit agent_start/agent_end, so a
-                // successful response remains their completion fallback.
-                let queue_state = queue_state.clone();
-                std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_millis(500));
-                    queue_state.signal_done();
-                });
+            // Correlate lifecycle replies by request id, not a shared wakeup.
+            if let Some(id) = event.get("id").and_then(|id| id.as_str()) {
+                let success = event
+                    .get("success")
+                    .and_then(|success| success.as_bool())
+                    .unwrap_or(true);
+                let result = if success {
+                    Ok(())
+                } else {
+                    Err(event
+                        .get("error")
+                        .and_then(|error| error.as_str())
+                        .unwrap_or("Pi command failed")
+                        .to_string())
+                };
+                queue_state.signal_response(id, result);
             }
         }
         _ => {}

@@ -411,6 +411,16 @@
       "notes": "Several messages queued during an active turn must all become pending cards immediately; regression for the conversation-lease hold that serialized enqueues one per turn."
     },
     {
+      "spec": "chat-stop-midturn.spec.ts",
+      "platforms": ["macos"],
+      "layers": ["chat-ai"],
+      "features": ["chat"],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "synthetic",
+      "notes": "Stop on a live turn against a real Pi subprocess: abort mid-stream then send again (no ghost turn or hang), and two overlapping Stops followed by a clean send. Queue lifecycle regression for the request-id correlation refactor."
+    },
+    {
       "spec": "chat-settings-background-stream.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["chat-ai", "settings", "real-ui-e2e"],
