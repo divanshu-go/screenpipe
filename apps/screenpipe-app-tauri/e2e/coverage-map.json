@@ -401,6 +401,16 @@
       "notes": "Switching conversations during streaming must not corrupt state."
     },
     {
+      "spec": "chat-queue-burst-pending.spec.ts",
+      "platforms": ["macos"],
+      "layers": ["chat-ai"],
+      "features": ["chat"],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "synthetic",
+      "notes": "Several messages queued during an active turn must all become pending cards immediately; regression for the conversation-lease hold that serialized enqueues one per turn."
+    },
+    {
       "spec": "chat-settings-background-stream.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["chat-ai", "settings", "real-ui-e2e"],
