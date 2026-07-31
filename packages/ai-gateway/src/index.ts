@@ -18,7 +18,7 @@ import { handleWebSearch } from './handlers/web-search';
 import { handleTinfoilAttestation, handleTinfoilProxy, parseTinfoilUsageMetrics } from './handlers/tinfoil-proxy';
 import { logCost, getModelCost, getStreamModelCost, inferProvider, getSpendSummary, getDailyUserCost, getMaxDailyCostPerUser, getTierDailyCostCap, resolveServedModel } from './services/cost-tracker';
 import { trackResponseUsage } from './utils/stream-usage-tracker';
-import { pruneModelHealth } from './services/model-health';
+import { pruneRuntimeState } from './services/runtime-state-maintenance';
 import { resolveLatencyClass, isBackgroundRequest } from './utils/latency';
 import {
 	releaseDailyCostLease,
@@ -645,8 +645,6 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 		}
 
 		if (path === '/v1/models' && request.method === 'GET') {
-			// Prune old health records opportunistically (fire-and-forget)
-			ctx.waitUntil(pruneModelHealth(env));
 			// Return tier-filtered models with live health status
 			return await handleModelListing(
 				env,
@@ -1070,6 +1068,9 @@ export default {
 			},
 			() => handleRequest(request, env, ctx)
 		);
+	},
+	async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+		ctx.waitUntil(pruneRuntimeState(env));
 	},
 } satisfies ExportedHandler<Env>;
 

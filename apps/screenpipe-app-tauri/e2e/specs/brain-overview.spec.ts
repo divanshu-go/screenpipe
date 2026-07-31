@@ -972,6 +972,8 @@ Refresh the assigned Live View output targets from source-backed activity.
     const restoredBrainNav = await waitForTestId("nav-brain", 10_000);
     await restoredBrainNav.click();
     await waitForTestId("section-brain", 15_000);
+    await waitForTestId("overview-dashboard-selector", 10_000);
+    await selectDashboard(SELECTABLE_VIEW_ID);
     await waitForTestId("live-view-canvas", 15_000);
     expect(await $("textarea[aria-label='Canvas note']").getValue()).toBe(
       "Review the source evidence before automating.",
