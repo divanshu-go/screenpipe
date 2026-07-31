@@ -1804,8 +1804,8 @@ async readViewerFile(path: string) : Promise<Result<ViewerContent, string>> {
  *
  * `text` is the raw logs + chat (PII-dense chat first); `settings_json` is the
  * raw settings store. Config secrets are stripped by field name, then the whole
- * thing goes through the crate's redaction pipeline (enclave model under a time
- * budget, regex for the overflow). Never returns `Err` — worst case is
+ * thing goes through the crate's deterministic local pipeline before bounded,
+ * concurrent enclave enrichment. Never returns `Err` — worst case is
  * regex-only redaction — so feedback submission is never blocked.
  */
 async redactPiiForFeedback(text: string, settingsJson: string) : Promise<Result<string, string>> {
@@ -2346,8 +2346,8 @@ async setSyncEnabled(enabled: boolean) : Promise<Result<null, string>> {
  * string ("off" | "cited" | "all"; legacy "true" accepted) — parsed
  * fail-closed by FrameImagesMode::parse.
  */
-async setSyncStreams(frames: boolean, audio: boolean, uiEvents: boolean, memories: boolean, snapshots: boolean, frameImages: string) : Promise<void> {
-    await TAURI_INVOKE("set_sync_streams", { frames, audio, uiEvents, memories, snapshots, frameImages });
+async setSyncStreams(frames: boolean, audio: boolean, uiEvents: boolean, memories: boolean, snapshots: boolean, feedback: string, frameImages: string) : Promise<void> {
+    await TAURI_INVOKE("set_sync_streams", { frames, audio, uiEvents, memories, snapshots, feedback, frameImages });
 },
 async setTrayHealthIcon() : Promise<void> {
     await TAURI_INVOKE("set_tray_health_icon");
@@ -2489,6 +2489,14 @@ async startCapture() : Promise<Result<null, string>> {
 async startExportRecording(meetingId: number | null, start: string | null, end: string | null, outputPath: string) : Promise<Result<StartExportRecordingResponse, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("start_export_recording", { meetingId, start, end, outputPath }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async startFeedbackUpload(request: FeedbackUploadRequest) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("start_feedback_upload", { request }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -2693,8 +2701,33 @@ async writeBrowserLogs(entries: BrowserLogEntry[]) : Promise<void> {
 
 /** user-defined types **/
 
-export type AIPreset = { id: string; prompt: string; provider: AIProviderType; url?: string; model?: string; defaultPreset: boolean; apiKey: string | null; maxContextChars: number; maxTokens?: number }
-export type AIProviderType = "openai" | "openai-chatgpt" | "native-ollama" | "custom" | "screenpipe-cloud" | "pi" | "anthropic"
+export type AIPreset = { id: string; prompt: string; provider: AIProviderType; url?: string; model?: string; defaultPreset: boolean; apiKey: string | null; maxContextChars: number; maxTokens?: number;
+/**
+ * The external adapter to launch when `provider` is `acp`.
+ */
+acpAgent?: AcpAgentConfig | null }
+export type AcpAgentConfig = {
+/**
+ * Catalog id (for example `claude-acp`) or `custom`.
+ */
+id: string;
+/**
+ * Executable for a custom adapter; built-in ids resolve by id when absent.
+ */
+command?: string | null;
+/**
+ * Arguments passed to the adapter verbatim, without a shell.
+ */
+args?: string[];
+/**
+ * Environment passed only to the supervised adapter process.
+ */
+env?: { [key in string]: string } }
+export type AIProviderType = "openai" | "openai-chatgpt" | "native-ollama" | "custom" | "screenpipe-cloud" | "pi" | "anthropic" |
+/**
+ * External Agent Client Protocol adapter, launched via the ACP runtime.
+ */
+"acp"
 export type AecMode = "off" | "screenpipe" | "macos" | "windows"
 export type AudioDeviceInfo = { name: string; isDefault: boolean;
 /**
@@ -2847,6 +2880,7 @@ export type EnterpriseInstallMetadata = { install_source: string; update_manager
 export type ExcludedApp = { bundleId: string; name: string | null; icon: string | null }
 export type ExportEvent = { kind: "started"; jobId: string; request: ExportRequestInfo } | { kind: "completed"; jobId: string; request: ExportRequestInfo; summary: MeetingExportSummary } | { kind: "failed"; jobId: string; request: ExportRequestInfo; error: string }
 export type ExportRequestInfo = { meetingId: number | null; start: string | null; end: string | null; outputPath: string }
+export type FeedbackUploadRequest = { jobId: string; identifier: string; reportType: string; feedbackText: string; settingsJson: string; chatHistory: string; consoleLog: string; analyticsId: string | null; os: string; osVersion: string; appVersion: string; screenshotDataUrl: string | null; videoDataUrl: string | null; videoPath: string | null; videoExt: string | null }
 export type HardwareCapability = { hasGpu: boolean; cpuCores: number; totalMemoryGb: number; recommendedEngine: string; reason: string }
 export type IcsCalendarEntry = { name: string; url: string; enabled: boolean }
 /**
@@ -2914,7 +2948,17 @@ export type PiInfo = { running: boolean; projectDir: string | null; pid: number 
 /**
  * Configuration for which AI provider Pi should use
  */
+export type PiBackend = "acp"
 export type PiProviderConfig = {
+/**
+ * Transport backend. Absent keeps the native Pi RPC agent; `acp` runs an
+ * external adapter through the hidden ACP runtime.
+ */
+backend?: PiBackend | null;
+/**
+ * Adapter configuration, required when `backend` is `acp`.
+ */
+acpAgent?: AcpAgentConfig | null;
 /**
  * Provider type: "openai", "native-ollama", "custom", "screenpipe-cloud"
  */
