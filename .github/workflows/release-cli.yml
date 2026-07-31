@@ -626,12 +626,15 @@ jobs:
 
       - name: Launch + ONNX-init probes (native, then emulated non-AVX2)
         shell: pwsh
-        # Probe design notes (validated 2026-07-06 on a real Windows machine;
-        # SDE 10.8.0 2026-03-15 kit re-verified locally on Windows 11 with the
-        # negative control: stock AVX2 bun.exe faults instantly under -snb —
-        # "vinserti128 ... not valid for SANDYBRIDGE"):
-        # - 7z two-step extraction: proven on runners (run 28806190901); a
-        #   tar -xf variant wedged 60+ min (run 28808593583).
+        # Probe design notes:
+        # - SDE 9.58 (2025-06-16 kit), NOT 10.x: every 10.x kit's Pin
+        #   injector fails on current GitHub-hosted Windows images
+        #   ("Injection failed with code ffffffff" — 10.8 on windows-2022 +
+        #   windows-latest regardless of extraction/invocation, lab run
+        #   30658575297; 10.5 + 10.7 likewise, lab run 30659124066). 9.58
+        #   launched this exact package green under -snb in the same lab
+        #   run. 10.8 DOES work on real Windows 11 — for local repro any
+        #   recent kit is fine.
         # - -snb ONLY. Pre-AVX chips (-nhm/-mrm) are a false-negative trap:
         #   modern hosts' system DLLs execute AVX, so emulating pre-AVX
         #   faults in the OS, not our code. The no-AVX floor is covered by
@@ -640,7 +643,7 @@ jobs:
         #   fail fast and loud, never eat runner-hours.
         # - Intel rotates mirrors (9.44.0's died 2026-07-31, run 30651369680).
         #   Fresh URLs: intel.com SDE article, or google/XNNPACK's sde-tests
-        #   workflow env.
+        #   workflow env (their git history holds older-version URLs).
         run: |
           Write-Host "=== extracting deployment package ==="
           $zip = (Get-ChildItem "screenpipe-*-x86_64-pc-windows-msvc.zip" | Select-Object -First 1).FullName
@@ -660,13 +663,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "ort-smoke failed natively on windows-latest (exit $LASTEXITCODE)" }
 
           Write-Host "=== downloading SDE ==="
-          $sdeUrl = 'https://downloadmirror.intel.com/915934/sde-external-10.8.0-2026-03-15-win.tar.xz'
+          $sdeUrl = 'https://downloadmirror.intel.com/859732/sde-external-9.58.0-2025-06-16-win.tar.xz'
           curl.exe -fSL -o sde.tar.xz $sdeUrl
           if ($LASTEXITCODE -ne 0) { throw "SDE download failed ($LASTEXITCODE) — Intel rotated the mirror again? See the step comment for fresh-URL sources" }
-          Write-Host "=== extracting SDE (7z two-step) ==="
-          7z x sde.tar.xz -y | Out-Null
-          7z x sde.tar -y | Out-Null
-          $sde = (Get-ChildItem "sde-external-*" -Recurse -Filter sde.exe | Select-Object -First 1).FullName
+          Write-Host "=== extracting SDE (tar) ==="
+          New-Item -ItemType Directory -Force sde-kit | Out-Null
+          tar -xf sde.tar.xz -C sde-kit
+          $sde = (Get-ChildItem "sde-kit" -Recurse -Filter sde.exe | Select-Object -First 1).FullName
           if (-not $sde) { throw "sde.exe not found after extraction" }
 
           # Probe 1: the packaged CLI launches without AVX2 — catches the
