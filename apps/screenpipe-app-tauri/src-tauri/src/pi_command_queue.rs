@@ -40,6 +40,10 @@ pub const PROMPT_START_TIMEOUT: Duration = Duration::from_secs(15);
 pub const PROMPT_START_TIMEOUT_ERROR: &str =
     "AI agent did not start responding within 15 seconds";
 
+fn is_already_processing_rejection(error: &str) -> bool {
+    error.to_ascii_lowercase().contains("already processing")
+}
+
 /// A user prompt that's been enqueued but not yet written to Pi's stdin.
 /// Surfaced to the UI so the chat can render "queued" cards while a prior
 /// prompt is still streaming. Once the queue's drain loop pulls a prompt and
@@ -279,6 +283,20 @@ impl PiQueueState {
             active_tools.clear();
         }
         self.done_notify.notify_waiters();
+    }
+
+    fn mark_prompt_rejected_with_error(&self, error: &str) {
+        if is_already_processing_rejection(error) {
+            // The SDK can reject a raced prompt because an earlier real turn
+            // still owns the process even though our local lifecycle briefly
+            // looked idle. Clear only this prompt's reservation and preserve a
+            // busy guard until that real turn emits its terminal event.
+            self.prompt_pending.store(false, Ordering::SeqCst);
+            self.agent_active.store(true, Ordering::SeqCst);
+            self.done_notify.notify_waiters();
+        } else {
+            self.mark_prompt_rejected();
+        }
     }
 
     fn finish_aborted_turn(&self) {
@@ -1197,7 +1215,7 @@ async fn wait_for_prompt_acceptance(
                 return match response {
                     Ok(Ok(())) => (Ok(()), None),
                     Ok(Err(error)) => {
-                        state.mark_prompt_rejected();
+                        state.mark_prompt_rejected_with_error(&error);
                         (Err(error), None)
                     }
                     Err(_) => {
@@ -1255,7 +1273,7 @@ async fn wait_for_prompt_idle_or_rejected(
                 response = receiver => {
                     response_rx = None;
                     if let Ok(Err(error)) = response {
-                        state.mark_prompt_rejected();
+                        state.mark_prompt_rejected_with_error(&error);
                         return PromptWait::Rejected(error);
                     }
                 }
@@ -2428,6 +2446,93 @@ mod tests {
         state.signal_terminated();
         let _ = tokio::time::timeout(std::time::Duration::from_secs(2), join).await;
         drop(handle);
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_already_processing_rejection_keeps_followup_parked() {
+        use std::process::{Command as StdCommand, Stdio};
+
+        let mut child = StdCommand::new("cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn fake pi");
+        let stdin = Arc::new(Mutex::new(child.stdin.take().expect("fake pi stdin")));
+        let state = PiQueueState::new();
+        let (handle, join) = spawn_queue_with_prompt_start_timeout(
+            stdin,
+            state.clone(),
+            0,
+            std::time::Duration::from_millis(500),
+        );
+
+        let (_, first_reply) = handle
+            .send_prompt(
+                json!({ "type": "prompt", "message": "raced prompt" }),
+                WaitMode::Prompt,
+                "raced prompt".into(),
+                true,
+            )
+            .await
+            .expect("enqueue raced prompt");
+        let first_request_id = wait_for_response_id(&state).await;
+
+        let (_, mut followup_reply) = handle
+            .send_prompt(
+                json!({ "type": "prompt", "message": "must stay parked" }),
+                WaitMode::Prompt,
+                "must stay parked".into(),
+                true,
+            )
+            .await
+            .expect("enqueue follow-up");
+
+        state.signal_response(
+            &first_request_id,
+            Err("Agent is already processing another prompt".to_string()),
+        );
+        assert_eq!(
+            first_reply.await.expect("first reply channel stays open"),
+            Err("Agent is already processing another prompt".to_string())
+        );
+        assert!(
+            state.is_agent_active(),
+            "the rejection proves a real turn still owns the process"
+        );
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(200),
+                &mut followup_reply,
+            )
+            .await
+            .is_err(),
+            "follow-up must remain parked until the real turn ends"
+        );
+
+        state.mark_agent_idle();
+        state.signal_done_if_idle();
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while !state.is_prompt_pending() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("follow-up should be written after the real turn ends");
+        state.mark_agent_active();
+        assert_eq!(
+            followup_reply.await.expect("follow-up reply channel stays open"),
+            Ok(())
+        );
+
+        state.mark_agent_idle();
+        state.signal_done_if_idle();
+        state.signal_terminated();
+        drop(handle);
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), join).await;
         let _ = child.kill();
         let _ = child.wait();
     }
