@@ -564,12 +564,18 @@ jobs:
           # CI runners have AVX2, so without SDE a poisoned build sails through
           # CI and dies on customer machines.
           #
-          # Probe design notes (validated 2026-07-06 on a real Windows machine
-          # against this exact build config — the probe completes in ~2s):
-          # - SDE 9.44.0: 10.8's Pin injector fails on windows-2022 runners
-          #   ("Invalid file name and base dir combination: pincrt4.dll",
-          #   run 28806190901). 9.44.0 is the version google/XNNPACK runs on
-          #   the same runner image.
+          # Probe design notes (original run validated 2026-07-06 on a real
+          # Windows machine against this exact build config — ~2s when healthy):
+          # - SDE 10.8.0 (2026-03-15 kit): Intel removed the 9.44.0 mirror
+          #   (403 as of 2026-07-31, run 30651369680). This is the kit
+          #   google/XNNPACK runs in CI; the 2026-03-15 build's negative
+          #   control was re-verified locally on Windows 11 (stock AVX2
+          #   bun.exe faults instantly under -snb: "vinserti128 ... not valid
+          #   for SANDYBRIDGE"). An earlier 10.8 kit had a broken Pin
+          #   injector on windows-2022 ("Invalid file name and base dir
+          #   combination: pincrt4.dll", run 28806190901) — if that
+          #   resurfaces here, the 8-min hard timeout below fails loud, and
+          #   the fix is a newer kit, not a hang.
           # - 7z two-step extraction: the one method proven to work on the
           #   runner (run 28806190901); a tar -xf variant wedged for 60+ min
           #   without ever reaching the SDE invocation (run 28808593583).
@@ -581,9 +587,10 @@ jobs:
           #   runtime AVX2 gates.
           # - Hard timeout per invocation + step timeout-minutes: a wedged
           #   emulator must fail fast and loud, never eat runner-hours.
-          # If Intel rotates the mirror, grab a fresh URL from
+          # If Intel rotates the mirror again, grab a fresh URL from
           # https://www.intel.com/content/www/us/en/developer/articles/tool/software-development-emulator.html
-          $sdeUrl = 'https://downloadmirror.intel.com/831748/sde-external-9.44.0-2024-08-22-win.tar.xz'
+          # (google/XNNPACK's sde-tests workflow env is another quick source).
+          $sdeUrl = 'https://downloadmirror.intel.com/915934/sde-external-10.8.0-2026-03-15-win.tar.xz'
           Write-Host "=== downloading SDE ==="
           curl.exe -fSL -o sde.tar.xz $sdeUrl
           Write-Host "=== extracting SDE (7z two-step) ==="
