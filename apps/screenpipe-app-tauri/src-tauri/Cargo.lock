@@ -11150,6 +11150,7 @@ dependencies = [
 name = "screenpipe-app"
 version = "2.5.183"
 dependencies = [
+ "accessibility",
  "aes 0.8.4",
  "aes-gcm 0.10.3",
  "agent-client-protocol",

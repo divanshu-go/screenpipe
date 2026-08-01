@@ -143,6 +143,168 @@ fn fresh_process_screen_recording_preflight() -> Result<bool, String> {
     parse_screen_recording_preflight_helper_output(&output.stdout)
 }
 
+#[cfg(target_os = "macos")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SystemSettingsModalState {
+    Visible,
+    NotVisible,
+    Unavailable,
+}
+
+#[cfg(target_os = "macos")]
+fn ax_element_is_modal(element: &::accessibility::AXUIElement) -> bool {
+    use ::accessibility::{AXAttribute, AXUIElementAttributes};
+    use core_foundation::{array::CFArray, boolean::CFBoolean, string::CFString};
+
+    let attribute = |name| AXAttribute::new(&CFString::new(name));
+    let modal = element
+        .attribute(&attribute("AXModal"))
+        .ok()
+        .and_then(|value| value.downcast::<CFBoolean>())
+        .is_some_and(bool::from);
+    let role = element.role().ok().map(|value| value.to_string());
+    let subrole = element.subrole().ok().map(|value| value.to_string());
+    let has_sheet = element
+        .attribute(&attribute("AXSheets"))
+        .ok()
+        .and_then(|value| value.downcast::<CFArray>())
+        .is_some_and(|sheets| !sheets.is_empty());
+
+    modal
+        || role.as_deref() == Some("AXSheet")
+        || matches!(subrole.as_deref(), Some("AXDialog" | "AXSystemDialog"))
+        || has_sheet
+}
+
+#[cfg(target_os = "macos")]
+fn ax_tree_has_modal(
+    element: &::accessibility::AXUIElement,
+    depth_remaining: usize,
+    elements_remaining: &mut usize,
+) -> bool {
+    use ::accessibility::AXUIElementAttributes;
+
+    if *elements_remaining == 0 {
+        return false;
+    }
+    *elements_remaining -= 1;
+
+    if ax_element_is_modal(element) {
+        return true;
+    }
+    if depth_remaining == 0 {
+        return false;
+    }
+
+    element.children().is_ok_and(|children| {
+        children.iter().any(|child| {
+            ax_tree_has_modal(&child, depth_remaining - 1, elements_remaining)
+        })
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn application_has_modal(bundle_identifier: &str) -> Result<Option<bool>, ::accessibility::Error> {
+    use ::accessibility::{AXUIElement, AXUIElementAttributes};
+
+    let application = match AXUIElement::application_with_bundle(bundle_identifier) {
+        Ok(application) => application,
+        Err(::accessibility::Error::NotFound) => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let _ = application.set_messaging_timeout(0.5);
+    if application
+        .focused_window()
+        .is_ok_and(|window| ax_element_is_modal(&window))
+    {
+        return Ok(Some(true));
+    }
+
+    let windows = application.windows()?;
+    let mut elements_remaining = 128;
+    Ok(Some(windows.iter().any(|window| {
+        ax_tree_has_modal(&window, 6, &mut elements_remaining)
+    })))
+}
+
+/// Detect any modal owned by System Settings (or System Preferences on older
+/// macOS), without depending on localized text or which button it contains.
+#[cfg(target_os = "macos")]
+fn system_settings_modal_state() -> SystemSettingsModalState {
+    const SETTINGS_BUNDLE_IDS: &[&str] = &[
+        "com.apple.systempreferences",
+        "com.apple.settings.PrivacySecurity.extension",
+    ];
+
+    let mut found_any = false;
+    let mut queried_any = false;
+    let mut query_failed = false;
+    for bundle_id in SETTINGS_BUNDLE_IDS {
+        match application_has_modal(bundle_id) {
+            Ok(Some(true)) => return SystemSettingsModalState::Visible,
+            Ok(Some(false)) => {
+                found_any = true;
+                queried_any = true;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                found_any = true;
+                query_failed = true;
+                debug!(
+                    "could not inspect System Settings accessibility tree for modal (bundle={bundle_id}, error={error})"
+                );
+            }
+        }
+    }
+
+    if queried_any && !query_failed {
+        SystemSettingsModalState::NotVisible
+    } else if found_any {
+        SystemSettingsModalState::Unavailable
+    } else {
+        SystemSettingsModalState::NotVisible
+    }
+}
+
+#[cfg(target_os = "macos")]
+const SYSTEM_RELAUNCH_GRACE_PERIOD: std::time::Duration = std::time::Duration::from_secs(3);
+
+#[cfg(target_os = "macos")]
+#[derive(Default)]
+struct ScreenRecordingRestartWaitState {
+    modal_seen: bool,
+    modal_closed_at: Option<tokio::time::Instant>,
+}
+
+#[cfg(target_os = "macos")]
+impl ScreenRecordingRestartWaitState {
+    fn should_relaunch(
+        &mut self,
+        permission_needs_restart: bool,
+        modal_state: SystemSettingsModalState,
+        now: tokio::time::Instant,
+    ) -> bool {
+        if !permission_needs_restart {
+            *self = Self::default();
+            return false;
+        }
+
+        match modal_state {
+            SystemSettingsModalState::Visible => {
+                self.modal_seen = true;
+                self.modal_closed_at = None;
+                false
+            }
+            SystemSettingsModalState::NotVisible if self.modal_seen => {
+                let modal_closed_at = *self.modal_closed_at.get_or_insert(now);
+                now.duration_since(modal_closed_at) >= SYSTEM_RELAUNCH_GRACE_PERIOD
+            }
+            SystemSettingsModalState::Unavailable if self.modal_seen => false,
+            SystemSettingsModalState::NotVisible | SystemSettingsModalState::Unavailable => false,
+        }
+    }
+}
+
 /// Runs before Tauri and the single-instance handoff in the helper process.
 /// It must stay limited to a silent preflight: requesting permission here
 /// would allow a background poll to reorder macOS permission prompts.
@@ -156,23 +318,9 @@ pub(crate) fn run_screen_recording_preflight_helper() -> Result<(), String> {
     Ok(())
 }
 
-/// Relaunch after macOS applies a Screen Recording grant to TCC but the
-/// running process still holds the old denied result.
-///
 #[cfg(target_os = "macos")]
-pub(crate) async fn restart_after_screen_recording_grant_if_needed(app: tauri::AppHandle) -> bool {
+async fn relaunch_after_screen_recording_grant(app: tauri::AppHandle) {
     use crate::recording::{bounded_teardown, TeardownOutcome, PRE_EXIT_TEARDOWN_TIMEOUT};
-
-    let state = match tokio::task::spawn_blocking(screen_recording_permission_state).await {
-        Ok(state) => state,
-        Err(error) => {
-            warn!("Screen Recording permission preflight task failed: {error}");
-            return false;
-        }
-    };
-    if !should_restart_after_screen_recording_grant(state) {
-        return false;
-    }
 
     static RESTART_IN_FLIGHT: std::sync::atomic::AtomicBool =
         std::sync::atomic::AtomicBool::new(false);
@@ -181,7 +329,7 @@ pub(crate) async fn restart_after_screen_recording_grant_if_needed(app: tauri::A
         .is_err()
     {
         debug!("screen recording permission relaunch already in flight");
-        return true;
+        return;
     }
 
     info!("Screen Recording permission was granted after process start — relaunching to apply it");
@@ -206,7 +354,6 @@ pub(crate) async fn restart_after_screen_recording_grant_if_needed(app: tauri::A
         "screen recording permission grant",
         std::time::Duration::from_millis(250),
     );
-    true
 }
 
 /// Silently watch for a Screen Recording grant that the running process has
@@ -226,9 +373,62 @@ pub(crate) fn start_screen_recording_permission_restart_monitor(app: tauri::AppH
 
     tauri::async_runtime::spawn(async move {
         let started_at = tokio::time::Instant::now();
+        let mut restart_wait_state = ScreenRecordingRestartWaitState::default();
+        let mut last_modal_state = None;
 
         loop {
-            if restart_after_screen_recording_grant_if_needed(app.clone()).await {
+            let observation = tokio::task::spawn_blocking(|| {
+                let state = screen_recording_permission_state();
+                let modal_state = if should_restart_after_screen_recording_grant(state) {
+                    system_settings_modal_state()
+                } else {
+                    SystemSettingsModalState::NotVisible
+                };
+                (state, modal_state)
+            })
+            .await;
+
+            let (permission_state, modal_state) = match observation {
+                Ok(observation) => observation,
+                Err(error) => {
+                    warn!("Screen Recording permission restart observation failed: {error}");
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    continue;
+                }
+            };
+            let permission_needs_restart =
+                should_restart_after_screen_recording_grant(permission_state);
+
+            if permission_needs_restart && last_modal_state != Some(modal_state) {
+                match modal_state {
+                    SystemSettingsModalState::Visible => {
+                        info!("Screen Recording grant modal appeared in System Settings")
+                    }
+                    SystemSettingsModalState::NotVisible
+                        if last_modal_state == Some(SystemSettingsModalState::Visible) =>
+                    {
+                        info!(
+                            "Screen Recording grant modal closed — waiting for macOS to relaunch the app"
+                        )
+                    }
+                    SystemSettingsModalState::NotVisible => {
+                        debug!("waiting to observe the Screen Recording grant modal")
+                    }
+                    SystemSettingsModalState::Unavailable => warn!(
+                        "cannot inspect the System Settings modal; waiting instead of relaunching"
+                    ),
+                }
+                last_modal_state = Some(modal_state);
+            } else if !permission_needs_restart {
+                last_modal_state = None;
+            }
+
+            if restart_wait_state.should_relaunch(
+                permission_needs_restart,
+                modal_state,
+                tokio::time::Instant::now(),
+            ) {
+                relaunch_after_screen_recording_grant(app.clone()).await;
                 return;
             }
 
@@ -1562,6 +1762,87 @@ mod screen_recording_state_tests {
         assert!(!should_restart_after_screen_recording_grant(
             ScreenRecordingPermissionState::RevokedButCached
         ));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn waits_for_system_settings_modal_to_close_before_relaunching() {
+        let started_at = tokio::time::Instant::now();
+        let mut state = ScreenRecordingRestartWaitState::default();
+
+        assert!(!state.should_relaunch(
+            true,
+            SystemSettingsModalState::NotVisible,
+            started_at,
+        ));
+        assert!(!state.should_relaunch(
+            true,
+            SystemSettingsModalState::Visible,
+            started_at + std::time::Duration::from_secs(1),
+        ));
+        let closed_at = started_at + std::time::Duration::from_secs(2);
+        assert!(!state.should_relaunch(
+            true,
+            SystemSettingsModalState::NotVisible,
+            closed_at,
+        ));
+        assert!(!state.should_relaunch(
+            true,
+            SystemSettingsModalState::NotVisible,
+            closed_at + SYSTEM_RELAUNCH_GRACE_PERIOD - std::time::Duration::from_millis(1),
+        ));
+        assert!(state.should_relaunch(
+            true,
+            SystemSettingsModalState::NotVisible,
+            closed_at + SYSTEM_RELAUNCH_GRACE_PERIOD,
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn never_relaunches_before_observing_the_system_settings_modal() {
+        let started_at = tokio::time::Instant::now();
+        let mut state = ScreenRecordingRestartWaitState::default();
+
+        assert!(!state.should_relaunch(
+            true,
+            SystemSettingsModalState::Unavailable,
+            started_at,
+        ));
+        assert!(!state.should_relaunch(
+            true,
+            SystemSettingsModalState::Unavailable,
+            started_at + std::time::Duration::from_secs(60),
+        ));
+        assert!(!state.should_relaunch(
+            true,
+            SystemSettingsModalState::NotVisible,
+            started_at + std::time::Duration::from_secs(120),
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn does_not_treat_an_ax_failure_as_modal_dismissal() {
+        let started_at = tokio::time::Instant::now();
+        let mut state = ScreenRecordingRestartWaitState::default();
+
+        assert!(!state.should_relaunch(
+            true,
+            SystemSettingsModalState::Visible,
+            started_at,
+        ));
+        assert!(!state.should_relaunch(
+            true,
+            SystemSettingsModalState::Unavailable,
+            started_at + SYSTEM_RELAUNCH_GRACE_PERIOD,
+        ));
+        assert!(!state.should_relaunch(
+            false,
+            SystemSettingsModalState::NotVisible,
+            started_at + SYSTEM_RELAUNCH_GRACE_PERIOD,
+        ));
+        assert!(!state.modal_seen);
     }
 
     #[test]
