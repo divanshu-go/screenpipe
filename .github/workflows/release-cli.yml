@@ -594,17 +594,18 @@ jobs:
           path: screenpipe-*.zip
 
   # Non-AVX2 launch + ONNX-init smoke against the exact deployment package,
-  # under Intel SDE -snb (Sandy Bridge: AVX but NO AVX2 — the pre-Haswell /
-  # Atom-line customer class from #3125). CI runners have AVX2, so without
-  # SDE an AVX2-poisoned build sails through CI and dies with 0xC000001D on
-  # customer machines — this job is the permanent regression guard, and
-  # `release`/`publish-npm` require it.
+  # under Intel SDE -wsm (Westmere: SSE4.2, NO AVX, no AVX2 — the customer
+  # CPU class from #3125: Celeron N5095 / Jasper Lake has no AVX, and the
+  # original report's QEMU `-cpu qemu64` is baseline SSE2). CI runners have
+  # AVX2, so without SDE an AVX-poisoned build sails through CI and dies with
+  # 0xC000001D on customer machines — this job is the permanent regression
+  # guard, and `release`/`publish-npm` require it.
   #
   # Separate job from build-windows on purpose: SDE's Pin injector is broken
   # on windows-2022 runners ("Invalid file name and base dir combination:
   # pincrt4.dll" — runs 28806190901 and 30653241813, both SDE 10.8 kits).
   # windows-latest (Server 2025) is the image google/XNNPACK runs the same
-  # kit + -snb probes on. The build stays on windows-2022 for toolchain
+  # kit + SDE probes on. The build stays on windows-2022 for toolchain
   # stability; this job only downloads and runs its artifacts.
   smoke-windows:
     name: Non-AVX2 smoke (Intel SDE)
@@ -632,13 +633,28 @@ jobs:
         #   ("Injection failed with code ffffffff" — 10.8 on windows-2022 +
         #   windows-latest regardless of extraction/invocation, lab run
         #   30658575297; 10.5 + 10.7 likewise, lab run 30659124066). 9.58
-        #   launched this exact package green under -snb in the same lab
+        #   launched this exact package green under SDE in the same lab
         #   run. 10.8 DOES work on real Windows 11 — for local repro any
         #   recent kit is fine.
-        # - -snb ONLY. Pre-AVX chips (-nhm/-mrm) are a false-negative trap:
-        #   modern hosts' system DLLs execute AVX, so emulating pre-AVX
-        #   faults in the OS, not our code. The no-AVX floor is covered by
-        #   baseline codegen + the runtime AVX2 gates.
+        # - -wsm (Westmere: SSE4.2, NO AVX, no AVX2), NOT -snb. This is the
+        #   single most important knob here and it was wrong before.
+        #   Sandy Bridge HAS AVX, and /arch:AVX2 codegen emits VEX-encoded
+        #   AVX instructions that run happily there — measured on a real
+        #   Windows guest: the pre-fix build ran `record` for 420s under
+        #   SandyBridge but died in 1.4s under Westmere with
+        #   "Exception code: 0xc000001d" in the Application event log,
+        #   faulting module screenpipe.exe. The affected customer CPUs have
+        #   no AVX at all (Celeron N5095 = Jasper Lake/Tremont; the original
+        #   report's QEMU `-cpu qemu64` is baseline SSE2), so an -snb probe
+        #   passes builds that crash in the field. Verified both ways with
+        #   the packaged exes: under -wsm the pre-fix build faults on
+        #   `vpxor xmm0, xmm0, xmm0` inside screenpipe.exe, the fixed build
+        #   prints its version. AVX2 ⊂ AVX, so -wsm covers the AVX2 case too.
+        # - -chip_check_exe_only makes pre-AVX emulation usable: it scopes the
+        #   chip check to the main image, so the host's own system DLLs (which
+        #   execute AVX regardless of the emulated chip) can't produce false
+        #   failures. That trap is why the original probe avoided pre-AVX
+        #   targets; the flag removes it. Negative controls still fire.
         # - -chip_check_exe_only (same conclusion google/XNNPACK reached):
         #   MS runtime DLLs (VCRUNTIME140 etc.) dispatch via OS feature
         #   checks SDE cannot spoof, so on an AVX-512 HOST the bundled
@@ -652,7 +668,7 @@ jobs:
         #   CPUID for every DLL (onnxruntime's MLAS keys off in-process
         #   CPUID, which SDE does spoof). Negative control re-verified WITH
         #   the flag: stock AVX2 bun.exe still faults (vinserti128, main
-        #   image) under -snb -chip_check_exe_only.
+        #   image) under -wsm -chip_check_exe_only.
         # - Hard timeout per invocation + job timeout: a wedged emulator must
         #   fail fast and loud, never eat runner-hours.
         # - Intel rotates mirrors (9.44.0's died 2026-07-31, run 30651369680).
@@ -689,17 +705,17 @@ jobs:
           # Probe 1: the packaged CLI launches without AVX2 — catches the
           # 0xC000001D static-init crash class (global /arch:AVX2 CFLAGS,
           # AVX2 static onnxruntime, eager ggml init...).
-          Write-Host "=== SDE -snb — screenpipe.exe --version (8 min timeout; ~2s native) ==="
-          $p = Start-Process -FilePath $sde -ArgumentList @('-snb','-chip_check_exe_only','--',$exe,'--version') `
+          Write-Host "=== SDE -wsm — screenpipe.exe --version (8 min timeout; ~2s native) ==="
+          $p = Start-Process -FilePath $sde -ArgumentList @('-wsm','-chip_check_exe_only','--',$exe,'--version') `
             -NoNewWindow -PassThru -RedirectStandardOutput sde-out.txt -RedirectStandardError sde-err.txt
           if (-not $p.WaitForExit(480000)) {
             taskkill /PID $($p.Id) /T /F | Out-Null
             Get-Content sde-out.txt, sde-err.txt -ErrorAction SilentlyContinue
-            throw "SDE -snb launch probe timed out after 8 minutes — emulator wedged or a startup-path hang on non-AVX2 CPUs"
+            throw "SDE -wsm launch probe timed out after 8 minutes — emulator wedged or a startup-path hang on pre-AVX CPUs"
           }
           Get-Content sde-out.txt, sde-err.txt -ErrorAction SilentlyContinue
-          if ($p.ExitCode -ne 0) { throw "screenpipe.exe faulted under SDE -snb (exit $($p.ExitCode)) — a non-AVX2 CPU cannot launch this build" }
-          Write-Host "=== SDE -snb launch probe passed ==="
+          if ($p.ExitCode -ne 0) { throw "screenpipe.exe faulted under SDE -wsm (exit $($p.ExitCode)) — a pre-AVX/non-AVX2 CPU cannot launch this build" }
+          Write-Host "=== SDE -wsm launch probe passed ==="
 
           # Probe 2: ONNX Runtime (the shipped MS DirectML DLL) actually
           # INITIALIZES without AVX2 — MLAS runtime CPUID dispatch must pick
@@ -707,18 +723,18 @@ jobs:
           # created on the audio boot path), so this is the probe that
           # directly covers the pyke-AVX2-static-lib crash class for
           # VAD/diarization/PII.
-          Write-Host "=== SDE -snb — ort-smoke (8 min timeout; probe deadline 420s) ==="
+          Write-Host "=== SDE -wsm — ort-smoke (8 min timeout; probe deadline 420s) ==="
           $env:ORT_SMOKE_DEADLINE_SECS = "420"
-          $p2 = Start-Process -FilePath $sde -ArgumentList @('-snb','-chip_check_exe_only','--',(Resolve-Path "smoke-probes/ort-smoke.exe").Path) `
+          $p2 = Start-Process -FilePath $sde -ArgumentList @('-wsm','-chip_check_exe_only','--',(Resolve-Path "smoke-probes/ort-smoke.exe").Path) `
             -NoNewWindow -PassThru -RedirectStandardOutput ort-sde-out.txt -RedirectStandardError ort-sde-err.txt
           if (-not $p2.WaitForExit(480000)) {
             taskkill /PID $($p2.Id) /T /F | Out-Null
             Get-Content ort-sde-out.txt, ort-sde-err.txt -ErrorAction SilentlyContinue
-            throw "ort-smoke timed out under SDE -snb after 8 minutes — emulator wedged or ONNX init hangs on non-AVX2 CPUs"
+            throw "ort-smoke timed out under SDE -wsm after 8 minutes — emulator wedged or ONNX init hangs on non-AVX2 CPUs"
           }
           Get-Content ort-sde-out.txt, ort-sde-err.txt -ErrorAction SilentlyContinue
-          if ($p2.ExitCode -ne 0) { throw "ONNX Runtime failed to initialize under SDE -snb (exit $($p2.ExitCode)) — the shipped DLL cannot init on non-AVX2 CPUs" }
-          Write-Host "=== SDE -snb ort probe passed: ONNX Runtime initializes without AVX2 ==="
+          if ($p2.ExitCode -ne 0) { throw "ONNX Runtime failed to initialize under SDE -wsm (exit $($p2.ExitCode)) — the shipped DLL cannot init on pre-AVX CPUs" }
+          Write-Host "=== SDE -wsm ort probe passed: ONNX Runtime initializes without AVX ==="
 
   build-linux:
     needs: check_commit
