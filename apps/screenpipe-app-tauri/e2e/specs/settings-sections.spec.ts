@@ -386,8 +386,14 @@ describe('Settings sections', () => {
     expect(existsSync(filepath)).toBe(true);
   });
 
-  it('Permissions section mounts and shows macOS permission recovery content', async function () {
+  it('Permissions is macOS-only: absent from nav elsewhere, recovery content on macOS', async function () {
     const navPermissions = await $('[data-testid="settings-nav-permissions"]');
+
+    if (process.platform !== 'darwin') {
+      expect(await navPermissions.isExisting()).toBe(false);
+      return;
+    }
+
     await navPermissions.waitForExist({ timeout: 8_000 });
     await navPermissions.click();
 
@@ -398,21 +404,19 @@ describe('Settings sections', () => {
     const body = (await browser.execute(() => document.body.innerText.toLowerCase())) as string;
     expect(body).not.toContain('unhandled runtime error');
     expect(body).not.toContain('application error');
+    expect(body).not.toContain('not applicable');
 
     const hasPermissionsContent =
       body.includes('permission') ||
       body.includes('screen recording') ||
       body.includes('microphone') ||
-      body.includes('accessibility') ||
-      body.includes('not applicable');
+      body.includes('accessibility');
     expect(hasPermissionsContent).toBe(true);
 
-    // On macOS the required rows should mount; elsewhere the stub is enough.
     const required = await $('[data-testid="permissions-required"]');
-    if (await required.isExisting()) {
-      const accessibilityRow = await $('[data-testid="permission-row-accessibility"]');
-      await accessibilityRow.waitForExist({ timeout: 5_000 });
-    }
+    await required.waitForExist({ timeout: 5_000 });
+    const accessibilityRow = await $('[data-testid="permission-row-accessibility"]');
+    await accessibilityRow.waitForExist({ timeout: 5_000 });
 
     const filepath = await saveScreenshot('settings-permissions');
     expect(existsSync(filepath)).toBe(true);

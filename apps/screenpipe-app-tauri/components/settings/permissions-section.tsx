@@ -374,6 +374,12 @@ function CalendarPermissionRow() {
 export function PermissionsSection() {
   const { isMac, isLoading } = usePlatform();
 
+  // Defensive: settings nav/search already hide this on non-mac. Render nothing
+  // if something still mounts the section off-platform.
+  if (!isLoading && !isMac) {
+    return null;
+  }
+
   if (isLoading) {
     return (
       <div
@@ -384,20 +390,6 @@ export function PermissionsSection() {
           <Loader2 className="h-4 w-4 animate-spin" />
           Checking platform…
         </div>
-      </div>
-    );
-  }
-
-  if (!isMac) {
-    return (
-      <div
-        className="space-y-5"
-        data-testid="section-settings-permissions"
-      >
-        <p className="text-sm text-muted-foreground">
-          macOS privacy permissions (Screen Recording, Microphone, Accessibility)
-          are managed here. This section is not applicable on your platform.
-        </p>
       </div>
     );
   }

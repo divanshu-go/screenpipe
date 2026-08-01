@@ -139,13 +139,11 @@ describe("PermissionsSection", () => {
     });
   });
 
-  it("shows a non-mac stub instead of permission rows", async () => {
+  it("renders nothing on non-mac platforms", () => {
     platformMock.isMac = false;
-    render(<PermissionsSection />);
-
-    expect(
-      await screen.findByText(/not applicable on your platform/i),
-    ).toBeInTheDocument();
+    const { container } = render(<PermissionsSection />);
+    expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByTestId("section-settings-permissions")).not.toBeInTheDocument();
     expect(screen.queryByTestId("permissions-required")).not.toBeInTheDocument();
   });
 });

@@ -65,7 +65,7 @@
     {
       "id": "settings-permissions",
       "label": "Permissions settings recovery UX",
-      "platforms": ["windows", "macos", "linux"],
+      "platforms": ["macos"],
       "layers": ["settings"]
     },
     {
@@ -746,7 +746,7 @@
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "Settings sections, AI preset/preferences split and toggle flows, default-off low-disk capture stop with persistent notification, storage, privacy, permissions recovery hub, and rapid switching crash guard."
+      "notes": "Settings sections, AI preset/preferences split and toggle flows, default-off low-disk capture stop with persistent notification, storage, privacy, macOS-only permissions recovery hub (asserted absent on Windows/Linux), and rapid switching crash guard."
     },
     {
       "spec": "spotlight-exclusion.spec.ts",

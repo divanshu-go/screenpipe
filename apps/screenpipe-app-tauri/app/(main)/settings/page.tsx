@@ -83,6 +83,7 @@ const ALL_SETTINGS_FIELDS: IndexedSettingsField[] = [
   ...referralSearchIndex.map((f) => ({ ...f, section: "referral" })),
 ];
 import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
+import { usePlatform } from "@/lib/hooks/use-platform";
 import posthog from "posthog-js";
 
 type SettingsSection =
@@ -118,13 +119,19 @@ function SettingsContent() {
   const fromSection = searchParams.get("from");
   const { isSectionHidden, isManagedDeployment } = useManagedPolicy();
   const { isTranslucent } = useSidebarContext();
+  const { isMac, isLoading: isPlatformLoading } = usePlatform();
+  // macOS TCC recovery only. Non-mac must not see the nav item, search hits,
+  // or deep-link content. System Settings permissions are not a Windows/Linux surface.
+  const showPermissions = isMac;
 
   // `ai-settings` shares the legacy `ai` policy key so existing managed
   // deployments that hide AI continue to hide both destinations.
   const isSettingsSectionHidden = useCallback(
-    (sectionId: SettingsSection) =>
-      isSectionHidden(sectionId === "ai-settings" ? "ai" : sectionId),
-    [isSectionHidden],
+    (sectionId: SettingsSection) => {
+      if (sectionId === "permissions" && !showPermissions) return true;
+      return isSectionHidden(sectionId === "ai-settings" ? "ai" : sectionId);
+    },
+    [isSectionHidden, showPermissions],
   );
 
   const [section, setSection] = useQueryState<SettingsSection>("section", {
@@ -139,13 +146,14 @@ function SettingsContent() {
     if (raw === "connections") router.replace("/?section=connections");
   }, [router]);
 
-  // Enterprise guard: if the active section is hidden by policy, redirect to the
-  // first visible section. Prevents direct-URL bypass of enterprise restrictions.
+  // Enterprise + platform guard: if the active section is hidden by policy or
+  // unavailable on this OS, redirect to the first visible section.
   useEffect(() => {
+    if (isPlatformLoading) return;
     if (!isSettingsSectionHidden(section)) return;
     const fallback = ALL_SETTINGS_SECTIONS.find((s) => !isSettingsSectionHidden(s)) ?? "display";
     setSection(fallback as SettingsSection);
-  }, [section, isSettingsSectionHidden, setSection]);
+  }, [section, isSettingsSectionHidden, isPlatformLoading, setSection]);
 
   const navGroups = [
     {
@@ -160,7 +168,9 @@ function SettingsContent() {
       label: "Privacy & security",
       items: [
         { id: "privacy" as const, label: "Privacy", icon: <Shield className="h-4 w-4" /> },
-        { id: "permissions" as const, label: "Permissions", icon: <KeyRound className="h-4 w-4" /> },
+        ...(showPermissions
+          ? [{ id: "permissions" as const, label: "Permissions", icon: <KeyRound className="h-4 w-4" /> }]
+          : []),
       ].filter((s) => !isSectionHidden(s.id)),
     },
     {
@@ -219,7 +229,10 @@ function SettingsContent() {
   const flatItems = navGroups.flatMap((g) =>
     g.items.map((it) => ({ ...it, group: g.label })),
   );
-  const results = searchSettingsNav(searchQuery, flatItems, ALL_SETTINGS_FIELDS);
+  const searchableFields = showPermissions
+    ? ALL_SETTINGS_FIELDS
+    : ALL_SETTINGS_FIELDS.filter((f) => f.section !== "permissions");
+  const results = searchSettingsNav(searchQuery, flatItems, searchableFields);
 
   useEffect(() => {
     posthog.capture("settings_viewed", { initial_section: section });
@@ -306,7 +319,7 @@ function SettingsContent() {
       case "recording":     return <RecordingSettings />;
       case "shortcuts":     return <ShortcutSection />;
       case "privacy":       return <PrivacySection />;
-      case "permissions":   return <PermissionsSection />;
+      case "permissions":   return showPermissions ? <PermissionsSection /> : null;
       case "storage":       return <StorageSection />;
       case "team":          return <TeamSection />;
       case "notifications": return <NotificationsSettings />;
