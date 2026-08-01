@@ -2368,7 +2368,7 @@ fn seed_from_global(global: &Path, dest: &Path, data_dir: &Path) -> bool {
 }
 
 /// A pi credential in the tagged form pi >=0.83 requires.
-fn api_key_credential(key: &str) -> serde_json::Value {
+pub fn api_key_credential(key: &str) -> serde_json::Value {
     json!({ "type": "api_key", "key": key })
 }
 
@@ -2406,7 +2406,11 @@ fn upgrade_legacy_pi_credential(value: &serde_json::Value) -> Option<serde_json:
 
 /// Upgrade every legacy entry in an `auth.json` value. Returns whether
 /// anything changed.
-fn upgrade_legacy_pi_credentials(auth: &mut serde_json::Value) -> bool {
+///
+/// Public because the Tauri app has its own `auth.json` writer for the chat
+/// sidecar — both must emit the tagged shape or pi 0.83 rejects the whole
+/// provider.
+pub fn upgrade_legacy_pi_credentials(auth: &mut serde_json::Value) -> bool {
     let Some(obj) = auth.as_object_mut() else {
         return false;
     };
