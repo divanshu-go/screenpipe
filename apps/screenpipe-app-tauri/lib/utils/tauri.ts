@@ -2945,6 +2945,11 @@ apiKey: string | null;
  */
 maxTokens?: number;
 /**
+ * Approximate input context size in characters. Pi model metadata uses
+ * tokens, so Screenpipe converts this value using four characters/token.
+ */
+maxContextChars?: number | null;
+/**
  * Optional system prompt from AI preset (appended to Pi's built-in system prompt)
  */
 systemPrompt?: string | null }
