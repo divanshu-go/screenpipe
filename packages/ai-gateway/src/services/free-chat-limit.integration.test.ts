@@ -281,6 +281,41 @@ describe('usage reservations against workerd D1', () => {
 		)).allowed).toBe(true);
 	});
 
+	it('uses the inserted row instead of ambiguous write metadata to prove admission', async () => {
+		const realDb = env.DB;
+		const dbWithAmbiguousWriteMetadata = {
+			prepare(sql: string) {
+				const statement = realDb.prepare(sql);
+				if (!sql.includes('INSERT OR IGNORE INTO usage')) return statement;
+				return {
+					bind(...values: unknown[]) {
+						const bound = statement.bind(...values);
+						return {
+							first: <T>() => bound.first<T>(),
+							// Reproduce the production symptom: a successful write path whose
+							// metadata cannot be used as the admission source of truth.
+							run: async () => ({ success: true, meta: { changes: 0 }, results: [] }),
+						};
+					},
+				};
+			},
+		} as unknown as D1Database;
+		const result = await reserveDailyCostCap(
+			{ ...env, DB: dbWithAmbiguousWriteMetadata },
+			'user-d1-returning-proof',
+			'subscribed',
+			'gpt-5.6-sol',
+			new Date('2026-07-14T12:00:00.000Z'),
+		);
+
+		expect(result.allowed).toBe(true);
+		if (!result.allowed || !result.reservation) throw new Error('expected reservation');
+		const stored = await realDb.prepare(
+			'SELECT device_id FROM usage WHERE device_id = ?',
+		).bind(result.reservation.key).first<{ device_id: string }>();
+		expect(stored?.device_id).toBe(result.reservation.key);
+	});
+
 	it('stops stale disconnects from occupying capacity while retaining their spend holds', async () => {
 		const start = new Date('2026-07-14T12:00:00.000Z');
 		const controls = loadHostedAiReservationControls(env);

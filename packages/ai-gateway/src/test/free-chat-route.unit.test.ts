@@ -38,9 +38,11 @@ describe('/v1/chat/completions free-plan route policy', () => {
 			}),
 		},
 		DB: {
-			prepare: () => ({
-				bind: () => ({
-					first: async () => null,
+			prepare: (sql: string) => ({
+				bind: (...values: unknown[]) => ({
+					first: async () => sql.includes('INSERT OR IGNORE INTO usage')
+						? { reservation_key: values[0] }
+						: null,
 					run: async () => ({ success: true, meta: { changes: 1 } }),
 				}),
 			}),

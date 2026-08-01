@@ -318,7 +318,9 @@ export async function reserveDailyCostCap(
 
 		// D1/SQLite serializes this write. Every concurrent request observes the
 		// previously committed holds, so global and account caps cannot race open.
-		const claimed = changed(await env.DB.prepare(`
+		// RETURNING is the admission proof; D1 write metadata can report an
+		// ambiguous change count even when the row was inserted.
+		const claimed = await env.DB.prepare(`
 			INSERT OR IGNORE INTO usage
 				(device_id, user_id, daily_count, last_reset, tier, updated_at)
 			SELECT ?, ?, ?, ?, ?, ?
@@ -387,6 +389,7 @@ export async function reserveDailyCostCap(
 						AND device_id LIKE ?
 				), 0) + ? <= ?
 			)
+			RETURNING device_id AS reservation_key
 		`).bind(
 			key,
 			deviceId,
@@ -437,9 +440,9 @@ export async function reserveDailyCostCap(
 			backgroundPrefix,
 			reservedMicroUsd,
 			backgroundBudgetMicroUsd,
-		).run());
+		).first<{ reservation_key: string }>();
 
-		if (claimed) {
+		if (claimed?.reservation_key === key) {
 			return {
 				allowed: true,
 				reservation: {

@@ -502,6 +502,11 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				freeModel: isFreeModel(body.model),
 			});
 			if (!rateLimit.allowed && rateLimit.response) {
+				console.warn('hosted AI admission rejected', {
+					gate: 'per_minute',
+					tier: authResult.tier,
+					accountPlan: authResult.accountPlan,
+				});
 				return rateLimit.response;
 			}
 
@@ -509,6 +514,11 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			const ipAddress = request.headers.get('cf-connecting-ip') || undefined;
 			const usage = await trackUsage(env, authResult.deviceId, usageTier, authResult.userId, ipAddress, body.model);
 			if (!usage.allowed) {
+				console.warn('hosted AI admission rejected', {
+					gate: 'daily_query',
+					tier: authResult.tier,
+					accountPlan: authResult.accountPlan,
+				});
 				const creditsExhausted = (usage.creditsRemaining ?? 0) <= 0;
 				return addCorsHeaders(createErrorResponse(429, JSON.stringify({
 					error: creditsExhausted ? 'credits_exhausted' : 'daily_limit_exceeded',
@@ -561,6 +571,13 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				authResult.hostedAiTrial === true,
 			);
 			if (!costReservation.allowed) {
+				console.warn('hosted AI admission rejected', {
+					gate: 'cost_reservation',
+					tier: authResult.tier,
+					accountPlan: authResult.accountPlan,
+					hostedAiTrial: authResult.hostedAiTrial === true,
+					status: costReservation.response.status,
+				});
 				if (freeChatLease) await releaseFreeChatLease(env, freeChatLease);
 				return costReservation.response;
 			}
