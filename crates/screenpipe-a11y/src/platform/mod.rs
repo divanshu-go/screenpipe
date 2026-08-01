@@ -18,7 +18,8 @@ pub mod linux;
 // Re-export platform-specific types with common names
 #[cfg(target_os = "macos")]
 pub use macos::{
-    check_input_monitoring, request_input_monitoring, PermissionStatus, RecordingHandle, UiRecorder,
+    check_input_monitoring, enroll_input_monitoring, prompt_input_monitoring,
+    request_input_monitoring, PermissionStatus, RecordingHandle, UiRecorder,
 };
 
 #[cfg(target_os = "windows")]
@@ -33,6 +34,12 @@ pub use linux::{PermissionStatus, RecordingHandle, UiRecorder};
 // permission as always granted.
 #[cfg(not(target_os = "macos"))]
 pub fn check_input_monitoring() -> bool {
+    true
+}
+#[cfg(not(target_os = "macos"))]
+pub fn enroll_input_monitoring() {}
+#[cfg(not(target_os = "macos"))]
+pub fn prompt_input_monitoring() -> bool {
     true
 }
 #[cfg(not(target_os = "macos"))]

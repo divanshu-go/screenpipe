@@ -76,7 +76,8 @@ pub use events::{
     WindowTreeSnapshot,
 };
 pub use platform::{
-    check_input_monitoring, request_input_monitoring, PermissionStatus, RecordingHandle, UiRecorder,
+    check_input_monitoring, enroll_input_monitoring, prompt_input_monitoring,
+    request_input_monitoring, PermissionStatus, RecordingHandle, UiRecorder,
 };
 
 /// Prelude for convenient imports

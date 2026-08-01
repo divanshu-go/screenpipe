@@ -357,27 +357,60 @@ pub fn check_input_monitoring() -> bool {
                 return true;
             }
             // Earlier tap succeeded, but TCC now denies (revoke/reset).
-            INPUT_MONITORING_GROUND_TRUTH.store(0, Ordering::SeqCst);
+            // Clear to unknown so a later System Settings toggle can recover
+            // via preflight without requiring a process relaunch.
+            INPUT_MONITORING_GROUND_TRUTH.store(-1, Ordering::SeqCst);
             return false;
         }
-        0 => return false,
+        0 => {
+            // Known denied from a failed real tap — still allow recovery when
+            // the user re-grants in System Settings (same cold-start preflight
+            // ghost-record risk as an unset cache).
+            if preflight {
+                INPUT_MONITORING_GROUND_TRUTH.store(-1, Ordering::SeqCst);
+                return true;
+            }
+            return false;
+        }
         _ => {}
     }
     preflight
 }
 
-/// Request Input Monitoring and enroll this process in the TCC list.
+/// Ensure this process appears under System Settings → Input Monitoring.
 ///
-/// Calls `CGRequestListenEventAccess`, then a short-lived `LISTEN_ONLY` tap
-/// create (never enabled / never on a run loop) so System Settings shows a row.
-pub fn request_input_monitoring() -> bool {
-    let _ = cg_access::listen_request();
+/// Creates a disposable LISTEN_ONLY tap (never enabled / never on a run loop)
+/// so tccd lists the app. Does not show the consent prompt.
+pub fn enroll_input_monitoring() {
     enroll_listen_event_via_tap();
+}
+
+/// Request Input Monitoring consent and enroll this process in the TCC list.
+///
+/// Enrolls first (list row), then calls `CGRequestListenEventAccess`. Prefer
+/// [`enroll_input_monitoring`] + open Settings + this prompt path when the
+/// host wants the OS prompt layered above System Settings.
+pub fn request_input_monitoring() -> bool {
+    enroll_listen_event_via_tap();
+    let _ = cg_access::listen_request();
+    check_input_monitoring()
+}
+
+/// Show the Input Monitoring consent prompt without opening System Settings.
+///
+/// Call after [`enroll_input_monitoring`] and after activating the Privacy
+/// pane so the prompt lands on top of Settings.
+pub fn prompt_input_monitoring() -> bool {
+    let _ = cg_access::listen_request();
     check_input_monitoring()
 }
 
 /// Create a disposable LISTEN_ONLY HID tap so tccd lists this app under
 /// Input Monitoring. Create + invalidate only; do not enable or attach.
+///
+/// Does not write `INPUT_MONITORING_GROUND_TRUTH` — that cache stays owned by
+/// real capture taps (KeyCastr ghost-keystroke rule). Status after enroll
+/// comes from preflight / a later real tap.
 fn enroll_listen_event_via_tap() {
     use std::ffi::c_void;
 
@@ -428,13 +461,12 @@ fn enroll_listen_event_via_tap() {
             std::ptr::null_mut(),
         );
         if tap.is_null() {
-            // Denied, but create still enrolls a list row. Do not cache denial.
+            // Denied, but create still enrolls a list row.
             return;
         }
         CGEventTapEnable(tap, false);
         CFMachPortInvalidate(tap);
         CFRelease(tap as *const c_void);
-        record_input_monitoring_truth(true);
     }
 }
 

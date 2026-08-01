@@ -501,15 +501,11 @@ async function preparePermissionForDrag(
     const result = await commands.resetPermission(permission);
     if (result.status === "error") {
       state.preparedPermissions.delete(permission);
-    } else {
-      // tccutil wipe removes the app from the System Settings list. Re-request
-      // so TCC recreates a row (denied until the user toggles or finishes drag).
-      try {
-        await commands.requestPermission(permission);
-      } catch {
-        // Enrollment is best-effort; drag / Settings still work as fallback.
-      }
     }
+    // Do NOT call requestPermission here. Reset intentionally leaves the TCC
+    // list empty so drag-to-grant can add the app. Re-enrolling a denied row
+    // makes macOS reject the drop as a duplicate and also opens competing
+    // Settings/prompt UI before the drag panel.
   } catch {
     // Let a later click retry when tccutil itself failed to run.
     state.preparedPermissions.delete(permission);
@@ -586,6 +582,9 @@ export async function requestPermissionWithFlow(
   try {
     const flow = await getOrCreateFlow();
     await preparePermissionForDrag(permission, dragPermission);
+    // Prepare can race a user toggle / modal grant. Skip the drag UI if we
+    // are already authorized so we never open a redundant stuck panel.
+    if (await finishIfAlreadyGranted(permission, dragPermission)) return;
     // Start watching BEFORE the drag panel opens so a manual toggle in
     // system settings is detected while startFlow is still awaiting.
     watchUntilGrantedAndClose(permission, dragPermission);
@@ -603,11 +602,7 @@ export async function requestPermissionWithFlow(
     if (!state.flow && !state.activeWatch) return;
     // startFlow resolved — do an immediate grant check for the "already in
     // list, re-enabled via drag" case.
-    const postDragState = await authorizationState(dragPermission);
-    if (postDragState === PermissionAuthorizationState.Granted) {
-      await stopActiveFlow();
-      await reclaimScreenpipeWindow();
-    }
+    if (await finishIfAlreadyGranted(permission, dragPermission)) return;
     // Not yet granted — watcher keeps polling.
   } catch (error) {
     console.error("permission-flow failed, falling back:", error);
@@ -631,6 +626,7 @@ export async function openPermissionSettingsWithFlow(
   try {
     const flow = await getOrCreateFlow();
     await preparePermissionForDrag(permission, dragPermission);
+    if (await finishIfAlreadyGranted(permission, dragPermission)) return;
     watchUntilGrantedAndClose(permission, dragPermission);
     try {
       await flow.startFlow({
@@ -640,14 +636,23 @@ export async function openPermissionSettingsWithFlow(
       });
     } catch {}
     if (!state.flow && !state.activeWatch) return;
-    const postDragState = await authorizationState(dragPermission);
-    if (postDragState === PermissionAuthorizationState.Granted) {
-      await stopActiveFlow();
-      await reclaimScreenpipeWindow();
-    }
+    if (await finishIfAlreadyGranted(permission, dragPermission)) return;
   } catch (error) {
     console.error("permission-flow settings open failed, falling back:", error);
     await stopActiveFlow();
     await openNativePermissionSettings(permission);
   }
+}
+
+/** Close the flow when authorization is already granted. */
+async function finishIfAlreadyGranted(
+  permission: PermissionFlowPermission,
+  dragPermission: Permission,
+): Promise<boolean> {
+  const authState = await authorizationState(dragPermission).catch(() => null);
+  if (authState !== PermissionAuthorizationState.Granted) return false;
+  state.preparedPermissions.delete(permission);
+  await stopActiveFlow();
+  await reclaimScreenpipeWindow();
+  return true;
 }

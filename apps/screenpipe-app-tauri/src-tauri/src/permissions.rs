@@ -113,9 +113,8 @@ pub async fn request_permission(app: tauri::AppHandle, permission: OSPermission)
                 open_permission_settings(OSPermission::Automation);
             }
             OSPermission::InputMonitoring => {
-                // Defer to the dedicated request flow (opens Settings + calls
-                // CGRequestListenEventAccess). No probe tap is created — the
-                // check reads from INPUT_MONITORING_GROUND_TRUTH or preflight.
+                // Defer to the dedicated request flow (enroll list row, open
+                // Settings, then CGRequestListenEventAccess for the prompt).
                 let _ = request_input_monitoring_permission().await;
             }
             OSPermission::Calendar => {
@@ -462,14 +461,9 @@ pub fn check_input_monitoring_permission_cmd() -> OSPermissionStatus {
 
 /// Request Input Monitoring permission (macOS only).
 ///
-/// Calls `cg_access::listen_request()` to trigger the system permission
-/// flow. On first call this either shows the native prompt (if NotDetermined)
-/// or silently no-ops (if already Denied — macOS doesn't re-prompt). For
-/// reliability we also open System Settings → Input Monitoring so the user
-/// can grant manually if the prompt didn't appear.
-///
-/// Returns the post-request permission status so the UI can update without
-/// waiting for the next poll.
+/// Enrolls a TCC list row, opens System Settings → Input Monitoring, then
+/// calls `CGRequestListenEventAccess` so the consent prompt layers on top of
+/// Settings. Returns the post-request status for an immediate UI update.
 #[tauri::command(async)]
 #[specta::specta]
 pub async fn request_input_monitoring_permission() -> OSPermissionStatus {
@@ -479,12 +473,14 @@ pub async fn request_input_monitoring_permission() -> OSPermissionStatus {
         if screenpipe_a11y::check_input_monitoring() {
             return OSPermissionStatus::Granted;
         }
-        // Enroll first so System Settings shows a row, then open the pane.
-        let granted = screenpipe_a11y::request_input_monitoring();
+        // Enroll a TCC list row first, open Settings, then prompt so the
+        // consent dialog layers on top of the Privacy pane (same pattern as
+        // Screen Recording: settings visible before the modal).
+        screenpipe_a11y::enroll_input_monitoring();
         let _ = Command::new("open")
             .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")
             .spawn();
-        if granted {
+        if screenpipe_a11y::prompt_input_monitoring() {
             OSPermissionStatus::Granted
         } else {
             OSPermissionStatus::Denied
