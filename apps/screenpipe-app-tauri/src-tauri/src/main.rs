@@ -334,15 +334,6 @@ async fn main() {
         std::process::exit(exit_code);
     }
 
-    #[cfg(target_os = "macos")]
-    if std::env::args().any(|arg| arg == permissions::SCREEN_RECORDING_PREFLIGHT_HELPER_ARG) {
-        if let Err(error) = permissions::run_screen_recording_preflight_helper() {
-            eprintln!("screen recording preflight helper failed: {error}");
-            std::process::exit(1);
-        }
-        return;
-    }
-
     #[cfg(target_os = "linux")]
     linux_webkit_env::configure();
 

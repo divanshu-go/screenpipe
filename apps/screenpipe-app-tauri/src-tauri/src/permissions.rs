@@ -9,10 +9,6 @@ use specta::Type;
 use std::sync::atomic::Ordering;
 use tracing::{debug, error, info, warn};
 
-#[cfg(target_os = "macos")]
-pub(crate) const SCREEN_RECORDING_PREFLIGHT_HELPER_ARG: &str =
-    "--screen-recording-preflight-helper";
-
 #[derive(Serialize, Deserialize, Type, Clone)]
 #[serde(rename_all = "camelCase")]
 pub enum OSPermission {
@@ -58,21 +54,17 @@ fn should_restart_after_screen_recording_grant(state: ScreenRecordingPermissionS
 /// Returns the current process's Screen Recording permission state.
 ///
 /// `CGPreflightScreenCaptureAccess` can return the result cached by SkyLight
-/// when this process requested permission. TCC's own preflight can also keep
-/// returning that process's old answer, so the live half of this check runs in
-/// a short-lived invocation of this same executable. A disagreement identifies
-/// a grant or revocation that happened after the running process cached its
-/// result.
+/// when this process requested permission. Calling TCC's preflight function
+/// directly bypasses that SkyLight cache, so a disagreement identifies a grant
+/// or revocation that happened after the cached result was recorded.
 #[cfg(target_os = "macos")]
 pub fn screen_recording_permission_state() -> ScreenRecordingPermissionState {
     use core_graphics_helmer_fork::access::ScreenCaptureAccess;
 
     let cached_preflight = ScreenCaptureAccess.preflight();
-    let live_preflight = fresh_process_screen_recording_preflight().unwrap_or_else(|error| {
-        warn!(
-            "fresh-process Screen Recording preflight failed ({error}); falling back to the current process"
-        );
-        direct_tcc_screen_recording_preflight().unwrap_or(cached_preflight)
+    let live_preflight = direct_tcc_screen_recording_preflight().unwrap_or_else(|error| {
+        warn!("direct Screen Recording TCC preflight failed ({error}); using cached preflight");
+        cached_preflight
     });
 
     screen_recording_permission_state_from_checks(cached_preflight, live_preflight)
@@ -111,36 +103,6 @@ fn direct_tcc_screen_recording_preflight() -> Result<bool, String> {
         libc::dlclose(handle);
         Ok(result == TCC_PREFLIGHT_GRANTED)
     }
-}
-
-#[cfg(target_os = "macos")]
-fn parse_screen_recording_preflight_helper_output(output: &[u8]) -> Result<bool, String> {
-    match std::str::from_utf8(output).map(str::trim) {
-        Ok("granted") => Ok(true),
-        Ok("not_granted") => Ok(false),
-        Ok(other) => Err(format!("unexpected helper output: {other:?}")),
-        Err(error) => Err(format!("helper output was not UTF-8: {error}")),
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn fresh_process_screen_recording_preflight() -> Result<bool, String> {
-    let executable = std::env::current_exe()
-        .map_err(|error| format!("failed to resolve current executable: {error}"))?;
-    let output = std::process::Command::new(executable)
-        .arg(SCREEN_RECORDING_PREFLIGHT_HELPER_ARG)
-        .output()
-        .map_err(|error| format!("failed to start preflight helper: {error}"))?;
-
-    if !output.status.success() {
-        return Err(format!(
-            "preflight helper exited with {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-
-    parse_screen_recording_preflight_helper_output(&output.stdout)
 }
 
 #[cfg(target_os = "macos")]
@@ -305,19 +267,6 @@ impl ScreenRecordingRestartWaitState {
     }
 }
 
-/// Runs before Tauri and the single-instance handoff in the helper process.
-/// It must stay limited to a silent preflight: requesting permission here
-/// would allow a background poll to reorder macOS permission prompts.
-#[cfg(target_os = "macos")]
-pub(crate) fn run_screen_recording_preflight_helper() -> Result<(), String> {
-    if direct_tcc_screen_recording_preflight()? {
-        println!("granted");
-    } else {
-        println!("not_granted");
-    }
-    Ok(())
-}
-
 #[cfg(target_os = "macos")]
 async fn relaunch_after_screen_recording_grant(app: tauri::AppHandle) {
     use crate::recording::{bounded_teardown, TeardownOutcome, PRE_EXIT_TEARDOWN_TIMEOUT};
@@ -433,8 +382,8 @@ pub(crate) fn start_screen_recording_permission_restart_monitor(app: tauri::AppH
             }
 
             // Keep the common onboarding path responsive. If the user leaves
-            // Settings open or cancels, back off rather than spawning a helper
-            // every second forever; a later grant is still detected.
+            // Settings open or cancels, back off rather than polling every
+            // second forever; a later grant is still detected.
             let delay = if started_at.elapsed() < std::time::Duration::from_secs(10 * 60) {
                 std::time::Duration::from_secs(1)
             } else {
@@ -1716,20 +1665,6 @@ mod screen_recording_state_tests {
     #[test]
     fn reads_the_current_process_tcc_preflight() {
         assert!(direct_tcc_screen_recording_preflight().is_ok());
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn parses_fresh_process_preflight_output_strictly() {
-        assert_eq!(
-            parse_screen_recording_preflight_helper_output(b"granted\n"),
-            Ok(true)
-        );
-        assert_eq!(
-            parse_screen_recording_preflight_helper_output(b"not_granted\n"),
-            Ok(false)
-        );
-        assert!(parse_screen_recording_preflight_helper_output(b"granted later").is_err());
     }
 
     #[test]
