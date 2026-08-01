@@ -20,6 +20,7 @@ import {
   Gift,
   ChevronLeft,
   SlidersHorizontal,
+  KeyRound,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import * as PopoverPrimitive from "@radix-ui/react-popover";
@@ -35,6 +36,7 @@ import GeneralSettings, { searchIndex as generalSearchIndex } from "@/components
 import { TeamSection, searchIndex as teamSearchIndex } from "@/components/settings/team-section";
 import { DisplaySection, searchIndex as displaySearchIndex } from "@/components/settings/display-section";
 import { PrivacySection, searchIndex as privacySearchIndex } from "@/components/settings/privacy-section";
+import { PermissionsSection, searchIndex as permissionsSearchIndex } from "@/components/settings/permissions-section";
 import { StorageSection, searchIndex as storageSearchIndex } from "@/components/settings/storage-section";
 import { NotificationsSettings, searchIndex as notificationsSearchIndex } from "@/components/settings/notifications-settings";
 import { UsageSection, searchIndex as usageSearchIndex } from "@/components/settings/usage-section";
@@ -73,6 +75,7 @@ const ALL_SETTINGS_FIELDS: IndexedSettingsField[] = [
   ...notificationsSearchIndex.map((f) => ({ ...f, section: "notifications" })),
   ...usageSearchIndex.map((f) => ({ ...f, section: "usage" })),
   ...privacySearchIndex.map((f) => ({ ...f, section: "privacy" })),
+  ...permissionsSearchIndex.map((f) => ({ ...f, section: "permissions" })),
   ...storageSearchIndex.map((f) => ({ ...f, section: "storage" })),
   ...speakersSearchIndex.map((f) => ({ ...f, section: "speakers" })),
   ...teamSearchIndex.map((f) => ({ ...f, section: "team" })),
@@ -91,6 +94,7 @@ type SettingsSection =
   | "display"
   | "shortcuts"
   | "privacy"
+  | "permissions"
   | "storage"
   | "team"
   | "notifications"
@@ -100,7 +104,7 @@ type SettingsSection =
 
 const ALL_SETTINGS_SECTIONS: SettingsSection[] = [
   "display", "general", "ai", "ai-settings", "recording", "shortcuts", "notifications",
-  "usage", "privacy", "storage", "speakers",
+  "usage", "privacy", "permissions", "storage", "speakers",
   "team", "account", "referral",
 ];
 
@@ -156,6 +160,7 @@ function SettingsContent() {
       label: "Privacy & security",
       items: [
         { id: "privacy" as const, label: "Privacy", icon: <Shield className="h-4 w-4" /> },
+        { id: "permissions" as const, label: "Permissions", icon: <KeyRound className="h-4 w-4" /> },
       ].filter((s) => !isSectionHidden(s.id)),
     },
     {
@@ -301,6 +306,7 @@ function SettingsContent() {
       case "recording":     return <RecordingSettings />;
       case "shortcuts":     return <ShortcutSection />;
       case "privacy":       return <PrivacySection />;
+      case "permissions":   return <PermissionsSection />;
       case "storage":       return <StorageSection />;
       case "team":          return <TeamSection />;
       case "notifications": return <NotificationsSettings />;
