@@ -6,9 +6,9 @@ and layer declared in the manifest, weighted by confidence and criticality.
 
 - Manifest: `e2e/coverage-map.json`
 - Specs directory: `e2e/specs`
-- Mapped specs: 85
-- Declared test blocks: 244
-- Weighted coverage points: 186.7
+- Mapped specs: 86
+- Declared test blocks: 245
+- Weighted coverage points: 187.7
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -20,7 +20,7 @@ can execute more runtime cases than this number shows.
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
 | windows | 69 | 218 | 175.2 | 15 | 72 | 90% |
-| macos | 81 | 207 | 157.5 | 17 | 74 | 88% |
+| macos | 82 | 208 | 158.5 | 17 | 74 | 88% |
 | linux | 59 | 178 | 145.0 | 13 | 67 | 87% |
 
 ## Runtime Results
@@ -37,7 +37,7 @@ pass/fail/skip counts.
 | auth | - | 1 specs / 1 tests / 1.0 pts | - |
 | billing | 4 specs / 6 tests / 5.7 pts | 4 specs / 6 tests / 5.7 pts | 4 specs / 6 tests / 5.7 pts |
 | capture-ocr | 2 specs / 16 tests / 6.4 pts | 5 specs / 7 tests / 2.8 pts | 1 specs / 3 tests / 1.2 pts |
-| chat-ai | 22 specs / 35 tests / 26.1 pts | 28 specs / 47 tests / 30.7 pts | 21 specs / 34 tests / 25.6 pts |
+| chat-ai | 22 specs / 35 tests / 26.1 pts | 29 specs / 48 tests / 31.7 pts | 21 specs / 34 tests / 25.6 pts |
 | entitlement | - | 1 specs / 1 tests / 1.0 pts | - |
 | local-api | 17 specs / 99 tests / 81.8 pts | 18 specs / 74 tests / 62.8 pts | 13 specs / 70 tests / 61.2 pts |
 | notifications | 3 specs / 24 tests / 15.3 pts | 2 specs / 4 tests / 2.4 pts | 1 specs / 3 tests / 2.1 pts |
@@ -45,10 +45,10 @@ pass/fail/skip counts.
 | os-integration | 5 specs / 17 tests / 16.1 pts | 7 specs / 7 tests / 3.7 pts | - |
 | performance | 2 specs / 44 tests / 44.0 pts | 4 specs / 34 tests / 30.5 pts | 1 specs / 29 tests / 29.0 pts |
 | pipes | 5 specs / 15 tests / 15.0 pts | 5 specs / 15 tests / 15.0 pts | 5 specs / 15 tests / 15.0 pts |
-| real-ui-e2e | 47 specs / 136 tests / 109.0 pts | 50 specs / 123 tests / 99.1 pts | 43 specs / 114 tests / 95.4 pts |
+| real-ui-e2e | 47 specs / 136 tests / 109.0 pts | 51 specs / 124 tests / 100.1 pts | 43 specs / 114 tests / 95.4 pts |
 | settings | 14 specs / 36 tests / 33.0 pts | 16 specs / 31 tests / 26.7 pts | 13 specs / 28 tests / 25.0 pts |
 | storage-privacy | 8 specs / 36 tests / 27.3 pts | 7 specs / 17 tests / 16.1 pts | 5 specs / 15 tests / 14.1 pts |
-| tauri-command | 10 specs / 19 tests / 12.3 pts | 11 specs / 21 tests / 12.8 pts | 9 specs / 18 tests / 11.3 pts |
+| tauri-command | 10 specs / 19 tests / 12.3 pts | 12 specs / 22 tests / 13.8 pts | 9 specs / 18 tests / 11.3 pts |
 | window-lifecycle | 18 specs / 62 tests / 52.6 pts | 18 specs / 43 tests / 31.0 pts | 13 specs / 38 tests / 29.5 pts |
 
 ## Critical Feature Matrix
@@ -110,6 +110,7 @@ pass/fail/skip counts.
 | chat-automation-card-duplicate.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat, chat-sidebar-dedupe | medium | partial | real-user-flow | 1 | Home automation card clicks must create exactly one persisted conversation per card, guarding the #4719 duplicate-row path. |
 | chat-composer-isolation.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat, chat-drafts | medium | partial | mixed | 1 | Composer draft isolation across conversations. |
 | chat-connections-context-duplicate.spec.ts | windows, macos | chat-ai | chat, chat-sidebar-dedupe | medium | partial | synthetic | 1 | QUARANTINED (#4689): connections-context wrapper stripping regression. The synthetic background-router event path never persists deterministically on Linux/macOS CI; re-enable once it drives a deterministic persisted session. |
+| chat-cost-limit-upgrade.spec.ts | macos | chat-ai, real-ui-e2e, tauri-command | chat | high | strong | real-user-flow | 1 | A local provider returns the gateway's structured daily-cost rejection for a Basic account; the request crosses the real Pi and foreground-event path, then the UI shows account-budget copy and a Business action without depending on the separate query counter. |
 | chat-cross-window-transcript-sync.spec.ts | windows, macos, linux | chat-ai, window-lifecycle, real-ui-e2e | chat, chat-streaming, window-lifecycle | high | strong | mixed | 1 | Both Home and standalone Chat show persistent pending feedback, then hydrate a completed disk transcript and clear stop state from the real cross-window save event without calling a provider. |
 | chat-empty-space.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat | medium | strong | real-user-flow | 1 | A real Tauri chat session keeps a short answer at the top of the message rail without exposing a false new-content state. |
 | chat-hosted-retry-feedback.spec.ts | macos | chat-ai, real-ui-e2e, tauri-command | chat, chat-streaming | high | strong | real-user-flow | 1 | A local provider returns priced_request_in_flight twice; Pi retries while the UI remains active, a real composer follow-up enters the Rust queue, and both turns recover without the misleading mid-response error. |
