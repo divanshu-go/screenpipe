@@ -501,6 +501,14 @@ async function preparePermissionForDrag(
     const result = await commands.resetPermission(permission);
     if (result.status === "error") {
       state.preparedPermissions.delete(permission);
+    } else {
+      // tccutil wipe removes the app from the System Settings list. Re-request
+      // so TCC recreates a row (denied until the user toggles or finishes drag).
+      try {
+        await commands.requestPermission(permission);
+      } catch {
+        // Enrollment is best-effort; drag / Settings still work as fallback.
+      }
     }
   } catch {
     // Let a later click retry when tccutil itself failed to run.

@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
     return undefined;
   }),
   resetPermission: vi.fn(async () => ({ status: "ok" as const, data: null })),
+  requestPermission: vi.fn(async () => undefined),
   setWindowAlwaysOnTopNative: vi.fn(async () => ({
     status: "ok" as const,
     data: null,
@@ -47,7 +48,7 @@ vi.mock("@/lib/utils/tauri", () => ({
   commands: {
     resetPermission: mocks.resetPermission,
     setWindowAlwaysOnTopNative: mocks.setWindowAlwaysOnTopNative,
-    requestPermission: vi.fn(async () => undefined),
+    requestPermission: mocks.requestPermission,
     openPermissionSettings: vi.fn(async () => undefined),
     calendarAuthorize: vi.fn(async () => ({
       status: "ok" as const,
@@ -71,6 +72,8 @@ describe("permission flow TCC preparation", () => {
 
     expect(mocks.resetPermission).toHaveBeenCalledTimes(1);
     expect(mocks.resetPermission).toHaveBeenCalledWith("accessibility");
+    // After tccutil wipe, re-request so the app reappears in System Settings.
+    expect(mocks.requestPermission).toHaveBeenCalledWith("accessibility");
     expect(
       mocks.invoke.mock.calls.filter(([command]) =>
         String(command).endsWith("|start_flow"),
