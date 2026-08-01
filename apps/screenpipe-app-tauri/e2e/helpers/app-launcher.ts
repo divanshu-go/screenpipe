@@ -7,6 +7,7 @@ import { homedir } from 'node:os';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { removeSpotlightExclusion } from './spotlight.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -85,6 +86,9 @@ const APP_PID_FILE = resolve(E2E_DATA_DIR, 'app.pid');
 // opt-in capture-loop liveness spec; the first visual-change probe hangs far
 // past VISUAL_PROBE_TIMEOUT so the spec can assert the loop stays live
 // (attempts keep advancing, /health stays "ok") instead of freezing.
+// `recording-health-return-race` enables alerts for an accelerated app-level
+// replay of 114 idle stale ticks followed by user input and immediate capture
+// recovery. It verifies the return input cannot itself raise the failure pill.
 // `hd-writer-stall-once` is a debug-only macOS fault injection used by the HD
 // duration spec; the writer pauses once so artifact time can be checked against
 // wall time after a missed timer window.
@@ -184,6 +188,7 @@ export async function startApp(port = WEBDRIVER_PORT): Promise<ReturnType<typeof
 
   rmSync(E2E_DATA_DIR, { recursive: true, force: true });
   mkdirSync(E2E_DATA_DIR, { recursive: true });
+  removeSpotlightExclusion(E2E_DATA_DIR);
 
   appProcess = spawn(appPath, [], {
     env: {
@@ -229,5 +234,10 @@ export function stopApp(): void {
     unlinkSync(APP_PID_FILE);
   } catch {
     // already gone
+  }
+  try {
+    removeSpotlightExclusion(E2E_DATA_DIR);
+  } catch (error) {
+    console.warn('[e2e] failed to clean up Spotlight exclusion:', error);
   }
 }

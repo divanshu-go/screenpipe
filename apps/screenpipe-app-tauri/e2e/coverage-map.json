@@ -39,6 +39,12 @@
       "layers": ["local-api"]
     },
     {
+      "id": "database-hard-fault-containment",
+      "label": "Database hard-fault fail-closed containment",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["local-api", "tauri-command"]
+    },
+    {
       "id": "settings-recording",
       "label": "Recording settings UX",
       "platforms": ["windows", "macos", "linux"],
@@ -117,6 +123,12 @@
       "layers": ["storage-privacy"]
     },
     {
+      "id": "spotlight-exclusion",
+      "label": "Screenpipe data stays out of macOS Spotlight",
+      "platforms": ["macos"],
+      "layers": ["storage-privacy", "os-integration"]
+    },
+    {
       "id": "updates",
       "label": "Updater install and rollback safety",
       "platforms": ["windows", "macos", "linux"],
@@ -130,16 +142,6 @@
     }
   ],
   "specs": [
-    {
-      "spec": "acp-text-streaming.spec.ts",
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["chat-ai", "tauri-command"],
-      "features": ["chat", "acp-runtime", "acp-text-streaming"],
-      "criticality": "high",
-      "confidence": "strong",
-      "ux": "command",
-      "notes": "A deterministic ACP adapter runs through the packaged Rust desktop runtime and proves ordered assistant text streaming from pi_start through agent_end."
-    },
     {
       "spec": "api.spec.ts",
       "platforms": ["windows", "macos", "linux"],
@@ -228,7 +230,7 @@
       "criticality": "medium",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "A real Tauri chat session keeps a short answer near the composer without exposing a false new-content state or a large empty viewport gap."
+      "notes": "A real Tauri chat session keeps a short answer at the top of the message rail without exposing a false new-content state."
     },
     {
       "spec": "chat-ask-user-tool-card.spec.ts",
@@ -471,6 +473,16 @@
       "notes": "A local provider returns priced_request_in_flight twice; Pi retries while the UI remains active, a real composer follow-up enters the Rust queue, and both turns recover without the misleading mid-response error."
     },
     {
+      "spec": "chat-cost-limit-upgrade.spec.ts",
+      "platforms": ["macos"],
+      "layers": ["chat-ai", "real-ui-e2e", "tauri-command"],
+      "features": ["chat"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "A local provider returns the gateway's structured daily-cost rejection for a Basic account; the request crosses the real Pi and foreground-event path, then the UI shows account-budget copy and a Business action without depending on the separate query counter."
+    },
+    {
       "spec": "chat-source-file-preview.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["chat-ai", "real-ui-e2e"],
@@ -671,6 +683,16 @@
       "notes": "Opt-in macOS fault injection wedges a visual-change probe; asserts the bounded probe keeps the capture loop and its /health heartbeat live (no false stale/incident)."
     },
     {
+      "spec": "recording-health-return-race.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["tauri-command", "os-integration", "real-ui-e2e"],
+      "features": ["app-launch", "recording-health-alerts"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "command",
+      "notes": "Accelerated app-level replay of the idle-to-attended stale race verifies that return input does not raise the recording-health failure overlay before capture recovery can be observed."
+    },
+    {
       "spec": "pipes.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["pipes", "real-ui-e2e", "local-api"],
@@ -719,6 +741,16 @@
       "confidence": "strong",
       "ux": "real-user-flow",
       "notes": "Settings sections, AI preset/preferences split and toggle flows, default-off low-disk capture stop with persistent notification, storage, privacy, and rapid switching crash guard."
+    },
+    {
+      "spec": "spotlight-exclusion.spec.ts",
+      "platforms": ["macos"],
+      "layers": ["storage-privacy", "os-integration"],
+      "features": ["spotlight-exclusion"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "mixed",
+      "notes": "Requires the launched app's exact E2E data directory to appear in Spotlight Search Privacy, then force-imports paired excluded/control canaries and proves only the control becomes searchable."
     },
     {
       "spec": "meeting-apps-picker.spec.ts",
@@ -985,6 +1017,16 @@
       "confidence": "partial",
       "ux": "synthetic",
       "notes": "Verifies keyword search request fires before secondary search, facet, and speaker requests."
+    },
+    {
+      "spec": "db-hard-fault-fail-closed.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["local-api", "tauri-command", "real-ui-e2e"],
+      "features": ["database-hard-fault-containment", "app-launch"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "mixed",
+      "notes": "Opt-in packaged-desktop regression: causes real SQLITE_CORRUPT in the isolated E2E database, then proves the engine API and database owners stop while the desktop stays alive and does not respawn across the watchdog window."
     }
   ]
 }
