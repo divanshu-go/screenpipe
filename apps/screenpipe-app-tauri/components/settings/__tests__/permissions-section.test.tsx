@@ -19,6 +19,7 @@ const commandMocks = vi.hoisted(() => ({
 
 const flowMocks = vi.hoisted(() => ({
   requestPermissionWithFlow: vi.fn(),
+  openPermissionSettingsWithFlow: vi.fn(),
 }));
 
 const platformMock = vi.hoisted(() => ({
@@ -58,6 +59,7 @@ describe("PermissionsSection", () => {
       },
     });
     flowMocks.requestPermissionWithFlow.mockResolvedValue(undefined);
+    flowMocks.openPermissionSettingsWithFlow.mockResolvedValue(undefined);
     commandMocks.openPermissionSettings.mockResolvedValue(undefined);
   });
 
@@ -101,11 +103,11 @@ describe("PermissionsSection", () => {
     fireEvent.click(manage);
 
     await waitFor(() => {
-      expect(commandMocks.openPermissionSettings).toHaveBeenCalledWith("microphone");
+      expect(flowMocks.openPermissionSettingsWithFlow).toHaveBeenCalledWith("microphone");
     });
   });
 
-  it("opens Accessibility System Settings from Manage (not the grant drag flow)", async () => {
+  it("opens Accessibility System Settings from Manage via the permission flow", async () => {
     commandMocks.doPermissionsCheck.mockResolvedValue({
       screenRecording: "granted",
       microphone: "granted",
@@ -119,7 +121,7 @@ describe("PermissionsSection", () => {
     fireEvent.click(manage);
 
     await waitFor(() => {
-      expect(commandMocks.openPermissionSettings).toHaveBeenCalledWith("accessibility");
+      expect(flowMocks.openPermissionSettingsWithFlow).toHaveBeenCalledWith("accessibility");
     });
   });
 

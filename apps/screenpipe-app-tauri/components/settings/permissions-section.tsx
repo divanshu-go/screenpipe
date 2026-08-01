@@ -15,18 +15,12 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { commands, type OSPermission, type OSPermissionStatus } from "@/lib/utils/tauri";
 import {
+  openPermissionSettingsWithFlow,
   requestPermissionWithFlow,
 } from "@/lib/utils/permission-flow";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { useInputMonitoringPermission } from "@/components/settings/hooks/use-input-monitoring-permission";
 import type { SettingsField } from "./settings-search";
-
-/** Open the matching System Settings pane (Manage/revoke path only).
- * Do NOT use permission-flow here: that drag panel is for granting, and when
- * the permission is already granted it often never opens Settings. */
-async function openSystemSettings(permission: OSPermission) {
-  await commands.openPermissionSettings(permission);
-}
 
 /** Settings search index for this section. Co-located with the component. */
 export const searchIndex: SettingsField[] = [
@@ -201,8 +195,9 @@ function RequiredPermissions() {
       if (mode === "request") {
         await requestPermissionWithFlow(permission);
       } else {
-        // Manage = revoke path: System Settings only (not the grant drag flow).
-        await openSystemSettings(permission);
+        // Same path as onboarding/recovery: drops always-on-top so System
+        // Settings can come forward instead of opening behind screenpipe.
+        await openPermissionSettingsWithFlow(permission);
       }
       await refresh();
     } finally {
@@ -295,7 +290,7 @@ function InputMonitoringPermissionRow() {
       onEnable={() => void enable()}
       onManage={() => {
         setManaging(true);
-        void openSystemSettings("inputMonitoring").finally(() =>
+        void openPermissionSettingsWithFlow("inputMonitoring").finally(() =>
           setManaging(false),
         );
       }}
@@ -350,7 +345,7 @@ function CalendarPermissionRow() {
       if (mode === "request") {
         await requestPermissionWithFlow("calendar");
       } else {
-        await openSystemSettings("calendar");
+        await openPermissionSettingsWithFlow("calendar");
       }
       await refresh();
     } finally {
