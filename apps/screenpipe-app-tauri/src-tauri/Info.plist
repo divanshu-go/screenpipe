@@ -4,6 +4,8 @@
 <dict>
     <key>NSMicrophoneUsageDescription</key>
     <string>This app requires microphone access to record audio.</string>
+    <key>NSAccessibilityUsageDescription</key>
+    <string>screenpipe needs Accessibility to read app and window context, meeting controls, and on-screen UI text for local AI context. Your data stays on-device.</string>
     <key>NSScreenCaptureUsageDescription</key>
     <string>This app requires screen capture access to record the screen.</string>
     <key>CGRequestScreenCaptureAccess</key>

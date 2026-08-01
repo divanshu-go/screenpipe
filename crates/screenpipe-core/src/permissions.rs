@@ -285,21 +285,14 @@ pub fn check_accessibility() -> PermissionStatus {
 
 /// Live accessibility check for the onboarding/settings poll loop.
 ///
-/// `AXIsProcessTrusted()` caches its answer in-process (macOS 13+), so a grant
-/// made while the app is running keeps reading as denied until relaunch. The
-/// event-tap probe asks tccd at call time and catches that transition;
-/// `AXIsProcessTrusted()` stays as the cheap first-line check and covers the
-/// probe's own false negatives (LSBackgroundOnly helpers, dev-build signature
-/// churn).
+/// `AXIsProcessTrusted()` caches mid-session. The event-tap probe asks tccd
+/// now and is the live signal for grant and revoke.
 ///
-/// NOT side-effect-free: creating an active event tap while denied enrolls the
-/// app in the Accessibility pane and can surface the system prompt. Only call
-/// this from a context where the user is actively being asked for the
-/// permission (the onboarding/settings grant flow) — never from a passive
-/// launch-time gate.
+/// NOT side-effect-free: an active tap while denied can enroll/prompt. Only
+/// call while the user is actively granting, never from a launch-time gate.
 #[cfg(target_os = "macos")]
 pub fn check_accessibility_live() -> PermissionStatus {
-    if check_accessibility().is_granted() || macos_accessibility::event_tap_probe() {
+    if macos_accessibility::event_tap_probe() {
         PermissionStatus::Granted
     } else {
         PermissionStatus::Denied

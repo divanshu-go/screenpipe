@@ -346,32 +346,128 @@ impl UiRecorder {
 ///
 /// Resolution order:
 ///   1. If a real capture tap has already run this process, return its cached
-///      ground truth — it cannot be fooled by stale ("ghost") TCC records and
-///      costs nothing. This is the common case while recording is active.
-///   2. Otherwise fall back to `CGPreflightListenEventAccess`. It can
-///      false-positive on ghost TCC records, but it never creates a tap and
-///      therefore never emits phantom keystrokes. The first real tap creation
-///      corrects the cache immediately afterwards.
+///      ground truth. A cached grant is re-checked against preflight so a
+///      mid-session revoke is not stuck showing granted until relaunch.
+///   2. Otherwise fall back to `CGPreflightListenEventAccess`.
 pub fn check_input_monitoring() -> bool {
+    let preflight = cg_access::listen_preflight();
     match INPUT_MONITORING_GROUND_TRUTH.load(Ordering::SeqCst) {
-        1 => return true,
-        0 => return false,
+        1 => {
+            if preflight {
+                return true;
+            }
+            // Earlier tap succeeded, but TCC now denies (revoke/reset).
+            // Clear to unknown so a later System Settings toggle can recover
+            // via preflight without requiring a process relaunch.
+            INPUT_MONITORING_GROUND_TRUTH.store(-1, Ordering::SeqCst);
+            return false;
+        }
+        0 => {
+            // Known denied from a failed real tap — still allow recovery when
+            // the user re-grants in System Settings (same cold-start preflight
+            // ghost-record risk as an unset cache).
+            if preflight {
+                INPUT_MONITORING_GROUND_TRUTH.store(-1, Ordering::SeqCst);
+                return true;
+            }
+            return false;
+        }
         _ => {}
     }
-    cg_access::listen_preflight()
+    preflight
 }
 
-/// Trigger the macOS Input Monitoring permission flow for the current
-/// process. Returns the resulting grant status. First call shows the
-/// native prompt (and registers the process in System Settings →
-/// Privacy & Security → Input Monitoring); subsequent calls return the
-/// current status without re-prompting.
+/// Ensure this process appears under System Settings → Input Monitoring.
 ///
-/// Like `check_input_monitoring`, this no longer creates a probe tap — it
-/// requests via the OS API and then reports the cached/preflight status.
+/// Creates a disposable LISTEN_ONLY tap (never enabled / never on a run loop)
+/// so tccd lists the app. Does not show the consent prompt.
+pub fn enroll_input_monitoring() {
+    enroll_listen_event_via_tap();
+}
+
+/// Request Input Monitoring consent and enroll this process in the TCC list.
+///
+/// Enrolls first (list row), then calls `CGRequestListenEventAccess`. Prefer
+/// [`enroll_input_monitoring`] + open Settings + this prompt path when the
+/// host wants the OS prompt layered above System Settings.
 pub fn request_input_monitoring() -> bool {
-    let requested = cg_access::listen_request();
-    requested && check_input_monitoring()
+    enroll_listen_event_via_tap();
+    let _ = cg_access::listen_request();
+    check_input_monitoring()
+}
+
+/// Show the Input Monitoring consent prompt without opening System Settings.
+///
+/// Call after [`enroll_input_monitoring`] and after activating the Privacy
+/// pane so the prompt lands on top of Settings.
+pub fn prompt_input_monitoring() -> bool {
+    let _ = cg_access::listen_request();
+    check_input_monitoring()
+}
+
+/// Create a disposable LISTEN_ONLY HID tap so tccd lists this app under
+/// Input Monitoring. Create + invalidate only; do not enable or attach.
+///
+/// Does not write `INPUT_MONITORING_GROUND_TRUTH` — that cache stays owned by
+/// real capture taps (KeyCastr ghost-keystroke rule). Status after enroll
+/// comes from preflight / a later real tap.
+fn enroll_listen_event_via_tap() {
+    use std::ffi::c_void;
+
+    type CGEventTapProxy = *mut c_void;
+    type CGEventRef = *mut c_void;
+    type CFMachPortRef = *mut c_void;
+
+    extern "C" fn noop_callback(
+        _proxy: CGEventTapProxy,
+        _event_type: u32,
+        event: CGEventRef,
+        _user_info: *mut c_void,
+    ) -> CGEventRef {
+        event
+    }
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGEventTapCreate(
+            tap: u32,
+            place: u32,
+            options: u32,
+            events_of_interest: u64,
+            callback: extern "C" fn(CGEventTapProxy, u32, CGEventRef, *mut c_void) -> CGEventRef,
+            user_info: *mut c_void,
+        ) -> CFMachPortRef;
+        fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CFRelease(cf: *const c_void);
+        fn CFMachPortInvalidate(port: CFMachPortRef);
+    }
+
+    const K_CG_HID_EVENT_TAP: u32 = 0;
+    const K_CG_HEAD_INSERT_EVENT_TAP: u32 = 0;
+    const K_CG_EVENT_TAP_OPTION_LISTEN_ONLY: u32 = 1;
+    const K_CG_EVENT_KEY_DOWN: u64 = 10;
+
+    unsafe {
+        let tap = CGEventTapCreate(
+            K_CG_HID_EVENT_TAP,
+            K_CG_HEAD_INSERT_EVENT_TAP,
+            K_CG_EVENT_TAP_OPTION_LISTEN_ONLY,
+            1u64 << K_CG_EVENT_KEY_DOWN,
+            noop_callback,
+            std::ptr::null_mut(),
+        );
+        if tap.is_null() {
+            // Denied, but create still enrolls a list row.
+            return;
+        }
+        CGEventTapEnable(tap, false);
+        CFMachPortInvalidate(tap);
+        CFRelease(tap as *const c_void);
+    }
 }
 
 // ============================================================================
