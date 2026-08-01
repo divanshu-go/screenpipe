@@ -1175,7 +1175,21 @@ impl SCServer {
             } else {
                 pipe_routes
             };
-            router.nest("/pipes", pipe_routes)
+            let router = router.nest("/pipes", pipe_routes);
+
+            // Plain chat, no pipe: served locally using the user's own AI preset
+            // so clients can stream without going through the hosted gateway.
+            router.merge(
+                Router::new()
+                    .route(
+                        // /v1/chat/completions is already taken by the cloud proxy.
+                        // Mounted under /v1/local so an OpenAI SDK reaches it by
+                        // setting base_url to http://<host>:3030/v1/local.
+                        "/v1/local/chat/completions",
+                        axum::routing::post(crate::local_chat::local_chat_completions),
+                    )
+                    .with_state(pm.clone()),
+            )
         } else {
             router
         };
