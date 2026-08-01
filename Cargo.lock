@@ -8755,6 +8755,7 @@ dependencies = [
  "reqwest 0.13.3",
  "screenpipe-resource",
  "screenpipe-rfdetr-mlx",
+ "screenpipe-sqlite-coordinator",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -8877,6 +8878,7 @@ name = "screenpipe-sqlite-coordinator"
 version = "0.4.34"
 dependencies = [
  "libsqlite3-sys",
+ "sqlx",
  "tempfile",
  "tokio",
  "tracing",

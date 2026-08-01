@@ -1082,6 +1082,9 @@ pub enum AIProviderType {
     Pi,
     #[serde(rename = "anthropic")]
     Anthropic,
+    /// External Agent Client Protocol adapter, launched via the ACP runtime.
+    #[serde(rename = "acp")]
+    Acp,
 }
 
 #[derive(Serialize, Deserialize, Type, Clone)]
@@ -1102,6 +1105,9 @@ pub struct AIPreset {
     pub max_context_chars: i32,
     #[serde(rename = "maxTokens", default = "default_max_tokens")]
     pub max_tokens: i32,
+    /// The external adapter to launch when `provider` is `acp`.
+    #[serde(rename = "acpAgent", default)]
+    pub acp_agent: Option<crate::pi::AcpAgentConfig>,
 }
 
 fn default_max_tokens() -> i32 {
@@ -1120,6 +1126,7 @@ impl Default for AIPreset {
             api_key: None,
             max_context_chars: 512000,
             max_tokens: 4096,
+            acp_agent: None,
         }
     }
 }
@@ -1388,6 +1395,7 @@ Rules:
             api_key: None,
             max_context_chars: 128000,
             max_tokens: 4096,
+            acp_agent: None,
         };
 
         Self {
