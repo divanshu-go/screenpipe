@@ -10,26 +10,28 @@
 //! polling `/pipes/:id/executions` saw `stdout` stay empty for the whole run and
 //! then arrive as one blob.
 //!
-//! This module fans those lines out to HTTP subscribers in two shapes:
+//! This module fans those lines out to authenticated HTTP subscribers:
 //!
 //! * `GET  /pipes/:id/stream`      — the raw agent events, one SSE frame per line
-//! * `POST /v1/chat/completions`   — OpenAI-compatible, so any OpenAI SDK can
-//!                                   stream a pipe run with no custom client code
+//!
+//! The OpenAI-shaped translation helpers below are intentionally not registered
+//! as a route yet. They do not start a run or apply hosted-AI admission controls,
+//! so exposing them would promise an incomplete API surface.
 //!
 //! Persistence is untouched: the completed-run blob is still written and read
 //! exactly as before.
 
 use axum::extract::{Path, State};
+use axum::http::{header::RETRY_AFTER, StatusCode};
 use axum::response::sse::{Event, Sse};
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use axum::Json;
-use futures::stream::Stream;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, OwnedSemaphorePermit, Semaphore};
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 
@@ -49,7 +51,10 @@ pub struct PipeLine {
 #[derive(Clone)]
 pub struct PipeStreamHub {
     tx: broadcast::Sender<PipeLine>,
+    subscriber_slots: Arc<Semaphore>,
 }
+
+const DEFAULT_MAX_SUBSCRIBERS: usize = 32;
 
 impl Default for PipeStreamHub {
     fn default() -> Self {
@@ -59,8 +64,15 @@ impl Default for PipeStreamHub {
 
 impl PipeStreamHub {
     pub fn new() -> Self {
+        Self::with_max_subscribers(DEFAULT_MAX_SUBSCRIBERS)
+    }
+
+    pub fn with_max_subscribers(max_subscribers: usize) -> Self {
         let (tx, _) = broadcast::channel(1024);
-        Self { tx }
+        Self {
+            tx,
+            subscriber_slots: Arc::new(Semaphore::new(max_subscribers)),
+        }
     }
 
     pub fn publish(&self, pipe: &str, exec_id: i64, line: &str) {
@@ -74,6 +86,14 @@ impl PipeStreamHub {
 
     pub fn subscribe(&self) -> broadcast::Receiver<PipeLine> {
         self.tx.subscribe()
+    }
+
+    fn try_subscribe(
+        &self,
+    ) -> Result<(broadcast::Receiver<PipeLine>, OwnedSemaphorePermit), tokio::sync::TryAcquireError>
+    {
+        let permit = self.subscriber_slots.clone().try_acquire_owned()?;
+        Ok((self.tx.subscribe(), permit))
     }
 }
 
@@ -95,33 +115,53 @@ fn is_done(line: &str) -> bool {
 pub async fn stream_pipe(
     State(hub): State<SharedPipeStreamHub>,
     Path(id): Path<String>,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let rx = hub.subscribe();
-    let wanted = id;
+) -> Response {
+    let (rx, permit) = match hub.try_subscribe() {
+        Ok(subscription) => subscription,
+        Err(_) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                [(RETRY_AFTER, "1")],
+                "too many active pipe streams",
+            )
+                .into_response();
+        }
+    };
 
-    let stream = BroadcastStream::new(rx)
-        .filter_map(move |item| match item {
-            // a lagged subscriber has already missed events; ending the stream is
-            // honest, resuming it would serve a gap the client cannot detect
-            Err(_) => Some(Err(())),
-            Ok(l) if l.pipe == wanted => Some(Ok(l)),
-            Ok(_) => None,
-        })
-        .take_while(|item| item.is_ok())
-        .filter_map(|item| item.ok())
-        .map(|l| {
-            let done = is_done(&l.line);
-            let event = Event::default().id(l.exec_id.to_string()).data(l.line);
-            (done, event)
-        })
-        .take_while(|(done, _)| !*done)
-        .map(|(_, event)| Ok(event));
+    // Keep the admission permit in the stream state for the full connection
+    // lifetime. The terminal pipe_done event is emitted before the stream ends
+    // so clients have an explicit, observable completion signal.
+    let stream = futures::stream::unfold(
+        (BroadcastStream::new(rx), id, permit, false),
+        |(mut rx, wanted, permit, finished)| async move {
+            if finished {
+                return None;
+            }
+            loop {
+                match rx.next().await {
+                    Some(Ok(line)) if line.pipe == wanted => {
+                        let done = is_done(&line.line);
+                        let event = Event::default()
+                            .id(line.exec_id.to_string())
+                            .data(line.line);
+                        return Some((Ok::<_, Infallible>(event), (rx, wanted, permit, done)));
+                    }
+                    Some(Ok(_)) => continue,
+                    // A lagged subscriber has missed data. Ending the stream is
+                    // safer than silently serving a gap the client cannot detect.
+                    Some(Err(_)) | None => return None,
+                }
+            }
+        },
+    );
 
-    Sse::new(stream).keep_alive(
-        axum::response::sse::KeepAlive::new()
-            .interval(Duration::from_secs(15))
-            .text("keep-alive"),
-    )
+    Sse::new(stream)
+        .keep_alive(
+            axum::response::sse::KeepAlive::new()
+                .interval(Duration::from_secs(15))
+                .text("keep-alive"),
+        )
+        .into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -265,6 +305,11 @@ pub async fn openai_chat_completions(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::body::{to_bytes, Body};
+    use axum::http::Request;
+    use axum::routing::get;
+    use axum::Router;
+    use tower::ServiceExt;
 
     #[test]
     fn text_delta_becomes_openai_content() {
@@ -304,5 +349,75 @@ mod tests {
         let got = rx.try_recv().expect("subscriber should receive");
         assert_eq!(got.pipe, "ios-chat");
         assert_eq!(got.exec_id, 7);
+    }
+
+    #[test]
+    fn hub_caps_long_lived_subscribers_and_recovers_capacity() {
+        let hub = PipeStreamHub::with_max_subscribers(1);
+        let (_rx, permit) = hub.try_subscribe().expect("first subscriber admitted");
+        assert!(
+            hub.try_subscribe().is_err(),
+            "second subscriber must be rejected"
+        );
+        drop(permit);
+        assert!(
+            hub.try_subscribe().is_ok(),
+            "disconnect must release capacity"
+        );
+    }
+
+    #[tokio::test]
+    async fn raw_route_emits_pipe_done_before_closing() {
+        let hub = Arc::new(PipeStreamHub::new());
+        let app = Router::new()
+            .route("/pipes/:id/stream", get(stream_pipe))
+            .with_state(hub.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/pipes/time-tracker/stream")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        hub.publish("time-tracker", 42, r#"{"type":"turn_start"}"#);
+        hub.publish("time-tracker", 42, r#"{"type":"pipe_done"}"#);
+        let body = to_bytes(response.into_body(), 16 * 1024).await.unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body.contains(r#"data: {"type":"turn_start"}"#));
+        assert!(body.contains(r#"data: {"type":"pipe_done"}"#));
+    }
+
+    #[tokio::test]
+    async fn raw_route_returns_retry_after_when_stream_slots_are_full() {
+        let hub = Arc::new(PipeStreamHub::with_max_subscribers(1));
+        let app = Router::new()
+            .route("/pipes/:id/stream", get(stream_pipe))
+            .with_state(hub);
+        let first = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/pipes/one/stream")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let second = app
+            .oneshot(
+                Request::builder()
+                    .uri("/pipes/two/stream")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(second.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(second.headers().get(RETRY_AFTER).unwrap(), "1");
+        drop(first);
     }
 }
