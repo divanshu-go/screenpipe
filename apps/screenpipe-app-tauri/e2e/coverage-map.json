@@ -677,6 +677,16 @@
       "notes": "Opt-in macOS fault injection wedges a visual-change probe; asserts the bounded probe keeps the capture loop and its /health heartbeat live (no false stale/incident)."
     },
     {
+      "spec": "recording-health-return-race.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["tauri-command", "os-integration", "real-ui-e2e"],
+      "features": ["app-launch", "recording-health-alerts"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "command",
+      "notes": "Accelerated app-level replay of the idle-to-attended stale race verifies that return input does not raise the recording-health failure overlay before capture recovery can be observed."
+    },
+    {
       "spec": "pipes.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["pipes", "real-ui-e2e", "local-api"],

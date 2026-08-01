@@ -1604,10 +1604,12 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                         }
                     }
 
-                    // Bare "stale" runs on its own user-presence tier: fast
-                    // when UI activity proves someone is losing recording
-                    // right now, slow when the machine is idle and the
-                    // engine's gone-silent watchdog should self-heal first.
+                    // Bare "stale" runs on its own user-presence tier: 90
+                    // attended stale checks when UI activity proves someone is
+                    // losing recording right now, 15 minutes when the machine
+                    // is idle and the engine's gone-silent watchdog should
+                    // self-heal first. Idle checks never carry into the
+                    // attended threshold: return input often wakes capture.
                     let user_active = crate::stale_tier::user_present_for_stale_tier(
                         health.last_ui_timestamp.as_deref(),
                     );
