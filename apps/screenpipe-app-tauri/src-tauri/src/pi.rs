@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use specta::Type;
 use std::collections::hash_map::DefaultHasher;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Write};
 use tauri::Manager;
@@ -156,6 +156,56 @@ use tracing::{debug, error, info, warn};
 static PI_INSTALL_DONE: AtomicBool = AtomicBool::new(false);
 static REQUIRED_PI_PACKAGE_INSTALL_LOCK: std::sync::OnceLock<Mutex<()>> =
     std::sync::OnceLock::new();
+static PI_EXTENSION_SAFE_MODE_PROJECTS: std::sync::OnceLock<std::sync::Mutex<HashSet<String>>> =
+    std::sync::OnceLock::new();
+
+const MANAGED_PI_EXTENSION_FILES: [&str; 5] = [
+    "web-search.ts",
+    "mcp-bridge.ts",
+    "save-artifact.ts",
+    "live-views.ts",
+    "connection-gate.ts",
+];
+
+fn extension_safe_mode_projects() -> &'static std::sync::Mutex<HashSet<String>> {
+    PI_EXTENSION_SAFE_MODE_PROJECTS.get_or_init(|| std::sync::Mutex::new(HashSet::new()))
+}
+
+fn is_pi_extension_startup_failure(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    lower.contains("failed to load extension")
+        || lower.contains("start without extensions using \"pi -ne\"")
+}
+
+fn enable_pi_extension_safe_mode(project_dir: &str) -> bool {
+    extension_safe_mode_projects()
+        .lock()
+        .map(|mut projects| projects.insert(project_dir.to_string()))
+        .unwrap_or(false)
+}
+
+fn pi_extension_safe_mode_enabled(project_dir: &str) -> bool {
+    extension_safe_mode_projects()
+        .lock()
+        .map(|projects| projects.contains(project_dir))
+        .unwrap_or(false)
+}
+
+fn managed_pi_extension_paths(project_dir: &str) -> Vec<PathBuf> {
+    let extension_dir = Path::new(project_dir).join(".pi").join("extensions");
+    MANAGED_PI_EXTENSION_FILES
+        .iter()
+        .map(|name| extension_dir.join(name))
+        .filter(|path| path.exists())
+        .collect()
+}
+
+fn apply_pi_extension_safe_mode(command: &mut Command, project_dir: &str) {
+    command.arg("--no-extensions");
+    for path in managed_pi_extension_paths(project_dir) {
+        command.arg("--extension").arg(path);
+    }
+}
 
 /// Captures the last bun-install error so `pi_start` can surface it to the UI
 /// when the install silently failed (e.g. Windows EPERM on bun's atomic rename).
@@ -1491,6 +1541,10 @@ pub struct PiProviderConfig {
     /// Max output tokens (default 4096)
     #[serde(default = "default_max_tokens")]
     pub max_tokens: i32,
+    /// Approximate input context size in characters. Pi model metadata uses
+    /// tokens, so Screenpipe converts this value using four characters/token.
+    #[serde(default)]
+    pub max_context_chars: Option<i32>,
     /// Optional system prompt from AI preset (appended to Pi's built-in system prompt)
     #[serde(default)]
     pub system_prompt: Option<String>,
@@ -1498,6 +1552,12 @@ pub struct PiProviderConfig {
 
 fn default_max_tokens() -> i32 {
     4096
+}
+
+fn context_window_tokens(max_context_chars: Option<i32>) -> Option<i32> {
+    max_context_chars
+        .filter(|value| *value > 0)
+        .map(|value| value.saturating_add(3) / 4)
 }
 
 fn pi_launch_fingerprint(
@@ -1682,6 +1742,9 @@ async fn build_models_json(
                 );
                 model_def.insert("input".into(), json!(["text", "image"]));
                 model_def.insert("maxTokens".into(), json!(config.max_tokens));
+                if let Some(context_window) = context_window_tokens(config.max_context_chars) {
+                    model_def.insert("contextWindow".into(), json!(context_window));
+                }
                 model_def.insert(
                     "cost".into(),
                     json!({"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}),
@@ -2005,6 +2068,7 @@ pub async fn pi_start_inner(
         user_token.as_deref(),
         provider_config.as_ref(),
     );
+    let extension_safe_mode = pi_extension_safe_mode_enabled(&project_dir);
     let sid = session_id.to_string();
 
     // Fast path before provider discovery/config writes. Home and standalone
@@ -2048,7 +2112,9 @@ pub async fn pi_start_inner(
 
     // Ensure Pi is configured with the user's provider
     ensure_pi_config(user_token.as_deref(), provider_config.as_ref()).await?;
-    ensure_required_pi_extension_package().await?;
+    if !extension_safe_mode {
+        ensure_required_pi_extension_package().await?;
+    }
 
     // Determine which Pi provider and model to use
     let (pi_provider, pi_model) = match &provider_config {
@@ -2217,6 +2283,13 @@ pub async fn pi_start_inner(
         "--model",
         &pi_model,
     ]);
+    if extension_safe_mode {
+        warn!(
+            "Starting Pi in extension safe mode for '{}'; third-party extension packages are disabled",
+            project_dir
+        );
+        apply_pi_extension_safe_mode(&mut cmd, &project_dir);
+    }
 
     // Ensure bun is discoverable by pi.exe shim: the bun global-install shim (pi.exe)
     // needs to find bun.exe to execute the actual JS. If bun isn't in PATH (common on
@@ -2687,11 +2760,20 @@ pub async fn pi_start_inner(
     if let Some(stderr) = stderr {
         let app_handle = app.clone();
         let sid_stderr = sid.clone();
+        let project_dir_stderr = project_dir.clone();
         let first_stderr_for_error = first_stderr_line.clone();
         std::thread::spawn(move || {
             let mut reader = BufReader::new(stderr);
             info!("Pi stderr reader started (session: {})", sid_stderr);
             while let Some(line) = read_lines_lossy(&mut reader) {
+                if is_pi_extension_startup_failure(&line)
+                    && enable_pi_extension_safe_mode(&project_dir_stderr)
+                {
+                    warn!(
+                        "Pi extension startup failed for '{}'; the next automatic restart will load only Screenpipe-managed extensions",
+                        project_dir_stderr
+                    );
+                }
                 if !line.trim().is_empty() {
                     if let Ok(mut first) = first_stderr_for_error.lock() {
                         if first.is_none() {
@@ -4327,6 +4409,7 @@ mod tests {
             model: "auto".to_string(),
             api_key: None,
             max_tokens: 4096,
+            max_context_chars: Some(512_000),
             system_prompt: Some("system context".to_string()),
         };
         let first = super::pi_launch_fingerprint("/tmp/pi-chat", Some("token"), Some(&config));
@@ -4450,7 +4533,10 @@ mod tests {
             &state,
             &json!({ "type": "agent_end", "willRetry": false }),
         );
-        assert!(!state.is_agent_active(), "terminal agent_end releases the queue");
+        assert!(
+            !state.is_agent_active(),
+            "terminal agent_end releases the queue"
+        );
     }
 
     #[test]
@@ -5504,6 +5590,7 @@ error: InstallFailed extracting tarball"#;
             model: model.to_string(),
             api_key: None,
             max_tokens: 4096,
+            max_context_chars: Some(512_000),
             system_prompt: None,
         }
     }
@@ -5575,6 +5662,57 @@ error: InstallFailed extracting tarball"#;
         assert_eq!(models.len(), 1);
         assert_eq!(models[0]["id"], "gpt-4o");
         assert_eq!(models[0]["reasoning"], false);
+        assert_eq!(models[0]["contextWindow"], 128_000);
+    }
+
+    #[tokio::test]
+    async fn test_build_models_json_uses_preset_context_window() {
+        let mut pc = make_provider_config("custom", "qwen3.5");
+        pc.url = "http://localhost:8080/v1".to_string();
+        pc.max_context_chars = Some(32_768);
+
+        let config = build_models_json(None, Some(&pc)).await;
+        assert_eq!(
+            config["providers"]["custom"]["models"][0]["contextWindow"],
+            8_192
+        );
+    }
+
+    #[test]
+    fn test_extension_startup_failure_detection_is_specific() {
+        assert!(super::is_pi_extension_startup_failure(
+            "Error: Failed to load extension /tmp/pi-subagents/index.ts: Tool conflict"
+        ));
+        assert!(super::is_pi_extension_startup_failure(
+            "Hint: Start without extensions using \"pi -ne\"."
+        ));
+        assert!(!super::is_pi_extension_startup_failure(
+            "Error: provider request timed out"
+        ));
+    }
+
+    #[test]
+    fn test_extension_safe_mode_loads_only_managed_project_extensions() {
+        let temp = tempfile::tempdir().unwrap();
+        let extension_dir = temp.path().join(".pi").join("extensions");
+        std::fs::create_dir_all(&extension_dir).unwrap();
+        let header = "// screenpipe — AI that knows everything you've seen, said, or heard\n";
+        std::fs::write(extension_dir.join("mcp-bridge.ts"), header).unwrap();
+        std::fs::write(extension_dir.join("live-views.ts"), header).unwrap();
+        std::fs::write(extension_dir.join("third-party.ts"), header).unwrap();
+
+        let mut command = Command::new("pi");
+        super::apply_pi_extension_safe_mode(&mut command, temp.path().to_str().unwrap());
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(args[0], "--no-extensions");
+        assert_eq!(args.iter().filter(|arg| *arg == "--extension").count(), 2);
+        assert!(args.iter().any(|arg| arg.ends_with("mcp-bridge.ts")));
+        assert!(args.iter().any(|arg| arg.ends_with("live-views.ts")));
+        assert!(!args.iter().any(|arg| arg.ends_with("third-party.ts")));
     }
 
     #[tokio::test]
@@ -5699,10 +5837,7 @@ error: InstallFailed extracting tarball"#;
 
     #[tokio::test]
     async fn test_build_models_json_repairs_ai_genesis_custom_url() {
-        for base_url in [
-            "https://ai.ai-genesis.app",
-            "https://api.ai-genesis.app/",
-        ] {
+        for base_url in ["https://ai.ai-genesis.app", "https://api.ai-genesis.app/"] {
             let mut pc = make_provider_config("custom", "glm-5.2");
             pc.url = base_url.to_string();
             let config = build_models_json(None, Some(&pc)).await;

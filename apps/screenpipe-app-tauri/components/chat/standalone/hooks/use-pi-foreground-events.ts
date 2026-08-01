@@ -1161,6 +1161,7 @@ export function usePiForegroundEvents({
                     url: providerConfig.url,
                     apiKey: providerConfig.apiKey,
                     maxTokens: providerConfig.maxTokens,
+                    maxContextChars: providerConfig.maxContextChars ?? null,
                     systemPrompt: providerConfig.systemPrompt,
                     token: settings.user?.token ?? null,
                   };
