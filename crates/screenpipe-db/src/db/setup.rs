@@ -82,6 +82,15 @@ fn preflight_existing_database_header(path: &Path) -> Result<(), SqlxError> {
 }
 
 impl DatabaseManager {
+    /// Give an independently owned worker access to the dedicated write pool
+    /// only while it participates in this database's single-writer protocol.
+    pub fn coordinated_writer(&self) -> screenpipe_sqlite_coordinator::SqliteWritePool {
+        screenpipe_sqlite_coordinator::SqliteWritePool::new(
+            self.write_pool.clone(),
+            Arc::clone(&self.write_semaphore),
+        )
+    }
+
     pub async fn new(database_path: &str, config: DbConfig) -> Result<Self, sqlx::Error> {
         screenpipe_sqlite_coordinator::verify_sqlite_runtime().map_err(SqlxError::Protocol)?;
         debug!(
