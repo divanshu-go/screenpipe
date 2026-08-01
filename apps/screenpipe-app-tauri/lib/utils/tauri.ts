@@ -540,6 +540,20 @@ async e2eOwnedBrowserVisible() : Promise<boolean> {
     return await TAURI_INVOKE("e2e_owned_browser_visible");
 },
 /**
+ * E2E-only accelerated reproduction of an idle capture heartbeat pause that
+ * recovers as the user returns. The real incident accumulated 114 idle stale
+ * checks, then the first input both woke capture and crossed the attended
+ * alert threshold before the next healthy check arrived.
+ */
+async e2eRecordingHealthReturnRace() : Promise<Result<JsonValue, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("e2e_recording_health_return_race") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * E2E helper: update the native store without depending on a mounted settings
  * webview. Used by the recording-enabled Windows lane.
  */

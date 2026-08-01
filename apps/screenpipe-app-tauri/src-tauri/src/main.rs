@@ -1145,6 +1145,17 @@ async fn main() {
                 store.recording.disable_audio = true;
                 info!("E2E seed: audio disabled");
             }
+            if e2e_flags
+                .iter()
+                .any(|f| f == "recording-health-return-race")
+            {
+                store.show_restart_notifications = true;
+                store.extra.insert(
+                    "restartNotificationsDefaultedOff".to_string(),
+                    serde_json::Value::Bool(true),
+                );
+                info!("E2E seed: recording health alerts enabled for return-race regression");
+            }
             if e2e_flags.iter().any(|f| f == "event-trigger-capture") {
                 store.recording.capture_on_keystroke = Some(true);
                 store.recording.capture_on_clipboard = Some(true);
