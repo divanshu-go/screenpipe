@@ -479,17 +479,12 @@ pub async fn request_input_monitoring_permission() -> OSPermissionStatus {
         if screenpipe_a11y::check_input_monitoring() {
             return OSPermissionStatus::Granted;
         }
-        // Open the Input Monitoring pane first so when the OS prompt
-        // appears it's layered on top of the settings UI the user lands
-        // in if they dismiss the prompt. Matches the pattern used by
-        // request_permission for ScreenRecording above.
+        // Enroll first so System Settings shows a row, then open the pane.
+        let granted = screenpipe_a11y::request_input_monitoring();
         let _ = Command::new("open")
             .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")
             .spawn();
-        // Triggers the native consent prompt the first time the process
-        // calls it. Subsequent calls are no-ops if denied — the user has
-        // to enable from System Settings, which we just opened.
-        if screenpipe_a11y::request_input_monitoring() {
+        if granted {
             OSPermissionStatus::Granted
         } else {
             OSPermissionStatus::Denied
