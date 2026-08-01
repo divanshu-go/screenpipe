@@ -137,16 +137,6 @@
   ],
   "specs": [
     {
-      "spec": "acp-text-streaming.spec.ts",
-      "platforms": ["windows", "macos", "linux"],
-      "layers": ["chat-ai", "tauri-command"],
-      "features": ["chat", "acp-runtime", "acp-text-streaming"],
-      "criticality": "high",
-      "confidence": "strong",
-      "ux": "command",
-      "notes": "A deterministic ACP adapter runs through the packaged Rust desktop runtime and proves ordered assistant text streaming from pi_start through agent_end."
-    },
-    {
       "spec": "api.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["local-api"],
