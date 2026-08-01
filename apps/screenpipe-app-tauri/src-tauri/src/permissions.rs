@@ -47,10 +47,6 @@ fn should_request_screen_recording(state: ScreenRecordingPermissionState) -> boo
     )
 }
 
-fn should_restart_after_screen_recording_grant(state: ScreenRecordingPermissionState) -> bool {
-    state == ScreenRecordingPermissionState::GrantedNeedsRestart
-}
-
 /// Returns the current process's Screen Recording permission state.
 ///
 /// `CGPreflightScreenCaptureAccess` can return the result cached by SkyLight
@@ -242,15 +238,9 @@ struct ScreenRecordingRestartWaitState {
 impl ScreenRecordingRestartWaitState {
     fn should_relaunch(
         &mut self,
-        permission_needs_restart: bool,
         modal_state: SystemSettingsModalState,
         now: tokio::time::Instant,
     ) -> bool {
-        if !permission_needs_restart {
-            *self = Self::default();
-            return false;
-        }
-
         match modal_state {
             SystemSettingsModalState::Visible => {
                 self.modal_seen = true;
@@ -305,9 +295,9 @@ async fn relaunch_after_screen_recording_grant(app: tauri::AppHandle) {
     );
 }
 
-/// Silently watch for a Screen Recording grant that the running process has
-/// not picked up yet. This never invokes a permission request API, so it can
-/// run alongside onboarding without changing the order of system prompts.
+/// Watch the System Settings restart sheet after an explicit Screen Recording
+/// permission flow. This never invokes a permission request API, so it can run
+/// alongside onboarding without changing the order of system prompts.
 #[cfg(target_os = "macos")]
 pub(crate) fn start_screen_recording_permission_restart_monitor(app: tauri::AppHandle) {
     static MONITOR_RUNNING: std::sync::atomic::AtomicBool =
@@ -326,29 +316,16 @@ pub(crate) fn start_screen_recording_permission_restart_monitor(app: tauri::AppH
         let mut last_modal_state = None;
 
         loop {
-            let observation = tokio::task::spawn_blocking(|| {
-                let state = screen_recording_permission_state();
-                let modal_state = if should_restart_after_screen_recording_grant(state) {
-                    system_settings_modal_state()
-                } else {
-                    SystemSettingsModalState::NotVisible
-                };
-                (state, modal_state)
-            })
-            .await;
-
-            let (permission_state, modal_state) = match observation {
-                Ok(observation) => observation,
+            let modal_state = match tokio::task::spawn_blocking(system_settings_modal_state).await {
+                Ok(modal_state) => modal_state,
                 Err(error) => {
                     warn!("Screen Recording permission restart observation failed: {error}");
                     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                     continue;
                 }
             };
-            let permission_needs_restart =
-                should_restart_after_screen_recording_grant(permission_state);
 
-            if permission_needs_restart && last_modal_state != Some(modal_state) {
+            if last_modal_state != Some(modal_state) {
                 match modal_state {
                     SystemSettingsModalState::Visible => {
                         info!("Screen Recording grant modal appeared in System Settings")
@@ -368,12 +345,9 @@ pub(crate) fn start_screen_recording_permission_restart_monitor(app: tauri::AppH
                     ),
                 }
                 last_modal_state = Some(modal_state);
-            } else if !permission_needs_restart {
-                last_modal_state = None;
             }
 
             if restart_wait_state.should_relaunch(
-                permission_needs_restart,
                 modal_state,
                 tokio::time::Instant::now(),
             ) {
@@ -448,11 +422,11 @@ pub async fn request_permission(app: tauri::AppHandle, permission: OSPermission)
         match permission {
             OSPermission::ScreenRecording => {
                 use core_graphics_helmer_fork::access::ScreenCaptureAccess;
-                start_screen_recording_permission_restart_monitor(app.clone());
                 // This branch is reached only after an explicit user action.
                 // Do not call request() again when live TCC already sees the
                 // grant but this process still has the old denied result.
                 if should_request_screen_recording(screen_recording_permission_state()) {
+                    start_screen_recording_permission_restart_monitor(app.clone());
                     // Open System Settings first so it's in the background,
                     // then request() shows the native modal on top (macOS 15+).
                     // If the user dismisses the modal, Settings is already open.
@@ -1683,22 +1657,6 @@ mod screen_recording_state_tests {
         ));
     }
 
-    #[test]
-    fn only_restarts_for_a_new_live_grant_held_stale_by_the_process() {
-        assert!(!should_restart_after_screen_recording_grant(
-            ScreenRecordingPermissionState::Denied
-        ));
-        assert!(!should_restart_after_screen_recording_grant(
-            ScreenRecordingPermissionState::Granted
-        ));
-        assert!(should_restart_after_screen_recording_grant(
-            ScreenRecordingPermissionState::GrantedNeedsRestart
-        ));
-        assert!(!should_restart_after_screen_recording_grant(
-            ScreenRecordingPermissionState::RevokedButCached
-        ));
-    }
-
     #[cfg(target_os = "macos")]
     #[test]
     fn waits_for_system_settings_modal_to_close_before_relaunching() {
@@ -1706,28 +1664,23 @@ mod screen_recording_state_tests {
         let mut state = ScreenRecordingRestartWaitState::default();
 
         assert!(!state.should_relaunch(
-            true,
             SystemSettingsModalState::NotVisible,
             started_at,
         ));
         assert!(!state.should_relaunch(
-            true,
             SystemSettingsModalState::Visible,
             started_at + std::time::Duration::from_secs(1),
         ));
         let closed_at = started_at + std::time::Duration::from_secs(2);
         assert!(!state.should_relaunch(
-            true,
             SystemSettingsModalState::NotVisible,
             closed_at,
         ));
         assert!(!state.should_relaunch(
-            true,
             SystemSettingsModalState::NotVisible,
             closed_at + SYSTEM_RELAUNCH_GRACE_PERIOD - std::time::Duration::from_millis(1),
         ));
         assert!(state.should_relaunch(
-            true,
             SystemSettingsModalState::NotVisible,
             closed_at + SYSTEM_RELAUNCH_GRACE_PERIOD,
         ));
@@ -1740,17 +1693,14 @@ mod screen_recording_state_tests {
         let mut state = ScreenRecordingRestartWaitState::default();
 
         assert!(!state.should_relaunch(
-            true,
             SystemSettingsModalState::Unavailable,
             started_at,
         ));
         assert!(!state.should_relaunch(
-            true,
             SystemSettingsModalState::Unavailable,
             started_at + std::time::Duration::from_secs(60),
         ));
         assert!(!state.should_relaunch(
-            true,
             SystemSettingsModalState::NotVisible,
             started_at + std::time::Duration::from_secs(120),
         ));
@@ -1763,21 +1713,18 @@ mod screen_recording_state_tests {
         let mut state = ScreenRecordingRestartWaitState::default();
 
         assert!(!state.should_relaunch(
-            true,
             SystemSettingsModalState::Visible,
             started_at,
         ));
         assert!(!state.should_relaunch(
-            true,
             SystemSettingsModalState::Unavailable,
             started_at + SYSTEM_RELAUNCH_GRACE_PERIOD,
         ));
         assert!(!state.should_relaunch(
-            false,
             SystemSettingsModalState::NotVisible,
             started_at + SYSTEM_RELAUNCH_GRACE_PERIOD,
         ));
-        assert!(!state.modal_seen);
+        assert!(state.modal_seen);
     }
 
     #[test]
