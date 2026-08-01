@@ -167,6 +167,8 @@
       "crate": "screenpipe-engine",
       "files": [
         "src/auth_key.rs",
+        "src/local_chat.rs",
+        "src/pipe_stream.rs",
         "src/routes/activity_summary.rs",
         "src/routes/artifacts.rs",
         "src/routes/content.rs",
@@ -242,6 +244,7 @@
         "src/capture_exclusions.rs",
         "src/cli/agent.rs",
         "src/cli/install.rs",
+        "src/cli/login.rs",
         "src/cli/mod.rs",
         "src/cli/presets.rs",
         "src/cli/profile.rs",

@@ -1226,6 +1226,19 @@ fn entitlement_is_lifetime(entitlement: &serde_json::Value) -> bool {
     field("plan") == "lifetime" || field("source") == "lifetime"
 }
 
+fn is_verified_paid_plan_id(plan: &str) -> bool {
+    matches!(
+        plan.trim().to_ascii_lowercase().as_str(),
+        "standard"
+            | "pro"
+            | "pro_max"
+            | "pro_ultra"
+            | "team"
+            | "enterprise"
+            | "lifetime"
+    )
+}
+
 fn entitlement_feature(entitlement: &serde_json::Value, feature: &str) -> bool {
     entitlement
         .get("features")
@@ -1699,11 +1712,7 @@ impl SettingsStore {
         else {
             return false;
         };
-        let account_plan_is_paid = matches!(
-            account_plan.to_ascii_lowercase().as_str(),
-            "standard" | "pro" | "team" | "enterprise" | "lifetime"
-        );
-        if !account_plan_is_paid {
+        if !is_verified_paid_plan_id(account_plan) {
             return false;
         }
         let Some(entitlement) = self.user.entitlement.as_ref() else {
@@ -1720,11 +1729,7 @@ impl SettingsStore {
         else {
             return false;
         };
-        let entitlement_plan_is_paid = matches!(
-            entitlement_plan.to_ascii_lowercase().as_str(),
-            "standard" | "pro" | "team" | "enterprise" | "lifetime"
-        );
-        if !entitlement_plan_is_paid {
+        if !is_verified_paid_plan_id(entitlement_plan) {
             return false;
         }
         if !account_plan.eq_ignore_ascii_case(entitlement_plan) {
@@ -2492,6 +2497,31 @@ mod tests {
             "features": { "app": true }
         }));
         assert!(!store.requires_enterprise_app_for_consumer());
+    }
+
+    #[test]
+    fn business_capacity_plans_override_enterprise_app_requirement() {
+        for plan in ["pro_max", "pro_ultra"] {
+            let mut store = SettingsStore::default();
+            store.user.id = Some("consumer_capacity_paid".to_string());
+            store.user.app_entitled = Some(true);
+            store.user.cloud_subscribed = Some(true);
+            store.user.subscription_plan = Some(plan.to_string());
+            store.user.enterprise_account = Some(json!({ "requires_enterprise_app": true }));
+            store.user.entitlement = Some(json!({
+                "active": true,
+                "plan": plan,
+                "source": "manual",
+                "checked_at": chrono::Utc::now().to_rfc3339(),
+                "features": { "app": true, "cloud": true, "enterprise": false }
+            }));
+
+            assert_eq!(store.local_plan_policy(), LocalPlanPolicy::VerifiedPaid);
+            assert!(!store.restricts_paid_local_features());
+            assert!(!store.requires_enterprise_app_for_consumer());
+            let config = store.to_recording_config(std::path::PathBuf::from("/tmp/screenpipe"));
+            assert_eq!(config.max_non_template_pipes, None);
+        }
     }
 
     #[test]
