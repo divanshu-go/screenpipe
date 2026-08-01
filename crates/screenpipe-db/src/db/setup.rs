@@ -268,7 +268,7 @@ impl DatabaseManager {
             .await
             .map_err(|_| SqlxError::PoolClosed)?;
         match sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-            .fetch_one(&db_manager.pool)
+            .fetch_one(&db_manager.write_pool)
             .await
         {
             Ok(row) => {
@@ -292,16 +292,17 @@ impl DatabaseManager {
                 warn!("startup wal checkpoint failed (continuing): {}", e);
             }
         }
-        drop(_checkpoint_guard);
-
-        // Run migrations after establishing the connection
-        if let Err(error) = Self::run_migrations(&db_manager.pool).await {
+        // Migrations mutate schema and migration bookkeeping, so keep them on
+        // the same serialized writer boundary as application writes.
+        if let Err(error) = Self::run_migrations(&db_manager.write_pool).await {
             if crate::sqlite_error::is_sqlite_hard_fault(&error) {
                 db_manager.write_queue_health.latch_hard_fault(&error);
             }
+            drop(_checkpoint_guard);
             db_manager.close().await;
             return Err(error);
         }
+        drop(_checkpoint_guard);
 
         // Surface persistent-file corruption proactively at boot with a recovery
         // hint, instead of only discovering it later via worker query errors.

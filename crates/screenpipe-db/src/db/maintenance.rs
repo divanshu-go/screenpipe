@@ -1292,11 +1292,13 @@ impl DatabaseManager {
         chunk_id: i64,
         blob_id: &str,
     ) -> Result<(), sqlx::Error> {
+        let mut tx = self.begin_immediate_with_retry().await?;
         sqlx::query("UPDATE video_chunks SET cloud_blob_id = ?1 WHERE id = ?2")
             .bind(blob_id)
             .bind(chunk_id)
-            .execute(&self.pool)
+            .execute(&mut **tx.conn())
             .await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -1306,11 +1308,13 @@ impl DatabaseManager {
         frame_id: i64,
         blob_id: &str,
     ) -> Result<(), sqlx::Error> {
+        let mut tx = self.begin_immediate_with_retry().await?;
         sqlx::query("UPDATE frames SET cloud_blob_id = ?1 WHERE id = ?2")
             .bind(blob_id)
             .bind(frame_id)
-            .execute(&self.pool)
+            .execute(&mut **tx.conn())
             .await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -1319,6 +1323,7 @@ impl DatabaseManager {
             .acquire_owned()
             .await
             .map_err(|_| anyhow::anyhow!("SQLite write coordinator closed"))?;
+        let mut conn = self.write_pool.acquire().await?;
         debug!("starting aggressive database repair process");
 
         // Force close any pending transactions
@@ -1329,7 +1334,7 @@ impl DatabaseManager {
         ];
 
         for step in emergency_steps {
-            if let Err(e) = sqlx::query(step).execute(&self.pool).await {
+            if let Err(e) = sqlx::query(step).execute(&mut *conn).await {
                 warn!("emergency step failed (continuing anyway): {}", e);
             }
         }
@@ -1342,7 +1347,7 @@ impl DatabaseManager {
         ];
 
         for step in wal_cleanup {
-            if let Err(e) = sqlx::query(step).execute(&self.pool).await {
+            if let Err(e) = sqlx::query(step).execute(&mut *conn).await {
                 warn!("wal cleanup failed (continuing anyway): {}", e);
             }
         }
@@ -1361,7 +1366,7 @@ impl DatabaseManager {
 
         for (query, step) in recovery_steps {
             debug!("running aggressive recovery step: {}", step);
-            match sqlx::query(query).execute(&self.pool).await {
+            match sqlx::query(query).execute(&mut *conn).await {
                 Ok(_) => debug!("recovery step '{}' succeeded", step),
                 Err(e) => warn!("recovery step '{}' failed: {}", step, e),
             }
@@ -1381,14 +1386,14 @@ impl DatabaseManager {
         ];
 
         for step in restore_steps {
-            if let Err(e) = sqlx::query(step).execute(&self.pool).await {
+            if let Err(e) = sqlx::query(step).execute(&mut *conn).await {
                 warn!("restore step failed: {}", e);
             }
         }
 
         // Final verification
         match sqlx::query_scalar::<_, String>("PRAGMA quick_check;")
-            .fetch_one(&self.pool)
+            .fetch_one(&mut *conn)
             .await
         {
             Ok(result) if result == "ok" => {
@@ -1418,7 +1423,7 @@ impl DatabaseManager {
     /// paths still use serialized `TRUNCATE` checkpoints when a physical reset
     /// is required.
     pub fn start_wal_maintenance(&self) {
-        let pool = self.pool.clone();
+        let pool = self.write_pool.clone();
         let shutdown = self.close_token.clone();
         let write_queue_health = self.write_queue_health.clone();
         let write_semaphore = std::sync::Arc::clone(&self.write_semaphore);
@@ -1629,8 +1634,9 @@ impl DatabaseManager {
         if self.write_queue_health.is_hard_faulted() {
             return Err(SqlxError::PoolClosed);
         }
+        let mut conn = self.write_pool.acquire().await?;
         let row = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-            .fetch_one(&self.pool)
+            .fetch_one(&mut *conn)
             .await?;
         Ok((row.get(0), row.get(1), row.get(2)))
     }
@@ -1638,9 +1644,14 @@ impl DatabaseManager {
     /// Create an atomic backup of the database using `VACUUM INTO`.
     /// The destination path must not already exist.
     pub async fn backup_to(&self, dest: &str) -> Result<(), sqlx::Error> {
+        let _write_guard = Arc::clone(&self.write_semaphore)
+            .acquire_owned()
+            .await
+            .map_err(|_| SqlxError::PoolClosed)?;
+        let mut conn = self.write_pool.acquire().await?;
         sqlx::query("VACUUM INTO ?1")
             .bind(dest)
-            .execute(&self.pool)
+            .execute(&mut *conn)
             .await?;
         Ok(())
     }
@@ -1664,9 +1675,12 @@ impl DatabaseManager {
     /// insufficient disk VACUUM errors (surfaced as 500) without corrupting
     /// anything.
     pub async fn compact(&self) -> Result<(), sqlx::Error> {
-        let _write_guard = self.write_semaphore.acquire().await.ok();
+        let _write_guard = Arc::clone(&self.write_semaphore)
+            .acquire_owned()
+            .await
+            .map_err(|_| SqlxError::PoolClosed)?;
 
-        let mut conn = self.pool.acquire().await?;
+        let mut conn = self.write_pool.acquire().await?;
         let _ = sqlx::query("PRAGMA busy_timeout = 60000")
             .execute(&mut *conn)
             .await;
