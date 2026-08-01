@@ -43,11 +43,29 @@ async fn run_wal_restart_checkpoint(
 }
 
 impl DatabaseManager {
-    pub async fn execute_raw_sql(&self, query: &str) -> Result<serde_json::Value, sqlx::Error> {
-        // This API intentionally executes caller-supplied maintenance SQL.
-        // Keep that trust boundary explicit for SQLx 0.9's dynamic-SQL audit.
+    /// Execute trusted, row-returning dynamic SQL on the query pool.
+    pub async fn query_raw_sql(&self, query: &str) -> Result<serde_json::Value, sqlx::Error> {
+        Self::raw_sql_on_pool(&self.pool, query).await
+    }
+
+    /// Execute trusted dynamic SQL that may mutate the database through the
+    /// dedicated, process-coordinated writer lane.
+    pub async fn execute_raw_sql_write(
+        &self,
+        query: &str,
+    ) -> Result<serde_json::Value, sqlx::Error> {
+        let writer = self.coordinated_writer().lock().await?;
+        Self::raw_sql_on_pool(writer.pool(), query).await
+    }
+
+    async fn raw_sql_on_pool(
+        pool: &SqlitePool,
+        query: &str,
+    ) -> Result<serde_json::Value, sqlx::Error> {
+        // These APIs intentionally execute caller-supplied trusted SQL. Keep
+        // that trust boundary explicit for SQLx 0.9's dynamic-SQL audit.
         let rows = sqlx::query(sqlx::AssertSqlSafe(query))
-            .fetch_all(&self.pool)
+            .fetch_all(pool)
             .await?;
 
         let result: Vec<serde_json::Map<String, serde_json::Value>> = rows
@@ -1706,6 +1724,47 @@ mod wal_maintenance_tests {
     use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
     use sqlx::Row;
     use std::time::Duration;
+
+    #[tokio::test]
+    async fn raw_sql_writes_wait_for_coordinator_and_reads_return_rows() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db_path = dir.path().join("db.sqlite");
+        let db_path_string = db_path.to_string_lossy().into_owned();
+        let db = DatabaseManager::new(&db_path_string, DbConfig::for_tier(DeviceTier::Low))
+            .await
+            .expect("database manager");
+
+        db.execute_raw_sql_write("CREATE TABLE raw_boundary (value INTEGER NOT NULL)")
+            .await
+            .expect("create through writer API");
+
+        let held_writer = db
+            .coordinated_writer()
+            .lock()
+            .await
+            .expect("hold writer lane");
+        let mut queued_write =
+            Box::pin(db.execute_raw_sql_write("INSERT INTO raw_boundary (value) VALUES (42)"));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), &mut queued_write)
+                .await
+                .is_err(),
+            "raw write bypassed the coordinator"
+        );
+        drop(held_writer);
+        tokio::time::timeout(Duration::from_secs(1), queued_write)
+            .await
+            .expect("queued write timed out")
+            .expect("queued write failed");
+
+        let rows = db
+            .query_raw_sql("SELECT value FROM raw_boundary LIMIT 1")
+            .await
+            .expect("query through reader API");
+        assert_eq!(rows, serde_json::json!([{ "value": 42 }]));
+
+        db.close().await;
+    }
 
     #[tokio::test]
     async fn routine_checkpoint_never_truncates_the_live_wal() {
