@@ -39,6 +39,12 @@
       "layers": ["local-api"]
     },
     {
+      "id": "database-hard-fault-containment",
+      "label": "Database hard-fault fail-closed containment",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["local-api", "tauri-command"]
+    },
+    {
       "id": "settings-recording",
       "label": "Recording settings UX",
       "platforms": ["windows", "macos", "linux"],
@@ -1011,6 +1017,16 @@
       "confidence": "partial",
       "ux": "synthetic",
       "notes": "Verifies keyword search request fires before secondary search, facet, and speaker requests."
+    },
+    {
+      "spec": "db-hard-fault-fail-closed.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["local-api", "tauri-command", "real-ui-e2e"],
+      "features": ["database-hard-fault-containment", "app-launch"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "mixed",
+      "notes": "Opt-in packaged-desktop regression: causes real SQLITE_CORRUPT in the isolated E2E database, then proves the engine API and database owners stop while the desktop stays alive and does not respawn across the watchdog window."
     }
   ]
 }

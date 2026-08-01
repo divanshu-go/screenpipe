@@ -401,6 +401,17 @@ async e2eCaptureSessionRunning() : Promise<Result<boolean, string>> {
 }
 },
 /**
+ * Read-only lifecycle snapshot for the packaged desktop regression.
+ */
+async e2eDbHardFaultState() : Promise<Result<JsonValue, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("e2e_db_hard_fault_state") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * E2E helper: emit a deterministic chat stream from the Rust side.
  *
  * This keeps chat performance tests close to production's Pi stdout path:
@@ -462,6 +473,18 @@ async e2eEmitSettledAgentFollowUp(sessionId: string) : Promise<Result<null, stri
 async e2eHandleDiskSpaceLow(availableBytes: number) : Promise<Result<DiskPressureOutcome, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("e2e_handle_disk_space_low", { availableBytes }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Damage only an E2E-owned table in the disposable database, then route the
+ * real SQLITE_CORRUPT result through the production manager and app hook.
+ */
+async e2eInjectDbHardFault() : Promise<Result<JsonValue, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("e2e_inject_db_hard_fault") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
