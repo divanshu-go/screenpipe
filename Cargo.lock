@@ -8631,6 +8631,7 @@ dependencies = [
  "regex",
  "reqwest 0.13.3",
  "rpassword",
+ "rusqlite",
  "screenpipe-a11y",
  "screenpipe-audio",
  "screenpipe-capture",
@@ -8644,6 +8645,7 @@ dependencies = [
  "screenpipe-screen",
  "screenpipe-secrets",
  "screenpipe-semantic",
+ "screenpipe-sqlite-recovery",
  "screenpipe-vault",
  "sentry",
  "serde",
@@ -8885,6 +8887,16 @@ dependencies = [
  "tokio",
  "tracing",
  "windows 0.58.0",
+]
+
+[[package]]
+name = "screenpipe-sqlite-recovery"
+version = "0.4.35"
+dependencies = [
+ "cc",
+ "libsqlite3-sys",
+ "rusqlite",
+ "tempfile",
 ]
 
 [[package]]
