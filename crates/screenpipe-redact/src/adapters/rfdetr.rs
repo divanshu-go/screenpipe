@@ -25,8 +25,10 @@
 //! recall@IoU0.5 on a 150-state real-app suite of planted PII that no
 //! model here trained on:
 //!
-//!     v27 (previous): recall 92.9 %, secrets 74/76, 1.04 strays/shot
-//!     v34 (this):     recall 95.3 %, secrets 75/76, 1.03 strays/shot
+//! ```text
+//! v27 (previous): recall 92.9 %, secrets 74/76, 1.04 strays/shot
+//! v34 (this):     recall 95.3 %, secrets 75/76, 1.03 strays/shot
+//! ```
 //!   Both: 0 decoy false fires. For scale, an RFDETR-**Large** trained on
 //!   the same data scores 95.7 % — i.e. +0.4 over this nano model, so
 //!   accuracy here is data-limited, not capacity-limited.
