@@ -20,6 +20,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { ensureChatGptPreset } from "@/lib/utils/chatgpt-preset";
 import { notifyConnectionsUpdated } from "@/lib/connections-events";
 import { foregroundAfterOAuth } from "@/lib/connections/foreground-oauth";
+import { appDeepLinkScheme } from "@/lib/connections/mcp-oauth";
 import { searchInputBehaviorProps } from "@/lib/search-input-behavior";
 import {
   CONNECTION_CATEGORY_BY_ID,
@@ -3309,6 +3310,7 @@ function OAuthMcpPanel({
       // (the server is persisted only when OAuth succeeds).
       const targetId = serverId ?? mcpRandomId();
       const isNew = !serverId;
+      const appScheme = await appDeepLinkScheme();
       const res = await localFetch(
         `/mcp-servers/${encodeURIComponent(targetId)}/oauth/start`,
         {
@@ -3316,8 +3318,14 @@ function OAuthMcpPanel({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(
             isNew
-              ? { name, url: mcpUrl, headers: [], enabled: true }
-              : {}
+              ? {
+                  name,
+                  url: mcpUrl,
+                  headers: [],
+                  enabled: true,
+                  app_scheme: appScheme,
+                }
+              : { app_scheme: appScheme }
           ),
         }
       );
@@ -3355,7 +3363,9 @@ function OAuthMcpPanel({
           timerRef.current = setTimeout(poll, 2000);
         } else {
           setWaiting(false);
-          setStatusMsg("Sign-in was not completed");
+          setStatusMsg(
+            "Sign-in was not completed — if your browser blocks http://localhost (e.g. Safari HTTPS-Only mode), click \"Open screenpipe\" on the confirmation page"
+          );
         }
       };
       timerRef.current = setTimeout(poll, 2000);
