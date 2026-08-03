@@ -297,6 +297,7 @@ impl ServerCore {
     ) -> Result<Self, String> {
         info!("Starting server core on port {}", config.port);
         crate::health::set_boot_phase("starting", Some("starting server"));
+        let ai_gateway_url = crate::config::screenpipe_ai_gateway_url()?;
 
         // --- Environment setup ---
         std::env::set_var("SCREENPIPE_FD_LIMIT", "8192");
@@ -690,6 +691,7 @@ impl ServerCore {
             screenpipe_core::agents::pi::PiExecutor::with_shared_user_token(
                 cloud_token_handle.clone(),
             )
+            .with_api_url(ai_gateway_url)
             .with_api_auth_key(config.api_auth_key.clone()),
         );
         let mut agent_executors: std::collections::HashMap<

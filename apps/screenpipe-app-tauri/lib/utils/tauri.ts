@@ -941,6 +941,17 @@ async getRecordingHealthState() : Promise<string> {
     return await TAURI_INVOKE("get_recording_health_state");
 },
 /**
+ * Frontend access to the same validated URL used by Rust Pi clients.
+ */
+async getScreenpipeAiGatewayUrl() : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_screenpipe_ai_gateway_url") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Tauri command: absolute path of the screenpipe base dir (where store.bin
  * lives). Honors SCREENPIPE_DATA_DIR; the webview must use this instead of
  * hardcoding ~/.screenpipe, or it reads/writes a different settings file

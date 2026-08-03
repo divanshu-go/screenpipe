@@ -1444,7 +1444,9 @@ fn ensure_web_search_extension(
         std::fs::create_dir_all(&ext_dir)
             .map_err(|e| format!("Failed to create extensions dir: {}", e))?;
 
-        let ext_content = include_str!("../assets/extensions/web-search.ts");
+        let api_url = crate::config::screenpipe_ai_gateway_url()?;
+        let ext_content = include_str!("../assets/extensions/web-search.ts")
+            .replace(SCREENPIPE_API_URL, &api_url);
         std::fs::write(&ext_path, ext_content)
             .map_err(|e| format!("Failed to write web-search extension: {}", e))?;
 
@@ -1700,9 +1702,18 @@ fn anthropic_model_requires_adaptive_thinking(model: &str) -> bool {
 /// Returns a map of provider entries to merge into the existing models.json.
 /// We merge instead of rebuilding from scratch to avoid a race condition where
 /// concurrent pipes overwrite each other's providers.
+#[cfg(test)]
 async fn build_models_json(
     user_token: Option<&str>,
     provider_config: Option<&PiProviderConfig>,
+) -> serde_json::Value {
+    build_models_json_with_api_url(user_token, provider_config, SCREENPIPE_API_URL).await
+}
+
+async fn build_models_json_with_api_url(
+    user_token: Option<&str>,
+    provider_config: Option<&PiProviderConfig>,
+    api_url: &str,
 ) -> serde_json::Value {
     let mut providers_map = serde_json::Map::new();
 
@@ -1710,9 +1721,9 @@ async fn build_models_json(
     // literal; the logged-out fallback must use `$` env-var syntax (pi >= 0.80
     // treats bare names as literal keys).
     let api_key_value = user_token.unwrap_or("$SCREENPIPE_API_KEY");
-    let models = screenpipe_cloud_models(SCREENPIPE_API_URL, user_token).await;
+    let models = screenpipe_cloud_models(api_url, user_token).await;
     let screenpipe_provider = json!({
-        "baseUrl": SCREENPIPE_API_URL,
+        "baseUrl": api_url,
         "api": "openai-completions",
         "apiKey": api_key_value,
         "authHeader": true,
@@ -1855,7 +1866,9 @@ async fn ensure_pi_config(
     std::fs::create_dir_all(&config_dir)
         .map_err(|e| format!("Failed to create pi config dir: {}", e))?;
 
-    let new_providers = build_models_json(user_token, provider_config).await;
+    let api_url = crate::config::screenpipe_ai_gateway_url()?;
+    let new_providers =
+        build_models_json_with_api_url(user_token, provider_config, &api_url).await;
 
     // Merge into existing models.json to avoid race conditions with concurrent pipes
     let models_path = config_dir.join("models.json");
@@ -5810,7 +5823,9 @@ error: InstallFailed extracting tarball"#;
 
     // -- build_models_json tests --
 
-    use super::{build_models_json, resolve_pi_model, PiProviderConfig};
+    use super::{
+        build_models_json, build_models_json_with_api_url, resolve_pi_model, PiProviderConfig,
+    };
 
     fn make_provider_config(provider: &str, model: &str) -> PiProviderConfig {
         PiProviderConfig {
@@ -5857,6 +5872,16 @@ error: InstallFailed extracting tarball"#;
         assert_eq!(sp["apiKey"], "$SCREENPIPE_API_KEY");
         assert_eq!(sp["authHeader"], true);
         assert!(sp["models"].as_array().unwrap().len() > 0);
+    }
+
+    #[tokio::test]
+    async fn test_build_models_json_uses_resolved_gateway_url() {
+        let config =
+            build_models_json_with_api_url(None, None, "http://127.0.0.1:8787/v1").await;
+        assert_eq!(
+            config["providers"]["screenpipe"]["baseUrl"],
+            "http://127.0.0.1:8787/v1"
+        );
     }
 
     #[tokio::test]
