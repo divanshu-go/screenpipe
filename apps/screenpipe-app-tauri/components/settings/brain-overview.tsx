@@ -399,8 +399,10 @@ function uniqueDashboardTitle(title: string, views: ViewDefinition[]): string {
 }
 
 export function BrainOverview({
+  navigation,
   onViewCountChange,
 }: {
+  navigation?: React.ReactNode;
   onViewCountChange?: (count: number) => void;
 } = {}) {
   const { toast } = useToast();
@@ -2608,7 +2610,11 @@ export function BrainOverview({
           data-onboarding-guide-target="dashboard"
           className="mb-3 flex shrink-0 flex-col gap-2 border-b border-border pb-2 lg:flex-row lg:items-center lg:justify-between"
         >
-          <div className="flex min-w-0 flex-1 flex-col gap-1 sm:flex-row sm:items-center sm:gap-3">
+          <div
+            data-testid="overview-dashboard-row"
+            className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1"
+          >
+          {navigation}
           <LiveViewDashboardSwitcher
             views={views}
             current={view}
@@ -2639,7 +2645,7 @@ export function BrainOverview({
           />
           <p
             data-testid="overview-data-status"
-            className="shrink-0 font-mono text-[9px] text-muted-foreground"
+            className="basis-full pl-12 font-mono text-[9px] text-muted-foreground sm:basis-auto sm:pl-0"
           >
             {onboardingColdStart
               ? "This view will appear when Screenpipe has enough real activity for your outcome."

@@ -713,6 +713,18 @@ describe("BrainOverview", () => {
     expect(mocks.saveBrainView).not.toHaveBeenCalled();
   });
 
+  it("places section navigation beside the dashboard selector", async () => {
+    render(
+      <BrainOverview
+        navigation={<button data-testid="section-navigation">views</button>}
+      />,
+    );
+
+    const row = await screen.findByTestId("overview-dashboard-row");
+    expect(within(row).getByTestId("section-navigation")).toBeTruthy();
+    expect(within(row).getByTestId("overview-dashboard-selector")).toBeTruthy();
+  });
+
   it("opens AI creation first and keeps blank manual creation available", async () => {
     mocks.listBrainViews.mockResolvedValue({
       status: "ok",
