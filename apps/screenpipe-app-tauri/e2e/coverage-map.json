@@ -659,6 +659,16 @@
       "notes": "Notification local file links rewrite into in-app viewer links."
     },
     {
+      "spec": "onboarding-background-ai-tools.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["onboarding", "real-ui-e2e", "storage-privacy"],
+      "features": ["onboarding", "settings-ai"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Isolated agent-home CI lane verifies private native config writes, the resolved local API credential, a real authenticated MCP tool call, skills setup, and removal of the connection slide."
+    },
+    {
       "spec": "onboarding-redirect.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["onboarding", "real-ui-e2e", "window-lifecycle"],

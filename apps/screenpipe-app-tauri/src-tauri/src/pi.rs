@@ -4298,7 +4298,7 @@ pub async fn cleanup_pi(state: &PiState) {
 }
 
 /// Find bun executable (shared by pi_install and ensure_pi_installed_background)
-fn find_bun_executable() -> Option<String> {
+pub(crate) fn find_bun_executable() -> Option<String> {
     // Pre-AVX2 CPU: the bundled/stock bun.exe requires AVX2 and dies with
     // 0xC000001D at spawn. Prefer the baseline build screenpipe-core
     // downloads; if it isn't on disk yet, kick the background download and

@@ -2123,7 +2123,7 @@ describe("BrainOverview", () => {
 
     await waitFor(() =>
       expect(mocks.capture).toHaveBeenCalledWith("onboarding_funnel_step", {
-        funnel_version: "onboarding_ui_v1",
+        funnel_version: "onboarding_ui_v2",
         step: "first_result_accepted",
         goal_category: "work_memory",
         acceptance_action: "positive_feedback",
