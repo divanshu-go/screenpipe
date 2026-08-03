@@ -312,6 +312,35 @@ const dailyMemoryTemplate = {
   ],
 };
 
+const processMapTemplate = {
+  id: "process-map",
+  title: "Process map",
+  description: "Map one repeated workflow from trigger to improvement.",
+  version: 1,
+  timeRange: "7d" as const,
+  periodPolicy: {
+    type: "selectable.v1" as const,
+    values: ["7d" as const, "30d" as const],
+  },
+  pipes: [{ name: "automate-my-work", distribution: "bundled" }],
+  slots: [
+    "trigger-and-outcome",
+    "observed-steps",
+    "handoffs",
+    "bottlenecks",
+    "controls-and-exceptions",
+    "improvement-path",
+  ].map((id, order) => ({
+    id,
+    title: id,
+    component: "markdown.v1" as const,
+    width: 6,
+    order,
+    intent: `Build ${id}`,
+    binding: { pipeName: "automate-my-work" },
+  })),
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.usageState = null;
@@ -1456,6 +1485,64 @@ describe("BrainOverview", () => {
         expectedRevision: 4,
         slots: [expect.objectContaining({ id: "focus-time" })],
       }),
+    );
+  });
+
+  it("installs the process map template with its connected Canvas seed", async () => {
+    const installedTemplateView: ViewDefinition = {
+      ...populatedView,
+      id: "process-map",
+      title: processMapTemplate.title,
+      revision: 1,
+      timeRange: processMapTemplate.timeRange,
+      periodPolicy: processMapTemplate.periodPolicy,
+      slots: processMapTemplate.slots.map((slot) => ({
+        ...slot,
+        value: null,
+        feedback: { upCount: 0, downCount: 0, current: null },
+        itemActions: { items: [] },
+      })),
+    };
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [populatedView],
+    });
+    mocks.listBrainViewTemplateKits.mockResolvedValue({
+      status: "ok",
+      data: [processMapTemplate],
+    });
+    mocks.installBrainViewTemplateKit.mockResolvedValue({
+      status: "ok",
+      data: installedTemplateView,
+    });
+    render(<BrainOverview />);
+
+    await openDashboardMenu();
+    fireEvent.click(await screen.findByTestId("overview-templates"));
+    fireEvent.click(
+      await screen.findByTestId("preview-live-view-template-process-map"),
+    );
+    fireEvent.click(await screen.findByTestId("overview-apply-template"));
+
+    await waitFor(() =>
+      expect(mocks.saveBrainViewCanvas).toHaveBeenCalledWith(
+        expect.objectContaining({
+          viewId: "process-map",
+          expectedRevision: null,
+          mode: "canvas",
+          arrows: [
+            expect.objectContaining({ label: "starts" }),
+            expect.objectContaining({ label: "moves through" }),
+            expect.objectContaining({ label: "reveals" }),
+            expect.objectContaining({ label: "must preserve" }),
+            expect.objectContaining({ label: "enables" }),
+          ],
+        }),
+      ),
+    );
+    expect(mocks.localFetch).toHaveBeenCalledWith(
+      "/pipes/automate-my-work/enable",
+      expect.objectContaining({ method: "POST" }),
     );
   });
 
