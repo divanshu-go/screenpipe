@@ -6,9 +6,9 @@ and layer declared in the manifest, weighted by confidence and criticality.
 
 - Manifest: `e2e/coverage-map.json`
 - Specs directory: `e2e/specs`
-- Mapped specs: 91
-- Declared test blocks: 255
-- Weighted coverage points: 197.7
+- Mapped specs: 90
+- Declared test blocks: 254
+- Weighted coverage points: 196.7
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -19,9 +19,9 @@ can execute more runtime cases than this number shows.
 
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
-| windows | 73 | 227 | 184.2 | 15 | 77 | 91% |
-| macos | 87 | 218 | 168.5 | 17 | 79 | 89% |
-| linux | 63 | 187 | 154.0 | 14 | 72 | 88% |
+| windows | 72 | 226 | 183.2 | 15 | 75 | 91% |
+| macos | 86 | 217 | 167.5 | 17 | 77 | 89% |
+| linux | 62 | 186 | 153.0 | 14 | 70 | 88% |
 
 ## Runtime Results
 
@@ -37,7 +37,7 @@ pass/fail/skip counts.
 | auth | - | 1 specs / 1 tests / 1.0 pts | - |
 | billing | 4 specs / 6 tests / 5.7 pts | 4 specs / 6 tests / 5.7 pts | 4 specs / 6 tests / 5.7 pts |
 | capture-ocr | 2 specs / 16 tests / 6.4 pts | 5 specs / 7 tests / 2.8 pts | 1 specs / 3 tests / 1.2 pts |
-| chat-ai | 23 specs / 37 tests / 28.1 pts | 31 specs / 51 tests / 34.7 pts | 22 specs / 36 tests / 27.6 pts |
+| chat-ai | 22 specs / 36 tests / 27.1 pts | 30 specs / 50 tests / 33.7 pts | 21 specs / 35 tests / 26.6 pts |
 | entitlement | - | 1 specs / 1 tests / 1.0 pts | - |
 | local-api | 18 specs / 102 tests / 84.8 pts | 19 specs / 77 tests / 65.8 pts | 14 specs / 73 tests / 64.2 pts |
 | notifications | 3 specs / 24 tests / 15.3 pts | 2 specs / 4 tests / 2.4 pts | 1 specs / 3 tests / 2.1 pts |
@@ -48,7 +48,7 @@ pass/fail/skip counts.
 | real-ui-e2e | 50 specs / 144 tests / 117.0 pts | 55 specs / 133 tests / 109.1 pts | 46 specs / 122 tests / 103.4 pts |
 | settings | 14 specs / 37 tests / 34.0 pts | 16 specs / 32 tests / 27.7 pts | 13 specs / 29 tests / 26.0 pts |
 | storage-privacy | 9 specs / 39 tests / 30.3 pts | 8 specs / 20 tests / 19.1 pts | 6 specs / 18 tests / 17.1 pts |
-| tauri-command | 13 specs / 22 tests / 15.3 pts | 16 specs / 26 tests / 17.8 pts | 12 specs / 21 tests / 14.3 pts |
+| tauri-command | 12 specs / 21 tests / 14.3 pts | 15 specs / 25 tests / 16.8 pts | 11 specs / 20 tests / 13.3 pts |
 | window-lifecycle | 18 specs / 62 tests / 52.6 pts | 18 specs / 43 tests / 31.0 pts | 13 specs / 38 tests / 29.5 pts |
 
 ## Critical Feature Matrix
@@ -98,7 +98,6 @@ pass/fail/skip counts.
 
 | Spec | Platforms | Layers | Features | Criticality | Confidence | UX | Tests | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| acp-text-streaming.spec.ts | windows, macos, linux | chat-ai, tauri-command | chat, acp-runtime, acp-text-streaming | high | strong | command | 1 | A deterministic ACP adapter runs through the packaged Rust desktop runtime and proves ordered assistant text streaming from pi_start through agent_end. |
 | api-key-cold-spawn.spec.ts | windows, macos, linux | local-api, tauri-command | local-api-auth, app-launch | medium | partial | command | 3 | Cold-spawn local API config regression coverage. |
 | api-search-stress.spec.ts | windows, macos, linux | local-api, performance | local-api-auth, local-api-search, health, audio-device-health, local-api-load | high | strong | api | 29 | Broad readonly API, auth, search, and load coverage. |
 | api.spec.ts | windows, macos, linux | local-api | health, audio-device-health, connections, local-api-auth | high | partial | api | 7 | Smoke coverage for local HTTP API shape and auth behavior. |

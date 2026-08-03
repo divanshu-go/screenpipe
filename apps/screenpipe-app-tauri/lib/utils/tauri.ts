@@ -2772,36 +2772,8 @@ async writeBrowserLogs(entries: BrowserLogEntry[]) : Promise<void> {
 
 /** user-defined types **/
 
-export type AIPreset = { id: string; prompt: string; provider: AIProviderType; url?: string; model?: string; defaultPreset: boolean; apiKey: string | null; maxContextChars: number; maxTokens?: number;
-/**
- * The external adapter to launch when `provider` is `acp`.
- */
-acpAgent?: AcpAgentConfig | null }
-export type AIProviderType = "openai" | "openai-chatgpt" | "native-ollama" | "custom" | "screenpipe-cloud" | "pi" | "anthropic" |
-/**
- * External Agent Client Protocol adapter, launched via the ACP runtime.
- */
-"acp"
-/**
- * The external ACP adapter to launch when `backend` is `acp`.
- */
-export type AcpAgentConfig = {
-/**
- * Catalog id (for example `claude-acp`) or `custom`.
- */
-id: string;
-/**
- * Executable for a custom adapter; built-in ids resolve by id when absent.
- */
-command?: string | null;
-/**
- * Arguments passed to the adapter verbatim, without a shell.
- */
-args?: string[];
-/**
- * Environment passed only to the supervised adapter process.
- */
-env?: { [key in string]: string } }
+export type AIPreset = { id: string; prompt: string; provider: AIProviderType; url?: string; model?: string; defaultPreset: boolean; apiKey: string | null; maxContextChars: number; maxTokens?: number }
+export type AIProviderType = "openai" | "openai-chatgpt" | "native-ollama" | "custom" | "screenpipe-cloud" | "pi" | "anthropic"
 export type AecMode = "off" | "screenpipe" | "macos" | "windows"
 export type AudioDeviceInfo = { name: string; isDefault: boolean;
 /**
@@ -3012,12 +2984,6 @@ downloaded: boolean;
  * True when download failed with 401/403 — user must sign in.
  */
 auth_required: boolean }
-/**
- * Which transport backend Pi uses. Absent means the native Pi RPC agent;
- * `acp` runs an external Agent Client Protocol adapter through the hidden
- * runtime (see acp_runtime.rs).
- */
-export type PiBackend = "acp"
 export type PiCheckResult = { available: boolean; path: string | null }
 export type PiExtensionPackage = { source: string; scope: string; filtered: boolean; installed: boolean }
 /**
@@ -3026,20 +2992,9 @@ export type PiExtensionPackage = { source: string; scope: string; filtered: bool
 export type PiImageContent = { type: string; mimeType: string; data: string }
 export type PiInfo = { running: boolean; projectDir: string | null; pid: number | null; sessionId: string | null }
 /**
- * Configuration for which AI provider Pi should use.
- * Not `Hash`: the ACP agent config carries an `env` map, so the launch
- * fingerprint hashes a canonical serialization instead.
+ * Configuration for which AI provider Pi should use
  */
 export type PiProviderConfig = {
-/**
- * Transport backend. Absent keeps the native Pi RPC agent; `acp` runs an
- * external adapter through the hidden ACP runtime.
- */
-backend?: PiBackend | null;
-/**
- * Adapter configuration, required when `backend` is `acp`.
- */
-acpAgent?: AcpAgentConfig | null;
 /**
  * Provider type: "openai", "native-ollama", "custom", "screenpipe-cloud"
  */
