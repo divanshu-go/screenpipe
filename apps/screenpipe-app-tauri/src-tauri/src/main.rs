@@ -2111,8 +2111,7 @@ async fn main() {
                     .await;
                 });
                 if !app_ui_hidden && !headless_startup {
-                    crate::db_recovery_notifications::prompt_for_quarantined_database(
-                        app_handle.clone(),
+                    crate::db_recovery_notifications::notify_quarantined_database(
                         data_dir.clone(),
                     );
                 }

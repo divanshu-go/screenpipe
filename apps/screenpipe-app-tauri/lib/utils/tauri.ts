@@ -2542,6 +2542,19 @@ async startCapture() : Promise<Result<null, string>> {
 }
 },
 /**
+ * Start the protected database repair selected from the persistent `/notify`
+ * recovery card. The command returns immediately while recovery continues in
+ * the background and reports progress back through `/notify`.
+ */
+async startDatabaseRecovery() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("start_database_recovery") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Start an MP4 export in the background and return its job id immediately.
  */
 async startExportRecording(meetingId: number | null, start: string | null, end: string | null, outputPath: string) : Promise<Result<StartExportRecordingResponse, string>> {

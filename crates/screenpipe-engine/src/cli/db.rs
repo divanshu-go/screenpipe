@@ -539,6 +539,26 @@ fn generation_fingerprint(live: &Path) -> Result<Vec<GenerationComponentFingerpr
     Ok(fingerprint)
 }
 
+/// A quarantined app shell can cause SQLite to create a brand-new zero-byte
+/// WAL while rendering the recovery UI. That file contains no committed data
+/// and does not make the base database a newer generation. Keep rejecting any
+/// base DB change, any existing-sidecar change, and any WAL with bytes.
+fn recovery_source_is_current(
+    source: &[GenerationComponentFingerprint],
+    current: &[GenerationComponentFingerprint],
+) -> bool {
+    let current_without_new_empty_wal = current.iter().filter(|component| {
+        let newly_created_empty_wal = component.name == "db.sqlite-wal"
+            && component.length == 0
+            && !source
+                .iter()
+                .any(|source_component| source_component.name == component.name);
+        !newly_created_empty_wal
+    });
+
+    source.iter().eq(current_without_new_empty_wal)
+}
+
 fn copy_generation_for_recovery(
     live: &Path,
     work: &Path,
@@ -569,7 +589,7 @@ fn copy_generation_for_recovery(
     }
     sync_directory(work.parent().expect("working copy has parent"))?;
     let after = generation_fingerprint(live)?;
-    if after != before {
+    if !recovery_source_is_current(&before, &after) {
         bail!(
             "live DB/WAL/SHM changed while it was being copied; refusing recovery because the source was not offline"
         );
@@ -899,7 +919,7 @@ async fn recover_offline(data_dir: &Path) -> Result<()> {
     )?;
 
     let current_fingerprint = generation_fingerprint(&live)?;
-    if current_fingerprint != source_fingerprint {
+    if !recovery_source_is_current(&source_fingerprint, &current_fingerprint) {
         bail!(
             "live DB/WAL/SHM changed while recovery was running; refusing to replace a newer generation \
              (source={source_fingerprint:?}, current={current_fingerprint:?})"
@@ -1262,6 +1282,22 @@ mod recovery_tests {
                 fs::read(copy).expect("copy")
             );
         }
+    }
+
+    #[test]
+    fn recovery_tolerates_only_a_new_zero_byte_wal() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let live = dir.path().join("db.sqlite");
+        fs::write(&live, b"database-bytes").expect("write db");
+        let source = generation_fingerprint(&live).expect("source fingerprint");
+
+        fs::write(sqlite_sidecar(&live, "-wal"), b"").expect("empty wal");
+        let empty_wal = generation_fingerprint(&live).expect("empty wal fingerprint");
+        assert!(recovery_source_is_current(&source, &empty_wal));
+
+        fs::write(sqlite_sidecar(&live, "-wal"), b"new-write").expect("nonempty wal");
+        let changed = generation_fingerprint(&live).expect("changed fingerprint");
+        assert!(!recovery_source_is_current(&source, &changed));
     }
 
     #[test]

@@ -292,6 +292,15 @@ pub fn get_app_server_config() -> serde_json::Value {
     serde_json::json!({ "port": port })
 }
 
+/// Start the protected database repair selected from the persistent `/notify`
+/// recovery card. The command returns immediately while recovery continues in
+/// the background and reports progress back through `/notify`.
+#[tauri::command]
+#[specta::specta]
+pub fn start_database_recovery(app_handle: tauri::AppHandle) -> Result<(), String> {
+    crate::db_recovery_notifications::start_quarantined_database_recovery(app_handle)
+}
+
 /// Pure JSON shape used by the cold-spawn fallback. Extracted so the contract
 /// is covered by a unit test without needing a tauri::AppHandle. Port is the
 /// same effective port that the server config will use, including settings and
