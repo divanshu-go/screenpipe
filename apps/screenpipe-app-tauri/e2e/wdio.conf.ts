@@ -33,6 +33,7 @@ const isDestructiveDbFaultRun = (process.env.SCREENPIPE_E2E_SEED ?? '')
 const allSpecs = [resolve(__dirname, 'specs', '**', '*.spec.ts')];
 const windowsCiSpecs = [
   'brain-overview.spec.ts',
+  'acp-backend.spec.ts',
   'windows-system-integration.spec.ts',
   'windows-user-journey.spec.ts',
 ].map((spec) => resolve(__dirname, 'specs', spec));

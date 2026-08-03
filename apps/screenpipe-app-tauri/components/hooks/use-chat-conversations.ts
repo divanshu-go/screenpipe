@@ -726,6 +726,16 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     ) {
       aiTitleAttempted.add(convId);
 
+      // Never send an ACP chat's message to a different provider for titling.
+      // The user picked that agent's own provider deliberately (a privacy /
+      // account boundary), so shipping the first prompt to a non-ACP default
+      // (e.g. Screenpipe Cloud) to make a "smart" title would silently leak it.
+      // Keep currentPreset — titleCreatedByAI is a no-op for ACP presets — so
+      // an ACP chat keeps its local fallback title (deriveFallbackConversation-
+      // Title). This matches how other ACP clients (e.g. Zed) title threads
+      // locally; the user can still rename manually.
+      const titlePreset = currentPreset;
+
       // Generate title in background (non-blocking)
       // Pass the full raw user message — the AI can parse wrapper tags
       // and extract intent better than the simple regex stripper.
@@ -733,7 +743,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
         try {
           const aiTitle = await titleCreatedByAI(
             rawContent,
-            currentPreset,
+            titlePreset,
             settings?.user?.token ?? null,
             async (partial) => {
               try {
@@ -835,13 +845,15 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       // file size becomes a problem for power users we cap at the render
       // layer, never on disk.
       messages: msgs.map(m => {
-        // For tool-only responses, content may be empty but contentBlocks has the data.
+        // Tool-only responses have no text; content stays empty (the tool
+        // activity is preserved via contentBlocks) rather than a placeholder
+        // that would render as an assistant text bubble.
         let content = m.content;
         if (!content && m.contentBlocks?.length) {
           content = m.contentBlocks
             .filter((b: any) => b.type === "text")
             .map((b: any) => b.text)
-            .join("\n") || "(tool result)";
+            .join("\n");
         }
         // Persist contentBlocks so tool calls/results survive reload.
         // Strip isRunning (stale) and cap result length to keep file small.
@@ -1288,6 +1300,14 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     if (needsPersistedSync) {
       const { loadConversationFile } = await import("@/lib/chat-storage");
       persisted = await loadConversationFile(conv.id);
+      // Seed the prior ACP session id so the first cold-start spawn for this
+      // reopened chat reattaches (session/resume) instead of starting fresh.
+      const priorAcpSessionId =
+        persisted?.acpSessionId ?? (conv as ChatConversation).acpSessionId;
+      if (priorAcpSessionId) {
+        const { useAcpSessionConfig } = await import("@/lib/stores/acp-session-config");
+        useAcpSessionConfig.getState().seedSessionId(conv.id, priorAcpSessionId);
+      }
       if (persisted) {
         if (!store.sessions[conv.id]) {
           store.actions.upsert({
@@ -1543,7 +1563,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
           content = m.contentBlocks
             .filter((b: any) => b.type === "text")
             .map((b: any) => b.text)
-            .join("\n") || "(tool result)";
+            .join("\n");
         }
         const blocks = m.contentBlocks?.map((b: any) => {
           if (b.type === "tool") {

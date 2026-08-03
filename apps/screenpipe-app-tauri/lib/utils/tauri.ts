@@ -390,6 +390,20 @@ async doPermissionsCheck(initialCheck: boolean) : Promise<OSPermissionsCheck> {
     return await TAURI_INVOKE("do_permissions_check", { initialCheck });
 },
 /**
+ * E2E helper: run the real Pi/ACP startup path while keeping its expected
+ * failure inside Rust. WebDriver implementations can surface a rejected Tauri
+ * invocation as the browser command result even when page JavaScript catches
+ * the promise, which makes negative-path process cleanup tests nondeterministic.
+ */
+async e2eCapturePiStartError(sessionId: string, projectDir: string, providerConfig: PiProviderConfig | null) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("e2e_capture_pi_start_error", { sessionId, projectDir, providerConfig }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * E2E helper: distinguish a real CaptureSession from capture intent alone.
  */
 async e2eCaptureSessionRunning() : Promise<Result<boolean, string>> {
@@ -1531,7 +1545,7 @@ async performOcrOnImage(imageBase64: string) : Promise<Result<string, string>> {
 },
 /**
  * Abort current Pi operation. Priority command — cancels all pending commands
- * in the queue and sends abort directly. Waits for the SDK's done event.
+ * in the queue and sends abort directly. Waits for its exact SDK response.
  */
 async piAbort(sessionId: string | null) : Promise<Result<null, string>> {
     try {
@@ -1547,6 +1561,58 @@ async piAbort(sessionId: string | null) : Promise<Result<null, string>> {
 async piAbortActive(sessionId: string | null) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("pi_abort_active", { sessionId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Whether launching this agent will trigger a first-run package install (a
+ * slow, silent-looking wait). The preset editor uses this to show an
+ * "Installing <agent>…" hint instead of a bare "loading…" label. Cheap cache
+ * stat; false for binary/cached agents.
+ */
+async piAcpAgentDownloadPending(agentId: string) : Promise<boolean> {
+    return await TAURI_INVOKE("pi_acp_agent_download_pending", { agentId });
+},
+async piAcpAgentInstallStatus(agentId: string) : Promise<AcpAgentInstallStatus> {
+    return await TAURI_INVOKE("pi_acp_agent_install_status", { agentId });
+},
+/**
+ * Probe an ACP adapter for its advertised model/mode selectors without a
+ * chat: spawn the hidden runtime, let it initialize and create a session,
+ * capture the acp_session_config event, and tear everything down. Returns
+ * the raw event JSON. Fails soft with the adapter's error message (e.g.
+ * sign-in required) so the preset editor can show it as a hint.
+ */
+async piAcpProbeAgent(agent: AcpAgentConfig) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("pi_acp_probe_agent", { agent }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Change one ACP session configuration option (model, mode, or any other
+ * selector the adapter advertised through `acp_session_config`). Select
+ * options take the value id string; boolean options take "true"/"false".
+ */
+async piAcpSetConfigOption(sessionId: string | null, optionId: string, value: string, isBoolean: boolean | null) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("pi_acp_set_config_option", { sessionId, optionId, value, isBoolean }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Switch the ACP session mode (e.g. a permission mode) advertised through
+ * `acp_session_config`. Allowed while a prompt is streaming.
+ */
+async piAcpSetMode(sessionId: string | null, modeId: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("pi_acp_set_mode", { sessionId, modeId }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1637,7 +1703,7 @@ async piListExtensionPackages() : Promise<Result<PiExtensionPackage[], string>> 
 /**
  * Start a new Pi session (clears conversation history).
  * Serialized through the queue — waits for any in-flight work to complete,
- * then sends new_session and waits for the SDK's done event before returning.
+ * then sends new_session and waits for its exact SDK response before returning.
  */
 async piNewSession(sessionId: string | null) : Promise<Result<null, string>> {
     try {
@@ -2183,12 +2249,13 @@ async saveEnterpriseLicenseKey(licenseKey: string) : Promise<Result<null, string
 },
 /**
  * Persist the user's enterprise admin status, team API token, and the org's
- * team API base URL so the pi-agent's `screenpipe-team` skill knows whether
- * to install itself and where to point.
+ * team API base URL. The Enterprise app uses the role/license/token fields to
+ * decide whether to inject `screenpipe-team`; the native CLI resolves the API
+ * base and token from the same file when that skill invokes it.
  *
  * Called by the frontend right after a policy fetch confirms admin
  * role. Storing this alongside the license key in `enterprise.json`
- * keeps everything pi-agent needs in one file the skill can read
+ * keeps the Enterprise app and native CLI on one local configuration contract
  * without a Tauri round-trip.
  *
  * All fields are optional so callers can update one at a time —
@@ -2772,8 +2839,60 @@ async writeBrowserLogs(entries: BrowserLogEntry[]) : Promise<void> {
 
 /** user-defined types **/
 
-export type AIPreset = { id: string; prompt: string; provider: AIProviderType; url?: string; model?: string; defaultPreset: boolean; apiKey: string | null; maxContextChars: number; maxTokens?: number }
-export type AIProviderType = "openai" | "openai-chatgpt" | "native-ollama" | "custom" | "screenpipe-cloud" | "pi" | "anthropic"
+export type AIPreset = { id: string; prompt: string; provider: AIProviderType; acpAgent?: AcpAgentPresetConfig | null; url?: string; model?: string; defaultPreset: boolean; apiKey: string | null; maxContextChars: number; maxTokens?: number }
+export type AIProviderType = "openai" | "openai-chatgpt" | "native-ollama" | "custom" | "screenpipe-cloud" | "acp" | "pi" | "anthropic"
+export type AcpAgentConfig = {
+/**
+ * Registry id (for example `codex-acp`) or `custom`.
+ */
+id: string;
+/**
+ * Optional executable. Built-in registry adapters resolve by id when absent.
+ */
+command?: string | null;
+/**
+ * Arguments passed verbatim without a shell.
+ */
+args?: string[];
+/**
+ * Environment passed only to the supervised adapter process.
+ */
+env?: { [key in string]: string };
+/**
+ * Optional ACP authentication method id.
+ */
+authMethod?: string | null;
+/**
+ * Default session config option values (option id -> value id), applied
+ * after every session/new.
+ */
+config?: { [key in string]: string };
+/**
+ * Default session mode id, applied after every session/new.
+ */
+modeId?: string | null }
+/**
+ * Whether a built-in agent's CLI is installed on this computer. Binary agents
+ * (OpenCode, Cursor, Kimi) require the user to install the CLI; npx agents run
+ * via the bundled bun and are always available. The preset editor uses this to
+ * gate saving and to show an install prompt instead of a cryptic spawn error.
+ */
+export type AcpAgentInstallStatus = { requiresInstall: boolean; installed: boolean; command: string | null; installUrl: string | null }
+export type AcpAgentPresetConfig = { id: string; command?: string | null; args?: string[];
+/**
+ * Keys with empty values inherit from the desktop process environment.
+ */
+env?: { [key in string]: string };
+/**
+ * Default session config option values (option id -> value id), applied
+ * after every session/new. Options the adapter no longer advertises are
+ * ignored at apply time.
+ */
+config?: { [key in string]: string };
+/**
+ * Default session mode id, applied after every session/new.
+ */
+modeId?: string | null }
 export type AecMode = "off" | "screenpipe" | "macos" | "windows"
 export type AudioDeviceInfo = { name: string; isDefault: boolean;
 /**
@@ -2984,17 +3103,34 @@ downloaded: boolean;
  * True when download failed with 401/403 — user must sign in.
  */
 auth_required: boolean }
+export type PiBackend = "acp"
 export type PiCheckResult = { available: boolean; path: string | null }
 export type PiExtensionPackage = { source: string; scope: string; filtered: boolean; installed: boolean }
 /**
  * Image content for Pi RPC protocol (pi-ai ImageContent format)
  */
 export type PiImageContent = { type: string; mimeType: string; data: string }
-export type PiInfo = { running: boolean; projectDir: string | null; pid: number | null; sessionId: string | null }
+export type PiInfo = { running: boolean; projectDir: string | null; pid: number | null; sessionId: string | null;
 /**
- * Configuration for which AI provider Pi should use
+ * A non-fatal startup outcome, such as the user declining an ACP login.
+ * Genuine process/configuration failures still use the command error.
+ */
+startupError: string | null }
+/**
+ * Configuration for which AI provider Pi should use.
+ * Not `Hash` (it carries an `env: HashMap` via the ACP agent config); the
+ * launch fingerprint hashes a canonical serialization instead.
  */
 export type PiProviderConfig = {
+/**
+ * Transport backend. Omitted keeps the native Pi RPC implementation;
+ * `acp` runs a registry-compatible adapter through the official Rust SDK.
+ */
+backend?: PiBackend | null;
+/**
+ * ACP adapter configuration when `backend` is `acp`.
+ */
+acpAgent?: AcpAgentConfig | null;
 /**
  * Provider type: "openai", "native-ollama", "custom", "screenpipe-cloud"
  */
@@ -3023,7 +3159,13 @@ maxContextChars?: number | null;
 /**
  * Optional system prompt from AI preset (appended to Pi's built-in system prompt)
  */
-systemPrompt?: string | null }
+systemPrompt?: string | null;
+/**
+ * A prior ACP session id to reattach to instead of creating a fresh
+ * session, set only when reopening a conversation whose agent process
+ * is gone. Ignored by the native Pi backend.
+ */
+resumeSessionId?: string | null }
 /**
  * A user prompt that's been enqueued but not yet written to Pi's stdin.
  * Surfaced to the UI so the chat can render "queued" cards while a prior
@@ -3747,7 +3889,7 @@ chatAlwaysOnTop?: boolean;
 showRestartNotifications?: boolean;
 /**
  * Stop capture before the data volume is completely full. Search, pipes,
- * and the local API remain available. Explicitly opt-in for now.
+ * and the local API remain available. Safety-on unless explicitly disabled.
  */
 stopRecordingOnLowDisk?: boolean;
 /**
