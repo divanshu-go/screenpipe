@@ -10,9 +10,7 @@ import {
   Plus,
   Brain,
   Clock,
-  Gift,
   HelpCircle,
-  UserPlus,
   PanelLeftClose,
   PanelLeftOpen,
   Search,
@@ -61,7 +59,6 @@ import {
   type ChatLoadConversationPayload,
   shouldActivateHomeSectionForChatLoadConversation,
 } from "@/lib/chat-utils";
-import { useTeam } from "@/lib/hooks/use-team";
 import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
 import { useTauriEvent } from "@/lib/hooks/use-tauri-event";
 import { PipeActivityIndicator } from "@/components/pipe-activity-indicator";
@@ -207,7 +204,6 @@ function HomeContent() {
     void updateSettings({ firstRunGuideDone: true });
   }, [updateSettings]);
 
-  const teamState = useTeam();
   const { isSectionHidden, isSettingLocked } = useManagedPolicy();
   const runningPipes = useRunningPipes();
   const runningPipeCount = runningPipes.length;
@@ -1197,43 +1193,6 @@ function HomeContent() {
 
               {/* Bottom items */}
               <div className={cn("space-y-0.5 border-t pt-2", isTranslucent ? "vibrant-sidebar-border" : "border-border")}>
-                {/* Team link — hide invite promo in enterprise (unless team exists) */}
-                {(!isSectionHidden("team") || teamState.team) && (() => {
-                  const teamLabel = teamState.team
-                    ? `Your team (${teamState.members.length})`
-                    : "Invite your team";
-                  const btn = (
-                    <button
-                      onClick={() => openSettings("team")}
-                      className={cn(
-                        "w-full flex items-center space-x-2.5 px-2.5 py-1.5 rounded-lg transition-all duration-150 text-left group",
-                        isTranslucent ? "vibrant-nav-item vibrant-nav-hover" : "hover:bg-card/50 text-muted-foreground hover:text-foreground",
-                      )}
-                    >
-                      <UserPlus className={cn("h-3.5 w-3.5 transition-colors flex-shrink-0", isTranslucent ? "" : "text-muted-foreground group-hover:text-foreground")} />
-                      <span className="font-medium text-xs truncate">{teamLabel}</span>
-                    </button>
-                  );
-                  return btn;
-                })()}
-
-                {/* Get free month — hidden in enterprise */}
-                {!isSectionHidden("referral") && (() => {
-                  const btn = (
-                    <button
-                      onClick={() => openSettings("referral")}
-                      className={cn(
-                        "w-full flex items-center space-x-2.5 px-2.5 py-1.5 rounded-lg transition-all duration-150 text-left group",
-                        isTranslucent ? "vibrant-nav-item vibrant-nav-hover" : "hover:bg-card/50 text-muted-foreground hover:text-foreground",
-                      )}
-                    >
-                      <Gift className={cn("h-3.5 w-3.5 transition-colors flex-shrink-0", isTranslucent ? "" : "text-muted-foreground group-hover:text-foreground")} />
-                      <span className="font-medium text-xs truncate">Get free month</span>
-                    </button>
-                  );
-                  return btn;
-                })()}
-
                 {/* Settings — always visible; individual sections are enterprise-filtered inside /settings */}
                 {(() => {
                   const btn = (
