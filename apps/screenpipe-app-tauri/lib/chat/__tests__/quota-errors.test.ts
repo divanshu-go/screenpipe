@@ -101,7 +101,7 @@ describe("buildDailyLimitMessage", () => {
   it("returns concise account-budget copy for cost-limit errors", () => {
     const msg = buildDailyLimitMessage("daily_cost_limit_exceeded");
     expect(msg).toContain("account budget");
-    expect(msg).toContain("Background pipes share this budget");
+    expect(msg).toContain("Background scheduled tasks share this budget");
     // must not leak a raw dollar cap
     expect(msg).not.toMatch(/\$\d/);
   });

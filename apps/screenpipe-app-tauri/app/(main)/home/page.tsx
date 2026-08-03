@@ -964,7 +964,7 @@ function HomeContent() {
     // conversation". Each click allocates a new session id (empty
     // rows are not reused — that felt like opening an old recent).
     { id: "home", label: "Chat", icon: <Plus className="h-3.5 w-3.5" /> },
-    { id: "pipes", label: "Pipes", icon: <Workflow className="h-3.5 w-3.5" /> },
+    { id: "pipes", label: "Scheduled", icon: <Workflow className="h-3.5 w-3.5" /> },
     { id: "timeline", label: "Timeline", icon: <Clock className="h-3.5 w-3.5" /> },
     { id: "brain", label: "Brain", icon: <Brain className="h-3.5 w-3.5" /> },
     { id: "connections", label: "Connections", icon: <Plug className="h-3.5 w-3.5" /> },
@@ -1191,7 +1191,7 @@ function HomeContent() {
                           label={runningPipeCount}
                           className="ml-auto shrink-0"
                           labelClassName="text-muted-foreground/60"
-                          ariaLabel={`${runningPipeCount} running pipe${runningPipeCount === 1 ? "" : "s"}`}
+                          ariaLabel={`${runningPipeCount} running scheduled task${runningPipeCount === 1 ? "" : "s"}`}
                         />
                       )}
                     </button>

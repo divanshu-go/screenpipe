@@ -94,7 +94,7 @@ export function buildDailyLimitMessage(errorStr: string): string {
         // repeated immediately above it.
         return "Hosted AI didn't run this request because today's account budget is reached. Choose a recovery option below.";
       }
-      return "Hosted AI didn't run this request because today's account budget is reached. Background pipes share this budget. Switch to a local model or your own provider key to keep working.";
+      return "Hosted AI didn't run this request because today's account budget is reached. Background scheduled tasks share this budget. Switch to a local model or your own provider key to keep working.";
     }
 
     const tierMatch = errorStr.match(/"tier":\s*"([^"]+)"/);

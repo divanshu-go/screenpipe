@@ -205,7 +205,7 @@ export function CustomMcpCard() {
               official registry, or add an HTTP endpoint like Brave Search,
               Linear, Notion, or a local stdio process like{" "}
               <code className="text-xs bg-muted px-1 rounded">uvx mcp-server-brave</code>
-              {" "}— so pipes and chat can call their tools via{" "}
+              {" "}— so scheduled tasks and chat can call their tools via{" "}
               <code className="text-xs bg-muted px-1 rounded">sp_mcp_call</code>
               .
             </p>
@@ -1062,7 +1062,7 @@ function ServerEditor({
           checked={enabled}
           onChange={(e) => setEnabled(e.target.checked)}
         />
-        <span>Enabled — make tools available to pipes and chat</span>
+        <span>Enabled — make tools available to scheduled tasks and chat</span>
       </label>
 
       {testResult && (
@@ -1084,7 +1084,7 @@ function ServerEditor({
                 {testResult.data.tools.map((t) => t.name).join(", ")}
               </div>
               <p className="text-[11px] text-muted-foreground pt-1">
-                Heads up — when a pipe calls these tools they run with
+                Heads up — when a scheduled task calls these tools they run with
                 screenpipe&apos;s grants. Review what each tool can do
                 before enabling on a sensitive workspace.
               </p>
