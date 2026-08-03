@@ -587,27 +587,12 @@ impl ServerCore {
             ));
         }
 
-        // Secret store — read-only keychain access on startup.
-        // Never create a key automatically (that triggers a macOS modal).
-        // Users opt in via onboarding or Settings > Privacy.
+        // Secret-store readers always resolve an existing OS-vault key. The
+        // read path never creates a key, so optional encryption remains
+        // unchanged while every process can read encrypted credentials.
         {
-            let secret_key = match crate::secrets::get_key_if_encryption_enabled() {
-                crate::secrets::KeyResult::Found(k) => Some(k),
-                _ => {
-                    info!("keychain: no encryption key found — secrets stored unencrypted until user opts in");
-                    None
-                }
-            };
-            let database_error_hook: screenpipe_secrets::DatabaseErrorHook = {
-                let db = Arc::clone(&db);
-                Arc::new(move |error| {
-                    db.report_sqlite_error(error);
-                })
-            };
-            match screenpipe_secrets::SecretStore::new_with_database_error_hook(
-                db.pool.clone(),
-                secret_key,
-                Some(database_error_hook),
+            match screenpipe_secrets::SecretStore::open_for_data_dir_with_vault_key(
+                &config.data_dir,
             )
             .await
             {

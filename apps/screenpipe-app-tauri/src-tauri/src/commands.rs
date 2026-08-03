@@ -2736,12 +2736,8 @@ pub async fn enable_keychain_encryption() -> Result<KeychainStatus, String> {
         tracing::warn!("failed to write .encrypt-store flag: {}", e);
     }
 
-    let db_path = data_dir.join("db.sqlite");
-
-    // Shared, engine-matched pool (never an ad-hoc per-call connection — that
-    // churn corrupts db.sqlite, #4263).
     if let Ok(store) =
-        screenpipe_secrets::SecretStore::open(&db_path.to_string_lossy(), Some(key)).await
+        screenpipe_secrets::SecretStore::open_for_data_dir(&data_dir, Some(key)).await
     {
         match store.reencrypt_unencrypted_secrets(&key).await {
             Ok(count) if count > 0 => {
@@ -2763,13 +2759,10 @@ pub async fn enable_keychain_encryption() -> Result<KeychainStatus, String> {
 #[specta::specta]
 pub async fn disable_keychain_encryption() -> Result<KeychainStatus, String> {
     let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
-    let db_path = data_dir.join("db.sqlite");
+    let secrets_path = screenpipe_secrets::secrets_database_path(&data_dir);
 
-    if db_path.exists() {
-        // Shared, engine-matched pool (never an ad-hoc per-call connection —
-        // that churn corrupts db.sqlite, #4263). The later encrypted-store open
-        // reuses this same cached pool.
-        let plain_store = screenpipe_secrets::SecretStore::open(&db_path.to_string_lossy(), None)
+    if secrets_path.exists() || data_dir.join("db.sqlite").exists() {
+        let plain_store = screenpipe_secrets::SecretStore::open_for_data_dir(&data_dir, None)
             .await
             .map_err(|e| format!("failed to open secret store: {e}"))?;
         let encrypted_count = plain_store
@@ -2798,7 +2791,7 @@ pub async fn disable_keychain_encryption() -> Result<KeychainStatus, String> {
             };
 
             let encrypted_store =
-                screenpipe_secrets::SecretStore::open(&db_path.to_string_lossy(), Some(key))
+                screenpipe_secrets::SecretStore::open_for_data_dir(&data_dir, Some(key))
                     .await
                     .map_err(|e| format!("failed to open encrypted secret store: {e}"))?;
             match encrypted_store.decrypt_encrypted_secrets().await {

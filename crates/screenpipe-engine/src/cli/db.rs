@@ -35,8 +35,10 @@
 //!  * free disk ≥ 2× the DB/WAL/SHM generation size
 //!  * never open or checkpoint the quarantined generation; copy the exact
 //!    triplet and run page-level recovery only against the working copy
+//!  * discard recovered external-content FTS shadow data and rebuild those
+//!    derived indexes from authoritative application tables
 //!  * require a new physical file identity, quick/full integrity, zero foreign
-//!    key violations, and a durable write/close/reopen/read canary
+//!    key violations, FTS integrity, and durable write/close/reopen canaries
 //!  * preserve the exact original DB/WAL/SHM in a recovery directory and clear
 //!    durable quarantine only after the installed file passes verification
 
@@ -846,6 +848,14 @@ async fn recover_offline(data_dir: &Path) -> Result<()> {
     screenpipe_sqlite_recovery::recover_database(&work, &candidate)
         .context("embedded page-level recovery failed; quarantined DB/WAL/SHM remain untouched")?;
 
+    println!("rebuilding derived external-content FTS5 indexes from authoritative tables");
+    let rebuilt_fts = screenpipe_db::rebuild_recovered_fts5_indexes(&candidate)
+        .await
+        .context("rebuilding recovered FTS5 indexes; live generation remains untouched")?;
+    if !rebuilt_fts.is_empty() {
+        println!("  rebuilt FTS5 indexes: {}", rebuilt_fts.join(", "));
+    }
+
     let mut forbidden_identities = vec![original_identity.clone()];
     if let Some(marker_identity) = marker.and_then(|marker| marker.file_identity) {
         if !forbidden_identities.contains(&marker_identity) {
@@ -888,9 +898,11 @@ async fn recover_offline(data_dir: &Path) -> Result<()> {
         RecoveryPhase::CandidateVerified,
     )?;
 
-    if generation_fingerprint(&live)? != source_fingerprint {
+    let current_fingerprint = generation_fingerprint(&live)?;
+    if current_fingerprint != source_fingerprint {
         bail!(
-            "live DB/WAL/SHM changed while recovery was running; refusing to replace a newer generation"
+            "live DB/WAL/SHM changed while recovery was running; refusing to replace a newer generation \
+             (source={source_fingerprint:?}, current={current_fingerprint:?})"
         );
     }
 
@@ -1335,7 +1347,40 @@ mod recovery_tests {
                    SELECT 1 UNION ALL SELECT value + 1 FROM n WHERE value < 200 \
                  ) \
                  INSERT INTO records(value) SELECT printf('row-%04d', value) FROM n; \
-                 CREATE INDEX records_value_idx ON records(value);",
+                 CREATE INDEX records_value_idx ON records(value); \
+                 CREATE TABLE frames (\
+                    id INTEGER PRIMARY KEY, full_text TEXT, app_name TEXT, \
+                    window_name TEXT, browser_url TEXT\
+                 ); \
+                 CREATE VIRTUAL TABLE frames_fts USING fts5(\
+                    full_text, app_name, window_name, browser_url, \
+                    content='frames', content_rowid='id', tokenize='unicode61'\
+                 ); \
+                 CREATE TRIGGER frames_ai AFTER INSERT ON frames \
+                 WHEN NEW.full_text IS NOT NULL AND NEW.full_text != '' BEGIN \
+                    INSERT INTO frames_fts(\
+                        rowid, full_text, app_name, window_name, browser_url\
+                    ) VALUES (\
+                        NEW.id, NEW.full_text, COALESCE(NEW.app_name, ''), \
+                        COALESCE(NEW.window_name, ''), COALESCE(NEW.browser_url, '')\
+                    ); \
+                 END; \
+                 CREATE TRIGGER frames_au \
+                 AFTER UPDATE OF full_text, app_name, window_name, browser_url ON frames BEGIN \
+                    INSERT INTO frames_fts(\
+                        frames_fts, rowid, full_text, app_name, window_name, browser_url\
+                    ) SELECT 'delete', OLD.id, OLD.full_text, COALESCE(OLD.app_name, ''), \
+                             COALESCE(OLD.window_name, ''), COALESCE(OLD.browser_url, '') \
+                      WHERE OLD.full_text IS NOT NULL AND OLD.full_text != ''; \
+                    INSERT INTO frames_fts(\
+                        rowid, full_text, app_name, window_name, browser_url\
+                    ) SELECT NEW.id, NEW.full_text, COALESCE(NEW.app_name, ''), \
+                             COALESCE(NEW.window_name, ''), COALESCE(NEW.browser_url, '') \
+                      WHERE NEW.full_text IS NOT NULL AND NEW.full_text != ''; \
+                 END; \
+                 INSERT INTO frames VALUES \
+                    (1, 'recoverable frame text', 'test-app', '', ''), \
+                    (2, '', 'metadata-only-app', '', '');",
             )
             .expect("seed source database");
         let index_root: i64 = create
@@ -1345,6 +1390,13 @@ mod recovery_tests {
                 |row| row.get(0),
             )
             .expect("index root page");
+        let fts_data_root: i64 = create
+            .query_row(
+                "SELECT rootpage FROM sqlite_schema WHERE name = 'frames_fts_data'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("FTS data root page");
         drop(create);
 
         let mut source_file = OpenOptions::new()
@@ -1358,6 +1410,12 @@ mod recovery_tests {
         source_file
             .write_all(&[0xff; 512])
             .expect("corrupt index page");
+        source_file
+            .seek(SeekFrom::Start(((fts_data_root - 1) * 4096 + 100) as u64))
+            .expect("seek FTS shadow page");
+        source_file
+            .write_all(&[0xa5; 512])
+            .expect("corrupt FTS shadow page");
         source_file.sync_all().expect("sync source corruption");
         drop(source_file);
 
@@ -1387,6 +1445,40 @@ mod recovery_tests {
                 .expect("verify recovered integrity"),
             "ok"
         );
+        let frame_hits: i64 = recovered
+            .query_row(
+                "SELECT COUNT(*) FROM frames_fts WHERE frames_fts MATCH 'recoverable'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query rebuilt FTS index");
+        assert_eq!(frame_hits, 1);
+        drop(recovered);
+
+        let writable = Connection::open(&live).expect("reopen recovered database for canary");
+        writable
+            .execute(
+                "INSERT INTO frames(id, full_text, app_name, window_name, browser_url) \
+                 VALUES (3, 'postrecoverycanary', '', '', '')",
+                [],
+            )
+            .expect("write through normal post-recovery FTS trigger");
+        let post_recovery_hits: i64 = writable
+            .query_row(
+                "SELECT COUNT(*) FROM frames_fts \
+                 WHERE frames_fts MATCH 'postrecoverycanary'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query post-recovery FTS trigger write");
+        assert_eq!(post_recovery_hits, 1);
+        writable
+            .execute(
+                "INSERT INTO frames_fts(frames_fts) VALUES('integrity-check')",
+                [],
+            )
+            .expect("FTS stays valid after post-recovery write");
+        drop(writable);
 
         let recovery_dir = newest_recovery_directories(data_dir)
             .expect("recovery dirs")

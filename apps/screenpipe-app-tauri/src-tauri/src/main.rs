@@ -512,9 +512,9 @@ async fn main() {
     let store_path = screenpipe_core::paths::default_screenpipe_data_dir().join("store.bin");
     let store_json = std::fs::read(&store_path).ok().and_then(|data| {
         if data.len() >= 8 && &data[..8] == b"SPSTORE1" {
-            // Encrypted store — try to decrypt with keychain key
-            // Only attempt if encryption is enabled (file being encrypted is the signal)
-            let key = match secrets::get_key_if_encryption_enabled() {
+            // The encrypted file is authoritative: every reader asks the OS
+            // vault for its existing key instead of relying on a separate flag.
+            let key = match secrets::get_key() {
                 secrets::KeyResult::Found(k) => k,
                 _ => return None,
             };
@@ -1298,8 +1298,8 @@ async fn main() {
             // hit a split: the engine (server_core) reads its SecretStore from
             // `config.data_dir` (the custom path) while OAuth token writes
             // (`open_secret_store`, chatgpt_oauth, …) went to the default
-            // `~/.screenpipe`. Tokens landed in one db.sqlite and were read from
-            // another → "no credentials found … cannot authenticate" 401s on
+            // `~/.screenpipe`. Tokens landed in one data directory and were read
+            // from another → "no credentials found … cannot authenticate" 401s on
             // every Microsoft 365 / Google / ChatGPT call, reconnecting forever
             // never helping. Setting the env var here (before any OAuth callback
             // can fire) makes `default_screenpipe_data_dir()` self-consistent and
