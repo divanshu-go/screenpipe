@@ -3286,9 +3286,9 @@ pub async fn hide_shortcut_reminder(app_handle: tauri::AppHandle) -> Result<(), 
 }
 
 /// Current recording-health overlay state: "normal" | "failure" | "fixing" |
-/// "recovered", optionally suffixed "|<detail>" (boot-phase label while
-/// fixing). The shortcut-reminder webview pulls this on mount, then stays
-/// current via the "recording-health-state" event.
+/// "recovered", optionally suffixed "|<detail>" (a concise failure reason or
+/// boot-phase label while fixing). The shortcut-reminder webview pulls this on
+/// mount, then stays current via the "recording-health-state" event.
 #[tauri::command]
 #[specta::specta]
 pub async fn get_recording_health_state() -> String {
@@ -3329,7 +3329,14 @@ pub async fn e2e_recording_health_return_race(
         .flatten()
         .map(|settings| settings.show_restart_notifications)
         .unwrap_or(false);
-    crate::overlay_health::on_tick(&app_handle, return_confirmed, false, false).await;
+    crate::overlay_health::on_tick(
+        &app_handle,
+        return_confirmed,
+        false,
+        false,
+        "screen capture is not updating",
+    )
+    .await;
     let overlay_state = crate::overlay_health::current_state_payload();
 
     let recovered_after = tier.observe(false, true);
