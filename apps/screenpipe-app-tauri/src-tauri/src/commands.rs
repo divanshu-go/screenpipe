@@ -3474,6 +3474,55 @@ pub async fn get_recording_health_state() -> String {
     crate::overlay_health::current_state_payload()
 }
 
+/// Arm the full-stack gone-silent capture fault after the E2E client has
+/// observed a healthy baseline. The engine validates the explicit seed again;
+/// release builds always return false.
+#[tauri::command]
+#[specta::specta]
+pub async fn e2e_arm_capture_loop_silent_fault() -> Result<bool, String> {
+    if !cfg!(feature = "e2e") {
+        return Err("capture-loop silent probe requires the e2e feature".into());
+    }
+    let armed = screenpipe_engine::event_driven_capture::e2e_arm_capture_loop_silent_fault();
+    if !armed {
+        return Err("capture-loop silent probe was not seeded or was already consumed".into());
+    }
+    Ok(true)
+}
+
+/// Arm the debug-only one-shot SCK id-lookup wedge after startup is healthy,
+/// preventing unrelated monitor-list consumers from racing the E2E assertion.
+#[tauri::command]
+#[specta::specta]
+pub async fn e2e_arm_sck_lookup_hang_fault() -> Result<bool, String> {
+    if !cfg!(feature = "e2e") {
+        return Err("SCK lookup probe requires the e2e feature".into());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let armed = screenpipe_screen::monitor::e2e_arm_sck_lookup_hang_fault();
+        if !armed {
+            return Err(
+                "SCK lookup probe was not seeded, was already armed, or was consumed".into(),
+            );
+        }
+        Ok(true)
+    }
+    #[cfg(not(target_os = "macos"))]
+    Err("SCK lookup probe requires macOS".into())
+}
+
+/// Read the real OS lock state for platform E2E setup. The capture recovery
+/// lane must skip rather than bypass an intentional lock-screen privacy pause.
+#[tauri::command]
+#[specta::specta]
+pub async fn e2e_screen_is_locked() -> Result<bool, String> {
+    if !cfg!(feature = "e2e") {
+        return Err("screen-lock probe requires the e2e feature".into());
+    }
+    Ok(screenpipe_engine::sleep_monitor::screen_is_locked())
+}
+
 /// E2E-only accelerated reproduction of an idle capture heartbeat pause that
 /// recovers as the user returns. The real incident accumulated 114 idle stale
 /// checks, then the first input both woke capture and crossed the attended
