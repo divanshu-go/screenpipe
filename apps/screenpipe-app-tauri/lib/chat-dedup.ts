@@ -77,9 +77,21 @@ export function conversationDedupKey(conv: DedupConvLike | null | undefined): st
   const firstUser = messages.find((m) => m?.role === "user");
   const display = typeof firstUser?.displayContent === "string" ? firstUser.displayContent : "";
   const content = typeof firstUser?.content === "string" ? firstUser.content : "";
-  const semantic = display.trim() || stripPromptPlumbing(content);
-  const cleaned = semantic.trim().toLowerCase().replace(/\s+/g, " ");
-  return cleaned ? cleaned.slice(0, 200) : null;
+  const stripped = stripPromptPlumbing(content);
+  const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
+  const displayNorm = norm(display);
+  const strippedNorm = norm(stripped);
+  // Card openers set a title displayContent distinct from the injected body
+  // and share a fixed template across launches, so exempt them from dedup
+  // (typed message labels prefix their content and still dedup).
+  const isTemplatedCardOpener =
+    displayNorm.length > 0 &&
+    strippedNorm.length > 0 &&
+    displayNorm !== strippedNorm &&
+    !strippedNorm.startsWith(displayNorm);
+  if (isTemplatedCardOpener) return null;
+  const semantic = displayNorm || strippedNorm;
+  return semantic ? semantic.slice(0, 200) : null;
 }
 
 /** Stable identity for read-time duplicate collapsing.
