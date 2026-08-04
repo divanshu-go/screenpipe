@@ -80,6 +80,10 @@ export interface Message {
   entrySource?: ChatEntrySource;
   /** Allowlisted home-card category. Never contains a title, prompt, or user-authored value. */
   entryCard?: ChatEntryCard;
+  /** The app quit while this assistant turn was still streaming; its
+   *  running tools never reported completion and are shown as interrupted
+   *  rather than silently marked done. */
+  interruptedByQuit?: boolean;
 }
 
 export type QueuedDisplayPayload = {

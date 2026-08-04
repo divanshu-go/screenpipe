@@ -480,3 +480,67 @@ describe("pi-event-router: agent_terminated", () => {
     );
   });
 });
+
+describe("pi-event-router: honest interruption on quit/crash", () => {
+  beforeEach(reset);
+
+  it("marks a still-running tool as interrupted when the process terminates mid-turn", async () => {
+    seed("A");
+    useChatStore.setState({ currentId: "B" });
+    await handlePiEvent(
+      piEvt("A", { type: "message_start", message: { role: "assistant" } }),
+    );
+    await handlePiEvent(
+      piEvt("A", {
+        type: "tool_execution_start",
+        toolCallId: "long-tool",
+        toolName: "Bash",
+        args: {},
+      } as unknown as AgentInnerEvent),
+    );
+
+    // Process dies before the tool ever completes.
+    handleTerminated({ sessionId: "A", source: "pi", exitCode: 1 });
+    await flushPendingSaves();
+
+    const saved = (saveConversationFile as any).mock.calls.at(-1)[0];
+    const assistant = saved.messages.find((m: any) => m.role === "assistant");
+    expect(assistant.interruptedByQuit).toBe(true);
+    const tool = assistant.contentBlocks.find((b: any) => b.type === "tool");
+    expect(tool.toolCall.isRunning).toBe(false);
+    expect(tool.toolCall.isError).toBe(true);
+    expect(tool.toolCall.result).toContain("interrupted");
+  });
+
+  it("does not flag a normally completed turn", async () => {
+    seed("A");
+    useChatStore.setState({ currentId: "B" });
+    await handlePiEvent(
+      piEvt("A", { type: "message_start", message: { role: "assistant" } }),
+    );
+    await handlePiEvent(
+      piEvt("A", {
+        type: "tool_execution_start",
+        toolCallId: "quick-tool",
+        toolName: "Read",
+        args: {},
+      } as unknown as AgentInnerEvent),
+    );
+    await handlePiEvent(
+      piEvt("A", {
+        type: "tool_execution_end",
+        toolCallId: "quick-tool",
+        toolName: "Read",
+        result: { content: [{ type: "text", text: "done" }] },
+      } as unknown as AgentInnerEvent),
+    );
+    await handlePiEvent(piEvt("A", { type: "agent_end" }));
+    await flushPendingSaves();
+
+    const saved = (saveConversationFile as any).mock.calls.at(-1)[0];
+    const assistant = saved.messages.find((m: any) => m.role === "assistant");
+    expect(assistant.interruptedByQuit).toBeUndefined();
+    const tool = assistant.contentBlocks.find((b: any) => b.type === "tool");
+    expect(tool.toolCall.isError).not.toBe(true);
+  });
+});

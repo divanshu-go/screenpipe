@@ -835,13 +835,15 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       // file size becomes a problem for power users we cap at the render
       // layer, never on disk.
       messages: msgs.map(m => {
-        // For tool-only responses, content may be empty but contentBlocks has the data.
+        // Tool-only responses have no text; content stays empty (the tool
+        // activity is preserved via contentBlocks) rather than a placeholder
+        // that would render as an assistant text bubble.
         let content = m.content;
         if (!content && m.contentBlocks?.length) {
           content = m.contentBlocks
             .filter((b: any) => b.type === "text")
             .map((b: any) => b.text)
-            .join("\n") || "(tool result)";
+            .join("\n");
         }
         // Persist contentBlocks so tool calls/results survive reload.
         // Strip isRunning (stale) and cap result length to keep file small.
@@ -1543,7 +1545,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
           content = m.contentBlocks
             .filter((b: any) => b.type === "text")
             .map((b: any) => b.text)
-            .join("\n") || "(tool result)";
+            .join("\n");
         }
         const blocks = m.contentBlocks?.map((b: any) => {
           if (b.type === "tool") {

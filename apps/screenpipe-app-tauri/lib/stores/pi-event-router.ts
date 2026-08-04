@@ -195,29 +195,11 @@ export async function handlePiEvent(envelope: AgentEventEnvelope) {
   }
 
   const store = useChatStore.getState();
-  const existing = store.sessions[sid];
+  let existing = store.sessions[sid];
 
   const nextStatus = statusForEvent(inner);
   const snippet = previewSnippet(inner);
   const err = errorMessage(inner);
-
-  // Phase 3: accumulate full message-content state in the store for
-  // EVERY session (current + background). This is what makes it possible
-  // for the chat panel to switch back to a previously-backgrounded
-  // session and see live tokens that arrived while it was away — the
-  // router has been writing them to the store the whole time. The chat
-  // panel either reads the store directly or syncs its local state from
-  // the store on session switch.
-  //
-  // Pipe-watch sessions are written by `pipe-watch-writer` instead —
-  // pipe streams don't follow chat-shaped lifecycles (missing
-  // message_start between turns, terminal `agent_end` carrying the
-  // canonical messages array), and double-writing here would race
-  // against that writer. Status mirroring (the sidebar dot / preview)
-  // still happens below for both kinds.
-  if (existing?.kind !== "pipe-watch") {
-    applyEventToSessionContent(sid, inner);
-  }
 
   // Lazy-create on first event from a previously-unknown session id.
   // Handles the case where Pi was started outside the chat-storage flow
@@ -240,7 +222,26 @@ export async function handlePiEvent(envelope: AgentEventEnvelope) {
       ...(snippet ? { lastContentAt: now } : {}),
     });
     if (snippet) previewLastEmittedAt.set(sid, Date.now());
-    return;
+    existing = useChatStore.getState().sessions[sid];
+    if (!existing) return;
+  }
+
+  // Phase 3: accumulate full message-content state in the store for
+  // EVERY session (current + background). This is what makes it possible
+  // for the chat panel to switch back to a previously-backgrounded
+  // session and see live tokens that arrived while it was away — the
+  // router has been writing them to the store the whole time. The chat
+  // panel either reads the store directly or syncs its local state from
+  // the store on session switch.
+  //
+  // Pipe-watch sessions are written by `pipe-watch-writer` instead —
+  // pipe streams don't follow chat-shaped lifecycles (missing
+  // message_start between turns, terminal `agent_end` carrying the
+  // canonical messages array), and double-writing here would race
+  // against that writer. Status mirroring (the sidebar dot / preview)
+  // still happens below for both kinds.
+  if (existing.kind !== "pipe-watch") {
+    applyEventToSessionContent(sid, inner);
   }
 
   // Decide whether to write a preview update — throttled per session.
@@ -797,21 +798,34 @@ async function persistBackgroundSession(sid: string): Promise<void> {
         messages: messages.map((m: any) => {
           let content: string = m.content || "";
           if (!content && m.contentBlocks?.length) {
-            content =
-              m.contentBlocks
-                .filter((b: any) => b.type === "text")
-                .map((b: any) => b.text)
-                .join("\n") || "(tool result)";
+            // Tool-only messages have no text; leave content empty (the tool
+            // activity persists via contentBlocks) rather than a placeholder
+            // that would render as an assistant text bubble.
+            content = m.contentBlocks
+              .filter((b: any) => b.type === "text")
+              .map((b: any) => b.text)
+              .join("\n");
           }
+          // A tool still marked running at persist time never reported
+          // completion: the turn was cut off (crash or app quit), since a
+          // normal finish flips isRunning false via tool_execution_end
+          // before agent_end. Record it honestly instead of persisting it
+          // as silently done, and flag the message so the UI can say so.
+          let wasInterrupted = false;
           const blocks = m.contentBlocks?.map((b: any) => {
             if (b.type === "tool") {
-              const { isRunning: _isRunning, ...rest } = b.toolCall ?? {};
+              const { isRunning, ...rest } = b.toolCall ?? {};
+              const interrupted = isRunning === true;
+              if (interrupted) wasInterrupted = true;
               return {
                 type: "tool",
                 toolCall: {
                   ...rest,
                   isRunning: false,
-                  result: rest.result?.slice?.(0, 4000),
+                  isError: interrupted ? true : rest.isError,
+                  result: interrupted
+                    ? "interrupted — the app closed before this finished"
+                    : rest.result?.slice?.(0, 4000),
                 },
               };
             }
@@ -820,6 +834,7 @@ async function persistBackgroundSession(sid: string): Promise<void> {
             }
             return b;
           });
+          const interruptedByQuit = m.interruptedByQuit || wasInterrupted;
           return {
             id: m.id,
             role: m.role,
@@ -836,6 +851,7 @@ async function persistBackgroundSession(sid: string): Promise<void> {
             ...(m.steeredResponse ? { steeredResponse: true } : {}),
             ...(m.workDurationMs ? { workDurationMs: m.workDurationMs } : {}),
             ...(m.stoppedByUser ? { stoppedByUser: true } : {}),
+            ...(interruptedByQuit ? { interruptedByQuit: true } : {}),
           };
         }),
         createdAt: existing?.createdAt ?? Date.now(),
