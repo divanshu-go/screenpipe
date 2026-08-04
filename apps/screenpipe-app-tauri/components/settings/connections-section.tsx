@@ -21,6 +21,10 @@ import { ensureChatGptPreset } from "@/lib/utils/chatgpt-preset";
 import { notifyConnectionsUpdated } from "@/lib/connections-events";
 import { foregroundAfterOAuth } from "@/lib/connections/foreground-oauth";
 import { appDeepLinkScheme } from "@/lib/connections/mcp-oauth";
+import {
+  connectionResponseState,
+  visibleConnectionCredentials,
+} from "@/lib/utils/connection-credentials";
 import { searchInputBehaviorProps } from "@/lib/search-input-behavior";
 import {
   CONNECTION_CATEGORY_BY_ID,
@@ -2518,6 +2522,7 @@ export function ConnectionCredentialForm({
   integrationId,
   fields,
   initialCredentials,
+  configured = false,
   onSaved,
   instanceName,
   onDisconnect,
@@ -2525,12 +2530,14 @@ export function ConnectionCredentialForm({
   integrationId: string;
   fields: IntegrationField[];
   initialCredentials?: Record<string, string>;
+  configured?: boolean;
   onSaved?: () => void;
   instanceName?: string;
   onDisconnect?: () => void;
 }) {
   const sessionKey = `disconnected:${integrationId}${instanceName ? `:${instanceName}` : ""}`;
-  const [creds, setCreds] = useState<Record<string, string>>(initialCredentials || {});
+  const safeInitialCredentials = () => visibleConnectionCredentials(fields, initialCredentials);
+  const [creds, setCreds] = useState<Record<string, string>>(safeInitialCredentials);
   const [visible, setVisible] = useState<Record<string, boolean>>({});
   const [status, setStatus] = useState<"idle" | "connecting" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
@@ -2538,7 +2545,7 @@ export function ConnectionCredentialForm({
   // suppressed if the user explicitly disconnected this session (persists across remounts)
   const [isSaved, setIsSaved] = useState(() => {
     if (typeof window !== "undefined" && sessionStorage.getItem(sessionKey)) return false;
-    return Object.values(initialCredentials || {}).some(v => !!v);
+    return configured;
   });
   // set when user explicitly clicks disconnect — blocks all future initialCredentials syncs
   const userDisconnectedRef = useRef(
@@ -2548,12 +2555,9 @@ export function ConnectionCredentialForm({
   useEffect(() => {
     if (userDisconnectedRef.current) return; // never auto-refill after explicit disconnect
     if (!initialCredentials) return;
-    const hasValues = Object.values(initialCredentials).some(v => !!v);
-    if (hasValues) {
-      setCreds(initialCredentials);
-      setIsSaved(true);
-    }
-  }, [initialCredentials]);
+    setCreds(safeInitialCredentials());
+    setIsSaved(configured);
+  }, [initialCredentials, configured]);
 
   const endpoint = instanceName
     ? `/connections/${integrationId}/instances/${encodeURIComponent(instanceName)}`
@@ -2636,13 +2640,13 @@ export function ConnectionCredentialForm({
           <div className="relative">
             <Input
               type={field.secret && !visible[field.key] ? "password" : "text"}
-              placeholder={field.placeholder}
+              placeholder={isSaved && field.secret ? "stored securely" : field.placeholder}
               value={creds[field.key] || ""}
               onChange={(e) => { setCreds(prev => ({ ...prev, [field.key]: e.target.value })); }}
               className="h-8 text-xs pr-8"
               readOnly={isSaved}
             />
-            {field.secret && (
+            {field.secret && !isSaved && (
               <button
                 type="button"
                 onClick={() => setVisible(prev => ({ ...prev, [field.key]: !prev[field.key] }))}
@@ -2938,6 +2942,7 @@ function ObsidianPanel({ onConnected, onDisconnected }: { onConnected?: () => vo
 interface InstanceData {
   name: string;
   credentials: Record<string, string>;
+  configured: boolean;
 }
 
 /**
@@ -3036,7 +3041,7 @@ function BeePairPanel({ onConnected }: { onConnected: () => void }) {
   );
 }
 
-function ApiIntegrationPanel({ integration, onRefresh }: {
+export function ApiIntegrationPanel({ integration, onRefresh }: {
   integration: IntegrationInfo;
   onRefresh: () => void;
 }) {
@@ -3045,23 +3050,19 @@ function ApiIntegrationPanel({ integration, onRefresh }: {
   const [addingInstance, setAddingInstance] = useState(false);
   const [newInstanceName, setNewInstanceName] = useState("");
   const [defaultCreds, setDefaultCreds] = useState<Record<string, string>>({});
+  const [defaultConfigured, setDefaultConfigured] = useState(false);
 
-  // Load default credentials
+  // The tile is aggregate across every instance and auth mode. Read the
+  // default slot itself before deciding whether its form is configured.
   useEffect(() => {
-    if (integration.connected) {
-      localFetch(`/connections/${integration.id}`)
-        .then(r => r.json())
-        .then(data => {
-          if (data.credentials) {
-            const loaded: Record<string, string> = {};
-            for (const [k, v] of Object.entries(data.credentials)) {
-              if (typeof v === "string") loaded[k] = v;
-            }
-            setDefaultCreds(loaded);
-          }
-        })
-        .catch(() => {});
-    }
+    localFetch(`/connections/${integration.id}`)
+      .then(r => r.json())
+      .then(data => {
+        const state = connectionResponseState(integration.fields, data);
+        setDefaultCreds(state.credentials);
+        setDefaultConfigured(state.connected);
+      })
+      .catch(() => {});
   }, [integration.id, integration.connected]);
 
   // Load instances
@@ -3076,7 +3077,11 @@ function ApiIntegrationPanel({ integration, onRefresh }: {
         if (Array.isArray(list)) {
           const mapped = list
             .filter((i: any) => i.instance != null)
-            .map((i: any) => ({ name: i.instance, credentials: i.credentials || {} }));
+            .map((i: any) => ({
+              name: i.instance,
+              credentials: i.credentials || {},
+              configured: i.enabled ?? i.connected ?? false,
+            }));
           setInstances(mapped);
         }
         setInstancesLoaded(true);
@@ -3089,6 +3094,7 @@ function ApiIntegrationPanel({ integration, onRefresh }: {
   const refreshAll = (disconnected = false) => {
     if (disconnected) {
       setDefaultCreds({});
+      setDefaultConfigured(false);
     }
     onRefresh();
     // Re-fetch instances
@@ -3100,7 +3106,11 @@ function ApiIntegrationPanel({ integration, onRefresh }: {
         if (Array.isArray(list)) {
           const mapped = list
             .filter((i: any) => i.instance != null)
-            .map((i: any) => ({ name: i.instance, credentials: i.credentials || {} }));
+            .map((i: any) => ({
+              name: i.instance,
+              credentials: i.credentials || {},
+              configured: i.enabled ?? i.connected ?? false,
+            }));
           setInstances(mapped);
         }
       })
@@ -3109,7 +3119,10 @@ function ApiIntegrationPanel({ integration, onRefresh }: {
 
   const handleAddInstance = () => {
     if (!newInstanceName.trim()) return;
-    setInstances(prev => [...prev, { name: newInstanceName.trim(), credentials: {} }]);
+    setInstances(prev => [
+      ...prev,
+      { name: newInstanceName.trim(), credentials: {}, configured: false },
+    ]);
     setNewInstanceName("");
     setAddingInstance(false);
   };
@@ -3123,6 +3136,7 @@ function ApiIntegrationPanel({ integration, onRefresh }: {
           integrationId={integration.id}
           fields={integration.fields}
           initialCredentials={defaultCreds}
+          configured={defaultConfigured}
           onSaved={refreshAll}
           onDisconnect={() => refreshAll(true)}
         />
@@ -3136,6 +3150,7 @@ function ApiIntegrationPanel({ integration, onRefresh }: {
             integrationId={integration.id}
             fields={integration.fields}
             initialCredentials={inst.credentials}
+            configured={inst.configured}
             instanceName={inst.name}
             onSaved={refreshAll}
             onDisconnect={() => {
