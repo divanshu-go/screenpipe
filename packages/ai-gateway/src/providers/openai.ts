@@ -141,14 +141,23 @@ export class OpenAIProvider implements AIProvider {
 	supportsVision = true;
 	supportsJson = true;
 	private client: OpenAI;
+	private chatTemplateKwargs?: Record<string, unknown>;
 
 	constructor(
 		apiKey: string,
 		baseURL?: string,
 		defaultHeaders?: Record<string, string | null | undefined>,
 		maxRetries?: number,
+		chatTemplateKwargs?: Record<string, unknown>,
 	) {
 		this.client = new OpenAI({ apiKey, ...(baseURL ? { baseURL } : {}), defaultHeaders, maxRetries });
+		this.chatTemplateKwargs = chatTemplateKwargs;
+	}
+
+	private applyProviderOptions(params: ChatCompletionCreateParams): void {
+		if (this.chatTemplateKwargs) {
+			Object.assign(params, { chat_template_kwargs: this.chatTemplateKwargs });
+		}
 	}
 
 	private createJSONSchemaFormat(schema: Record<string, unknown>, name: string, description?: string): ResponseFormatJSONSchema {
@@ -290,6 +299,7 @@ export class OpenAIProvider implements AIProvider {
 		this.applyGenerationOptions(params, body);
 		this.applyTokenLimit(params, body);
 		this.applyToolCompatibilityOptions(params, body);
+		this.applyProviderOptions(params);
 		await applyGpt56PromptCaching(params);
 
 		const response = await this.createWithUnsupportedParamRetry(params, (p) =>
@@ -323,6 +333,7 @@ export class OpenAIProvider implements AIProvider {
 		this.applyGenerationOptions(params, body);
 		this.applyTokenLimit(params, body);
 		this.applyToolCompatibilityOptions(params, body);
+		this.applyProviderOptions(params);
 		await applyGpt56PromptCaching(params);
 
 		const stream = (await this.createWithUnsupportedParamRetry(params, (p) =>
