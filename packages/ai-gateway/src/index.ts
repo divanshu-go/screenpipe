@@ -94,6 +94,18 @@ import {
 
 export { RateLimiter };
 
+/**
+ * Keep paid background-Pipe rescue independent from the flex-tier kill switch.
+ * The header identifies workload intent; resolveLatencyClass only controls
+ * whether the primary provider may use flex capacity.
+ */
+export function shouldEnableArgusBackgroundFallback(
+	request: Request,
+	authResult: AuthResult,
+): boolean {
+	return isBackgroundRequest(request) && hasPaidHostedAiPlan(authResult);
+}
+
 type BoundedJsonRead =
 	| { ok: true; value: unknown; bytes: number }
 	| { ok: false; tooLarge: boolean };
@@ -723,9 +735,23 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 						freePreview: freeChat.mode === 'metered',
 						efficientOnly: getHostedAiPlan(authResult.accountPlan) !== 'business',
 						gatewayContext,
-						argusBackgroundFallback: latency === 'background' && hasPaidHostedAiPlan(authResult),
+						argusBackgroundFallback: shouldEnableArgusBackgroundFallback(request, authResult),
 					},
 				);
+				if (response.status === 429 && body.stream) {
+					const userAgent = request.headers.get('user-agent')?.toLowerCase() ?? '';
+					console.warn('streaming hosted AI limit classification', {
+						backgroundHeader: isBackgroundRequest(request),
+						hasSessionAffinity: Boolean(
+							request.headers.get('x-session-id')
+							|| request.headers.get('x-screenpipe-session-id'),
+						),
+						piClient: userAgent.includes('pi-ai') || userAgent.includes('pi-coding-agent'),
+						model: body.model,
+						messageRoles: body.messages.map((message) => String(message.role)).join(',').slice(0, 256),
+						toolCount: Array.isArray(body.tools) ? body.tools.length : 0,
+					});
+				}
 				const latencyMs = Date.now() - reqStart;
 				// Difficulty-router decision (null unless the router ran) for A/B measurement.
 				const routerTier = response.headers.get('x-screenpipe-router-tier');

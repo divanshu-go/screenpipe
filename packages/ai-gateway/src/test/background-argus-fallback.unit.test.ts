@@ -6,6 +6,7 @@ import { describe, expect, it, mock } from 'bun:test';
 import { tryArgusBackgroundFallback } from '../handlers/chat';
 import {
 	ARGUS_BACKGROUND_FALLBACK_MODEL,
+	ARGUS_BACKGROUND_MAX_COMPLETION_TOKENS,
 	hasArgusUnsupportedInput,
 	isAccountLocalAllowanceError,
 	isProviderQuotaOrBillingLimitError,
@@ -99,6 +100,19 @@ describe('paid background Pipe Argus fallback', () => {
 
 		const textBody = prepareArgusBackgroundFallbackBody(body);
 		expect(textBody.messages).toBe(body.messages);
+	});
+
+	it('normalizes Pi\'s 32k output request to the bounded Argus vLLM field', () => {
+		const capped = prepareArgusBackgroundFallbackBody({
+			...body,
+			max_tokens: 16_000,
+			max_completion_tokens: 32_000,
+		});
+		expect(capped.max_completion_tokens).toBeUndefined();
+		expect(capped.max_tokens).toBe(ARGUS_BACKGROUND_MAX_COMPLETION_TOKENS);
+
+		const alreadyBounded = prepareArgusBackgroundFallbackBody({ ...body, max_tokens: 512 });
+		expect(alreadyBounded.max_tokens).toBe(512);
 	});
 
 	it('preserves the original allowance response when Argus is unavailable', async () => {
