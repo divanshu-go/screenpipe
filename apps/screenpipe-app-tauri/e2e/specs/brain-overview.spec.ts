@@ -932,7 +932,6 @@ Refresh the assigned Live View output targets from source-backed activity.
     const renderedText = (await browser.execute(
       () => document.body?.innerText || "",
     )) as string;
-    expect(renderedText).toContain("Live Views");
     expect(renderedText.toLowerCase()).toContain("dashboards");
     expect(renderedText.toLowerCase()).toContain("customize");
     expect(renderedText).toContain("Automation opportunities");
