@@ -159,16 +159,19 @@ describe("LiveViewCanvas", () => {
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(toggle.getAttribute("aria-label")).toContain("select tool active");
     expect(screen.queryByTestId("canvas-tools-panel")).toBeNull();
+    expect(screen.getByTestId("canvas-interaction-hint")).toBeTruthy();
 
     const panel = openCanvasTools();
     expect(panel).toBeTruthy();
     expect(screen.getByTestId("canvas-tool-pan")).toBeTruthy();
+    expect(screen.queryByTestId("canvas-interaction-hint")).toBeNull();
 
     fireEvent.click(screen.getByTestId("canvas-tool-pan"));
     expect(screen.queryByTestId("canvas-tools-panel")).toBeNull();
     expect(
       screen.getByTestId("canvas-tools-toggle").getAttribute("aria-label"),
     ).toContain("pan tool active");
+    expect(screen.getByTestId("canvas-interaction-hint")).toBeTruthy();
 
     openCanvasTools();
     fireEvent.keyDown(screen.getByTestId("canvas-tools-panel"), {

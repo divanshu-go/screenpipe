@@ -1167,9 +1167,54 @@ Refresh the assigned Live View output targets from source-backed activity.
     for (const size of [SUPPORTED_WINDOW_SIZES[0], SUPPORTED_WINDOW_SIZES[5]]) {
       await setCssWindowSize(size.width, size.height);
       await browser.pause(150);
+      const compactCanvasLayout = (await browser.execute(() => {
+        const canvasElement = document.querySelector<HTMLElement>(
+          "[data-testid='live-view-canvas']",
+        );
+        const toolbar = document.querySelector<HTMLElement>(
+          "[data-canvas-toolbar]",
+        );
+        const hint = document.querySelector<HTMLElement>(
+          "[data-testid='canvas-interaction-hint']",
+        );
+        const composer = document.querySelector<HTMLElement>(
+          "[data-testid='overview-floating-composer']",
+        );
+        if (!canvasElement || !toolbar || !hint || !composer) return null;
+        const canvasRect = canvasElement.getBoundingClientRect();
+        const toolbarRect = toolbar.getBoundingClientRect();
+        const hintRect = hint.getBoundingClientRect();
+        const composerRect = composer.getBoundingClientRect();
+        const overlaps = (a: DOMRect, b: DOMRect) =>
+          a.left < b.right &&
+          a.right > b.left &&
+          a.top < b.bottom &&
+          a.bottom > b.top;
+        return {
+          hintInsideCanvas:
+            hintRect.left >= canvasRect.left &&
+            hintRect.right <= canvasRect.right &&
+            hintRect.top >= canvasRect.top &&
+            hintRect.bottom <= canvasRect.bottom,
+          hintOverlapsToolbar: overlaps(hintRect, toolbarRect),
+          hintOverlapsComposer: overlaps(hintRect, composerRect),
+        };
+      })) as {
+        hintInsideCanvas: boolean;
+        hintOverlapsToolbar: boolean;
+        hintOverlapsComposer: boolean;
+      } | null;
+      expect(compactCanvasLayout).not.toBeNull();
+      expect(compactCanvasLayout!.hintInsideCanvas).toBe(true);
+      expect(compactCanvasLayout!.hintOverlapsToolbar).toBe(false);
+      expect(compactCanvasLayout!.hintOverlapsComposer).toBe(false);
+
       await pointerPressTestId("canvas-tools-toggle");
       const toolsPanel = await waitForTestId("canvas-tools-panel", 10_000);
       await toolsPanel.waitForDisplayed({ timeout: t(10_000) });
+      expect(
+        await $("[data-testid='canvas-interaction-hint']").isExisting(),
+      ).toBe(false);
       const canvasLayout = (await browser.execute(() => {
         const canvasElement = document.querySelector<HTMLElement>(
           "[data-testid='live-view-canvas']",

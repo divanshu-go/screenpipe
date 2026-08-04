@@ -1386,9 +1386,14 @@ export function LiveViewCanvas({
           choose another Block or note to connect
         </div>
       )}
-      <div className="pointer-events-none absolute bottom-3 right-3 z-20 border border-border bg-background/95 px-2 py-1 font-mono text-[9px] text-muted-foreground">
-        drag nodes · pan tool or middle-drag · ctrl/⌘ + wheel to zoom
-      </div>
+      {!toolsOpen && (
+        <div
+          data-testid="canvas-interaction-hint"
+          className="pointer-events-none absolute right-3 top-3 z-20 max-w-[calc(100%-11rem)] border border-border bg-background/95 px-2 py-1 text-right font-mono text-[9px] leading-tight text-muted-foreground"
+        >
+          drag nodes · pan tool or middle-drag · ctrl/⌘ + wheel to zoom
+        </div>
+      )}
     </section>
   );
 }
