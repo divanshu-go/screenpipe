@@ -72,6 +72,7 @@ export function LiveViewAiComposer({
   const [prompt, setPrompt] = useState("");
   const [generationStep, setGenerationStep] = useState(0);
   const [compactFocused, setCompactFocused] = useState(false);
+  const [modelSelectorOpen, setModelSelectorOpen] = useState(false);
 
   useEffect(() => {
     if (!busy) return;
@@ -109,7 +110,9 @@ export function LiveViewAiComposer({
     prompt.trim() && selectedPreset && !busy && !hostedUsageExhausted,
   );
   const compactExpanded =
-    compact && !hostedUsageExhausted && (compactFocused || busy);
+    compact &&
+    !hostedUsageExhausted &&
+    (compactFocused || modelSelectorOpen || busy);
   const intent = inferLiveViewGenerationIntent(
     prompt,
     Boolean(currentViewTitle),
@@ -235,6 +238,7 @@ export function LiveViewAiComposer({
               showLoginCta
               containerClassName="w-auto min-w-36"
               triggerClassName="h-8 rounded-none"
+              onOpenChange={setModelSelectorOpen}
             />
             {prompt.trim() && (
               <span
