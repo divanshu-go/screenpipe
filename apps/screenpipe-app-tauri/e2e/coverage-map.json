@@ -669,6 +669,16 @@
       "notes": "Isolated agent-home CI lane verifies private native config writes, the resolved local API credential, a real authenticated MCP tool call, skills setup, and removal of the connection slide."
     },
     {
+      "spec": "onboarding-h1-follow-up.spec.ts",
+      "platforms": ["windows", "macos", "linux"],
+      "layers": ["onboarding", "notifications", "pipes", "real-ui-e2e"],
+      "features": ["onboarding", "notifications", "pipes"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "A due H1 activation runs its real Pipe, sends one visible prompt through the app-control notification server, and remains exactly-once across repeated scheduler ticks."
+    },
+    {
       "spec": "onboarding-redirect.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["onboarding", "real-ui-e2e", "window-lifecycle"],
