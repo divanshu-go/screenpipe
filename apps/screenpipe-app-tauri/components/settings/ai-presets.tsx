@@ -78,6 +78,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { aiEndpointUrl } from "@/lib/utils/ai-endpoint-url";
+import { generatePresetName } from "@/lib/utils/preset-name";
 import { fetchAiGateway } from "@/lib/ai-gateway-url";
 import { Textarea } from "../ui/textarea";
 import {
@@ -289,6 +290,10 @@ const AISection = ({
   const [settingsPreset, setSettingsPreset] = useState<
     Partial<AIPreset> | undefined
   >(preset);
+  // Last name this component auto-generated. Lets the auto-name effect refill
+  // as the provider/model changes without ever overwriting a name the user
+  // typed themselves.
+  const lastAutoNameRef = useRef<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
@@ -515,6 +520,44 @@ const AISection = ({
     setSettingsPreset(prev => ({ ...prev, ...presetsObject }));
   }, []);
 
+  // Auto-fill the preset name from the picked provider/model while creating a
+  // new preset, refilling as the selection changes until the user types their
+  // own name. Existing presets keep their name (the field is disabled there).
+  const isNewPreset = !preset || isDuplicating;
+  useEffect(() => {
+    if (!isNewPreset) return;
+    const currentName = settingsPreset?.id ?? "";
+    if (currentName && currentName !== lastAutoNameRef.current) return;
+    const autoName = generatePresetName(
+      { provider: settingsPreset?.provider, model: settingsPreset?.model },
+      visiblePresets.map((p) => p.id),
+      preset?.id,
+    );
+    if (autoName === currentName) return;
+    lastAutoNameRef.current = autoName;
+    updateSettingsPreset({ id: autoName });
+  }, [
+    isNewPreset,
+    settingsPreset?.id,
+    settingsPreset?.provider,
+    settingsPreset?.model,
+    visiblePresets,
+    preset?.id,
+    updateSettingsPreset,
+  ]);
+
+  // Refill an emptied name on blur so a blank field never blocks saving.
+  const refillEmptyName = useCallback(() => {
+    if (!isNewPreset || (settingsPreset?.id ?? "").trim()) return;
+    const autoName = generatePresetName(
+      { provider: settingsPreset?.provider, model: settingsPreset?.model },
+      visiblePresets.map((p) => p.id),
+      preset?.id,
+    );
+    lastAutoNameRef.current = autoName;
+    updateSettingsPreset({ id: autoName });
+  }, [isNewPreset, settingsPreset?.id, settingsPreset?.provider, settingsPreset?.model, visiblePresets, preset?.id, updateSettingsPreset]);
+
   const handleApiKeyChange = useCallback((value: string, isValid: boolean) => {
     updateSettingsPreset({ apiKey: value });
   }, [updateSettingsPreset]);
@@ -575,15 +618,6 @@ const AISection = ({
     setChatgptLoggedIn(false);
     // chatgptChecking is managed by the status-check effect, not here
 
-    const defaultNames: Record<string, string> = {
-      "openai-chatgpt": "chatgpt",
-      "openai": "openai",
-      "anthropic": "claude",
-      "native-ollama": "ollama",
-      "screenpipe-cloud": "screenpipe-cloud",
-      "acp": "claude code",
-    };
-
     let newUrl = "";
     let newModel = settingsPreset?.model;
 
@@ -623,13 +657,9 @@ const AISection = ({
       model: newModel,
       acpAgent: newValue === "acp" ? { id: "claude-acp", args: [], env: {} } : undefined,
     };
-    // Auto-fill name only when creating a new preset (no existing id)
-    if (!settingsPreset?.id && defaultNames[newValue]) {
-      updates.id = defaultNames[newValue];
-    }
-
+    // The name auto-fills from provider/model via the auto-name effect.
     updateSettingsPreset(updates);
-  }, [settingsPreset?.id, settingsPreset?.url, settingsPreset?.model, updateSettingsPreset]);
+  }, [settingsPreset?.provider, settingsPreset?.model, updateSettingsPreset]);
 
   const [models, setModels] = useState<AIModel[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
@@ -1337,6 +1367,7 @@ const AISection = ({
         label="Preset Name"
         value={settingsPreset?.id || ""}
         onChange={(value, isValid) => updateSettingsPreset({ id: value })}
+        onBlur={refillEmptyName}
         validation={(value) => validatePresetName(value, visiblePresets, preset?.id)}
         placeholder="Enter preset name"
         required={true}
