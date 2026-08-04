@@ -32,15 +32,15 @@ results and `cargo llvm-cov` data on top when judging release confidence.
 
 - Mapped suites: 32
 - Mapped Rust files: 310
-- Active test blocks: 2884
+- Active test blocks: 2885
 - Ignored/manual test blocks: 133
-- Weighted coverage points: 2373.7
+- Weighted coverage points: 2374.7
 
 | Platform | Suites | Active tests | Ignored tests | Weighted points | Layers | Flows | Critical score |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| windows | 29 | 2756 | 128 | 2315.0 | 21 | 11 | 100% |
-| macos | 29 | 2807 | 108 | 2324.9 | 22 | 11 | 100% |
-| linux | 25 | 2450 | 102 | 2037.4 | 20 | 11 | 100% |
+| windows | 29 | 2757 | 128 | 2316.0 | 21 | 11 | 100% |
+| macos | 29 | 2808 | 108 | 2325.9 | 22 | 11 | 100% |
+| linux | 25 | 2451 | 102 | 2038.4 | 20 | 11 | 100% |
 
 ## Refresh
 

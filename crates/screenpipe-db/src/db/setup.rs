@@ -249,7 +249,7 @@ impl DatabaseManager {
         };
 
         // Read pool: handles all SELECT queries (search, timeline, API, pipes).
-        let read_pool = SqlitePoolOptions::new()
+        let read_pool = crate::write_queue::capture_pool_options()
             .max_connections(config.read_pool_max)
             .min_connections(config.read_pool_min)
             .acquire_timeout(Duration::from_secs(5))
@@ -260,7 +260,7 @@ impl DatabaseManager {
         // Write pool: dedicated to INSERT/UPDATE/DELETE via begin_immediate_with_retry().
         // Writes are serialized by write_semaphore so only 1 is active
         // at a time; extras absorb connection detach without killing the pool.
-        let write_pool = SqlitePoolOptions::new()
+        let write_pool = crate::write_queue::capture_pool_options()
             .max_connections(config.write_pool_max)
             .min_connections(1)
             .acquire_timeout(Duration::from_secs(10))
