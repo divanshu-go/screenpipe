@@ -503,8 +503,7 @@ impl SCServer {
         listener: TcpListener,
         app: Router,
     ) -> Result<(), std::io::Error> {
-        Self::serve_router_with_listener_graceful(addr, listener, app, std::future::pending())
-            .await
+        Self::serve_router_with_listener_graceful(addr, listener, app, std::future::pending()).await
     }
 
     /// Like [`Self::serve_router_with_listener`], but stops accepting when
