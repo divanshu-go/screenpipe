@@ -350,6 +350,25 @@ export function usePiForegroundEvents({
               prev.map((m) => m.id === msgId ? { ...m, contentBlocks } : m)
             );
           }
+        } else if (data.type === "tool_execution_update") {
+          // Pi streams the tool's partial output while it runs. partialResult
+          // is cumulative, so store its tail as the running tool's progress.
+          if (piMessageIdRef.current) {
+            const msgId = piMessageIdRef.current;
+            const toolCallId = stringValue(data.toolCallId);
+            const partial = textFromToolResult(data.partialResult);
+            if (partial) {
+              for (const block of piContentBlocksRef.current) {
+                if (block.type !== "tool" || block.toolCall.id !== toolCallId) continue;
+                block.toolCall.progress =
+                  partial.length > 4000 ? partial.slice(-4000) : partial;
+              }
+              const contentBlocks = [...piContentBlocksRef.current];
+              setMessages((prev) =>
+                prev.map((m) => m.id === msgId ? { ...m, contentBlocks } : m)
+              );
+            }
+          }
         } else if (data.type === "tool_execution_end") {
           if (piMessageIdRef.current) {
             const msgId = piMessageIdRef.current;
