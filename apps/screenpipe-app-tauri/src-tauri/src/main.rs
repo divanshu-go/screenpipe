@@ -2113,11 +2113,9 @@ async fn main() {
                 // A new process must preserve the same fail-closed state as the
                 // process that observed the hard fault. Start the notification
                 // subscriber first, then publish recovery-required immediately.
-                tauri::async_runtime::spawn(async {
-                    crate::db_relaunch::surface_manual_recovery(
-                        "durable SQLite quarantine was present at app launch",
-                    )
-                    .await;
+                tauri::async_runtime::spawn(async move {
+                    crate::db_relaunch::surface_quarantined_recovery_at_launch(&launch_db_path)
+                        .await;
                 });
                 if !app_ui_hidden && !headless_startup {
                     crate::db_recovery_notifications::notify_quarantined_database(
