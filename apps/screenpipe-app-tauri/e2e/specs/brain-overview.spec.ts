@@ -229,6 +229,12 @@ async function pointerPressTestId(testId: string) {
   }, testId);
 }
 
+async function clickTestId(testId: string) {
+  const target = await waitForTestId(testId, 10_000);
+  await target.waitForClickable({ timeout: t(10_000) });
+  await target.click();
+}
+
 async function resizeCanvasBlockBottomRight(
   testId: string,
   delta: { x: number; y: number },
@@ -1107,7 +1113,8 @@ Refresh the assigned Live View output targets from source-backed activity.
       },
     );
 
-    await pointerPressTestId("canvas-tools-toggle");
+    await clickTestId("canvas-tools-toggle");
+    await waitForTestId("canvas-tools-panel", 10_000);
     const noteTool = await $("[data-testid='canvas-tool-note']");
     await noteTool.click();
     const compactTools = await waitForTestId("canvas-tools-toggle", 10_000);
@@ -1119,7 +1126,8 @@ Refresh the assigned Live View output targets from source-backed activity.
     const noteInput = await $("textarea[aria-label='Canvas note']");
     await noteInput.waitForDisplayed({ timeout: t(10_000) });
     await noteInput.setValue("Review the source evidence before automating.");
-    await pointerPressTestId("canvas-tools-toggle");
+    await clickTestId("canvas-tools-toggle");
+    await waitForTestId("canvas-tools-panel", 10_000);
     await $("[data-testid='canvas-fit']").click();
 
     const arrowTool = await $("[data-testid='canvas-tool-arrow']");
@@ -1209,7 +1217,7 @@ Refresh the assigned Live View output targets from source-backed activity.
       expect(compactCanvasLayout!.hintOverlapsToolbar).toBe(false);
       expect(compactCanvasLayout!.hintOverlapsComposer).toBe(false);
 
-      await pointerPressTestId("canvas-tools-toggle");
+      await clickTestId("canvas-tools-toggle");
       const toolsPanel = await waitForTestId("canvas-tools-panel", 10_000);
       await toolsPanel.waitForDisplayed({ timeout: t(10_000) });
       expect(
@@ -1269,7 +1277,7 @@ Refresh the assigned Live View output targets from source-backed activity.
       expect(canvasLayout!.toolbarBottom).toBeLessThanOrEqual(
         canvasLayout!.canvasBottom,
       );
-      await pointerPressTestId("canvas-tools-close");
+      await clickTestId("canvas-tools-close");
       await canvas.moveTo({ xOffset: 0, yOffset: 160 });
       await browser.keys(["Escape"]);
       await browser.pause(250);
