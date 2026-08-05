@@ -1541,58 +1541,6 @@ export const AIPresetsSelector = ({
                     </CommandItem>
                   </CommandGroup>
                 )}
-                {showModelOnly &&
-                  (selectedPresetData?.provider === "screenpipe-cloud" ||
-                    selectedPresetData?.provider === "pi") &&
-                  piModels.length > 0 && (
-                  <CommandGroup heading="Models">
-                    {piModels.map((model) => {
-                      const isGated = showUpsell && model.locked;
-                      const isSelected = selectedPresetData.model === model.id;
-                      return (
-                        <CommandItem
-                          key={`cloud-model-${model.id}`}
-                          value={`cloud-model-${model.id}`}
-                          disabled={isGated}
-                          onSelect={async () => {
-                            if (isGated) return;
-                            if (!isSelected) {
-                              const updatedPreset = {
-                                ...selectedPresetData,
-                                model: model.id,
-                              };
-                              await updateSettings({
-                                aiPresets: (settings.aiPresets || []).map((preset) =>
-                                  preset.id === updatedPreset.id ? updatedPreset : preset,
-                                ),
-                              });
-                              onControlledSelect?.(updatedPreset.id);
-                              onPresetSaved?.(updatedPreset);
-                            }
-                            handleOpenChange(false);
-                          }}
-                          className="flex py-2"
-                        >
-                          <Check
-                            className={cn(
-                              "mr-2 h-4 w-4 shrink-0",
-                              isSelected ? "opacity-100" : "opacity-0",
-                            )}
-                          />
-                          <span className="min-w-0 flex-1 truncate">{model.name}</span>
-                          {model.free && (
-                            <span className="ml-2 text-[10px] text-muted-foreground">free</span>
-                          )}
-                          {isGated && (
-                            <span className="ml-2 border border-border px-1 text-[9px] text-muted-foreground">
-                              business
-                            </span>
-                          )}
-                        </CommandItem>
-                      );
-                    })}
-                  </CommandGroup>
-                )}
                 {canManageEmployeePresets && recommendedPresets && recommendedPresets.length > 0 && (
                   <CommandGroup heading="Recommended Presets">
                     {recommendedPresets.map((preset) => (
