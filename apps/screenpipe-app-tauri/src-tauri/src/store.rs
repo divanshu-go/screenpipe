@@ -1410,6 +1410,8 @@ Rules:
                     "semanticContext": null,
                     "coreAudioSystemAudio": null,
                     "smartRecording": null,
+                    "filterMusic": null,
+                    "prioritizeInputLatency": null,
                     "aecMode": null,
                 }),
             ),
@@ -1427,6 +1429,14 @@ Rules:
                             "forceDisabled": false,
                         },
                         "smartRecording": {
+                            "defaultEnabled": false,
+                            "forceDisabled": false,
+                        },
+                        "filterMusic": {
+                            "defaultEnabled": true,
+                            "forceDisabled": false,
+                        },
+                        "prioritizeInputLatency": {
                             "defaultEnabled": false,
                             "forceDisabled": false,
                         },
@@ -1678,6 +1688,12 @@ impl SettingsStore {
             }
             if boolean_force_disabled("smartRecording") {
                 settings.experimental_meeting_piggyback = false;
+            }
+            if boolean_force_disabled("filterMusic") {
+                settings.filter_music = false;
+            }
+            if boolean_force_disabled("prioritizeInputLatency") {
+                settings.prioritize_input_latency = false;
             }
             if policy
                 .pointer("/aecMode/forceDisabled")
@@ -3298,6 +3314,8 @@ mod tests {
         store.recording.enable_semantic_context = true;
         store.recording.experimental_coreaudio_system_audio = true;
         store.recording.experimental_meeting_piggyback = true;
+        store.recording.filter_music = true;
+        store.recording.prioritize_input_latency = true;
         store.recording.aec_mode = screenpipe_config::AecMode::Macos;
         store.recording.macos_input_vpio_enabled = true;
         store.extra.insert(
@@ -3308,6 +3326,8 @@ mod tests {
                     "semanticContext": {"defaultEnabled": true, "forceDisabled": true},
                     "coreAudioSystemAudio": {"defaultEnabled": true, "forceDisabled": true},
                     "smartRecording": {"defaultEnabled": true, "forceDisabled": true},
+                    "filterMusic": {"defaultEnabled": true, "forceDisabled": true},
+                    "prioritizeInputLatency": {"defaultEnabled": true, "forceDisabled": true},
                 },
                 "aecMode": {"defaultValue": "macos", "forceDisabled": true},
             }),
@@ -3317,6 +3337,8 @@ mod tests {
         assert!(!effective.enable_semantic_context);
         assert!(!effective.experimental_coreaudio_system_audio);
         assert!(!effective.experimental_meeting_piggyback);
+        assert!(!effective.filter_music);
+        assert!(!effective.prioritize_input_latency);
         assert_eq!(effective.aec_mode, screenpipe_config::AecMode::Off);
         assert!(!effective.screenpipe_aec_enabled);
         assert!(!effective.macos_input_vpio_enabled);
@@ -3350,6 +3372,20 @@ mod tests {
                 .extra
                 .get("remoteControlPreferences")
                 .and_then(|preferences| preferences.get("coreAudioSystemAudio")),
+            Some(&Value::Null),
+        );
+        assert_eq!(
+            store
+                .extra
+                .get("remoteControlPreferences")
+                .and_then(|preferences| preferences.get("filterMusic")),
+            Some(&Value::Null),
+        );
+        assert_eq!(
+            store
+                .extra
+                .get("remoteControlPreferences")
+                .and_then(|preferences| preferences.get("prioritizeInputLatency")),
             Some(&Value::Null),
         );
         assert_eq!(

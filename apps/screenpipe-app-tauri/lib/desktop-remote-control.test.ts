@@ -12,6 +12,7 @@ import {
   parseAecModeRemotePolicy,
   parseBooleanRemotePolicy,
   resolveAecModeRemoteValue,
+  resolveBooleanRemoteControlValue,
   resolveBooleanRemoteValue,
   type DesktopRemotePolicySnapshot,
 } from "./desktop-remote-control";
@@ -22,8 +23,18 @@ describe("desktop remote control", () => {
       defaultEnabled: false,
       forceDisabled: false,
     });
-    expect(parseBooleanRemotePolicy("coreAudioSystemAudio", undefined)).toEqual({
+    expect(parseBooleanRemotePolicy("coreAudioSystemAudio", undefined)).toEqual(
+      {
+        defaultEnabled: true,
+        forceDisabled: false,
+      },
+    );
+    expect(parseBooleanRemotePolicy("filterMusic", undefined)).toEqual({
       defaultEnabled: true,
+      forceDisabled: false,
+    });
+    expect(parseBooleanRemotePolicy("prioritizeInputLatency", null)).toEqual({
+      defaultEnabled: false,
       forceDisabled: false,
     });
     expect(
@@ -78,12 +89,34 @@ describe("desktop remote control", () => {
     ).toBe("screenpipe");
   });
 
+  it("keeps the input-latency optimization Windows-only", () => {
+    const defaultOn = { defaultEnabled: true, forceDisabled: false };
+    expect(
+      resolveBooleanRemoteControlValue(
+        "prioritizeInputLatency",
+        null,
+        defaultOn,
+        "macos",
+      ),
+    ).toBe(false);
+    expect(
+      resolveBooleanRemoteControlValue(
+        "prioritizeInputLatency",
+        null,
+        defaultOn,
+        "windows",
+      ),
+    ).toBe(true);
+  });
+
   it("preserves existing values while new stores inherit remote defaults", () => {
     expect(
       normalizeDesktopRemotePreferences({
         enableSemanticContext: true,
         experimentalCoreaudioSystemAudio: false,
         experimentalMeetingPiggyback: true,
+        filterMusic: false,
+        prioritizeInputLatency: true,
         aecMode: "screenpipe",
         platform: "linux",
       }),
@@ -91,6 +124,8 @@ describe("desktop remote control", () => {
       semanticContext: true,
       coreAudioSystemAudio: false,
       smartRecording: true,
+      filterMusic: false,
+      prioritizeInputLatency: true,
       aecMode: "screenpipe",
     });
 
@@ -119,6 +154,33 @@ describe("desktop remote control", () => {
     });
   });
 
+  it("fills new controls into older valid schema-v1 snapshots", () => {
+    const legacySnapshot = {
+      schemaVersion: 1,
+      boolean: {
+        semanticContext: { defaultEnabled: true, forceDisabled: true },
+        coreAudioSystemAudio: {
+          defaultEnabled: true,
+          forceDisabled: false,
+        },
+        smartRecording: { defaultEnabled: false, forceDisabled: false },
+      },
+      aecMode: { defaultValue: "off", forceDisabled: false },
+    };
+
+    expect(normalizeDesktopRemotePolicySnapshot(legacySnapshot)).toEqual({
+      ...legacySnapshot,
+      boolean: {
+        ...legacySnapshot.boolean,
+        filterMusic: { defaultEnabled: true, forceDisabled: false },
+        prioritizeInputLatency: {
+          defaultEnabled: false,
+          forceDisabled: false,
+        },
+      },
+    });
+  });
+
   it("builds one bounded patch and reports only effective engine changes", () => {
     const policy: DesktopRemotePolicySnapshot = {
       schemaVersion: 1,
@@ -129,6 +191,11 @@ describe("desktop remote control", () => {
           forceDisabled: false,
         },
         smartRecording: { defaultEnabled: true, forceDisabled: false },
+        filterMusic: { defaultEnabled: false, forceDisabled: false },
+        prioritizeInputLatency: {
+          defaultEnabled: false,
+          forceDisabled: false,
+        },
       },
       aecMode: { defaultValue: "macos", forceDisabled: false },
     };
@@ -140,6 +207,8 @@ describe("desktop remote control", () => {
         enableSemanticContext: false,
         experimentalCoreaudioSystemAudio: true,
         experimentalMeetingPiggyback: false,
+        filterMusic: true,
+        prioritizeInputLatency: false,
         aecMode: "off",
         screenpipeAecEnabled: false,
         macosInputVpioEnabled: false,
@@ -153,6 +222,7 @@ describe("desktop remote control", () => {
       enableSemanticContext: true,
       experimentalCoreaudioSystemAudio: false,
       experimentalMeetingPiggyback: true,
+      filterMusic: false,
       aecMode: "macos",
       screenpipeAecEnabled: false,
       macosInputVpioEnabled: true,
@@ -162,6 +232,7 @@ describe("desktop remote control", () => {
       "semanticContext",
       "coreAudioSystemAudio",
       "smartRecording",
+      "filterMusic",
       "aecMode",
     ]);
   });
@@ -176,6 +247,11 @@ describe("desktop remote control", () => {
           forceDisabled: false,
         },
         smartRecording: { defaultEnabled: true, forceDisabled: false },
+        filterMusic: { defaultEnabled: false, forceDisabled: false },
+        prioritizeInputLatency: {
+          defaultEnabled: true,
+          forceDisabled: false,
+        },
       },
       aecMode: { defaultValue: "screenpipe", forceDisabled: false },
     };
@@ -185,18 +261,24 @@ describe("desktop remote control", () => {
         semanticContext: false,
         coreAudioSystemAudio: true,
         smartRecording: false,
+        filterMusic: true,
+        prioritizeInputLatency: false,
         aecMode: "off" as const,
       },
       remoteControlPolicy: LOCAL_DESKTOP_REMOTE_POLICY,
       enableSemanticContext: false,
       experimentalCoreaudioSystemAudio: true,
       experimentalMeetingPiggyback: false,
+      filterMusic: true,
+      prioritizeInputLatency: false,
       aecMode: "off" as const,
       screenpipeAecEnabled: false,
       macosInputVpioEnabled: false,
       windowsInputAecEnabled: false,
     };
 
-    expect(buildDesktopRemoteControlPatch(settings, policy).changedControls).toEqual([]);
+    expect(
+      buildDesktopRemoteControlPatch(settings, policy).changedControls,
+    ).toEqual([]);
   });
 });

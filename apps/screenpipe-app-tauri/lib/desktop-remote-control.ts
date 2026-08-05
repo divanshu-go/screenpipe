@@ -4,6 +4,13 @@
 
 export type AecMode = "off" | "screenpipe" | "macos" | "windows";
 
+type BooleanRemoteControlDefinition = {
+  flagKey: string;
+  settingKey: string;
+  shippedDefault: boolean;
+  supportedPlatforms?: readonly string[];
+};
+
 export const BOOLEAN_REMOTE_CONTROL_DEFINITIONS = {
   semanticContext: {
     flagKey: "semantic-context-control",
@@ -20,7 +27,18 @@ export const BOOLEAN_REMOTE_CONTROL_DEFINITIONS = {
     settingKey: "experimentalMeetingPiggyback",
     shippedDefault: false,
   },
-} as const;
+  filterMusic: {
+    flagKey: "music-filter-control",
+    settingKey: "filterMusic",
+    shippedDefault: true,
+  },
+  prioritizeInputLatency: {
+    flagKey: "input-latency-control",
+    settingKey: "prioritizeInputLatency",
+    shippedDefault: false,
+    supportedPlatforms: ["windows"],
+  },
+} as const satisfies Record<string, BooleanRemoteControlDefinition>;
 
 export const AEC_MODE_CONTROL_FLAG_KEY = "aec-mode-control";
 
@@ -47,6 +65,8 @@ export type DesktopRemotePreferences = {
   semanticContext: boolean | null;
   coreAudioSystemAudio: boolean | null;
   smartRecording: boolean | null;
+  filterMusic: boolean | null;
+  prioritizeInputLatency: boolean | null;
   aecMode: AecMode | null;
 };
 
@@ -60,25 +80,21 @@ export type RemoteControllableSettings = {
   enableSemanticContext?: boolean;
   experimentalCoreaudioSystemAudio?: boolean;
   experimentalMeetingPiggyback?: boolean;
+  filterMusic?: boolean;
+  prioritizeInputLatency?: boolean;
   aecMode?: AecMode;
   screenpipeAecEnabled?: boolean;
   macosInputVpioEnabled?: boolean;
   windowsInputAecEnabled?: boolean;
 };
 
-const AEC_MODES = new Set<AecMode>([
-  "off",
-  "screenpipe",
-  "macos",
-  "windows",
-]);
+const AEC_MODES = new Set<AecMode>(["off", "screenpipe", "macos", "windows"]);
 
 function localBooleanPolicy(
   control: BooleanRemoteControlKey,
 ): BooleanRemotePolicy {
   return {
-    defaultEnabled:
-      BOOLEAN_REMOTE_CONTROL_DEFINITIONS[control].shippedDefault,
+    defaultEnabled: BOOLEAN_REMOTE_CONTROL_DEFINITIONS[control].shippedDefault,
     forceDisabled: false,
   };
 }
@@ -89,6 +105,8 @@ export const LOCAL_DESKTOP_REMOTE_POLICY: DesktopRemotePolicySnapshot = {
     semanticContext: localBooleanPolicy("semanticContext"),
     coreAudioSystemAudio: localBooleanPolicy("coreAudioSystemAudio"),
     smartRecording: localBooleanPolicy("smartRecording"),
+    filterMusic: localBooleanPolicy("filterMusic"),
+    prioritizeInputLatency: localBooleanPolicy("prioritizeInputLatency"),
   },
   aecMode: {
     defaultValue: "off",
@@ -96,12 +114,15 @@ export const LOCAL_DESKTOP_REMOTE_POLICY: DesktopRemotePolicySnapshot = {
   },
 };
 
-export const NEW_INSTALL_REMOTE_CONTROL_PREFERENCES: DesktopRemotePreferences = {
-  semanticContext: null,
-  coreAudioSystemAudio: null,
-  smartRecording: null,
-  aecMode: null,
-};
+export const NEW_INSTALL_REMOTE_CONTROL_PREFERENCES: DesktopRemotePreferences =
+  {
+    semanticContext: null,
+    coreAudioSystemAudio: null,
+    smartRecording: null,
+    filterMusic: null,
+    prioritizeInputLatency: null,
+    aecMode: null,
+  };
 
 function hasOnlyKeys(candidate: Record<string, unknown>, keys: string[]) {
   const actual = Object.keys(candidate).sort();
@@ -137,11 +158,17 @@ function cloneLocalDesktopRemotePolicy(): DesktopRemotePolicySnapshot {
   return {
     schemaVersion: 1,
     boolean: {
-      semanticContext: { ...LOCAL_DESKTOP_REMOTE_POLICY.boolean.semanticContext },
+      semanticContext: {
+        ...LOCAL_DESKTOP_REMOTE_POLICY.boolean.semanticContext,
+      },
       coreAudioSystemAudio: {
         ...LOCAL_DESKTOP_REMOTE_POLICY.boolean.coreAudioSystemAudio,
       },
       smartRecording: { ...LOCAL_DESKTOP_REMOTE_POLICY.boolean.smartRecording },
+      filterMusic: { ...LOCAL_DESKTOP_REMOTE_POLICY.boolean.filterMusic },
+      prioritizeInputLatency: {
+        ...LOCAL_DESKTOP_REMOTE_POLICY.boolean.prioritizeInputLatency,
+      },
     },
     aecMode: { ...LOCAL_DESKTOP_REMOTE_POLICY.aecMode },
   };
@@ -206,26 +233,28 @@ export function normalizeDesktopRemotePolicySnapshot(
     return fallback;
   }
   const boolean = candidate.boolean as Record<string, unknown>;
+  const controlKeys = Object.keys(
+    BOOLEAN_REMOTE_CONTROL_DEFINITIONS,
+  ) as BooleanRemoteControlKey[];
   if (
-    !hasOnlyKeys(boolean, [
-      "semanticContext",
-      "coreAudioSystemAudio",
-      "smartRecording",
-    ]) ||
-    !isBooleanRemotePolicy(boolean.semanticContext) ||
-    !isBooleanRemotePolicy(boolean.coreAudioSystemAudio) ||
-    !isBooleanRemotePolicy(boolean.smartRecording) ||
+    Object.keys(boolean).some(
+      (key) => !controlKeys.includes(key as BooleanRemoteControlKey),
+    ) ||
     !isAecModeRemotePolicy(candidate.aecMode)
   ) {
     return fallback;
   }
+  const normalizedBoolean = { ...fallback.boolean };
+  for (const control of controlKeys) {
+    const storedPolicy = boolean[control];
+    // Older schema-v1 snapshots legitimately lack newly reviewed controls.
+    if (storedPolicy === undefined) continue;
+    if (!isBooleanRemotePolicy(storedPolicy)) return fallback;
+    normalizedBoolean[control] = { ...storedPolicy };
+  }
   return {
     schemaVersion: 1,
-    boolean: {
-      semanticContext: { ...boolean.semanticContext },
-      coreAudioSystemAudio: { ...boolean.coreAudioSystemAudio },
-      smartRecording: { ...boolean.smartRecording },
-    },
+    boolean: normalizedBoolean,
     aecMode: { ...candidate.aecMode },
   };
 }
@@ -254,6 +283,16 @@ export function readDesktopRemotePolicySnapshot(
           BOOLEAN_REMOTE_CONTROL_DEFINITIONS.smartRecording.flagKey,
         ),
       ),
+      filterMusic: parseBooleanRemotePolicy(
+        "filterMusic",
+        payloadForFlag(BOOLEAN_REMOTE_CONTROL_DEFINITIONS.filterMusic.flagKey),
+      ),
+      prioritizeInputLatency: parseBooleanRemotePolicy(
+        "prioritizeInputLatency",
+        payloadForFlag(
+          BOOLEAN_REMOTE_CONTROL_DEFINITIONS.prioritizeInputLatency.flagKey,
+        ),
+      ),
     },
     aecMode: parseAecModeRemotePolicy(
       payloadForFlag(AEC_MODE_CONTROL_FLAG_KEY),
@@ -270,6 +309,25 @@ export function resolveBooleanRemoteValue(
   if (policy.forceDisabled) return false;
   if (managedValue !== undefined) return managedValue;
   return preference ?? policy.defaultEnabled;
+}
+
+export function resolveBooleanRemoteControlValue(
+  control: BooleanRemoteControlKey,
+  preference: boolean | null | undefined,
+  policy: BooleanRemotePolicy,
+  platform?: string,
+  managedValue?: boolean,
+): boolean {
+  const definition = BOOLEAN_REMOTE_CONTROL_DEFINITIONS[
+    control
+  ] as BooleanRemoteControlDefinition;
+  if (
+    definition.supportedPlatforms &&
+    !definition.supportedPlatforms.includes(platform ?? "unknown")
+  ) {
+    return false;
+  }
+  return resolveBooleanRemoteValue(preference, policy, managedValue);
 }
 
 export function normalizeAecModeForPlatform(
@@ -307,7 +365,10 @@ function validBooleanPreference(value: unknown): value is boolean | null {
 }
 
 function validAecPreference(value: unknown): value is AecMode | null {
-  return value === null || (typeof value === "string" && AEC_MODES.has(value as AecMode));
+  return (
+    value === null ||
+    (typeof value === "string" && AEC_MODES.has(value as AecMode))
+  );
 }
 
 /**
@@ -325,17 +386,26 @@ export function normalizeDesktopRemotePreferences(
       : validBooleanPreference(legacySemanticPreference)
         ? legacySemanticPreference
         : Boolean(settings.enableSemanticContext ?? false),
-    coreAudioSystemAudio: validBooleanPreference(
-      current?.coreAudioSystemAudio,
-    )
+    coreAudioSystemAudio: validBooleanPreference(current?.coreAudioSystemAudio)
       ? current.coreAudioSystemAudio
       : Boolean(settings.experimentalCoreaudioSystemAudio ?? true),
     smartRecording: validBooleanPreference(current?.smartRecording)
       ? current.smartRecording
       : Boolean(settings.experimentalMeetingPiggyback ?? false),
+    filterMusic: validBooleanPreference(current?.filterMusic)
+      ? current.filterMusic
+      : Boolean(settings.filterMusic ?? true),
+    prioritizeInputLatency: validBooleanPreference(
+      current?.prioritizeInputLatency,
+    )
+      ? current.prioritizeInputLatency
+      : Boolean(settings.prioritizeInputLatency ?? false),
     aecMode: validAecPreference(current?.aecMode)
       ? current.aecMode
-      : normalizeAecModeForPlatform(settings.aecMode ?? "off", settings.platform),
+      : normalizeAecModeForPlatform(
+          settings.aecMode ?? "off",
+          settings.platform,
+        ),
   };
 }
 
@@ -382,20 +452,40 @@ export function buildDesktopRemoteControlPatch(
   const preferences = normalizeDesktopRemotePreferences(settings);
   const managed = settings.enterpriseManagedSettings ?? {};
   const effective = {
-    semanticContext: resolveBooleanRemoteValue(
+    semanticContext: resolveBooleanRemoteControlValue(
+      "semanticContext",
       preferences.semanticContext,
       policy.boolean.semanticContext,
+      settings.platform,
       parseManagedBoolean(managed.enableSemanticContext),
     ),
-    coreAudioSystemAudio: resolveBooleanRemoteValue(
+    coreAudioSystemAudio: resolveBooleanRemoteControlValue(
+      "coreAudioSystemAudio",
       preferences.coreAudioSystemAudio,
       policy.boolean.coreAudioSystemAudio,
+      settings.platform,
       parseManagedBoolean(managed.experimentalCoreaudioSystemAudio),
     ),
-    smartRecording: resolveBooleanRemoteValue(
+    smartRecording: resolveBooleanRemoteControlValue(
+      "smartRecording",
       preferences.smartRecording,
       policy.boolean.smartRecording,
+      settings.platform,
       parseManagedBoolean(managed.experimentalMeetingPiggyback),
+    ),
+    filterMusic: resolveBooleanRemoteControlValue(
+      "filterMusic",
+      preferences.filterMusic,
+      policy.boolean.filterMusic,
+      settings.platform,
+      parseManagedBoolean(managed.filterMusic),
+    ),
+    prioritizeInputLatency: resolveBooleanRemoteControlValue(
+      "prioritizeInputLatency",
+      preferences.prioritizeInputLatency,
+      policy.boolean.prioritizeInputLatency,
+      settings.platform,
+      parseManagedBoolean(managed.prioritizeInputLatency),
     ),
     aecMode: resolveAecModeRemoteValue(
       preferences.aecMode,
@@ -420,17 +510,22 @@ export function buildDesktopRemoteControlPatch(
     changedControls.push("semanticContext");
   }
   if (
-    settings.experimentalCoreaudioSystemAudio !==
-    effective.coreAudioSystemAudio
+    settings.experimentalCoreaudioSystemAudio !== effective.coreAudioSystemAudio
   ) {
     patch.experimentalCoreaudioSystemAudio = effective.coreAudioSystemAudio;
     changedControls.push("coreAudioSystemAudio");
   }
-  if (
-    settings.experimentalMeetingPiggyback !== effective.smartRecording
-  ) {
+  if (settings.experimentalMeetingPiggyback !== effective.smartRecording) {
     patch.experimentalMeetingPiggyback = effective.smartRecording;
     changedControls.push("smartRecording");
+  }
+  if (settings.filterMusic !== effective.filterMusic) {
+    patch.filterMusic = effective.filterMusic;
+    changedControls.push("filterMusic");
+  }
+  if (settings.prioritizeInputLatency !== effective.prioritizeInputLatency) {
+    patch.prioritizeInputLatency = effective.prioritizeInputLatency;
+    changedControls.push("prioritizeInputLatency");
   }
 
   const aecSettings = getAecModeSettings(effective.aecMode);

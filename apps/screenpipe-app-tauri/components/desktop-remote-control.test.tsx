@@ -65,6 +65,8 @@ describe("DesktopRemoteControl", () => {
       enableSemanticContext: false,
       experimentalCoreaudioSystemAudio: true,
       experimentalMeetingPiggyback: false,
+      filterMusic: true,
+      prioritizeInputLatency: false,
       aecMode: "off",
       screenpipeAecEnabled: false,
       macosInputVpioEnabled: false,
@@ -93,6 +95,14 @@ describe("DesktopRemoteControl", () => {
         defaultEnabled: true,
         forceDisabled: false,
       },
+      "music-filter-control": {
+        defaultEnabled: false,
+        forceDisabled: false,
+      },
+      "input-latency-control": {
+        defaultEnabled: true,
+        forceDisabled: false,
+      },
       "aec-mode-control": {
         defaultValue: "macos",
         forceDisabled: false,
@@ -107,6 +117,7 @@ describe("DesktopRemoteControl", () => {
         enableSemanticContext: true,
         experimentalCoreaudioSystemAudio: false,
         experimentalMeetingPiggyback: true,
+        filterMusic: false,
         aecMode: "macos",
         macosInputVpioEnabled: true,
       }),
@@ -117,19 +128,43 @@ describe("DesktopRemoteControl", () => {
     expect(mocks.stopScreenpipe).toHaveBeenCalledTimes(1);
   });
 
+  it("applies the input-latency default only on Windows", async () => {
+    mocks.settings = { ...mocks.settings, platform: "windows" };
+    mocks.payloads = {
+      "input-latency-control": {
+        defaultEnabled: true,
+        forceDisabled: false,
+      },
+    };
+
+    render(<DesktopRemoteControl enabled />);
+
+    await waitFor(() =>
+      expect(mocks.updateSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ prioritizeInputLatency: true }),
+      ),
+    );
+    await waitFor(() => expect(mocks.spawnScreenpipe).toHaveBeenCalled());
+  });
+
   it("persists every force-off without restarting deliberately paused capture", async () => {
     mocks.settings = {
       ...mocks.settings,
       enableSemanticContext: true,
       experimentalCoreaudioSystemAudio: true,
       experimentalMeetingPiggyback: true,
-      aecMode: "macos",
-      macosInputVpioEnabled: true,
+      filterMusic: true,
+      prioritizeInputLatency: true,
+      platform: "windows",
+      aecMode: "windows",
+      windowsInputAecEnabled: true,
       remoteControlPreferences: {
         semanticContext: true,
         coreAudioSystemAudio: true,
         smartRecording: true,
-        aecMode: "macos",
+        filterMusic: true,
+        prioritizeInputLatency: true,
+        aecMode: "windows",
       },
     };
     mocks.payloads = {
@@ -143,6 +178,14 @@ describe("DesktopRemoteControl", () => {
       },
       "smart-recording-control": {
         defaultEnabled: false,
+        forceDisabled: true,
+      },
+      "music-filter-control": {
+        defaultEnabled: true,
+        forceDisabled: true,
+      },
+      "input-latency-control": {
+        defaultEnabled: true,
         forceDisabled: true,
       },
       "aec-mode-control": {
@@ -160,11 +203,14 @@ describe("DesktopRemoteControl", () => {
           enableSemanticContext: false,
           experimentalCoreaudioSystemAudio: false,
           experimentalMeetingPiggyback: false,
+          filterMusic: false,
+          prioritizeInputLatency: false,
           aecMode: "off",
-          macosInputVpioEnabled: false,
+          windowsInputAecEnabled: false,
         }),
       ),
     );
+    await waitFor(() => expect(mocks.isCapturePaused).toHaveBeenCalled());
     expect(mocks.stopScreenpipe).not.toHaveBeenCalled();
     expect(mocks.spawnScreenpipe).not.toHaveBeenCalled();
   });

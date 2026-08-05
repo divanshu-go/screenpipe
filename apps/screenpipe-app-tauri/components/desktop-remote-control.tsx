@@ -83,9 +83,7 @@ export function DesktopRemoteControl({ enabled }: { enabled: boolean }) {
           settingsRef.current = effective;
 
           const engineRestarted =
-            changedControls.length > 0
-              ? await restartRunningCapture()
-              : false;
+            changedControls.length > 0 ? await restartRunningCapture() : false;
 
           if (sendExposure) {
             posthog.capture("desktop_remote_control_applied", {
@@ -106,6 +104,10 @@ export function DesktopRemoteControl({ enabled }: { enabled: boolean }) {
               effective_smart_recording: Boolean(
                 effective.experimentalMeetingPiggyback,
               ),
+              effective_music_filter: Boolean(effective.filterMusic),
+              effective_prioritize_input_latency: Boolean(
+                effective.prioritizeInputLatency,
+              ),
               effective_aec_mode: effective.aecMode ?? "off",
               preference_semantic_context:
                 preferences.semanticContext === null
@@ -123,6 +125,18 @@ export function DesktopRemoteControl({ enabled }: { enabled: boolean }) {
                 preferences.smartRecording === null
                   ? "unset"
                   : preferences.smartRecording
+                    ? "on"
+                    : "off",
+              preference_music_filter:
+                preferences.filterMusic === null
+                  ? "unset"
+                  : preferences.filterMusic
+                    ? "on"
+                    : "off",
+              preference_prioritize_input_latency:
+                preferences.prioritizeInputLatency === null
+                  ? "unset"
+                  : preferences.prioritizeInputLatency
                     ? "on"
                     : "off",
               preference_aec_mode: preferences.aecMode ?? "unset",

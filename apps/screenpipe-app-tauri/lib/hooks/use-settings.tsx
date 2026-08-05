@@ -755,6 +755,12 @@ let DEFAULT_SETTINGS: Settings = {
 					smartRecording: {
 						...LOCAL_DESKTOP_REMOTE_POLICY.boolean.smartRecording,
 					},
+					filterMusic: {
+						...LOCAL_DESKTOP_REMOTE_POLICY.boolean.filterMusic,
+					},
+					prioritizeInputLatency: {
+						...LOCAL_DESKTOP_REMOTE_POLICY.boolean.prioritizeInputLatency,
+					},
 				},
 				aecMode: { ...LOCAL_DESKTOP_REMOTE_POLICY.aecMode },
 			},
@@ -776,6 +782,7 @@ let DEFAULT_SETTINGS: Settings = {
 			cloudArchiveRetentionDays: 7,
 			meetingSummaryPipeSlug: "meeting-summary",
 			filterMusic: true,
+			prioritizeInputLatency: false,
 			ignoreIncognitoWindows: true,
 			enhancedIncognitoDetection: false,
 			pauseOnDrmContent: false,
