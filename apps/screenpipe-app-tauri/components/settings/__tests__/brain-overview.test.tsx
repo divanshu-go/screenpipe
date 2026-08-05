@@ -1811,36 +1811,63 @@ describe("BrainOverview", () => {
       blocks: [
         {
           id: "focus-time",
-          title: "Time by project",
-          intent: "Group active time by project.",
-          component: "bar-chart.v1",
-          width: 12,
+          title: "Focus time",
+          intent: "Calculate focused work time",
+          component: "metric.v1",
+          width: 6,
+          pipeName: "daily-summary",
+        },
+        {
+          id: "habit-signals",
+          title: "Habit signals",
+          intent: "Show recurring work habits.",
+          component: "list.v1",
+          width: 6,
           pipeName: "daily-summary",
         },
       ],
     });
-    mocks.saveBrainView.mockImplementation(async (request) => ({
-      status: "ok",
-      data: {
-        ...populatedView,
-        revision: 4,
-        slots: request.slots,
-      },
-    }));
+    let finishSave: (() => void) | undefined;
+    const saveGate = new Promise<void>((resolve) => {
+      finishSave = resolve;
+    });
+    mocks.saveBrainView.mockImplementation(async (request) => {
+      await saveGate;
+      return {
+        status: "ok",
+        data: {
+          ...populatedView,
+          revision: 4,
+          slots: request.slots,
+        },
+      };
+    });
     render(<BrainOverview />);
 
-    fireEvent.click(
-      await screen.findByRole("button", { name: "edit Focus time with AI" }),
-    );
-    fireEvent.change(
-      await screen.findByPlaceholderText("e.g. group by project instead"),
-      { target: { value: "group this by project" } },
-    );
-    fireEvent.click(screen.getByRole("button", { name: "update" }));
+    const canvasBeforeAccept = await screen.findByTestId("live-view-canvas");
+    fireEvent.change(await screen.findByTestId("live-view-ai-prompt"), {
+      target: { value: "add habit signals" },
+    });
+    fireEvent.click(screen.getByTestId("live-view-ai-generate"));
     fireEvent.click(await screen.findByTestId("live-view-ai-accept-all"));
 
     await waitFor(() => expect(mocks.saveBrainView).toHaveBeenCalledTimes(1));
-    expect(screen.queryByTestId("live-view-ai-review")).toBeNull();
+    expect(await screen.findByTestId("live-view-canvas-applying")).toBeTruthy();
+    expect(screen.queryByTestId("live-view-canvas")).toBeNull();
+    finishSave?.();
+    await waitFor(() =>
+      expect(screen.queryByTestId("live-view-ai-review")).toBeNull(),
+    );
+    expect(mocks.saveBrainView).toHaveBeenCalledWith(
+      expect.objectContaining({
+        slots: expect.arrayContaining([
+          expect.objectContaining({ id: "habit-signals" }),
+        ]),
+      }),
+    );
+    expect(await screen.findByTestId("live-view-canvas")).not.toBe(
+      canvasBeforeAccept,
+    );
     expect(await screen.findByTestId("overview-undo")).toBeTruthy();
   });
 

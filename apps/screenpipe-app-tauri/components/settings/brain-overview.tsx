@@ -521,6 +521,7 @@ export function BrainOverview({
   const [draft, setDraft] = useState<ViewDefinition | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [applyingAiProposals, setApplyingAiProposals] = useState(false);
   const [editing, setEditing] = useState(false);
   const [aiPreview, setAiPreview] = useState(false);
   const [previewSource, setPreviewSource] = useState<PreviewSource | null>(
@@ -618,6 +619,65 @@ export function BrainOverview({
     writeActiveAiPresetId(presetId);
   }, []);
   const activeViewId = view?.id;
+  const slots = useMemo(
+    () => normalizedSlots(view?.slots ?? []),
+    [view?.slots],
+  );
+  const proposalById = useMemo(
+    () => new Map(aiBlockProposals.map((proposal) => [proposal.id, proposal])),
+    [aiBlockProposals],
+  );
+  const proposalSlots = useMemo(
+    () =>
+      normalizedSlots([
+        ...slots.map((slot) => {
+          const proposal = proposalById.get(slot.id);
+          if (!proposal || proposal.status === "rejected" || !proposal.after) {
+            return slot;
+          }
+          return proposal.kind === "remove" ? slot : proposal.after;
+        }),
+        ...aiBlockProposals.flatMap((proposal) =>
+          proposal.kind === "add" && proposal.after ? [proposal.after] : [],
+        ),
+      ]),
+    [aiBlockProposals, proposalById, slots],
+  );
+  const proposalView = useMemo(
+    () =>
+      view && aiBlockProposals.length > 0
+        ? { ...view, slots: proposalSlots }
+        : view,
+    [aiBlockProposals.length, proposalSlots, view],
+  );
+  const visibleCanvasDocument = useMemo(
+    () =>
+      proposalView && aiBlockProposals.length > 0
+        ? reconcileCanvasDocument(proposalView, canvasDocument)
+        : canvasDocument,
+    [aiBlockProposals.length, canvasDocument, proposalView],
+  );
+  const canvasProposals = useMemo(
+    () =>
+      new Map(
+        aiBlockProposals.map((proposal) => [
+          proposal.id,
+          { kind: proposal.kind, status: proposal.status },
+        ]),
+      ),
+    [aiBlockProposals],
+  );
+  const refreshingSlotIds = useMemo(
+    () =>
+      new Set(
+        dataRefresh?.viewId === view?.id &&
+          (dataRefresh?.status === "starting" ||
+            dataRefresh?.status === "running")
+          ? (dataRefresh?.slotIds ?? [])
+          : [],
+      ),
+    [dataRefresh, view?.id],
+  );
   const onboardingActivation = useMemo(() => {
     // The activation record lives in localStorage. This counter invalidates
     // the memo after background setup updates that external store.
@@ -1886,6 +1946,11 @@ export function BrainOverview({
     }
     const normalized = normalizedSlots(nextSlots);
     const previous = copyViewDefinition(view);
+    // React Flow cannot safely reconcile the proposal graph with the newly
+    // persisted graph inside the same controlled store. Unmount it for the
+    // duration of the transaction, then mount a fresh store at the new
+    // revision after the save completes.
+    setApplyingAiProposals(true);
     setSaving(true);
     try {
       const result = await commands.saveBrainView({
@@ -1929,6 +1994,7 @@ export function BrainOverview({
       });
     } finally {
       setSaving(false);
+      setApplyingAiProposals(false);
     }
   };
 
@@ -2732,28 +2798,6 @@ export function BrainOverview({
   }
 
   if (!view) return null;
-  const slots = normalizedSlots(view.slots);
-  const proposalById = new Map(
-    aiBlockProposals.map((proposal) => [proposal.id, proposal]),
-  );
-  const proposalSlots = normalizedSlots([
-    ...slots.map((slot) => {
-      const proposal = proposalById.get(slot.id);
-      if (!proposal || proposal.status === "rejected" || !proposal.after) {
-        return slot;
-      }
-      return proposal.kind === "remove" ? slot : proposal.after;
-    }),
-    ...aiBlockProposals.flatMap((proposal) =>
-      proposal.kind === "add" && proposal.after ? [proposal.after] : [],
-    ),
-  ]);
-  const proposalView =
-    aiBlockProposals.length > 0 ? { ...view, slots: proposalSlots } : view;
-  const visibleCanvasDocument =
-    aiBlockProposals.length > 0
-      ? reconcileCanvasDocument(proposalView, canvasDocument)
-      : canvasDocument;
   const boundSlotCount = slots.filter((slot) => slot.binding).length;
   const periodRanges = allowedLiveViewTimeRanges(view.periodPolicy);
   const latestUpdate = liveViewLatestUpdate(slots);
@@ -2763,9 +2807,6 @@ export function BrainOverview({
   const dashboardBusy = saving || refreshIsActive;
   const canvasReady =
     !canvasLoading && visibleCanvasDocument?.viewId === view.id && !canvasError;
-  const refreshingSlotIds = new Set(
-    refreshIsActive ? (dataRefresh?.slotIds ?? []) : [],
-  );
   const dashboardSelectionDisabled = saving;
   const showOnboardingActivation = Boolean(
     onboardingActivation && !onboardingActivation.completedAt,
@@ -3044,8 +3085,16 @@ export function BrainOverview({
           >
             add your first Block
           </button>
+        ) : applyingAiProposals ? (
+          <div
+            data-testid="live-view-canvas-applying"
+            className="flex min-h-0 flex-1 items-center justify-center border border-border font-mono text-[10px] uppercase tracking-wide text-muted-foreground"
+          >
+            applying changes
+          </div>
         ) : canvasReady && canvasDocument ? (
           <LiveViewCanvas
+            key={`${view.id}:${view.revision}`}
             document={visibleCanvasDocument!}
             slots={proposalSlots}
             timeRange={view.timeRange}
@@ -3059,14 +3108,7 @@ export function BrainOverview({
             onAiEdit={editSlotWithAi}
             onItemAction={recordItemAction}
             onItemHandoff={handoffItem}
-            proposals={
-              new Map(
-                aiBlockProposals.map((proposal) => [
-                  proposal.id,
-                  { kind: proposal.kind, status: proposal.status },
-                ]),
-              )
-            }
+            proposals={canvasProposals}
             focusSlotId={proposalFocusSlotId}
             onProposalDecision={decideAiProposal}
           />
