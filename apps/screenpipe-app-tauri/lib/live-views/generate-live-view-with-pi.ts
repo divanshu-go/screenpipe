@@ -348,6 +348,10 @@ function providerConfig(preset: AIPreset): PiProviderConfig {
       ? { maxContextChars: preset.maxContextChars }
       : {}),
     systemPrompt: null,
+    // This foreground editor only needs a read of the referenced Live View.
+    // Restrict the runtime itself so normal Chat, MCP, web, filesystem, and
+    // artifact tools are never advertised on this private editing surface.
+    allowedTools: ["screenpipe_live_view"],
   };
 }
 
