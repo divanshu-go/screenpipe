@@ -16,6 +16,7 @@ import { qualifiedValue } from "@/lib/analytics/qualified-value";
 import { onboardingFunnel } from "@/lib/analytics/onboarding-funnel";
 import {
   AlertCircle,
+  Check,
   CheckCircle2,
   Loader2,
   RefreshCw,
@@ -81,16 +82,14 @@ import {
   toSaveCanvasRequest,
 } from "@/lib/live-views/canvas-layout";
 import { MAX_DASHBOARDS } from "@/lib/live-views/constants";
-import type { LiveViewGenerationScope } from "@/lib/live-views/generate-live-view-with-pi";
+import {
+  generateLiveViewWithPi,
+  type GeneratedLiveView,
+  type GeneratedLiveViewBlock,
+  type LiveViewGenerationScope,
+} from "@/lib/live-views/generate-live-view-with-pi";
 import { createOnboardingLiveView } from "@/lib/live-views/onboarding-live-view";
-import {
-  buildLiveViewBuilderAgentPrompt,
-  type LiveViewBuilderTarget,
-} from "@/lib/live-views/pipe-agent-prompt";
-import {
-  runLiveViewBuilderAgent,
-  type LiveViewBuilderAgentPhase,
-} from "@/lib/live-views/run-live-view-builder-agent";
+import type { LiveViewBuilderTarget } from "@/lib/live-views/pipe-agent-prompt";
 import {
   allowedLiveViewTimeRanges,
   buildLiveViewTimeContext,
@@ -170,18 +169,18 @@ type PreviewSource = { kind: "template"; kit: BrainViewTemplateKit };
 
 type PreviewDestination = "new" | "replace";
 
+type AiBlockProposal = {
+  id: string;
+  kind: "add" | "update" | "remove";
+  before: ViewSlot | null;
+  after: ViewSlot | null;
+  status: "pending" | "accepted" | "rejected";
+};
+
 const STARTER_DASHBOARD_ID = "my-dashboard";
 const STARTER_DASHBOARD_TITLE = "My dashboard";
 const LIVE_VIEW_ANALYTICS_SCHEMA_VERSION = 2;
 const LIVE_VIEW_COHERENT_UPDATE_WINDOW_MS = 60_000;
-const BUILDER_RESULT_POLL_ATTEMPTS = 8;
-
-const BUILDER_PHASE_LABELS: Record<LiveViewBuilderAgentPhase, string> = {
-  starting: "starting",
-  working: "working",
-  applying: "updating Live View",
-  finishing: "checking changes",
-};
 
 const LIVE_VIEW_FRESHNESS_FORMATTER = new Intl.DateTimeFormat(undefined, {
   month: "short",
@@ -362,6 +361,121 @@ function copyViewDefinition(view: ViewDefinition): ViewDefinition {
   };
 }
 
+function slotIdStem(title: string): string {
+  return (
+    title
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 48) || "block"
+  );
+}
+
+function slotFromGenerated(
+  block: GeneratedLiveViewBlock,
+  id: string,
+  order: number,
+  previous: ViewSlot | null,
+): ViewSlot {
+  const unchanged = Boolean(
+    previous &&
+    previous.title === block.title &&
+    previous.intent === block.intent &&
+    previous.component === block.component &&
+    previous.width === block.width &&
+    previous.binding?.pipeName === block.pipeName,
+  );
+  return {
+    id,
+    title: block.title,
+    intent: block.intent,
+    component: block.component,
+    width: block.width,
+    order,
+    binding: block.pipeName ? { pipeName: block.pipeName } : null,
+    value: unchanged ? (previous?.value ?? null) : null,
+    feedback: unchanged
+      ? (previous?.feedback ?? { upCount: 0, downCount: 0, current: null })
+      : { upCount: 0, downCount: 0, current: null },
+    itemActions: unchanged
+      ? (previous?.itemActions ?? { items: [] })
+      : { items: [] },
+  };
+}
+
+function sameSlotDefinition(left: ViewSlot, right: ViewSlot): boolean {
+  return (
+    left.title === right.title &&
+    left.intent === right.intent &&
+    left.component === right.component &&
+    left.width === right.width &&
+    left.binding?.pipeName === right.binding?.pipeName
+  );
+}
+
+function buildAiBlockProposals(
+  current: ViewDefinition,
+  generated: GeneratedLiveView,
+  targetSlotId: string | null,
+): AiBlockProposal[] {
+  const currentById = new Map(current.slots.map((slot) => [slot.id, slot]));
+  const used = new Set(current.slots.map((slot) => slot.id));
+  const candidateSlots = generated.blocks.map((block, order) => {
+    let id = targetSlotId ?? block.id ?? "";
+    if (!id || (!currentById.has(id) && used.has(id))) {
+      const stem = slotIdStem(block.title);
+      id = stem;
+      let suffix = 2;
+      while (used.has(id)) id = `${stem}-${suffix++}`;
+    }
+    used.add(id);
+    return slotFromGenerated(block, id, order, currentById.get(id) ?? null);
+  });
+
+  if (targetSlotId) {
+    const before = currentById.get(targetSlotId);
+    const after = candidateSlots[0];
+    return before && after && !sameSlotDefinition(before, after)
+      ? [{ id: targetSlotId, kind: "update", before, after, status: "pending" }]
+      : [];
+  }
+
+  const proposals: AiBlockProposal[] = [];
+  const candidateIds = new Set(candidateSlots.map((slot) => slot.id));
+  for (const after of candidateSlots) {
+    const before = currentById.get(after.id) ?? null;
+    if (!before) {
+      proposals.push({
+        id: after.id,
+        kind: "add",
+        before: null,
+        after,
+        status: "pending",
+      });
+    } else if (!sameSlotDefinition(before, after)) {
+      proposals.push({
+        id: after.id,
+        kind: "update",
+        before,
+        after,
+        status: "pending",
+      });
+    }
+  }
+  for (const before of current.slots) {
+    if (!candidateIds.has(before.id)) {
+      proposals.push({
+        id: before.id,
+        kind: "remove",
+        before,
+        after: null,
+        status: "pending",
+      });
+    }
+  }
+  return proposals;
+}
+
 function kitSlots(kit: BrainViewTemplateKit): ViewSlot[] {
   return kit.slots.map((slot) => ({
     ...slot,
@@ -446,6 +560,18 @@ export function BrainOverview({
   );
   const [builderFeedback, setBuilderFeedback] =
     useState<LiveViewAiFeedback | null>(null);
+  const [aiBlockProposals, setAiBlockProposals] = useState<AiBlockProposal[]>(
+    [],
+  );
+  const [proposalFocusSlotId, setProposalFocusSlotId] = useState<string | null>(
+    null,
+  );
+  const [proposalTitle, setProposalTitle] = useState<string | null>(null);
+  const [proposalTimeRange, setProposalTimeRange] =
+    useState<BrainViewTimeRange | null>(null);
+  const [proposalPeriodPolicy, setProposalPeriodPolicy] = useState<
+    ViewDefinition["periodPolicy"] | null
+  >(null);
   const builderAbortRef = useRef<AbortController | null>(null);
   const builderFeedbackTimerRef = useRef<number | null>(null);
   const activationViewedRef = useRef(new Set<string>());
@@ -467,12 +593,15 @@ export function BrainOverview({
     [],
   );
 
-  useEffect(() => () => {
-    builderAbortRef.current?.abort();
-    if (builderFeedbackTimerRef.current) {
-      clearTimeout(builderFeedbackTimerRef.current);
-    }
-  });
+  useEffect(
+    () => () => {
+      builderAbortRef.current?.abort();
+      if (builderFeedbackTimerRef.current) {
+        clearTimeout(builderFeedbackTimerRef.current);
+      }
+    },
+    [],
+  );
 
   const installedPipes = useMemo(
     () => [...pipes].sort((a, b) => a.config.name.localeCompare(b.config.name)),
@@ -1164,6 +1293,11 @@ export function BrainOverview({
     setUndoRevision(null);
     setReplaceConfirmationOpen(false);
     setCreateDashboardOpen(false);
+    setAiBlockProposals([]);
+    setProposalFocusSlotId(null);
+    setProposalTitle(null);
+    setProposalTimeRange(null);
+    setProposalPeriodPolicy(null);
   };
 
   const selectDashboard = (id: string) => {
@@ -1293,13 +1427,6 @@ export function BrainOverview({
       analyticsProperties,
     );
 
-    const agentPrompt = buildLiveViewBuilderAgentPrompt({
-      request,
-      view: reference,
-      target,
-      template,
-    });
-    const beforeIds = new Set(views.map((candidate) => candidate.id));
     const controller = new AbortController();
     builderAbortRef.current = controller;
     if (builderFeedbackTimerRef.current) {
@@ -1308,57 +1435,111 @@ export function BrainOverview({
     }
 
     try {
-      await runLiveViewBuilderAgent({
-        prompt: agentPrompt,
+      const generated = await generateLiveViewWithPi({
+        prompt: request,
+        scope: target.scope === "block" ? "block" : "dashboard",
         preset: selectedAiPreset,
-        userToken: settings.user?.token ?? null,
+        userToken:
+          selectedAiPreset.provider === "screenpipe-cloud"
+            ? (settings.user?.token ?? null)
+            : null,
+        pipes: installedPipes.map((pipe) => ({
+          name: pipe.config.name,
+          description:
+            typeof pipe.config.config?.description === "string"
+              ? pipe.config.config.description
+              : "",
+        })),
+        currentView: reference
+          ? {
+              title: reference.title,
+              timeRange: reference.timeRange,
+              blocks: reference.slots.map((slot) => ({
+                id: slot.id,
+                title: slot.title,
+                intent: slot.intent ?? slot.title,
+                component: slot.component,
+                width: slot.width === 3 || slot.width === 12 ? slot.width : 6,
+                pipeName: slot.binding?.pipeName ?? null,
+              })),
+            }
+          : null,
+        currentViewRef: reference
+          ? { id: reference.id, revision: reference.revision }
+          : null,
         signal: controller.signal,
         onPhase: (phase) =>
           setBuilderFeedback({
             tone: "working",
-            label: BUILDER_PHASE_LABELS[phase],
+            label:
+              phase === "starting"
+                ? "starting"
+                : phase === "working"
+                  ? "drafting changes"
+                  : "preparing review",
           }),
       });
-
-      setBuilderFeedback({ tone: "working", label: "checking changes" });
-      let refreshedViews: ViewDefinition[] = [];
-      let updatedView: ViewDefinition | null = null;
-      for (
-        let attempt = 0;
-        attempt < BUILDER_RESULT_POLL_ATTEMPTS;
-        attempt += 1
-      ) {
-        const result = await commands.listBrainViews();
-        if (result.status === "ok") {
-          refreshedViews = result.data;
-          updatedView = reference
-            ? (result.data.find(
-                (candidate) =>
-                  candidate.id === reference.id &&
-                  candidate.revision > reference.revision,
-              ) ?? null)
-            : (result.data
-                .filter((candidate) => !beforeIds.has(candidate.id))
-                .sort(
-                  (left, right) =>
-                    Date.parse(right.updatedAt) - Date.parse(left.updatedAt),
-                )[0] ?? null);
+      if (!reference) {
+        const now = new Date().toISOString();
+        const empty: ViewDefinition = {
+          id: uniqueDashboardId(generated.title, views),
+          title: generated.title,
+          revision: 0,
+          timeRange: generated.timeRange,
+          periodPolicy:
+            generated.periodPolicy ?? DEFAULT_LIVE_VIEW_PERIOD_POLICY,
+          slots: [],
+          createdAt: now,
+          updatedAt: now,
+        };
+        setDraft({
+          ...empty,
+          slots: generated.blocks.map((block, order) =>
+            slotFromGenerated(
+              block,
+              block.id ?? `${slotIdStem(block.title)}-${order + 1}`,
+              order,
+              null,
+            ),
+          ),
+        });
+        setAiNote(generated.note);
+        setPreviewSource(null);
+        setPreviewDestination("new");
+        setAiPreview(true);
+      } else {
+        const targetSlotId = target.scope === "block" ? target.block.id : null;
+        const proposals = buildAiBlockProposals(
+          reference,
+          generated,
+          targetSlotId,
+        );
+        if (proposals.length === 0) {
+          throw new Error("The agent did not propose a visible change");
         }
-        if (updatedView) break;
-        await new Promise((resolve) => window.setTimeout(resolve, 250));
+        setAiBlockProposals(proposals);
+        setProposalTitle(target.scope === "dashboard" ? generated.title : null);
+        setProposalTimeRange(
+          target.scope === "dashboard" ? generated.timeRange : null,
+        );
+        setProposalPeriodPolicy(
+          target.scope === "dashboard"
+            ? (generated.periodPolicy ?? reference.periodPolicy)
+            : null,
+        );
+        setProposalFocusSlotId(proposals[0].id);
       }
-      if (!updatedView) {
-        throw new Error("The agent finished without changing this Live View");
-      }
-
-      setViews(refreshedViews);
-      setView(updatedView);
-      rememberSelectedLiveViewDashboard(updatedView.id);
-      await refetchPipes();
       posthog.capture("live_view_builder_agent_handoff_completed", {
         ...analyticsProperties,
+        proposed_block_count: reference
+          ? buildAiBlockProposals(
+              reference,
+              generated,
+              target.scope === "block" ? target.block.id : null,
+            ).length
+          : generated.blocks.length,
       });
-      setBuilderFeedback({ tone: "success", label: "Live View updated" });
+      setBuilderFeedback({ tone: "success", label: "changes ready to review" });
       builderFeedbackTimerRef.current = window.setTimeout(
         () => setBuilderFeedback(null),
         2_500,
@@ -1376,6 +1557,10 @@ export function BrainOverview({
       setBuilderFeedback({
         tone: "error",
         label: "could not update · try again",
+        detail:
+          handoffError instanceof Error
+            ? handoffError.message
+            : "The AI editor stopped before creating a review.",
       });
       toast({
         title: "could not update the Live View",
@@ -1638,6 +1823,107 @@ export function BrainOverview({
       });
     } finally {
       setAiEditingSlotId(null);
+    }
+  };
+
+  const decideAiProposal = (
+    slotId: string,
+    decision: "accepted" | "rejected",
+  ) => {
+    setAiBlockProposals((current) =>
+      current.map((proposal) =>
+        proposal.id === slotId ? { ...proposal, status: decision } : proposal,
+      ),
+    );
+    const next = aiBlockProposals.findIndex(
+      (proposal) => proposal.id === slotId,
+    );
+    const following = aiBlockProposals
+      .slice(next + 1)
+      .find((proposal) => proposal.status === "pending");
+    setProposalFocusSlotId(following?.id ?? slotId);
+  };
+
+  const decideAllAiProposals = (decision: "accepted" | "rejected") => {
+    setAiBlockProposals((current) =>
+      current.map((proposal) => ({ ...proposal, status: decision })),
+    );
+    setProposalFocusSlotId(aiBlockProposals[0]?.id ?? null);
+  };
+
+  const discardAiProposals = () => {
+    setAiBlockProposals([]);
+    setProposalFocusSlotId(null);
+    setProposalTitle(null);
+    setProposalTimeRange(null);
+    setProposalPeriodPolicy(null);
+    setBuilderFeedback(null);
+  };
+
+  const applyAcceptedAiProposals = async () => {
+    if (!view) return;
+    const accepted = aiBlockProposals.filter(
+      (proposal) => proposal.status === "accepted",
+    );
+    if (accepted.length === 0) {
+      discardAiProposals();
+      return;
+    }
+    const acceptedById = new Map(
+      accepted.map((proposal) => [proposal.id, proposal]),
+    );
+    const nextSlots = view.slots
+      .filter((slot) => acceptedById.get(slot.id)?.kind !== "remove")
+      .map((slot) => acceptedById.get(slot.id)?.after ?? slot);
+    for (const proposal of accepted) {
+      if (proposal.kind === "add" && proposal.after)
+        nextSlots.push(proposal.after);
+    }
+    const normalized = normalizedSlots(nextSlots);
+    const previous = copyViewDefinition(view);
+    setSaving(true);
+    try {
+      const result = await commands.saveBrainView({
+        id: view.id,
+        title: proposalTitle?.trim() || view.title,
+        expectedRevision: view.revision,
+        timeRange: proposalTimeRange ?? view.timeRange,
+        periodPolicy: proposalPeriodPolicy ?? view.periodPolicy,
+        slots: serializedSlots(normalized),
+      });
+      if (result.status === "error") throw new Error(result.error);
+      setView(result.data);
+      setViews((current) =>
+        current.map((candidate) =>
+          candidate.id === result.data.id ? result.data : candidate,
+        ),
+      );
+      setUndoView(previous);
+      setUndoRevision(result.data.revision);
+      posthog.capture("live_view_ai_proposal_applied", {
+        analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
+        accepted_block_count: accepted.length,
+        rejected_block_count: aiBlockProposals.filter(
+          (proposal) => proposal.status === "rejected",
+        ).length,
+      });
+      discardAiProposals();
+      const changedSlots = result.data.slots.filter(
+        (slot) => acceptedById.has(slot.id) && Boolean(slot.binding),
+      );
+      if (changedSlots.length > 0) {
+        void refreshConnectedPipes(result.data, changedSlots, "card_ai_edit");
+      }
+      toast({ title: "accepted changes applied" });
+    } catch (applyError) {
+      toast({
+        title: "could not apply accepted changes",
+        description:
+          applyError instanceof Error ? applyError.message : String(applyError),
+        variant: "destructive",
+      });
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -2402,6 +2688,27 @@ export function BrainOverview({
 
   if (!view) return null;
   const slots = normalizedSlots(view.slots);
+  const proposalById = new Map(
+    aiBlockProposals.map((proposal) => [proposal.id, proposal]),
+  );
+  const proposalSlots = normalizedSlots([
+    ...slots.map((slot) => {
+      const proposal = proposalById.get(slot.id);
+      if (!proposal || proposal.status === "rejected" || !proposal.after) {
+        return slot;
+      }
+      return proposal.kind === "remove" ? slot : proposal.after;
+    }),
+    ...aiBlockProposals.flatMap((proposal) =>
+      proposal.kind === "add" && proposal.after ? [proposal.after] : [],
+    ),
+  ]);
+  const proposalView =
+    aiBlockProposals.length > 0 ? { ...view, slots: proposalSlots } : view;
+  const visibleCanvasDocument =
+    aiBlockProposals.length > 0
+      ? reconcileCanvasDocument(proposalView, canvasDocument)
+      : canvasDocument;
   const boundSlotCount = slots.filter((slot) => slot.binding).length;
   const periodRanges = allowedLiveViewTimeRanges(view.periodPolicy);
   const dataStatus = liveViewDataStatus(slots);
@@ -2410,7 +2717,7 @@ export function BrainOverview({
     (dataRefresh.status === "starting" || dataRefresh.status === "running");
   const dashboardBusy = saving || refreshIsActive;
   const canvasReady =
-    !canvasLoading && canvasDocument?.viewId === view.id && !canvasError;
+    !canvasLoading && visibleCanvasDocument?.viewId === view.id && !canvasError;
   const refreshingSlotIds = new Set(
     refreshIsActive ? (dataRefresh?.slotIds ?? []) : [],
   );
@@ -2577,6 +2884,75 @@ export function BrainOverview({
             </Button>
           </div>
         )}
+        {aiBlockProposals.length > 0 && (
+          <div
+            data-testid="live-view-ai-review"
+            className="mb-3 flex flex-wrap items-center gap-2 border border-amber-500/60 bg-amber-500/5 px-3 py-2 text-xs"
+          >
+            <span className="font-medium">
+              Review {aiBlockProposals.length} proposed Block
+              {aiBlockProposals.length === 1 ? "" : "s"}
+            </span>
+            <span className="text-muted-foreground">
+              {
+                aiBlockProposals.filter(
+                  (proposal) => proposal.status === "accepted",
+                ).length
+              }{" "}
+              accepted ·{" "}
+              {
+                aiBlockProposals.filter(
+                  (proposal) => proposal.status === "rejected",
+                ).length
+              }{" "}
+              rejected
+            </span>
+            <div className="ml-auto flex flex-wrap items-center gap-1">
+              <Button
+                data-testid="live-view-ai-accept-all"
+                size="sm"
+                variant="ghost"
+                className="h-7 rounded-none px-2"
+                onClick={() => decideAllAiProposals("accepted")}
+              >
+                <Check className="mr-1 h-3 w-3" /> accept all
+              </Button>
+              <Button
+                data-testid="live-view-ai-reject-all"
+                size="sm"
+                variant="ghost"
+                className="h-7 rounded-none px-2"
+                onClick={() => decideAllAiProposals("rejected")}
+              >
+                <X className="mr-1 h-3 w-3" /> reject all
+              </Button>
+              <Button
+                data-testid="live-view-ai-apply-accepted"
+                size="sm"
+                className="h-7 rounded-none px-2"
+                disabled={
+                  saving ||
+                  aiBlockProposals.some(
+                    (proposal) => proposal.status === "pending",
+                  )
+                }
+                onClick={() => void applyAcceptedAiProposals()}
+              >
+                apply accepted
+              </Button>
+              <Button
+                data-testid="live-view-ai-discard"
+                size="icon"
+                variant="ghost"
+                className="h-7 w-7 rounded-none"
+                aria-label="discard all AI changes"
+                onClick={discardAiProposals}
+              >
+                <X className="h-3 w-3" />
+              </Button>
+            </div>
+          </div>
+        )}
         {dataRefresh?.viewId === view.id && (
           <DataRefreshBanner state={dataRefresh} />
         )}
@@ -2629,8 +3005,8 @@ export function BrainOverview({
           </button>
         ) : canvasReady && canvasDocument ? (
           <LiveViewCanvas
-            document={canvasDocument}
-            slots={slots}
+            document={visibleCanvasDocument!}
+            slots={proposalSlots}
             timeRange={view.timeRange}
             refreshingSlotIds={refreshingSlotIds}
             aiEditingSlotId={aiEditingSlotId}
@@ -2642,6 +3018,16 @@ export function BrainOverview({
             onAiEdit={editSlotWithAi}
             onItemAction={recordItemAction}
             onItemHandoff={handoffItem}
+            proposals={
+              new Map(
+                aiBlockProposals.map((proposal) => [
+                  proposal.id,
+                  { kind: proposal.kind, status: proposal.status },
+                ]),
+              )
+            }
+            focusSlotId={proposalFocusSlotId}
+            onProposalDecision={decideAiProposal}
           />
         ) : canvasLoading ? (
           <div

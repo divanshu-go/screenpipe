@@ -33,6 +33,7 @@ const SUGGESTIONS = [
 export type LiveViewAiFeedback = {
   tone: "working" | "success" | "error";
   label: string;
+  detail?: string;
 };
 
 export function LiveViewAiFeedbackStatus({
@@ -59,6 +60,14 @@ export function LiveViewAiFeedbackStatus({
         )}
         <span>{feedback.label}</span>
       </div>
+      {feedback.detail && (
+        <p
+          data-testid="live-view-generation-detail"
+          className="mt-1 pl-5 text-[10px] leading-4 text-muted-foreground"
+        >
+          {feedback.detail}
+        </p>
+      )}
     </div>
   );
 }

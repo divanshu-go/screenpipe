@@ -65,6 +65,7 @@ export class PiConversationHarness {
   private gatewayErrorResponse: unknown | null = null;
   private scriptedToolCalls: ScriptedToolCall[] = [];
   private scriptedToolCallIndex = 0;
+  private textResponse = "mock-ok";
   private readonly requests: unknown[] = [];
 
   constructor(private readonly sessionId: string) {}
@@ -219,7 +220,9 @@ export class PiConversationHarness {
   async clearCaptures(): Promise<void> {
     this.requests.length = 0;
     await browser.execute(() => {
-      (globalThis as any).__e2ePiWirePrompts = [];
+      const global = globalThis as any;
+      global.__e2ePiWirePrompts = [];
+      global.__e2ePiAgentEvents = [];
     });
   }
 
@@ -240,6 +243,10 @@ export class PiConversationHarness {
   setToolCallSequence(toolCalls: ScriptedToolCall[]): void {
     this.scriptedToolCalls = [...toolCalls];
     this.scriptedToolCallIndex = 0;
+  }
+
+  setTextResponse(value: string): void {
+    this.textResponse = value;
   }
 
   async waitForRequestCount(
@@ -342,8 +349,23 @@ export class PiConversationHarness {
     }, this.sessionId)) as PiWirePrompt[];
   }
 
+  async agentEvents(): Promise<unknown[]> {
+    return (await browser.execute(() => {
+      const global = globalThis as any;
+      return global.__e2ePiAgentEvents || [];
+    })) as unknown[];
+  }
+
   requestOccurrences(index: number, needle: string): number {
     return JSON.stringify(this.requests[index]).split(needle).length - 1;
+  }
+
+  requestCount(): number {
+    return this.requests.length;
+  }
+
+  requestAt(index: number): unknown {
+    return this.requests[index];
   }
 
   private async installWireRecorder(): Promise<void> {
@@ -351,19 +373,23 @@ export class PiConversationHarness {
       (done: (ok: boolean) => void) => {
         const global = globalThis as any;
         global.__e2ePiWirePrompts = [];
+        global.__e2ePiAgentEvents = [];
         const listen = global.__TAURI__?.event?.listen;
         if (typeof listen !== "function") {
           done(false);
           return;
         }
-        void listen(
-          "e2e_pi_wire_prompt",
-          (event: { payload: PiWirePrompt }) => {
+        void Promise.all([
+          listen("e2e_pi_wire_prompt", (event: { payload: PiWirePrompt }) => {
             global.__e2ePiWirePrompts.push(event.payload);
-          },
-        )
-          .then((unlisten: () => void) => {
-            global.__e2ePiWirePromptUnlisten = unlisten;
+          }),
+          listen("agent_event", (event: { payload: unknown }) => {
+            global.__e2ePiAgentEvents.push(event.payload);
+          }),
+        ])
+          .then((unlisteners: Array<() => void>) => {
+            global.__e2ePiWirePromptUnlisten = () =>
+              unlisteners.forEach((unlisten) => unlisten());
             done(true);
           })
           .catch(() => done(false));
@@ -469,7 +495,7 @@ export class PiConversationHarness {
           }
           response.end(
             `data: ${chunk({ role: "assistant", content: "" }, null)}\n\n` +
-              `data: ${chunk({ content: "mock-ok" }, null)}\n\n` +
+              `data: ${chunk({ content: this.textResponse }, null)}\n\n` +
               `data: ${chunk({}, "stop")}\n\n` +
               "data: [DONE]\n\n",
           );
