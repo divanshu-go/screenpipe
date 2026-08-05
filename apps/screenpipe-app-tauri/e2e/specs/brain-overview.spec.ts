@@ -598,7 +598,7 @@ describe("Brain Live Views", function () {
       await waitForTestId("section-brain", 15_000);
       await selectDashboard("process-map");
       const chatsDir = await invokeOrThrow<string>("get_chats_dir");
-      expect(chatsDir).toContain(".e2e/chats");
+      expect(chatsDir.replaceAll("\\", "/")).toContain(".e2e/chats");
       const prompt = await waitForTestId("live-view-ai-prompt", 10_000);
       await prompt.click();
       const selectedModel = await $(
