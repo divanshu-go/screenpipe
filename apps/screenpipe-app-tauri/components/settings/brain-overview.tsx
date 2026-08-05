@@ -32,6 +32,8 @@ import {
 } from "@/components/ui/select";
 import {
   LiveViewAiComposer,
+  LiveViewAiFeedbackStatus,
+  type LiveViewAiFeedback,
   type LiveViewGenerationIntent,
 } from "@/components/settings/live-view-ai-composer";
 import {
@@ -85,6 +87,10 @@ import {
   buildLiveViewBuilderAgentPrompt,
   type LiveViewBuilderTarget,
 } from "@/lib/live-views/pipe-agent-prompt";
+import {
+  runLiveViewBuilderAgent,
+  type LiveViewBuilderAgentPhase,
+} from "@/lib/live-views/run-live-view-builder-agent";
 import {
   allowedLiveViewTimeRanges,
   buildLiveViewTimeContext,
@@ -168,6 +174,14 @@ const STARTER_DASHBOARD_ID = "my-dashboard";
 const STARTER_DASHBOARD_TITLE = "My dashboard";
 const LIVE_VIEW_ANALYTICS_SCHEMA_VERSION = 2;
 const LIVE_VIEW_COHERENT_UPDATE_WINDOW_MS = 60_000;
+const BUILDER_RESULT_POLL_ATTEMPTS = 8;
+
+const BUILDER_PHASE_LABELS: Record<LiveViewBuilderAgentPhase, string> = {
+  starting: "starting",
+  working: "working",
+  applying: "updating Live View",
+  finishing: "checking changes",
+};
 
 const LIVE_VIEW_FRESHNESS_FORMATTER = new Intl.DateTimeFormat(undefined, {
   month: "short",
@@ -430,6 +444,10 @@ export function BrainOverview({
   const [selectedAiPresetId, setSelectedAiPresetId] = useState<string | null>(
     readActiveAiPresetId,
   );
+  const [builderFeedback, setBuilderFeedback] =
+    useState<LiveViewAiFeedback | null>(null);
+  const builderAbortRef = useRef<AbortController | null>(null);
+  const builderFeedbackTimerRef = useRef<number | null>(null);
   const activationViewedRef = useRef(new Set<string>());
   const lastViewedDashboardRef = useRef<string | null>(null);
   const lastViewedResultRef = useRef<{
@@ -448,6 +466,13 @@ export function BrainOverview({
     () => setActivationVersion((version) => version + 1),
     [],
   );
+
+  useEffect(() => () => {
+    builderAbortRef.current?.abort();
+    if (builderFeedbackTimerRef.current) {
+      clearTimeout(builderFeedbackTimerRef.current);
+    }
+  });
 
   const installedPipes = useMemo(
     () => [...pipes].sort((a, b) => a.config.name.localeCompare(b.config.name)),
@@ -1239,12 +1264,11 @@ export function BrainOverview({
     setAiPreview(true);
   };
 
-  const openLiveViewBuilderAgent = async ({
+  const runLiveViewBuilderAgentInline = async ({
     request,
     target,
     reference,
     template = null,
-    displayLabel = request,
   }: {
     request: string;
     target: LiveViewBuilderTarget;
@@ -1252,6 +1276,7 @@ export function BrainOverview({
     template?: BrainViewTemplateKit | null;
     displayLabel?: string;
   }): Promise<boolean> => {
+    if (!selectedAiPreset || builderAbortRef.current) return false;
     const analyticsProperties = {
       analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
       scope: target.scope,
@@ -1260,6 +1285,8 @@ export function BrainOverview({
       current_block_count: reference?.slots.length ?? 0,
       has_template_guide: Boolean(template),
       prompt_length: request.length,
+      execution_surface: "live_view",
+      opened_chat: false,
     };
     posthog.capture(
       "live_view_builder_agent_handoff_started",
@@ -1272,42 +1299,101 @@ export function BrainOverview({
       target,
       template,
     });
-    const context =
-      target.scope === "block"
-        ? `Edit Block “${target.block.title}” in Live View “${reference?.title ?? "unknown"}”`
-        : target.operation === "create"
-          ? template
-            ? `Create a Live View guided by “${template.title}”`
-            : "Create a new Live View"
-          : `${target.operation === "replace" ? "Replace" : "Edit"} Live View “${reference?.title ?? "unknown"}”`;
+    const beforeIds = new Set(views.map((candidate) => candidate.id));
+    const controller = new AbortController();
+    builderAbortRef.current = controller;
+    if (builderFeedbackTimerRef.current) {
+      clearTimeout(builderFeedbackTimerRef.current);
+      builderFeedbackTimerRef.current = null;
+    }
 
     try {
-      await showChatWithPrefill({
-        context,
+      await runLiveViewBuilderAgent({
         prompt: agentPrompt,
-        displayLabel,
-        autoSend: true,
-        source: "live-view-builder-agent",
-        useHomeChat: true,
+        preset: selectedAiPreset,
+        userToken: settings.user?.token ?? null,
+        signal: controller.signal,
+        onPhase: (phase) =>
+          setBuilderFeedback({
+            tone: "working",
+            label: BUILDER_PHASE_LABELS[phase],
+          }),
       });
+
+      setBuilderFeedback({ tone: "working", label: "checking changes" });
+      let refreshedViews: ViewDefinition[] = [];
+      let updatedView: ViewDefinition | null = null;
+      for (
+        let attempt = 0;
+        attempt < BUILDER_RESULT_POLL_ATTEMPTS;
+        attempt += 1
+      ) {
+        const result = await commands.listBrainViews();
+        if (result.status === "ok") {
+          refreshedViews = result.data;
+          updatedView = reference
+            ? (result.data.find(
+                (candidate) =>
+                  candidate.id === reference.id &&
+                  candidate.revision > reference.revision,
+              ) ?? null)
+            : (result.data
+                .filter((candidate) => !beforeIds.has(candidate.id))
+                .sort(
+                  (left, right) =>
+                    Date.parse(right.updatedAt) - Date.parse(left.updatedAt),
+                )[0] ?? null);
+        }
+        if (updatedView) break;
+        await new Promise((resolve) => window.setTimeout(resolve, 250));
+      }
+      if (!updatedView) {
+        throw new Error("The agent finished without changing this Live View");
+      }
+
+      setViews(refreshedViews);
+      setView(updatedView);
+      rememberSelectedLiveViewDashboard(updatedView.id);
+      await refetchPipes();
       posthog.capture("live_view_builder_agent_handoff_completed", {
         ...analyticsProperties,
       });
+      setBuilderFeedback({ tone: "success", label: "Live View updated" });
+      builderFeedbackTimerRef.current = window.setTimeout(
+        () => setBuilderFeedback(null),
+        2_500,
+      );
       return true;
     } catch (handoffError) {
+      if (handoffError instanceof Error && handoffError.name === "AbortError") {
+        setBuilderFeedback(null);
+        return false;
+      }
       posthog.capture("live_view_builder_agent_handoff_failed", {
         ...analyticsProperties,
         failure_type: analyticsErrorType(handoffError),
       });
+      setBuilderFeedback({
+        tone: "error",
+        label: "could not update · try again",
+      });
       toast({
-        title: "could not open the Live View agent",
+        title: "could not update the Live View",
         description:
           handoffError instanceof Error
             ? handoffError.message
             : String(handoffError),
         variant: "destructive",
       });
+      builderFeedbackTimerRef.current = window.setTimeout(
+        () => setBuilderFeedback(null),
+        4_000,
+      );
       return false;
+    } finally {
+      if (builderAbortRef.current === controller) {
+        builderAbortRef.current = null;
+      }
     }
   };
 
@@ -1320,7 +1406,7 @@ export function BrainOverview({
     const creating = intent === "new-dashboard";
     setCreateDashboardOpen(false);
     setTemplateGalleryOpen(false);
-    return await openLiveViewBuilderAgent({
+    return await runLiveViewBuilderAgentInline({
       request: prompt,
       target: {
         scope: "dashboard",
@@ -1540,7 +1626,7 @@ export function BrainOverview({
 
     setAiEditingSlotId(slot.id);
     try {
-      return await openLiveViewBuilderAgent({
+      return await runLiveViewBuilderAgentInline({
         request: prompt,
         target: {
           scope: "block",
@@ -1665,7 +1751,7 @@ export function BrainOverview({
     const creatingNew = destination === "new" || !view;
     setSaving(true);
     try {
-      const opened = await openLiveViewBuilderAgent({
+      const opened = await runLiveViewBuilderAgentInline({
         request: `Build a useful Live View for the “${kit.title}” outcome. Use the template as guidance, then personalize the Blocks and Pipe strategy from a small relevant sample of my local data.`,
         target: {
           scope: "dashboard",
@@ -2000,7 +2086,9 @@ export function BrainOverview({
         className="mx-auto flex min-h-80 w-full max-w-5xl flex-col items-center justify-center px-6 py-8 text-center"
       >
         <LiveViewAiComposer
-          busy={false}
+          busy={builderFeedback?.tone === "working"}
+          feedback={builderFeedback}
+          onCancel={() => builderAbortRef.current?.abort()}
           selectedPresetId={selectedAiPreset?.id ?? null}
           onSelectedPresetIdChange={selectAiPreset}
           onGenerate={generateFromComposer}
@@ -2130,6 +2218,13 @@ export function BrainOverview({
               </Button>
             </div>
           </div>
+
+          {builderFeedback && (
+            <LiveViewAiFeedbackStatus
+              feedback={builderFeedback}
+              className="mb-5 border border-border bg-background"
+            />
+          )}
 
           {wholeDashboardPreview && (
             <div className="mb-5 grid gap-4 border border-border p-4 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,0.8fr)]">
@@ -2564,7 +2659,9 @@ export function BrainOverview({
         >
           <div className="pointer-events-auto w-full max-w-2xl shadow-lg shadow-black/5">
             <LiveViewAiComposer
-              busy={false}
+              busy={builderFeedback?.tone === "working"}
+              feedback={builderFeedback}
+              onCancel={() => builderAbortRef.current?.abort()}
               compact
               currentViewTitle={view.title}
               selectedPresetId={selectedAiPreset?.id ?? null}

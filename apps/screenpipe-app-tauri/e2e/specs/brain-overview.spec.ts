@@ -19,6 +19,7 @@ import {
 import { E2E_DATA_DIR } from "../helpers/app-launcher.js";
 import { invokeOrThrow } from "../helpers/tauri.js";
 import { saveScreenshot } from "../helpers/screenshot-utils.js";
+import { PiConversationHarness } from "../helpers/pi-conversation-harness.js";
 
 interface LocalApiConfig {
   key: string | null;
@@ -416,83 +417,140 @@ describe("Brain Live Views", function () {
     }
   });
 
-  it("hands the process map template to the Live View builder agent", async () => {
+  it("builds the process map inline without opening Chat", async () => {
     await waitForAppReady();
     await openHomeWithDiagnostics();
-    const existingViews = await invokeOrThrow<BrainView[]>("list_brain_views");
-    if (existingViews.some((view) => view.id === "process-map")) {
-      await invokeOrThrow("delete_brain_view", { id: "process-map" });
+    const piConversation = new PiConversationHarness(
+      "e2e-live-view-inline-builder",
+    );
+    await piConversation.initialize();
+    await piConversation.configureAppPreset();
+    piConversation.setResponseDelay(500);
+    piConversation.setToolCallSequence([
+      {
+        name: "screenpipe_live_view",
+        arguments: {
+          action: "save",
+          view: {
+            schema: "live-view-template.v1",
+            id: "process-map",
+            title: "Process map",
+            revision: 0,
+            timeRange: "7d",
+            periodPolicy: {
+              type: "selectable.v1",
+              values: ["7d", "30d"],
+            },
+            blocks: [
+              {
+                id: "trigger-and-outcome",
+                title: "Trigger and outcome",
+                kind: "markdown.v1",
+                width: 6,
+                order: 0,
+                intent: "Describe what starts the workflow and its outcome.",
+              },
+              {
+                id: "safe-improvement-path",
+                title: "Safe improvement path",
+                kind: "markdown.v1",
+                width: 6,
+                order: 1,
+                intent: "Describe a safe way to improve the workflow.",
+              },
+            ],
+          },
+        },
+      },
+    ]);
+
+    try {
+      const existingViews =
+        await invokeOrThrow<BrainView[]>("list_brain_views");
+      if (existingViews.some((view) => view.id === "process-map")) {
+        await invokeOrThrow("delete_brain_view", { id: "process-map" });
+      }
+
+      const brainNav = await waitForTestId("nav-brain", 10_000);
+      await brainNav.click();
+      await waitForTestId("section-brain", 15_000);
+      await openDashboardMenu();
+      await waitForTestId("overview-templates", 10_000).then((element) =>
+        element.click(),
+      );
+      await waitForTestId(
+        "preview-live-view-template-process-map",
+        10_000,
+      ).then((element) => element.click());
+
+      await waitForTestId("overview-apply-template", 10_000).then((element) =>
+        element.click(),
+      );
+
+      const progress = await waitForTestId(
+        "live-view-generation-progress",
+        20_000,
+      );
+      expect((await progress.getText()).trim().length).toBeGreaterThan(0);
+
+      try {
+        await browser.waitUntil(
+          async () =>
+            (await waitForTestId("live-view-generation-progress", 10_000).then(
+              (element) => element.getText(),
+            )) === "Live View updated",
+          {
+            timeout: t(45_000),
+            interval: 200,
+            timeoutMsg: "inline Live View builder did not report success",
+          },
+        );
+      } catch (error) {
+        const diagnostic = await browser.execute(() => ({
+          status:
+            document.querySelector(
+              "[data-testid='live-view-generation-progress']",
+            )?.textContent ?? null,
+          text: document.body?.innerText.slice(0, 2_000) ?? "",
+          wirePrompts: (globalThis as any).__e2ePiWirePrompts ?? [],
+        }));
+        throw new Error(`${String(error)}\n${JSON.stringify(diagnostic)}`);
+      }
+
+      const brainSection = await waitForTestId("section-brain", 10_000);
+      expect(await brainSection.isDisplayed()).toBe(true);
+      const homeSection = await $("[data-testid=section-home]");
+      expect(await homeSection.isDisplayed()).toBe(false);
+      expect(
+        await browser.execute(() =>
+          window.sessionStorage.getItem("pendingChatPrefill"),
+        ),
+      ).toBeNull();
+
+      const viewsAfterUpdate =
+        await invokeOrThrow<BrainView[]>("list_brain_views");
+      expect(viewsAfterUpdate.some((view) => view.id === "process-map")).toBe(
+        true,
+      );
+      expect(
+        await waitForTestId("overview-dashboard-selector", 10_000).then(
+          (element) => element.getValue(),
+        ),
+      ).toBe("process-map");
+
+      const screenshot = await saveScreenshot(
+        "brain-process-map-inline-builder",
+      );
+      expect(existsSync(screenshot)).toBe(true);
+    } finally {
+      await piConversation.dispose();
+      const remainingViews = await invokeOrThrow<BrainView[]>(
+        "list_brain_views",
+      ).catch(() => []);
+      if (remainingViews.some((view) => view.id === "process-map")) {
+        await invokeOrThrow("delete_brain_view", { id: "process-map" });
+      }
     }
-
-    const brainNav = await waitForTestId("nav-brain", 10_000);
-    await brainNav.click();
-    await waitForTestId("section-brain", 15_000);
-    await openDashboardMenu();
-    await waitForTestId("overview-templates", 10_000).then((element) =>
-      element.click(),
-    );
-    await waitForTestId("preview-live-view-template-process-map", 10_000).then(
-      (element) => element.click(),
-    );
-
-    const capturedPrefillKey = "e2eLiveViewBuilderPrefill";
-    await browser.execute((captureKey: string) => {
-      window.sessionStorage.removeItem(captureKey);
-      const originalSetItem = Storage.prototype.setItem;
-      Storage.prototype.setItem = function (key: string, value: string) {
-        if (this === window.sessionStorage && key === "pendingChatPrefill") {
-          originalSetItem.call(this, captureKey, value);
-        }
-        originalSetItem.call(this, key, value);
-      };
-    }, capturedPrefillKey);
-
-    await waitForTestId("overview-apply-template", 10_000).then((element) =>
-      element.click(),
-    );
-
-    await waitForTestId("section-home", 20_000);
-    const capturedPrefill = (await browser.execute((captureKey: string) => {
-      const value = window.sessionStorage.getItem(captureKey);
-      return value ? JSON.parse(value) : null;
-    }, capturedPrefillKey)) as {
-      context?: string;
-      prompt?: string;
-      displayLabel?: string;
-      autoSend?: boolean;
-      source?: string;
-      useHomeChat?: boolean;
-      targetWindow?: string;
-    } | null;
-
-    expect(capturedPrefill).not.toBeNull();
-    expect(capturedPrefill?.context).toBe(
-      "Create a Live View guided by “Process map”",
-    );
-    expect(capturedPrefill?.displayLabel).toBe(
-      "Build “Process map” with the Live View agent",
-    );
-    expect(capturedPrefill?.source).toBe("live-view-builder-agent");
-    expect(capturedPrefill?.autoSend).toBe(true);
-    expect(capturedPrefill?.useHomeChat).toBe(true);
-    expect(capturedPrefill?.targetWindow).toBe("home");
-    expect(capturedPrefill?.prompt).toContain('"title":"Trigger and outcome"');
-    expect(capturedPrefill?.prompt).toContain(
-      '"title":"Safe improvement path"',
-    );
-    expect(capturedPrefill?.prompt).not.toContain("automate-my-work");
-
-    const viewsAfterHandoff =
-      await invokeOrThrow<BrainView[]>("list_brain_views");
-    expect(viewsAfterHandoff.some((view) => view.id === "process-map")).toBe(
-      false,
-    );
-
-    const screenshot = await saveScreenshot("brain-process-map-agent-handoff");
-    expect(existsSync(screenshot)).toBe(true);
-    await browser.execute((captureKey: string) => {
-      window.sessionStorage.removeItem(captureKey);
-    }, capturedPrefillKey);
   });
 
   it("shows requested range and per-block freshness honestly", async () => {

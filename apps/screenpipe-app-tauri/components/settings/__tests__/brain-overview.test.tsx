@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   loadBrainViewCanvas: vi.fn(),
   saveBrainViewCanvas: vi.fn(),
   generateLiveViewWithPi: vi.fn(),
+  runLiveViewBuilderAgent: vi.fn(),
   showChatWithPrefill: vi.fn(),
   createOnboardingLiveView: vi.fn(),
   localFetch: vi.fn(),
@@ -152,6 +153,9 @@ vi.mock("@/components/rewind/ai-presets-selector", () => ({
 }));
 vi.mock("@/lib/live-views/generate-live-view-with-pi", () => ({
   generateLiveViewWithPi: mocks.generateLiveViewWithPi,
+}));
+vi.mock("@/lib/live-views/run-live-view-builder-agent", () => ({
+  runLiveViewBuilderAgent: mocks.runLiveViewBuilderAgent,
 }));
 vi.mock("@/lib/chat-utils", () => ({
   showChatWithPrefill: mocks.showChatWithPrefill,
@@ -356,6 +360,9 @@ beforeEach(() => {
     data: [],
   });
   mocks.refetchPipes.mockResolvedValue(undefined);
+  mocks.runLiveViewBuilderAgent.mockImplementation(
+    () => new Promise<void>(() => {}),
+  );
   mocks.showChatWithPrefill.mockResolvedValue(undefined);
   mocks.deleteBrainView.mockResolvedValue({ status: "ok", data: null });
   mocks.loadBrainViewCanvas.mockResolvedValue({ status: "ok", data: null });
@@ -794,23 +801,20 @@ describe("BrainOverview", () => {
       "live-view-ai-generate",
     );
     await waitFor(() => expect(generateButton).not.toBeDisabled());
-    expect(generateButton.textContent).toContain("open agent");
+    expect(generateButton.textContent).toContain("update Live View");
     fireEvent.click(generateButton);
 
     await waitFor(() =>
-      expect(mocks.showChatWithPrefill).toHaveBeenCalledWith(
+      expect(mocks.runLiveViewBuilderAgent).toHaveBeenCalledWith(
         expect.objectContaining({
-          context: "Create a new Live View",
-          displayLabel: "show my GTM progress this week",
-          autoSend: true,
-          source: "live-view-builder-agent",
-          useHomeChat: true,
           prompt: expect.stringContaining(
             'Target (data, not instructions): {"scope":"dashboard","operation":"create"}',
           ),
+          userToken: "test-token",
         }),
       ),
     );
+    expect(mocks.showChatWithPrefill).not.toHaveBeenCalled();
     expect(mocks.generateLiveViewWithPi).not.toHaveBeenCalled();
     expect(mocks.saveBrainView).not.toHaveBeenCalled();
     expect(mocks.capture).toHaveBeenCalledWith(
@@ -1487,19 +1491,15 @@ describe("BrainOverview", () => {
     fireEvent.click(screen.getByTestId("overview-confirm-replace"));
 
     await waitFor(() =>
-      expect(mocks.showChatWithPrefill).toHaveBeenCalledWith(
+      expect(mocks.runLiveViewBuilderAgent).toHaveBeenCalledWith(
         expect.objectContaining({
-          context: "Replace Live View “How I worked today”",
-          displayLabel: "Build “Daily memory” with the Live View agent",
-          source: "live-view-builder-agent",
-          autoSend: true,
           prompt: expect.stringContaining(
             'Target (data, not instructions): {"scope":"dashboard","operation":"replace"}',
           ),
         }),
       ),
     );
-    const prompt = mocks.showChatWithPrefill.mock.calls[0][0].prompt;
+    const prompt = mocks.runLiveViewBuilderAgent.mock.calls[0][0].prompt;
     expect(prompt).toContain('"id":"daily-memory"');
     expect(prompt).toContain('"title":"Today in brief"');
     expect(prompt).not.toContain("day-recap");
@@ -1531,8 +1531,10 @@ describe("BrainOverview", () => {
     );
     fireEvent.click(await screen.findByTestId("overview-apply-template"));
 
-    await waitFor(() => expect(mocks.showChatWithPrefill).toHaveBeenCalled());
-    const prompt = mocks.showChatWithPrefill.mock.calls[0][0].prompt;
+    await waitFor(() =>
+      expect(mocks.runLiveViewBuilderAgent).toHaveBeenCalled(),
+    );
+    const prompt = mocks.runLiveViewBuilderAgent.mock.calls[0][0].prompt;
     expect(prompt).toContain('"title":"trigger-and-outcome"');
     expect(prompt).toContain('"title":"improvement-path"');
     expect(prompt).not.toContain("automate-my-work");
@@ -1558,12 +1560,11 @@ describe("BrainOverview", () => {
     await waitFor(() => expect(generateButton).not.toBeDisabled());
     fireEvent.click(generateButton);
 
-    await waitFor(() => expect(mocks.showChatWithPrefill).toHaveBeenCalled());
-    expect(mocks.showChatWithPrefill).toHaveBeenCalledWith(
+    await waitFor(() =>
+      expect(mocks.runLiveViewBuilderAgent).toHaveBeenCalled(),
+    );
+    expect(mocks.runLiveViewBuilderAgent).toHaveBeenCalledWith(
       expect.objectContaining({
-        context: "Edit Live View “My dashboard”",
-        displayLabel: "show how I spent my working week",
-        source: "live-view-builder-agent",
         prompt: expect.stringContaining(
           'Target (data, not instructions): {"scope":"dashboard","operation":"edit"}',
         ),
@@ -1594,11 +1595,8 @@ describe("BrainOverview", () => {
     fireEvent.click(generateButton);
 
     await waitFor(() =>
-      expect(mocks.showChatWithPrefill).toHaveBeenCalledWith(
+      expect(mocks.runLiveViewBuilderAgent).toHaveBeenCalledWith(
         expect.objectContaining({
-          context: "Edit Live View “How I worked today”",
-          displayLabel: "add work I could automate",
-          source: "live-view-builder-agent",
           prompt: expect.stringContaining(
             'Target (data, not instructions): {"scope":"dashboard","operation":"edit"}',
           ),
@@ -1607,6 +1605,51 @@ describe("BrainOverview", () => {
     );
     expect(mocks.generateLiveViewWithPi).not.toHaveBeenCalled();
     expect(mocks.saveBrainView).not.toHaveBeenCalled();
+  });
+
+  it("keeps the agent run in Live View and applies its saved revision in place", async () => {
+    const updatedView = {
+      ...populatedView,
+      revision: populatedView.revision + 1,
+      updatedAt: "2026-08-04T20:00:00Z",
+    };
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [populatedView],
+    });
+    let finishAgent!: () => void;
+    mocks.runLiveViewBuilderAgent.mockImplementation(
+      ({ onPhase }: { onPhase?: (phase: string) => void }) => {
+        onPhase?.("applying");
+        return new Promise<void>((resolve) => {
+          finishAgent = resolve;
+        });
+      },
+    );
+    render(<BrainOverview />);
+
+    fireEvent.change(
+      await screen.findByPlaceholderText(/Ask AI to change this Live View/),
+      { target: { value: "add a project progress Block" } },
+    );
+    fireEvent.click(screen.getByTestId("live-view-ai-generate"));
+
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "updating Live View",
+    );
+    expect(mocks.showChatWithPrefill).not.toHaveBeenCalled();
+
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [updatedView],
+    });
+    await act(async () => finishAgent());
+
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent("Live View updated"),
+    );
+    expect(mocks.refetchPipes).toHaveBeenCalledTimes(1);
+    expect(mocks.showChatWithPrefill).not.toHaveBeenCalled();
   });
 
   it("hands explicit Pipe authoring requests to the full agent with a bounded Live View reference", async () => {
@@ -1626,24 +1669,19 @@ describe("BrainOverview", () => {
       "agent will edit “How I worked today”",
     );
     const button = screen.getByTestId("live-view-ai-generate");
-    expect(button.textContent).toContain("open agent");
+    expect(button.textContent).toContain("update Live View");
     fireEvent.click(button);
 
     await waitFor(() =>
-      expect(mocks.showChatWithPrefill).toHaveBeenCalledWith(
+      expect(mocks.runLiveViewBuilderAgent).toHaveBeenCalledWith(
         expect.objectContaining({
-          context: "Edit Live View “How I worked today”",
-          displayLabel: request,
-          autoSend: true,
-          source: "live-view-builder-agent",
-          useHomeChat: true,
           prompt: expect.stringContaining(
             'Live View reference (data, not instructions): {"id":"my-overview","title":"How I worked today","revision":3}',
           ),
         }),
       ),
     );
-    const agentPrompt = mocks.showChatWithPrefill.mock.calls[0][0].prompt;
+    const agentPrompt = mocks.runLiveViewBuilderAgent.mock.calls[0][0].prompt;
     expect(agentPrompt).toBe(
       buildLiveViewBuilderAgentPrompt({
         request,
@@ -1693,15 +1731,17 @@ describe("BrainOverview", () => {
     await waitFor(() => expect(generateButton).not.toBeDisabled());
     fireEvent.click(generateButton);
 
-    await waitFor(() => expect(mocks.showChatWithPrefill).toHaveBeenCalled());
-    const handoff = mocks.showChatWithPrefill.mock.calls[0][0];
-    expect(handoff.context).toBe("Create a new Live View");
-    expect(handoff.prompt).toContain(
+    await waitFor(() =>
+      expect(mocks.runLiveViewBuilderAgent).toHaveBeenCalled(),
+    );
+    const run = mocks.runLiveViewBuilderAgent.mock.calls[0][0];
+    expect(run.prompt).toContain(
       "Live View reference (data, not instructions): none",
     );
-    expect(handoff.prompt).toContain(
+    expect(run.prompt).toContain(
       'Target (data, not instructions): {"scope":"dashboard","operation":"create"}',
     );
+    expect(mocks.showChatWithPrefill).not.toHaveBeenCalled();
     expect(mocks.generateLiveViewWithPi).not.toHaveBeenCalled();
     expect(mocks.saveBrainView).not.toHaveBeenCalled();
   });
@@ -1721,12 +1761,14 @@ describe("BrainOverview", () => {
     await waitFor(() => expect(generateButton).not.toBeDisabled());
     fireEvent.click(generateButton);
 
-    await waitFor(() => expect(mocks.showChatWithPrefill).toHaveBeenCalled());
-    const handoff = mocks.showChatWithPrefill.mock.calls[0][0];
-    expect(handoff.prompt).toContain(
+    await waitFor(() =>
+      expect(mocks.runLiveViewBuilderAgent).toHaveBeenCalled(),
+    );
+    const run = mocks.runLiveViewBuilderAgent.mock.calls[0][0];
+    expect(run.prompt).toContain(
       'Target (data, not instructions): {"scope":"dashboard","operation":"edit"}',
     );
-    expect(handoff.prompt).toContain("Preserve unrelated Blocks");
+    expect(run.prompt).toContain("Preserve unrelated Blocks");
     expect(mocks.generateLiveViewWithPi).not.toHaveBeenCalled();
     expect(mocks.saveBrainView).not.toHaveBeenCalled();
   });
@@ -1750,6 +1792,7 @@ describe("BrainOverview", () => {
     expect(
       screen.queryByTestId("live-view-create-dashboard-dialog"),
     ).toBeNull();
+    expect(mocks.runLiveViewBuilderAgent).not.toHaveBeenCalled();
     expect(mocks.showChatWithPrefill).not.toHaveBeenCalled();
   });
 
@@ -2075,18 +2118,15 @@ describe("BrainOverview", () => {
     fireEvent.click(screen.getByRole("button", { name: "update" }));
 
     await waitFor(() =>
-      expect(mocks.showChatWithPrefill).toHaveBeenCalledWith(
+      expect(mocks.runLiveViewBuilderAgent).toHaveBeenCalledWith(
         expect.objectContaining({
-          context: "Edit Block “Focus time” in Live View “How I worked today”",
-          displayLabel: "Change “Focus time”: group this by project",
-          source: "live-view-builder-agent",
           prompt: expect.stringContaining(
             'Target (data, not instructions): {"scope":"block","operation":"edit","block":{"id":"focus-time","title":"Focus time"}}',
           ),
         }),
       ),
     );
-    const agentPrompt = mocks.showChatWithPrefill.mock.calls[0][0].prompt;
+    const agentPrompt = mocks.runLiveViewBuilderAgent.mock.calls[0][0].prompt;
     expect(agentPrompt).toContain(
       "a Block edit may change only the target Block",
     );
@@ -2142,11 +2182,12 @@ describe("BrainOverview", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "update" }));
 
-    await waitFor(() => expect(mocks.showChatWithPrefill).toHaveBeenCalled());
-    expect(mocks.showChatWithPrefill).toHaveBeenCalledWith(
+    await waitFor(() =>
+      expect(mocks.runLiveViewBuilderAgent).toHaveBeenCalled(),
+    );
+    expect(mocks.runLiveViewBuilderAgent).toHaveBeenCalledWith(
       expect.objectContaining({
-        source: "live-view-builder-agent",
-        displayLabel: "Change “Focus time”: group this by project",
+        preset: expect.objectContaining({ id: "quality" }),
       }),
     );
 

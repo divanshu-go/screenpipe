@@ -2008,6 +2008,35 @@ pub async fn pi_start(
     pi_start_inner(app, &state, &sid, project_dir, user_token, provider_config).await
 }
 
+/// Start a private Pi session and submit its first prompt as one operation.
+/// Foreground surfaces that only care about agent events should not have to
+/// round-trip through WebView between process readiness and prompt acceptance.
+#[tauri::command]
+#[specta::specta]
+pub async fn pi_start_and_prompt(
+    app: AppHandle,
+    state: State<'_, PiState>,
+    session_id: String,
+    project_dir: String,
+    user_token: Option<String>,
+    provider_config: Option<PiProviderConfig>,
+    message: String,
+) -> Result<String, String> {
+    let started = pi_start_inner(
+        app.clone(),
+        state.inner(),
+        &session_id,
+        project_dir,
+        user_token,
+        provider_config,
+    )
+    .await?;
+    if !started.running {
+        return Err("Pi did not start".to_string());
+    }
+    pi_prompt_inner(&app, state.inner(), &session_id, message, None, None).await
+}
+
 /// Kill orphan Pi RPC processes left over from a previous app crash.
 /// Only kills if the managed child is dead or absent.
 fn kill_orphan_pi_processes(managed_alive: bool) {
@@ -3036,8 +3065,10 @@ pub async fn pi_start_inner(
             debug!("Pi readiness timeout after {:?} (pid: {}), checking if alive", PI_READY_TIMEOUT, pid);
         }
     }
-    {
-        let mut pool = state.0.lock().await;
+    // This is a best-effort diagnostic only. The stdout reader can briefly own
+    // the session pool while the child becomes ready; never block the command
+    // response (and therefore the first prompt) waiting for that lock.
+    if let Ok(mut pool) = state.0.try_lock() {
         if let Some(m) = pool.sessions.get_mut(&sid) {
             if let Some(ref mut child) = m.child {
                 match child.try_wait() {
@@ -3071,6 +3102,11 @@ pub async fn pi_start_inner(
                 }
             }
         }
+    } else {
+        debug!(
+            "Pi post-start exit check skipped while the session pool is busy (pid: {}, session: {})",
+            pid, sid
+        );
     }
 
     // Pi agent bug (pi-mono#2461): first RPC prompt fails with "startsWith" error.
@@ -3251,13 +3287,32 @@ pub async fn pi_prompt(
     display_preview: Option<String>,
 ) -> Result<String, String> {
     let sid = session_id.unwrap_or_else(|| "chat".to_string());
-    let mut conversation = acquire_pi_conversation_lease(state.inner(), &sid).await?;
+    pi_prompt_inner(
+        &app,
+        state.inner(),
+        &sid,
+        message,
+        images,
+        display_preview,
+    )
+    .await
+}
+
+async fn pi_prompt_inner(
+    app: &AppHandle,
+    state: &PiState,
+    sid: &str,
+    message: String,
+    images: Option<Vec<PiImageContent>>,
+    display_preview: Option<String>,
+) -> Result<String, String> {
+    let mut conversation = acquire_pi_conversation_lease(state, sid).await?;
     let message = conversation.prepare_prompt(message);
 
     let preview = display_preview.unwrap_or_else(|| message.clone());
-    let message = attach_foreground_connections_context(&app, &sid, message).await;
+    let message = attach_foreground_connections_context(app, sid, message).await;
     #[cfg(feature = "e2e")]
-    emit_e2e_pi_wire_prompt(&app, &sid, "prompt", &message);
+    emit_e2e_pi_wire_prompt(app, sid, "prompt", &message);
     let cmd = build_prompt_command(message, images)?;
     let (queue_id, rx) = conversation
         .queue
@@ -3268,7 +3323,7 @@ pub async fn pi_prompt(
             false,
         )
         .await?;
-    await_prompt_start(state.inner(), &sid, rx).await?;
+    await_prompt_start(state, sid, rx).await?;
     conversation.mark_synced();
     Ok(queue_id)
 }
