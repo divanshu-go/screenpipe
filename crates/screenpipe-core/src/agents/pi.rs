@@ -21,6 +21,7 @@ pub const PI_AI_PACKAGE: &str = "@earendil-works/pi-ai@0.83.0";
 pub const PI_NAMESPACE_DIR: &str = "@earendil-works";
 pub const SCREENPIPE_API_URL: &str = "https://api.screenpipe.com/v1";
 const CUSTOM_PROVIDER_USER_AGENT: &str = "screenpipe";
+const DEFAULT_CLOUD_MAX_OUTPUT_TOKENS: u64 = 32_000;
 
 /// Apply compatibility settings required by OpenAI-compatible custom endpoints.
 ///
@@ -263,7 +264,14 @@ fn gateway_models_to_pi_models(data: &[serde_json::Value]) -> Vec<serde_json::Va
             let ctx = m
                 .get("context_window")
                 .and_then(|v| v.as_u64())
+                .filter(|value| *value > 0)
                 .unwrap_or(128000);
+            let max_tokens = m
+                .get("max_output_tokens")
+                .and_then(|v| v.as_u64())
+                .filter(|value| *value > 0)
+                .unwrap_or(DEFAULT_CLOUD_MAX_OUTPUT_TOKENS)
+                .min(ctx);
             let intelligence = m
                 .get("intelligence")
                 .and_then(|v| v.as_str())
@@ -277,7 +285,7 @@ fn gateway_models_to_pi_models(data: &[serde_json::Value]) -> Vec<serde_json::Va
                 "input": ["text", "image"],
                 "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
                 "contextWindow": ctx,
-                "maxTokens": 32000,
+                "maxTokens": max_tokens,
                 // Pi sends its stable agent session ID as x-session-affinity.
                 // The hosted gateway uses that plus the user-message ordinal to
                 // count one visible turn once across a multi-call tool loop.
@@ -299,7 +307,7 @@ fn selectable_gateway_models(data: &[serde_json::Value]) -> Option<Vec<serde_jso
 /// Only auto — if the gateway is down, nothing works anyway.
 fn fallback_cloud_models() -> serde_json::Value {
     json!([
-        {"id": "auto", "name": "Auto (recommended)", "reasoning": true, "input": ["text", "image"], "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}, "contextWindow": 128000, "maxTokens": 32000, "compat": {"sendSessionAffinityHeaders": true}},
+        {"id": "auto", "name": "Auto (recommended)", "reasoning": true, "input": ["text", "image"], "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}, "contextWindow": 128000, "maxTokens": DEFAULT_CLOUD_MAX_OUTPUT_TOKENS, "compat": {"sendSessionAffinityHeaders": true}},
     ])
 }
 
@@ -4560,6 +4568,70 @@ mod tests {
             "locked": true,
         })])
         .is_none());
+    }
+
+    #[test]
+    fn gateway_catalog_uses_advertised_output_budget_with_safe_fallback() {
+        let models = gateway_models_to_pi_models(&[
+            json!({
+                "id": "claude-sonnet-5",
+                "context_window": 1_000_000,
+                "max_output_tokens": 128_000,
+            }),
+            json!({
+                "id": "legacy-model-without-output-metadata",
+                "context_window": 128_000,
+            }),
+            json!({
+                "id": "invalid-model-budget",
+                "context_window": 64_000,
+                "max_output_tokens": 0,
+            }),
+            json!({
+                "id": "oversized-model-budget",
+                "context_window": 64_000,
+                "max_output_tokens": 128_000,
+            }),
+        ]);
+
+        assert_eq!(models[0].get("maxTokens"), Some(&json!(128_000)));
+        assert_eq!(models[1].get("maxTokens"), Some(&json!(32_000)));
+        assert_eq!(models[2].get("maxTokens"), Some(&json!(32_000)));
+        assert_eq!(models[3].get("maxTokens"), Some(&json!(64_000)));
+    }
+
+    #[tokio::test]
+    async fn gateway_output_budget_flows_from_http_to_pi_catalog() {
+        use wiremock::{
+            matchers::{method, path},
+            Mock, MockServer, ResponseTemplate,
+        };
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": [
+                    {
+                        "id": "claude-sonnet-5",
+                        "name": "Claude Sonnet 5",
+                        "context_window": 1_000_000,
+                        "max_output_tokens": 128_000,
+                        "intelligence": "highest",
+                    },
+                    {
+                        "id": "legacy-model",
+                        "name": "Legacy model",
+                        "context_window": 128_000,
+                    },
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let models = screenpipe_cloud_models(&server.uri(), None).await;
+        assert_eq!(models.pointer("/0/maxTokens"), Some(&json!(128_000)));
+        assert_eq!(models.pointer("/1/maxTokens"), Some(&json!(32_000)));
     }
 
     #[tokio::test]
