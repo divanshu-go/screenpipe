@@ -180,8 +180,6 @@ type AiBlockProposal = {
 const STARTER_DASHBOARD_ID = "my-dashboard";
 const STARTER_DASHBOARD_TITLE = "My dashboard";
 const LIVE_VIEW_ANALYTICS_SCHEMA_VERSION = 2;
-const LIVE_VIEW_COHERENT_UPDATE_WINDOW_MS = 60_000;
-
 const LIVE_VIEW_FRESHNESS_FORMATTER = new Intl.DateTimeFormat(undefined, {
   month: "short",
   day: "numeric",
@@ -189,23 +187,15 @@ const LIVE_VIEW_FRESHNESS_FORMATTER = new Intl.DateTimeFormat(undefined, {
   minute: "2-digit",
 });
 
-function liveViewDataStatus(slots: BrainViewSlot[]): string {
+function liveViewLatestUpdate(slots: BrainViewSlot[]): string | null {
   const timestamps = slots.flatMap((slot) => {
     const timestamp = slot.value?.updatedAt
       ? Date.parse(slot.value.updatedAt)
       : Number.NaN;
     return Number.isFinite(timestamp) ? [timestamp] : [];
   });
-  if (timestamps.length === 0) return "No data yet";
-
-  const blockLabel = slots.length === 1 ? "block" : "blocks";
-  const readiness = `${timestamps.length} of ${slots.length} ${blockLabel} ready`;
-  const oldest = Math.min(...timestamps);
-  const latest = Math.max(...timestamps);
-  if (latest - oldest <= LIVE_VIEW_COHERENT_UPDATE_WINDOW_MS) {
-    return `${readiness} · updated ${LIVE_VIEW_FRESHNESS_FORMATTER.format(latest)}`;
-  }
-  return `${readiness} · oldest ${LIVE_VIEW_FRESHNESS_FORMATTER.format(oldest)} · latest ${LIVE_VIEW_FRESHNESS_FORMATTER.format(latest)}`;
+  if (timestamps.length === 0) return null;
+  return `Latest update: ${LIVE_VIEW_FRESHNESS_FORMATTER.format(Math.max(...timestamps))}`;
 }
 
 function analyticsErrorType(error: unknown): string {
@@ -2711,7 +2701,7 @@ export function BrainOverview({
       : canvasDocument;
   const boundSlotCount = slots.filter((slot) => slot.binding).length;
   const periodRanges = allowedLiveViewTimeRanges(view.periodPolicy);
-  const dataStatus = liveViewDataStatus(slots);
+  const latestUpdate = liveViewLatestUpdate(slots);
   const refreshIsActive =
     dataRefresh?.viewId === view.id &&
     (dataRefresh.status === "starting" || dataRefresh.status === "running");
@@ -2789,7 +2779,12 @@ export function BrainOverview({
               >
                 <SelectTrigger
                   data-testid="overview-time-range"
-                  aria-label="Live View time range"
+                  aria-label={
+                    latestUpdate
+                      ? `Live View time range. ${latestUpdate}`
+                      : "Live View time range"
+                  }
+                  title={latestUpdate ?? undefined}
                   className="h-9 min-w-36 w-auto flex-1 text-xs sm:flex-none"
                 >
                   <SelectValue />
@@ -2822,14 +2817,6 @@ export function BrainOverview({
               </Button>
             )}
           </div>
-          <p
-            data-testid="overview-data-status"
-            className="min-w-0 truncate pl-12 font-mono text-[9px] text-muted-foreground lg:col-span-2"
-          >
-            {onboardingColdStart
-              ? "This view will appear when Screenpipe has enough real activity for your outcome."
-              : dataStatus}
-          </p>
         </div>
         {canvasError && (
           <div

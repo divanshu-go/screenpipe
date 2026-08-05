@@ -850,13 +850,13 @@ describe("BrainOverview", () => {
     const header = controls.parentElement;
     expect(header?.className).toContain("grid");
     expect(header?.className).toContain("lg:grid-cols-[minmax(0,1fr)_auto]");
-    const freshness = screen.getByTestId("overview-data-status");
-    expect(freshness.parentElement).toBe(header);
-    expect(freshness.className).toContain("lg:col-span-2");
-    expect(freshness.className).toContain("truncate");
-    expect(header?.lastElementChild).toBe(freshness);
+    expect(screen.queryByTestId("overview-data-status")).toBeNull();
     expect(screen.getByTestId("overview-time-range").className).toContain(
       "h-9",
+    );
+    expect(screen.getByTestId("overview-time-range")).toHaveAttribute(
+      "title",
+      expect.stringMatching(/^Latest update: /),
     );
     expect(screen.getByTestId("overview-refresh-data").className).toContain(
       "w-9",
@@ -939,9 +939,7 @@ describe("BrainOverview", () => {
     await screen.findByTestId("overview-dashboard-selector");
     expect(screen.queryByTestId("overview-fixed-period")).toBeNull();
     expect(screen.queryByTestId("overview-time-range")).toBeNull();
-    expect(screen.getByTestId("overview-data-status")).toHaveTextContent(
-      /^1 of 1 block ready · updated /,
-    );
+    expect(screen.queryByTestId("overview-data-status")).toBeNull();
 
     await openDashboardMenu();
     fireEvent.click(await screen.findByTestId("overview-edit"));
@@ -1030,12 +1028,12 @@ describe("BrainOverview", () => {
     fireEvent.change(selector, { target: { value: otherView.id } });
 
     await waitFor(() => expect(selector.value).toBe(otherView.id));
-    expect(screen.getByTestId("overview-data-status").textContent).toBe(
-      "No data yet",
+    expect(screen.getByTestId("overview-time-range")).not.toHaveAttribute(
+      "title",
     );
   });
 
-  it("shows block readiness and the oldest/latest update instead of one misleading dashboard timestamp", async () => {
+  it("keeps only the latest update in the time-range tooltip", async () => {
     const oldValue = populatedView.slots[0].value!;
     mocks.listBrainViews.mockResolvedValue({
       status: "ok",
@@ -1066,43 +1064,13 @@ describe("BrainOverview", () => {
     });
     render(<BrainOverview />);
 
-    const status = await screen.findByTestId("overview-data-status");
-    expect(status).toHaveTextContent(/^2 of 3 blocks ready · oldest /);
-    expect(status).toHaveTextContent(/ · latest /);
-    expect(status).not.toHaveTextContent(/^Updated /);
-  });
-
-  it("treats blocks published within one minute as one coherent update", async () => {
-    const firstValue = populatedView.slots[0].value!;
-    mocks.listBrainViews.mockResolvedValue({
-      status: "ok",
-      data: [
-        {
-          ...populatedView,
-          slots: [
-            populatedView.slots[0],
-            {
-              ...populatedView.slots[0],
-              id: "same-refresh",
-              order: 1,
-              value: {
-                ...firstValue,
-                artifactOutputId: 89,
-                updatedAt: "2026-07-23T17:00:30Z",
-              },
-            },
-          ],
-        },
-      ],
-    });
-    render(<BrainOverview />);
-
-    expect(await screen.findByTestId("overview-data-status")).toHaveTextContent(
-      /^2 of 2 blocks ready · updated /,
+    const timeRange = await screen.findByTestId("overview-time-range");
+    expect(timeRange).toHaveAttribute(
+      "title",
+      expect.stringMatching(/^Latest update: /),
     );
-    expect(screen.getByTestId("overview-data-status")).not.toHaveTextContent(
-      "oldest",
-    );
+    expect(timeRange.getAttribute("title")).not.toContain("oldest");
+    expect(screen.queryByTestId("overview-data-status")).toBeNull();
   });
 
   it("keeps vertical scrolling on the dashboard while dense tables can scroll sideways", async () => {
