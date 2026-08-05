@@ -15,6 +15,7 @@ import {
   SEMANTIC_CONTEXT_MODE_COPY,
   type SemanticContextMode,
 } from "@/lib/semantic-context-mode";
+import { resolveSemanticContextEnabled } from "@/lib/semantic-context-control";
 import {
   createSettingsWriteQueue,
   enqueueSettingsWrite,
@@ -3768,15 +3769,42 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                       </p>
                     </div>
                   </div>
-                  <ManagedSwitch
-                    settingKey="enableSemanticContext"
-                    id="enableSemanticContext"
-                    checked={Boolean(settings.enableSemanticContext ?? false)}
-                    onCheckedChange={(checked) => handleSettingsChange({ enableSemanticContext: checked }, true)}
-                  />
+                  {settings.semanticContextRemoteForceDisabled ? (
+                    <Switch id="enableSemanticContext" checked={false} disabled />
+                  ) : (
+                    <ManagedSwitch
+                      settingKey="enableSemanticContext"
+                      id="enableSemanticContext"
+                      checked={Boolean(settings.enableSemanticContext ?? false)}
+                      onCheckedChange={(checked) =>
+                        handleSettingsChange(
+                          {
+                            semanticContextPreference: checked,
+                            enableSemanticContext: resolveSemanticContextEnabled(
+                              checked,
+                              {
+                                defaultEnabled:
+                                  settings.semanticContextRemoteDefault ?? false,
+                                forceDisabled: false,
+                              },
+                            ),
+                          },
+                          true,
+                        )
+                      }
+                    />
+                  )}
                 </div>
 
-                {settings.enableSemanticContext && (
+                {settings.semanticContextRemoteForceDisabled && (
+                  <p className="border-t border-border pt-3 text-xs text-muted-foreground">
+                    Temporarily disabled by the remote safety control. Your
+                    preference is preserved.
+                  </p>
+                )}
+
+                {settings.enableSemanticContext &&
+                  !settings.semanticContextRemoteForceDisabled && (
                   <LockedSetting settingKey="semanticContextMode">
                     <div className="flex flex-col gap-3 border-t border-border pt-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
                       <div className="min-w-0">
@@ -3808,7 +3836,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                       </Select>
                     </div>
                   </LockedSetting>
-                )}
+                  )}
               </div>
             </CardContent>
           </Card>

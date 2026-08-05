@@ -6,8 +6,13 @@ import { describe, expect, it } from "vitest";
 import { createDefaultSettingsObject } from "@/lib/hooks/use-settings";
 
 describe("default settings: structured app context", () => {
-  it("keeps semantic parsing disabled until the user opts in", () => {
+  it("ships disabled while leaving new installs eligible for a remote default", () => {
     expect(createDefaultSettingsObject().enableSemanticContext).toBe(false);
+    expect(createDefaultSettingsObject().semanticContextPreference).toBeNull();
+    expect(createDefaultSettingsObject().semanticContextRemoteDefault).toBe(false);
+    expect(
+      createDefaultSettingsObject().semanticContextRemoteForceDisabled,
+    ).toBe(false);
     expect(createDefaultSettingsObject().semanticContextMode).toBe("memory");
   });
 });

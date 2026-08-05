@@ -244,6 +244,12 @@ export type Settings = SettingsStore & {
 	deviceId?: string;
 	/** Device-key values enforced by the current enterprise policy. */
 	enterpriseManagedSettings?: Record<string, ManagedSettingValue>;
+	/** Explicit local choice for structured app context. null means inherit the remote rollout default. */
+	semanticContextPreference?: boolean | null;
+	/** Last valid PostHog default, persisted so offline restarts keep the resolved behavior. */
+	semanticContextRemoteDefault?: boolean;
+	/** Emergency PostHog force-off. The Rust engine also enforces this after enterprise overrides. */
+	semanticContextRemoteForceDisabled?: boolean;
 	updateChannel?: UpdateChannel;
 	chatHistory?: ChatHistoryStore;
 	ignoredUrls?: string[];
@@ -726,6 +732,9 @@ let DEFAULT_SETTINGS: Settings = {
 			disableVision: false,
 			disableScreenshots: false,
 			enableSemanticContext: false,
+			semanticContextPreference: null,
+			semanticContextRemoteDefault: false,
+			semanticContextRemoteForceDisabled: false,
 			semanticContextMode: "memory",
 			useAllMonitors: true,
 			showShortcutOverlay: true,
@@ -995,6 +1004,18 @@ function createSettingsStore() {
 		await hydrateCloudToken(settings);
 
 		let needsUpdate = normalizeSettingsArrays(settings);
+
+		// Existing installs predate the tri-state preference. Preserve their
+		// current value as an explicit choice so a later remote default-on rollout
+		// applies only to new installs. New defaults seed this field as null.
+		if (settings.semanticContextPreference === undefined) {
+			settings.semanticContextPreference = Boolean(
+				settings.enableSemanticContext ?? false,
+			);
+			settings.semanticContextRemoteDefault = false;
+			settings.semanticContextRemoteForceDisabled = false;
+			needsUpdate = true;
+		}
 
 		// Migration: Ensure existing users have deviceId for free tier tracking
 		const existingUserGoal = normalizeUserGoalCategory(

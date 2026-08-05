@@ -1398,6 +1398,22 @@ Rules:
             acp_agent: None,
         };
 
+        // Rust creates and persists store.bin before the frontend mounts on a
+        // fresh install. Seed the tri-state marker here too: null means the
+        // install may inherit a remote default. Legacy stores lack the key, so
+        // the frontend migration can preserve their existing boolean choice.
+        let semantic_context_control = std::collections::HashMap::from([
+            ("semanticContextPreference".to_string(), Value::Null),
+            (
+                "semanticContextRemoteDefault".to_string(),
+                Value::Bool(false),
+            ),
+            (
+                "semanticContextRemoteForceDisabled".to_string(),
+                Value::Bool(false),
+            ),
+        ]);
+
         Self {
             // App-specific defaults override RecordingSettings::default() where needed
             recording: screenpipe_config::RecordingSettings {
@@ -1480,7 +1496,7 @@ Rules:
             minimize_to_tray_on_close: false,
             headless: false,
             headless_record_only: false,
-            extra: std::collections::HashMap::new(),
+            extra: semantic_context_control,
         }
     }
 }
@@ -1613,6 +1629,18 @@ impl SettingsStore {
             .filter(|s| !s.trim().is_empty())
             .or_else(|| self.user.name.clone().filter(|s| !s.trim().is_empty()))
             .or_else(|| self.user.email.clone().filter(|s| !s.trim().is_empty()));
+        // The remote emergency stop is intentionally applied after the
+        // flattened recording settings (including enterprise-managed values).
+        // This makes the safety control effective for every build while never
+        // allowing remote config to force the parser on.
+        if self
+            .extra
+            .get("semanticContextRemoteForceDisabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            settings.enable_semantic_context = false;
+        }
         settings
     }
 
@@ -3213,5 +3241,47 @@ mod tests {
         assert_eq!(settings.user.token, None);
         assert_eq!(settings.embedded_llm.enabled, false);
         assert_eq!(settings.ai_presets.len(), 0);
+    }
+
+    #[test]
+    fn semantic_context_remote_force_off_wins_after_recording_settings() {
+        let mut store = SettingsStore::default();
+        store.recording.enable_semantic_context = true;
+        store.extra.insert(
+            "semanticContextRemoteForceDisabled".to_string(),
+            Value::Bool(true),
+        );
+
+        assert!(store.recording.enable_semantic_context);
+        assert!(!store.to_recording_settings().enable_semantic_context);
+
+        let round_tripped: SettingsStore =
+            serde_json::from_value(serde_json::to_value(store).unwrap()).unwrap();
+        assert_eq!(
+            round_tripped
+                .extra
+                .get("semanticContextRemoteForceDisabled"),
+            Some(&Value::Bool(true))
+        );
+        assert!(!round_tripped
+            .to_recording_settings()
+            .enable_semantic_context);
+    }
+
+    #[test]
+    fn new_store_marks_semantic_context_preference_as_inherited() {
+        let store = SettingsStore::default();
+        assert_eq!(
+            store.extra.get("semanticContextPreference"),
+            Some(&Value::Null)
+        );
+        assert_eq!(
+            store.extra.get("semanticContextRemoteDefault"),
+            Some(&Value::Bool(false))
+        );
+        assert_eq!(
+            store.extra.get("semanticContextRemoteForceDisabled"),
+            Some(&Value::Bool(false))
+        );
     }
 }
