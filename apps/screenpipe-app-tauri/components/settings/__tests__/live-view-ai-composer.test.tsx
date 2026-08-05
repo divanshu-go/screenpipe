@@ -69,6 +69,34 @@ describe("LiveViewAiComposer", () => {
     portaledInput.remove();
   });
 
+  it("does not unmount the model picker when the compact prompt collapses", () => {
+    render(
+      <LiveViewAiComposer
+        busy={false}
+        compact
+        selectedPresetId="auto"
+        onSelectedPresetIdChange={vi.fn()}
+        onGenerate={vi.fn()}
+      />,
+    );
+
+    const prompt = screen.getByTestId("live-view-ai-prompt");
+    const options = screen.getByTestId("live-view-ai-options");
+    expect(options).toHaveAttribute("aria-hidden", "true");
+    expect(screen.getByTestId("model-selector")).toBeInTheDocument();
+
+    fireEvent.focus(prompt);
+    expect(options).toHaveAttribute("aria-hidden", "false");
+
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    fireEvent.blur(prompt, { relatedTarget: outside });
+
+    expect(options).toHaveAttribute("aria-hidden", "true");
+    expect(screen.getByTestId("model-selector")).toBeInTheDocument();
+    outside.remove();
+  });
+
   it("shows one compact live status and lets the user stop", () => {
     const onCancel = vi.fn();
     render(
@@ -84,7 +112,10 @@ describe("LiveViewAiComposer", () => {
     );
 
     expect(screen.getByRole("status")).toHaveTextContent("updating Live View");
-    expect(screen.queryByTestId("live-view-ai-options")).toBeNull();
+    expect(screen.getByTestId("live-view-ai-options")).toHaveAttribute(
+      "aria-hidden",
+      "true",
+    );
     fireEvent.click(screen.getByRole("button", { name: "stop update" }));
     expect(onCancel).toHaveBeenCalledTimes(1);
   });

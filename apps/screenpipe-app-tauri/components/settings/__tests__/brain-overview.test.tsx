@@ -876,13 +876,22 @@ describe("BrainOverview", () => {
       "live-view-ai-prompt",
     ) as HTMLTextAreaElement;
     expect(prompt.rows).toBe(1);
-    expect(screen.queryByTestId("live-view-ai-options")).toBeNull();
+    expect(screen.getByTestId("live-view-ai-options")).toHaveAttribute(
+      "aria-hidden",
+      "true",
+    );
     fireEvent.focus(prompt);
-    expect(screen.getByTestId("live-view-ai-options")).toBeTruthy();
+    expect(screen.getByTestId("live-view-ai-options")).toHaveAttribute(
+      "aria-hidden",
+      "false",
+    );
     fireEvent.change(prompt, { target: { value: "keep this draft" } });
     fireEvent.blur(prompt, { relatedTarget: null });
     expect(prompt.rows).toBe(1);
-    expect(screen.queryByTestId("live-view-ai-options")).toBeNull();
+    expect(screen.getByTestId("live-view-ai-options")).toHaveAttribute(
+      "aria-hidden",
+      "true",
+    );
 
     await openDashboardMenu();
     expect(await screen.findByTestId("overview-new-dashboard")).toBeTruthy();
@@ -912,7 +921,10 @@ describe("BrainOverview", () => {
     )) as HTMLTextAreaElement;
     expect(prompt).toBeDisabled();
     expect(prompt.placeholder).toBe("Hosted AI limit reached");
-    expect(screen.queryByTestId("live-view-ai-options")).toBeNull();
+    expect(screen.getByTestId("live-view-ai-options")).toHaveAttribute(
+      "aria-hidden",
+      "true",
+    );
     expect(screen.queryByTestId("live-view-ai-generate")).toBeNull();
 
     fireEvent.click(screen.getByTestId("live-view-ai-upgrade"));

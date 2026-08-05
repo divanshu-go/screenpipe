@@ -148,6 +148,7 @@ export function LiveViewAiComposer({
     compact &&
     !hostedUsageExhausted &&
     (compactFocused || modelSelectorOpen || busy || Boolean(feedback));
+  const compactOptionsVisible = compactExpanded && !busy && !feedback;
   const intent = inferLiveViewGenerationIntent(
     prompt,
     Boolean(currentViewTitle),
@@ -265,33 +266,34 @@ export function LiveViewAiComposer({
           ))}
       </div>
       {compact ? (
-        compactExpanded &&
-        !busy &&
-        !feedback && (
-          <div
-            data-testid="live-view-ai-options"
-            className="flex min-w-0 flex-wrap items-center gap-2 border-t border-border px-2 py-2"
-          >
-            <AIPresetsSelector
-              controlledPresetId={selectedPresetId}
-              onControlledSelect={onSelectedPresetIdChange}
-              compact
-              showModelOnly
-              showLoginCta
-              containerClassName="w-auto min-w-36"
-              triggerClassName="h-8 rounded-none"
-              onOpenChange={setModelSelectorOpen}
-            />
-            {prompt.trim() && (
-              <span
-                data-testid="live-view-generation-intent"
-                className="max-w-72 truncate text-[11px] text-muted-foreground"
-              >
-                {intentLabel}
-              </span>
-            )}
-          </div>
-        )
+        <div
+          data-testid="live-view-ai-options"
+          aria-hidden={!compactOptionsVisible}
+          className={
+            compactOptionsVisible
+              ? "flex min-w-0 flex-wrap items-center gap-2 border-t border-border px-2 py-2"
+              : "pointer-events-none invisible flex h-0 min-w-0 overflow-hidden px-2 py-0"
+          }
+        >
+          <AIPresetsSelector
+            controlledPresetId={selectedPresetId}
+            onControlledSelect={onSelectedPresetIdChange}
+            compact
+            showModelOnly
+            showLoginCta
+            containerClassName="w-auto min-w-36"
+            triggerClassName="h-8 rounded-none"
+            onOpenChange={setModelSelectorOpen}
+          />
+          {prompt.trim() && (
+            <span
+              data-testid="live-view-generation-intent"
+              className="max-w-72 truncate text-[11px] text-muted-foreground"
+            >
+              {intentLabel}
+            </span>
+          )}
+        </div>
       ) : (
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-2 py-2">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
