@@ -77,65 +77,15 @@ jobs:
             echo "should_test=${{ github.event.inputs.needs_testing }}" >> $GITHUB_OUTPUT
           fi
 
-      - name: Check self-hosted runner availability
+      - name: Select release runners
         id: check-runner
-        env:
-          GH_TOKEN: ${{ secrets.RUNNER_CHECK_TOKEN }}
         run: |
-          # Check runner: returns "available" (online+idle), "busy" (online+busy), or "offline"
-          check_runner() {
-            local label="$1"
-            local info
-            info=$(gh api repos/${{ github.repository }}/actions/runners \
-              --jq ".runners[] | select(.labels[].name == \"$label\") | {status: .status, busy: .busy}" 2>/dev/null || echo '{"status":"offline","busy":true}')
-            local status=$(echo "$info" | jq -r '.status // "offline"')
-            local busy=$(echo "$info" | jq -r 'if .busy then "true" else "false" end')
-            if [ "$status" = "online" ] && [ "$busy" = "false" ]; then
-              echo "available"
-            elif [ "$status" = "online" ]; then
-              echo "busy"
-            else
-              echo "offline"
-            fi
-          }
-
-          # Wait up to TIMEOUT seconds for a runner to become available
-          # Returns "available" or "timeout"
-          wait_for_runner() {
-            local label="$1"
-            local timeout="$2"
-            local elapsed=0
-            local interval=10
-            echo "⏳ Waiting up to ${timeout}s for $label to become available..." >&2
-            while [ $elapsed -lt $timeout ]; do
-              local state=$(check_runner "$label")
-              if [ "$state" = "available" ]; then
-                echo "available"
-                return
-              elif [ "$state" = "offline" ]; then
-                echo "offline"
-                return
-              fi
-              echo "  $label is busy, waiting... (${elapsed}s/${timeout}s)" >&2
-              sleep $interval
-              elapsed=$((elapsed + interval))
-            done
-            echo "timeout"
-          }
-
-          # Force GitHub-hosted runners if requested
           if [ "${{ github.event.inputs.force_github_runners }}" = "true" ]; then
             echo "macos_arm_runner=macos-latest" >> $GITHUB_OUTPUT
             echo "windows_runner=windows-2022" >> $GITHUB_OUTPUT
-            echo "⚠️ Forcing GitHub-hosted runners (manual override)"
           else
-            # macOS aarch64: GitHub-hosted macos-26 runner
             echo "macos_arm_runner=macos-26" >> $GITHUB_OUTPUT
-            echo "✅ Using GitHub-hosted macos-26 runner"
-
-            # Always use GH-hosted Windows - self-hosted is unreliable for builds
             echo "windows_runner=windows-2022" >> $GITHUB_OUTPUT
-            echo "ℹ️ Using GH-hosted Windows runner (windows-2022)"
           fi
 
   draft:
@@ -1560,34 +1510,3 @@ jobs:
           fi
           echo "Uploading debug symbols to Sentry..."
           sentry-cli debug-files upload --org $SENTRY_ORG --project screenpipe-app apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/
-
-  generate-changelog:
-    needs: [check_commit, publish-tauri]
-    if: github.event_name == 'workflow_dispatch' || needs.check_commit.outputs.should_release == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 100
-
-      - name: Get version and previous bump
-        id: params
-        run: |
-          VERSION=$(grep '^version = ' apps/screenpipe-app-tauri/src-tauri/Cargo.toml | sed 's/version = "\(.*\)"/\1/')
-          echo "version=v${VERSION}" >> $GITHUB_OUTPUT
-
-          # Find the previous "Bump" or "release-app" commit to diff from
-          PREV=$(git log --oneline --skip=1 --grep="release-app\|Bump app" -1 --format="%H" 2>/dev/null || echo "")
-          if [ -z "$PREV" ]; then
-            PREV="HEAD~50"
-          fi
-          echo "since=${PREV}" >> $GITHUB_OUTPUT
-          echo "Changelog: v${VERSION} since ${PREV}"
-
-      - name: Trigger changelog generation on website repo
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.WEBSITE_REPO_TOKEN }}
-          repository: screenpipe/website
-          event-type: generate-changelog
-          client-payload: '{"version": "${{ steps.params.outputs.version }}", "since": "${{ steps.params.outputs.since }}"}'

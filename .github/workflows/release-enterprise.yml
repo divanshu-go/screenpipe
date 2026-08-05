@@ -1127,34 +1127,3 @@ jobs:
           BUILD_KC="$HOME/Library/Keychains/build.keychain-db"
           security delete-keychain "$BUILD_KC" 2>/dev/null || true
           security list-keychain -d user -s ~/Library/Keychains/login.keychain-db 2>/dev/null || true
-
-  # ─── Notify subscribers after all builds complete ─────────────────────────
-  notify:
-    needs: [release-enterprise-windows, release-enterprise-linux, release-enterprise-macos]
-    runs-on: ubuntu-latest
-    if: always() && (needs.release-enterprise-windows.result == 'success' || needs.release-enterprise-linux.result == 'success' || needs.release-enterprise-macos.result == 'success')
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Notify enterprise build subscribers
-        shell: bash
-        env:
-          ENTERPRISE_NOTIFY_SECRET: ${{ secrets.ENTERPRISE_NOTIFY_SECRET }}
-        run: |
-          VERSION=$(grep '^version = ' apps/screenpipe-app-tauri/src-tauri/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
-          if [ -z "$ENTERPRISE_NOTIFY_SECRET" ]; then
-            echo "::error::ENTERPRISE_NOTIFY_SECRET is not set in GitHub secrets"
-            exit 1
-          fi
-          HTTP_CODE=$(curl -s -o /tmp/notify_response.txt -w "%{http_code}" -X POST "https://screenpi.pe/api/enterprise/builds/notify" \
-            -H "Authorization: Bearer $ENTERPRISE_NOTIFY_SECRET" \
-            -H "Content-Type: application/json" \
-            -d "{\"version\": \"$VERSION\"}")
-          BODY=$(cat /tmp/notify_response.txt)
-          echo "Response: HTTP $HTTP_CODE — $BODY"
-          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
-            echo "Notified subscribers for v$VERSION"
-          else
-            echo "::error::Notification failed (HTTP $HTTP_CODE)"
-            exit 1
-          fi
