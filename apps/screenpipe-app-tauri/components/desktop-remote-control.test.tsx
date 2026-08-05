@@ -18,6 +18,11 @@ const mocks = vi.hoisted(() => ({
   payloads: {} as Record<string, unknown>,
   capture: vi.fn(),
   reloadFeatureFlags: vi.fn(),
+  enterpriseBuildStatus: {
+    isEnterprise: false,
+    resolved: true,
+    error: false,
+  } as { isEnterprise: boolean; resolved: boolean; error: boolean },
 }));
 
 vi.mock("@/lib/hooks/use-settings", () => ({
@@ -30,6 +35,10 @@ vi.mock("@/lib/hooks/use-settings", () => ({
 
 vi.mock("@/lib/utils/is-primary-window", () => ({
   isPrimaryWindow: () => true,
+}));
+
+vi.mock("@/lib/hooks/use-is-enterprise-build", () => ({
+  useEnterpriseBuildStatus: () => mocks.enterpriseBuildStatus,
 }));
 
 vi.mock("@/lib/utils/tauri", () => ({
@@ -71,10 +80,16 @@ describe("DesktopRemoteControl", () => {
       screenpipeAecEnabled: false,
       macosInputVpioEnabled: false,
       windowsInputAecEnabled: false,
+      autoUpdate: true,
       remoteControlPreferences: NEW_INSTALL_REMOTE_CONTROL_PREFERENCES,
       remoteControlPolicy: LOCAL_DESKTOP_REMOTE_POLICY,
     };
     mocks.payloads = {};
+    mocks.enterpriseBuildStatus = {
+      isEnterprise: false,
+      resolved: true,
+      error: false,
+    };
     mocks.updateSettings.mockResolvedValue(undefined);
     mocks.isCapturePaused.mockResolvedValue(false);
     mocks.stopScreenpipe.mockResolvedValue({ status: "ok", data: null });
@@ -213,5 +228,43 @@ describe("DesktopRemoteControl", () => {
     await waitFor(() => expect(mocks.isCapturePaused).toHaveBeenCalled());
     expect(mocks.stopScreenpipe).not.toHaveBeenCalled();
     expect(mocks.spawnScreenpipe).not.toHaveBeenCalled();
+  });
+
+  it("forces consumer auto-update on without restarting capture", async () => {
+    mocks.settings = { ...mocks.settings, autoUpdate: false };
+    mocks.payloads = {
+      "auto-update-control": { forceEnabled: true },
+    };
+
+    render(<DesktopRemoteControl enabled />);
+
+    await waitFor(() =>
+      expect(mocks.updateSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ autoUpdate: true }),
+      ),
+    );
+    expect(mocks.isCapturePaused).not.toHaveBeenCalled();
+    expect(mocks.stopScreenpipe).not.toHaveBeenCalled();
+    expect(mocks.spawnScreenpipe).not.toHaveBeenCalled();
+  });
+
+  it("never applies the remote auto-update override to Enterprise builds", async () => {
+    mocks.settings = { ...mocks.settings, autoUpdate: false };
+    mocks.enterpriseBuildStatus = {
+      isEnterprise: true,
+      resolved: true,
+      error: false,
+    };
+    mocks.payloads = {
+      "auto-update-control": { forceEnabled: true },
+    };
+
+    render(<DesktopRemoteControl enabled />);
+
+    await waitFor(() => expect(mocks.updateSettings).toHaveBeenCalledTimes(1));
+    expect(mocks.updateSettings.mock.calls[0][0]).not.toHaveProperty(
+      "autoUpdate",
+    );
+    expect(mocks.isCapturePaused).not.toHaveBeenCalled();
   });
 });

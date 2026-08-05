@@ -19,6 +19,7 @@ describe("default settings: remote controls", () => {
     expect(settings.filterMusic).toBe(true);
     expect(settings.prioritizeInputLatency).toBe(false);
     expect(settings.aecMode).toBe("off");
+    expect(settings.autoUpdate).toBe(true);
     expect(settings.remoteControlPreferences).toEqual(
       NEW_INSTALL_REMOTE_CONTROL_PREFERENCES,
     );

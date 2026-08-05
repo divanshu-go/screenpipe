@@ -956,7 +956,7 @@ pub struct SettingsStore {
     pub device_id: String,
     /// Auto-install updates and restart when a new version is available.
     /// When disabled, users must click "update now" in the tray menu.
-    #[serde(rename = "autoUpdate", default = "default_false")]
+    #[serde(rename = "autoUpdate", default = "default_true")]
     pub auto_update: bool,
     /// Auto-update store-installed pipes that haven't been locally modified.
     #[serde(rename = "autoUpdatePipes", default = "default_true")]
@@ -1040,10 +1040,6 @@ fn generate_device_id() -> String {
 
 fn default_true() -> bool {
     true
-}
-
-fn default_false() -> bool {
-    false
 }
 
 fn default_overlay_size() -> String {
@@ -1445,6 +1441,9 @@ Rules:
                         "defaultValue": "off",
                         "forceDisabled": false,
                     },
+                    "autoUpdate": {
+                        "forceEnabled": false,
+                    },
                 }),
             ),
         ]);
@@ -1510,7 +1509,7 @@ Rules:
             show_shortcut_overlay: true,
             shortcut_overlay_size: "small".to_string(),
             device_id: uuid::Uuid::new_v4().to_string(),
-            auto_update: false,
+            auto_update: true,
             auto_update_pipes: true,
             enhanced_ai: false,
             remote_log_collection_enabled: false,
@@ -2263,8 +2262,8 @@ mod tests {
     const FALLBACK_ENGINE: &str = "whisper-large-v3-turbo-quantized";
 
     #[test]
-    fn auto_update_defaults_to_disabled() {
-        assert!(!SettingsStore::default().auto_update);
+    fn auto_update_defaults_to_enabled() {
+        assert!(SettingsStore::default().auto_update);
     }
 
     #[test]
@@ -2304,9 +2303,20 @@ mod tests {
     }
 
     #[test]
-    fn missing_auto_update_deserializes_disabled() {
+    fn missing_auto_update_deserializes_enabled() {
         let settings: SettingsStore = serde_json::from_value(json!({
             "aiPresets": []
+        }))
+        .unwrap();
+
+        assert!(settings.auto_update);
+    }
+
+    #[test]
+    fn explicit_auto_update_false_is_respected() {
+        let settings: SettingsStore = serde_json::from_value(json!({
+            "aiPresets": [],
+            "autoUpdate": false
         }))
         .unwrap();
 

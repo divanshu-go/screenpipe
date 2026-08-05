@@ -10,6 +10,7 @@ import {
   normalizeDesktopRemotePreferences,
   normalizeDesktopRemotePolicySnapshot,
   parseAecModeRemotePolicy,
+  parseAutoUpdateRemotePolicy,
   parseBooleanRemotePolicy,
   resolveAecModeRemoteValue,
   resolveBooleanRemoteControlValue,
@@ -50,6 +51,12 @@ describe("desktop remote control", () => {
         forceDisabled: false,
       }),
     ).toEqual({ defaultValue: "off", forceDisabled: false });
+    expect(
+      parseAutoUpdateRemotePolicy({
+        forceEnabled: true,
+        arbitrarySetting: true,
+      }),
+    ).toEqual({ forceEnabled: false });
   });
 
   it("uses defaults only for unset preferences and never remotely forces on", () => {
@@ -178,6 +185,7 @@ describe("desktop remote control", () => {
           forceDisabled: false,
         },
       },
+      autoUpdate: { forceEnabled: false },
     });
   });
 
@@ -198,6 +206,7 @@ describe("desktop remote control", () => {
         },
       },
       aecMode: { defaultValue: "macos", forceDisabled: false },
+      autoUpdate: { forceEnabled: false },
     };
     const result = buildDesktopRemoteControlPatch(
       {
@@ -235,6 +244,46 @@ describe("desktop remote control", () => {
       "filterMusic",
       "aecMode",
     ]);
+    expect(result.recorderRestartRequired).toBe(true);
+  });
+
+  it("can force consumer auto-update on without restarting the recorder", () => {
+    const policy: DesktopRemotePolicySnapshot = {
+      ...LOCAL_DESKTOP_REMOTE_POLICY,
+      autoUpdate: { forceEnabled: true },
+    };
+    const settings = {
+      platform: "macos",
+      remoteControlPreferences: NEW_INSTALL_REMOTE_CONTROL_PREFERENCES,
+      remoteControlPolicy: LOCAL_DESKTOP_REMOTE_POLICY,
+      autoUpdate: false,
+      enableSemanticContext: false,
+      experimentalCoreaudioSystemAudio: true,
+      experimentalMeetingPiggyback: false,
+      filterMusic: true,
+      prioritizeInputLatency: false,
+      aecMode: "off" as const,
+      screenpipeAecEnabled: false,
+      macosInputVpioEnabled: false,
+      windowsInputAecEnabled: false,
+    };
+
+    const consumer = buildDesktopRemoteControlPatch(settings, policy, {
+      allowRemoteAutoUpdate: true,
+    });
+    expect(consumer.patch).toEqual({
+      remoteControlPolicy: policy,
+      autoUpdate: true,
+    });
+    expect(consumer.changedControls).toEqual(["autoUpdate"]);
+    expect(consumer.recorderRestartRequired).toBe(false);
+
+    const enterprise = buildDesktopRemoteControlPatch(settings, policy, {
+      allowRemoteAutoUpdate: false,
+    });
+    expect(enterprise.patch).toEqual({ remoteControlPolicy: policy });
+    expect(enterprise.changedControls).toEqual([]);
+    expect(enterprise.recorderRestartRequired).toBe(false);
   });
 
   it("keeps explicit preferences above rollout defaults", () => {
@@ -254,6 +303,7 @@ describe("desktop remote control", () => {
         },
       },
       aecMode: { defaultValue: "screenpipe", forceDisabled: false },
+      autoUpdate: { forceEnabled: false },
     };
     const settings = {
       platform: "macos",

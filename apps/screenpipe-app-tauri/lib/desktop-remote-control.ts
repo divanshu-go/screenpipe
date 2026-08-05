@@ -41,6 +41,7 @@ export const BOOLEAN_REMOTE_CONTROL_DEFINITIONS = {
 } as const satisfies Record<string, BooleanRemoteControlDefinition>;
 
 export const AEC_MODE_CONTROL_FLAG_KEY = "aec-mode-control";
+export const AUTO_UPDATE_CONTROL_FLAG_KEY = "auto-update-control";
 
 export type BooleanRemoteControlKey =
   keyof typeof BOOLEAN_REMOTE_CONTROL_DEFINITIONS;
@@ -55,10 +56,15 @@ export type AecModeRemotePolicy = {
   forceDisabled: boolean;
 };
 
+export type AutoUpdateRemotePolicy = {
+  forceEnabled: boolean;
+};
+
 export type DesktopRemotePolicySnapshot = {
   schemaVersion: 1;
   boolean: Record<BooleanRemoteControlKey, BooleanRemotePolicy>;
   aecMode: AecModeRemotePolicy;
+  autoUpdate: AutoUpdateRemotePolicy;
 };
 
 export type DesktopRemotePreferences = {
@@ -86,6 +92,7 @@ export type RemoteControllableSettings = {
   screenpipeAecEnabled?: boolean;
   macosInputVpioEnabled?: boolean;
   windowsInputAecEnabled?: boolean;
+  autoUpdate?: boolean;
 };
 
 const AEC_MODES = new Set<AecMode>(["off", "screenpipe", "macos", "windows"]);
@@ -111,6 +118,9 @@ export const LOCAL_DESKTOP_REMOTE_POLICY: DesktopRemotePolicySnapshot = {
   aecMode: {
     defaultValue: "off",
     forceDisabled: false,
+  },
+  autoUpdate: {
+    forceEnabled: false,
   },
 };
 
@@ -154,6 +164,17 @@ function isAecModeRemotePolicy(value: unknown): value is AecModeRemotePolicy {
   );
 }
 
+function isAutoUpdateRemotePolicy(
+  value: unknown,
+): value is AutoUpdateRemotePolicy {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    hasOnlyKeys(candidate, ["forceEnabled"]) &&
+    typeof candidate.forceEnabled === "boolean"
+  );
+}
+
 function cloneLocalDesktopRemotePolicy(): DesktopRemotePolicySnapshot {
   return {
     schemaVersion: 1,
@@ -171,6 +192,7 @@ function cloneLocalDesktopRemotePolicy(): DesktopRemotePolicySnapshot {
       },
     },
     aecMode: { ...LOCAL_DESKTOP_REMOTE_POLICY.aecMode },
+    autoUpdate: { ...LOCAL_DESKTOP_REMOTE_POLICY.autoUpdate },
   };
 }
 
@@ -205,6 +227,18 @@ export function parseAecModeRemotePolicy(
   };
 }
 
+/**
+ * Auto-update is intentionally separate from recorder safety controls. Remote
+ * config may only enable consumer updates; it can never disable them or change
+ * Enterprise-managed update policy.
+ */
+export function parseAutoUpdateRemotePolicy(
+  payload: unknown,
+): AutoUpdateRemotePolicy {
+  const fallback = LOCAL_DESKTOP_REMOTE_POLICY.autoUpdate;
+  return isAutoUpdateRemotePolicy(payload) ? { ...payload } : { ...fallback };
+}
+
 /** Validate a persisted snapshot before either UI or Rust-facing state uses it. */
 export function normalizeDesktopRemotePolicySnapshot(
   value: unknown,
@@ -223,8 +257,17 @@ export function normalizeDesktopRemotePolicySnapshot(
     return fallback;
   }
   const candidate = value as Record<string, unknown>;
+  const allowedKeys = new Set([
+    "schemaVersion",
+    "boolean",
+    "aecMode",
+    "autoUpdate",
+  ]);
   if (
-    !hasOnlyKeys(candidate, ["schemaVersion", "boolean", "aecMode"]) ||
+    Object.keys(candidate).some((key) => !allowedKeys.has(key)) ||
+    !("schemaVersion" in candidate) ||
+    !("boolean" in candidate) ||
+    !("aecMode" in candidate) ||
     candidate.schemaVersion !== 1 ||
     !candidate.boolean ||
     typeof candidate.boolean !== "object" ||
@@ -244,6 +287,12 @@ export function normalizeDesktopRemotePolicySnapshot(
   ) {
     return fallback;
   }
+  if (
+    candidate.autoUpdate !== undefined &&
+    !isAutoUpdateRemotePolicy(candidate.autoUpdate)
+  ) {
+    return fallback;
+  }
   const normalizedBoolean = { ...fallback.boolean };
   for (const control of controlKeys) {
     const storedPolicy = boolean[control];
@@ -256,6 +305,10 @@ export function normalizeDesktopRemotePolicySnapshot(
     schemaVersion: 1,
     boolean: normalizedBoolean,
     aecMode: { ...candidate.aecMode },
+    autoUpdate:
+      candidate.autoUpdate === undefined
+        ? { ...fallback.autoUpdate }
+        : { ...candidate.autoUpdate },
   };
 }
 
@@ -296,6 +349,9 @@ export function readDesktopRemotePolicySnapshot(
     },
     aecMode: parseAecModeRemotePolicy(
       payloadForFlag(AEC_MODE_CONTROL_FLAG_KEY),
+    ),
+    autoUpdate: parseAutoUpdateRemotePolicy(
+      payloadForFlag(AUTO_UPDATE_CONTROL_FLAG_KEY),
     ),
   };
 }
@@ -437,6 +493,13 @@ export function getRemoteAecModePolicy(
     .aecMode;
 }
 
+export function getRemoteAutoUpdatePolicy(
+  settings: Pick<RemoteControllableSettings, "remoteControlPolicy">,
+): AutoUpdateRemotePolicy {
+  return normalizeDesktopRemotePolicySnapshot(settings.remoteControlPolicy)
+    .autoUpdate;
+}
+
 function sameJson(left: unknown, right: unknown) {
   return JSON.stringify(left) === JSON.stringify(right);
 }
@@ -444,9 +507,11 @@ function sameJson(left: unknown, right: unknown) {
 export function buildDesktopRemoteControlPatch(
   settings: RemoteControllableSettings,
   policy: DesktopRemotePolicySnapshot,
+  options: { allowRemoteAutoUpdate?: boolean } = {},
 ): {
   patch: Partial<RemoteControllableSettings>;
-  changedControls: Array<BooleanRemoteControlKey | "aecMode">;
+  changedControls: Array<BooleanRemoteControlKey | "aecMode" | "autoUpdate">;
+  recorderRestartRequired: boolean;
   preferences: DesktopRemotePreferences;
 } {
   const preferences = normalizeDesktopRemotePreferences(settings);
@@ -496,13 +561,24 @@ export function buildDesktopRemoteControlPatch(
   };
 
   const patch: Partial<RemoteControllableSettings> = {};
-  const changedControls: Array<BooleanRemoteControlKey | "aecMode"> = [];
+  const changedControls: Array<
+    BooleanRemoteControlKey | "aecMode" | "autoUpdate"
+  > = [];
 
   if (!sameJson(settings.remoteControlPreferences, preferences)) {
     patch.remoteControlPreferences = preferences;
   }
   if (!sameJson(settings.remoteControlPolicy, policy)) {
     patch.remoteControlPolicy = policy;
+  }
+
+  if (
+    options.allowRemoteAutoUpdate &&
+    policy.autoUpdate.forceEnabled &&
+    settings.autoUpdate !== true
+  ) {
+    patch.autoUpdate = true;
+    changedControls.push("autoUpdate");
   }
 
   if (settings.enableSemanticContext !== effective.semanticContext) {
@@ -542,5 +618,12 @@ export function buildDesktopRemoteControlPatch(
     changedControls.push("aecMode");
   }
 
-  return { patch, changedControls, preferences };
+  return {
+    patch,
+    changedControls,
+    recorderRestartRequired: changedControls.some(
+      (control) => control !== "autoUpdate",
+    ),
+    preferences,
+  };
 }

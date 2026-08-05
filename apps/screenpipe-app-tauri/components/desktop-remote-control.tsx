@@ -9,6 +9,7 @@ import posthog from "posthog-js";
 import { commands } from "@/lib/utils/tauri";
 import { useSettings, type Settings } from "@/lib/hooks/use-settings";
 import { isPrimaryWindow } from "@/lib/utils/is-primary-window";
+import { useEnterpriseBuildStatus } from "@/lib/hooks/use-is-enterprise-build";
 import {
   buildDesktopRemoteControlPatch,
   readDesktopRemotePolicySnapshot,
@@ -47,6 +48,9 @@ async function restartRunningCapture(): Promise<boolean> {
  */
 export function DesktopRemoteControl({ enabled }: { enabled: boolean }) {
   const { settings, updateSettings, isSettingsLoaded } = useSettings();
+  const enterpriseBuild = useEnterpriseBuildStatus();
+  const allowRemoteAutoUpdate =
+    enterpriseBuild.resolved && !enterpriseBuild.isEnterprise;
   const settingsRef = useRef(settings);
   const updateSettingsRef = useRef(updateSettings);
   const reconcileRef = useRef<Promise<void>>(Promise.resolve());
@@ -74,16 +78,23 @@ export function DesktopRemoteControl({ enabled }: { enabled: boolean }) {
         .then(async () => {
           if (cancelled) return;
           const current = settingsRef.current;
-          const { patch, changedControls, preferences } =
-            buildDesktopRemoteControlPatch(current, policy);
+          const {
+            patch,
+            changedControls,
+            recorderRestartRequired,
+            preferences,
+          } = buildDesktopRemoteControlPatch(current, policy, {
+            allowRemoteAutoUpdate,
+          });
           if (Object.keys(patch).length === 0) return;
 
           await updateSettingsRef.current(patch as Partial<Settings>);
           const effective = { ...current, ...patch } as Settings;
           settingsRef.current = effective;
 
-          const engineRestarted =
-            changedControls.length > 0 ? await restartRunningCapture() : false;
+          const engineRestarted = recorderRestartRequired
+            ? await restartRunningCapture()
+            : false;
 
           if (sendExposure) {
             posthog.capture("desktop_remote_control_applied", {
@@ -95,6 +106,9 @@ export function DesktopRemoteControl({ enabled }: { enabled: boolean }) {
                   .map(([key]) => key),
                 ...(policy.aecMode.forceDisabled ? ["aecMode"] : []),
               ],
+              forced_on_controls: policy.autoUpdate.forceEnabled
+                ? ["autoUpdate"]
+                : [],
               effective_semantic_context: Boolean(
                 effective.enableSemanticContext,
               ),
@@ -109,6 +123,7 @@ export function DesktopRemoteControl({ enabled }: { enabled: boolean }) {
                 effective.prioritizeInputLatency,
               ),
               effective_aec_mode: effective.aecMode ?? "off",
+              effective_auto_update: Boolean(effective.autoUpdate),
               preference_semantic_context:
                 preferences.semanticContext === null
                   ? "unset"
@@ -181,7 +196,7 @@ export function DesktopRemoteControl({ enabled }: { enabled: boolean }) {
       window.removeEventListener("focus", refresh);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [enabled, isSettingsLoaded]);
+  }, [allowRemoteAutoUpdate, enabled, isSettingsLoaded]);
 
   return null;
 }
