@@ -878,7 +878,7 @@ describe("BrainOverview", () => {
     expect(prompt.rows).toBe(1);
     expect(screen.getByTestId("live-view-ai-options")).toHaveAttribute(
       "aria-hidden",
-      "true",
+      "false",
     );
     fireEvent.focus(prompt);
     expect(screen.getByTestId("live-view-ai-options")).toHaveAttribute(
@@ -890,7 +890,7 @@ describe("BrainOverview", () => {
     expect(prompt.rows).toBe(1);
     expect(screen.getByTestId("live-view-ai-options")).toHaveAttribute(
       "aria-hidden",
-      "true",
+      "false",
     );
 
     await openDashboardMenu();

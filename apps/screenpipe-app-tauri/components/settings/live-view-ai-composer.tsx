@@ -117,7 +117,6 @@ export function LiveViewAiComposer({
   );
   const [prompt, setPrompt] = useState("");
   const [compactFocused, setCompactFocused] = useState(false);
-  const [modelSelectorOpen, setModelSelectorOpen] = useState(false);
 
   const selectedPreset = presets.find(
     (preset) => preset.id === selectedPresetId,
@@ -147,8 +146,12 @@ export function LiveViewAiComposer({
   const compactExpanded =
     compact &&
     !hostedUsageExhausted &&
-    (compactFocused || modelSelectorOpen || busy || Boolean(feedback));
-  const compactOptionsVisible = compactExpanded && !busy && !feedback;
+    (compactFocused || busy || Boolean(feedback));
+  // Keep the model control independent from the textarea's focus disclosure.
+  // Radix renders its menu in a portal, so hiding this row on blur can make the
+  // trigger disappear while the user is moving focus into the menu.
+  const compactOptionsVisible =
+    compact && !hostedUsageExhausted && !busy && !feedback;
   const intent = inferLiveViewGenerationIntent(
     prompt,
     Boolean(currentViewTitle),
@@ -283,7 +286,6 @@ export function LiveViewAiComposer({
             showLoginCta
             containerClassName="w-auto min-w-36"
             triggerClassName="h-8 rounded-none"
-            onOpenChange={setModelSelectorOpen}
           />
           {prompt.trim() && (
             <span

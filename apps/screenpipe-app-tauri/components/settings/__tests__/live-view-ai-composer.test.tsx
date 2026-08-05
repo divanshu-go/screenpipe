@@ -44,7 +44,7 @@ vi.mock("@/components/rewind/ai-presets-selector", () => ({
 import { LiveViewAiComposer } from "../live-view-ai-composer";
 
 describe("LiveViewAiComposer", () => {
-  it("keeps compact model options mounted while the model popover has focus", () => {
+  it("keeps compact model options visible while focus moves into the model popover", () => {
     render(
       <LiveViewAiComposer
         busy={false}
@@ -63,13 +63,16 @@ describe("LiveViewAiComposer", () => {
     document.body.appendChild(portaledInput);
     fireEvent.blur(modelSelector, { relatedTarget: portaledInput });
 
-    expect(screen.getByTestId("live-view-ai-options")).toBeInTheDocument();
+    expect(screen.getByTestId("live-view-ai-options")).toHaveAttribute(
+      "aria-hidden",
+      "false",
+    );
     expect(screen.getByTestId("model-selector")).toBeInTheDocument();
 
     portaledInput.remove();
   });
 
-  it("does not unmount the model picker when the compact prompt collapses", () => {
+  it("does not hide the model picker when the compact prompt collapses", () => {
     render(
       <LiveViewAiComposer
         busy={false}
@@ -82,7 +85,7 @@ describe("LiveViewAiComposer", () => {
 
     const prompt = screen.getByTestId("live-view-ai-prompt");
     const options = screen.getByTestId("live-view-ai-options");
-    expect(options).toHaveAttribute("aria-hidden", "true");
+    expect(options).toHaveAttribute("aria-hidden", "false");
     expect(screen.getByTestId("model-selector")).toBeInTheDocument();
 
     fireEvent.focus(prompt);
@@ -92,7 +95,7 @@ describe("LiveViewAiComposer", () => {
     document.body.appendChild(outside);
     fireEvent.blur(prompt, { relatedTarget: outside });
 
-    expect(options).toHaveAttribute("aria-hidden", "true");
+    expect(options).toHaveAttribute("aria-hidden", "false");
     expect(screen.getByTestId("model-selector")).toBeInTheDocument();
     outside.remove();
   });

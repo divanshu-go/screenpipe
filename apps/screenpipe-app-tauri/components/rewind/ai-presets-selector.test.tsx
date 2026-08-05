@@ -11,6 +11,7 @@ const { updateSettings } = vi.hoisted(() => ({
 }));
 
 let presetProvider: "screenpipe-cloud" | "pi" = "screenpipe-cloud";
+let presetModel = "auto";
 
 vi.mock("@/lib/hooks/use-settings", () => ({
   useSettings: () => ({
@@ -19,7 +20,7 @@ vi.mock("@/lib/hooks/use-settings", () => ({
         {
           id: "screenpipe-cloud default",
           provider: presetProvider,
-          model: "auto",
+          model: presetModel,
           defaultPreset: true,
           prompt: "",
           apiKey: null,
@@ -58,13 +59,19 @@ import { AIPresetsSelector } from "./ai-presets-selector";
 describe("AIPresetsSelector model-only mode", () => {
   beforeEach(() => {
     updateSettings.mockClear();
-    updateSettings.mockResolvedValue(undefined);
+    updateSettings.mockImplementation(async (updates) => {
+      const nextPreset = updates.aiPresets?.find(
+        (preset: { id: string }) => preset.id === "screenpipe-cloud default",
+      );
+      if (nextPreset?.model) presetModel = nextPreset.model;
+    });
     presetProvider = "screenpipe-cloud";
+    presetModel = "auto";
   });
 
   it("lets a cloud user switch models without creating another preset", async () => {
     const onControlledSelect = vi.fn();
-    render(
+    const { rerender } = render(
       <AIPresetsSelector
         compact
         showModelOnly
@@ -87,6 +94,16 @@ describe("AIPresetsSelector model-only mode", () => {
       });
     });
     expect(onControlledSelect).toHaveBeenCalledWith("screenpipe-cloud default");
+
+    rerender(
+      <AIPresetsSelector
+        compact
+        showModelOnly
+        controlledPresetId="screenpipe-cloud default"
+        onControlledSelect={onControlledSelect}
+      />,
+    );
+    expect(screen.getByRole("combobox")).toHaveTextContent("claude-sonnet-5");
   });
 
   it("lets legacy pi presets change hosted models", async () => {
