@@ -2567,21 +2567,17 @@ fn remove_screenpipe_auth_from_path(auth_path: &Path) -> Result<()> {
     write_auth_json(auth_path, &auth)
 }
 
+fn stock_bun_is_safe(is_windows: bool, has_avx2: bool) -> bool {
+    !is_windows || has_avx2
+}
+
 pub fn find_bun_executable() -> Option<String> {
-    // Pre-AVX2 CPU: the bundled/stock bun.exe requires AVX2 and dies with
-    // 0xC000001D (STATUS_ILLEGAL_INSTRUCTION) at spawn. Prefer the
-    // runtime-downloaded baseline build; if it isn't on disk yet, kick off
-    // the download in the background and fall through to the stock bun for
-    // this run (its failure is diagnosed by describe_exit_status_code; the
-    // next spawn picks up the baseline).
-    #[cfg(windows)]
-    if !crate::cpu_features::has_avx2() {
-        if let Some(baseline) = baseline_bun_path() {
-            if baseline.exists() {
-                return Some(baseline.to_string_lossy().to_string());
-            }
-        }
-        spawn_baseline_bun_download();
+    // Stock bun.exe requires AVX2. On older Windows CPUs, wait for the
+    // verified baseline build instead of returning a binary that will die
+    // immediately with STATUS_ILLEGAL_INSTRUCTION.
+    if !stock_bun_is_safe(cfg!(windows), crate::cpu_features::has_avx2()) {
+        #[cfg(windows)]
+        return ensure_baseline_bun_available();
     }
 
     // Check next to our own executable (bundled bun)
@@ -2652,11 +2648,11 @@ pub fn describe_exit_status_code(code: i32) -> String {
         // 0xC000001D == STATUS_ILLEGAL_INSTRUCTION == exit code -1073741795.
         // The stock bun.exe requires AVX2; on pre-AVX2 CPUs it dies with this
         // code before writing a single byte to stderr — exactly the case that
-        // used to surface as an empty error. find_bun_executable downloads
-        // bun's official baseline build in the background on such CPUs.
+        // used to surface as an empty error. Current installs fail closed onto
+        // bun's official baseline build before any subprocess is launched.
         if code == -1073741795i32 {
             return format!(
-                "exit code {code} (0xC000001D, illegal instruction; this CPU may lack AVX2 — the stock bun build requires it; the baseline bun variant will be used after download)"
+                "exit code {code} (0xC000001D, illegal instruction; this CPU may lack AVX2 — the stock bun build requires it; use the baseline bun variant)"
             );
         }
     }
@@ -3503,25 +3499,35 @@ pub fn baseline_bun_path() -> Option<PathBuf> {
     )
 }
 
-/// One-shot guard for the background baseline-bun download (per process).
+/// One-shot guard for baseline-bun setup. Concurrent callers wait for the
+/// same verified result instead of launching stock bun while setup is active.
 #[cfg(windows)]
-static BASELINE_BUN_DOWNLOAD_ONCE: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+static BASELINE_BUN_PATH_ONCE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
 
-/// Kick off (at most once per process) a background download of bun's
-/// official baseline Windows build. Non-blocking on purpose: the caller
-/// falls through to the stock bun for the current run, and the next spawn
-/// picks up the baseline from disk.
+/// Ensure bun's official baseline Windows build is ready. This blocks only on
+/// non-AVX2 Windows CPUs and is normally called by the existing Pi install
+/// worker. Returning `None` prevents an unsafe stock-bun fallback.
 #[cfg(windows)]
-pub fn spawn_baseline_bun_download() {
-    BASELINE_BUN_DOWNLOAD_ONCE.get_or_init(|| {
-        std::thread::spawn(|| match download_baseline_bun() {
-            Ok(path) => info!("baseline bun installed at: {}", path),
-            Err(e) => warn!(
-                "baseline bun download failed (pipes/AI chat may not work on this pre-AVX2 CPU): {}",
-                e
-            ),
-        });
-    });
+fn ensure_baseline_bun_available() -> Option<String> {
+    if let Some(path) = baseline_bun_path().filter(|path| path.exists()) {
+        return Some(path.to_string_lossy().to_string());
+    }
+
+    BASELINE_BUN_PATH_ONCE
+        .get_or_init(|| match download_baseline_bun() {
+            Ok(path) => {
+                info!("baseline bun installed at: {}", path);
+                Some(path)
+            }
+            Err(e) => {
+                warn!(
+                    "baseline bun setup failed (pipes/AI chat cannot run on this pre-AVX2 CPU): {}",
+                    e
+                );
+                None
+            }
+        })
+        .clone()
 }
 
 /// Download bun's official `windows-x64-baseline` build (runs on any x86-64,
@@ -3776,6 +3782,13 @@ mod tests {
         let s = describe_exit_status_code(-1073741795);
         assert!(s.contains("illegal instruction"));
         assert!(s.to_lowercase().contains("avx2"));
+    }
+
+    #[test]
+    fn stock_bun_is_never_selected_on_windows_without_avx2() {
+        assert!(!stock_bun_is_safe(true, false));
+        assert!(stock_bun_is_safe(true, true));
+        assert!(stock_bun_is_safe(false, false));
     }
 
     #[cfg(windows)]
