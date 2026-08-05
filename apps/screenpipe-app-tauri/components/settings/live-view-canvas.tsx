@@ -32,7 +32,6 @@ import {
 import {
   ArrowRight,
   ChevronLeft,
-  ChevronRight,
   Hand,
   LayoutGrid,
   Maximize2,
@@ -1366,17 +1365,11 @@ export function LiveViewCanvas({
             data-testid="canvas-tools-toggle"
             aria-label={`open canvas tools. ${activeTool.label} tool active`}
             aria-expanded="false"
-            className="flex h-8 max-w-32 items-center gap-2 px-2 font-mono text-[10px] uppercase tracking-wide text-muted-foreground transition-colors hover:bg-foreground hover:text-background focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-foreground"
+            title={`open canvas tools · ${activeTool.label} active`}
+            className="flex h-8 w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-foreground hover:text-background focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-foreground"
             onClick={() => setToolsOpen(true)}
           >
-            <ActiveToolIcon
-              className="h-3.5 w-3.5 shrink-0"
-              aria-hidden="true"
-            />
-            <span className="truncate">
-              {tool === "select" ? "tools" : activeTool.label}
-            </span>
-            <ChevronRight className="h-3 w-3 shrink-0" aria-hidden="true" />
+            <ActiveToolIcon className="h-4 w-4 shrink-0" aria-hidden="true" />
           </button>
         )}
       </div>
