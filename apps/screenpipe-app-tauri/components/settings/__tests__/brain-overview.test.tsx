@@ -1782,7 +1782,66 @@ describe("BrainOverview", () => {
         ],
       }),
     );
-    expect(await screen.findByTestId("overview-undo-banner")).toBeTruthy();
+    expect(await screen.findByTestId("overview-undo")).toHaveAttribute(
+      "title",
+      "Undo last Live View change (⌘Z)",
+    );
+
+    fireEvent.keyDown(window, { key: "z", metaKey: true });
+    await waitFor(() => expect(mocks.saveBrainView).toHaveBeenCalledTimes(2));
+    expect(mocks.saveBrainView).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        id: "my-overview",
+        expectedRevision: 4,
+        slots: [expect.objectContaining({ title: "Focus time" })],
+      }),
+    );
+  });
+
+  it("accept all applies every proposal in one action", async () => {
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [populatedView],
+    });
+    mocks.generateLiveViewWithPi.mockResolvedValue({
+      title: populatedView.title,
+      timeRange: populatedView.timeRange,
+      periodPolicy: populatedView.periodPolicy,
+      note: "Changed the breakdown.",
+      blocks: [
+        {
+          id: "focus-time",
+          title: "Time by project",
+          intent: "Group active time by project.",
+          component: "bar-chart.v1",
+          width: 12,
+          pipeName: "daily-summary",
+        },
+      ],
+    });
+    mocks.saveBrainView.mockImplementation(async (request) => ({
+      status: "ok",
+      data: {
+        ...populatedView,
+        revision: 4,
+        slots: request.slots,
+      },
+    }));
+    render(<BrainOverview />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "edit Focus time with AI" }),
+    );
+    fireEvent.change(
+      await screen.findByPlaceholderText("e.g. group by project instead"),
+      { target: { value: "group this by project" } },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "update" }));
+    fireEvent.click(await screen.findByTestId("live-view-ai-accept-all"));
+
+    await waitFor(() => expect(mocks.saveBrainView).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId("live-view-ai-review")).toBeNull();
+    expect(await screen.findByTestId("overview-undo")).toBeTruthy();
   });
 
   it("rejects a staged Block edit without writing the dashboard", async () => {

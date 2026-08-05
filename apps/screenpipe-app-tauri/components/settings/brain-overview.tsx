@@ -1444,6 +1444,7 @@ export function BrainOverview({
           ? {
               title: reference.title,
               timeRange: reference.timeRange,
+              periodPolicy: reference.periodPolicy,
               blocks: reference.slots.map((slot) => ({
                 id: slot.id,
                 title: slot.title,
@@ -1457,6 +1458,7 @@ export function BrainOverview({
         currentViewRef: reference
           ? { id: reference.id, revision: reference.revision }
           : null,
+        targetBlockId: target.scope === "block" ? target.block.id : null,
         signal: controller.signal,
         onPhase: (phase) =>
           setBuilderFeedback({
@@ -1825,20 +1827,10 @@ export function BrainOverview({
         proposal.id === slotId ? { ...proposal, status: decision } : proposal,
       ),
     );
-    const next = aiBlockProposals.findIndex(
-      (proposal) => proposal.id === slotId,
-    );
-    const following = aiBlockProposals
-      .slice(next + 1)
-      .find((proposal) => proposal.status === "pending");
-    setProposalFocusSlotId(following?.id ?? slotId);
-  };
-
-  const decideAllAiProposals = (decision: "accepted" | "rejected") => {
-    setAiBlockProposals((current) =>
-      current.map((proposal) => ({ ...proposal, status: decision })),
-    );
-    setProposalFocusSlotId(aiBlockProposals[0]?.id ?? null);
+    // A local accept/reject action must not pan the whole canvas to another
+    // Block. The initial proposal is focused once; review then stays spatially
+    // stable under the user's pointer.
+    setProposalFocusSlotId(null);
   };
 
   const discardAiProposals = () => {
@@ -1850,9 +1842,11 @@ export function BrainOverview({
     setBuilderFeedback(null);
   };
 
-  const applyAcceptedAiProposals = async () => {
+  const applyAcceptedAiProposals = async (
+    reviewedProposals: AiBlockProposal[] = aiBlockProposals,
+  ) => {
     if (!view) return;
-    const accepted = aiBlockProposals.filter(
+    const accepted = reviewedProposals.filter(
       (proposal) => proposal.status === "accepted",
     );
     if (accepted.length === 0) {
@@ -1893,7 +1887,7 @@ export function BrainOverview({
       posthog.capture("live_view_ai_proposal_applied", {
         analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
         accepted_block_count: accepted.length,
-        rejected_block_count: aiBlockProposals.filter(
+        rejected_block_count: reviewedProposals.filter(
           (proposal) => proposal.status === "rejected",
         ).length,
       });
@@ -1915,6 +1909,16 @@ export function BrainOverview({
     } finally {
       setSaving(false);
     }
+  };
+
+  const acceptAllAiProposals = async () => {
+    const reviewed = aiBlockProposals.map((proposal) => ({
+      ...proposal,
+      status: "accepted" as const,
+    }));
+    setAiBlockProposals(reviewed);
+    setProposalFocusSlotId(null);
+    await applyAcceptedAiProposals(reviewed);
   };
 
   const save = async (
@@ -2241,6 +2245,11 @@ export function BrainOverview({
       });
       if (result.status === "error") throw new Error(result.error);
       setView(result.data);
+      setViews((current) =>
+        current.map((candidate) =>
+          candidate.id === result.data.id ? result.data : candidate,
+        ),
+      );
       setUndoView(null);
       setUndoRevision(null);
       posthog.capture("live_view_dashboard_saved", {
@@ -2270,6 +2279,31 @@ export function BrainOverview({
       setSaving(false);
     }
   };
+
+  useEffect(() => {
+    const handleUndoShortcut = (event: KeyboardEvent) => {
+      if (
+        !(event.metaKey || event.ctrlKey) ||
+        event.shiftKey ||
+        event.key.toLowerCase() !== "z" ||
+        !undoView ||
+        saving
+      ) {
+        return;
+      }
+      const target = event.target;
+      if (
+        target instanceof Element &&
+        target.closest("input, textarea, [contenteditable='true']")
+      ) {
+        return;
+      }
+      event.preventDefault();
+      void restorePreviousView();
+    };
+    window.addEventListener("keydown", handleUndoShortcut);
+    return () => window.removeEventListener("keydown", handleUndoShortcut);
+  }, [saving, undoView]);
 
   const changeTimeRange = async (timeRange: BrainViewTimeRange) => {
     if (!view || timeRange === view.timeRange) return;
@@ -2769,6 +2803,20 @@ export function BrainOverview({
             data-testid="overview-header-controls"
             className="flex w-full flex-wrap items-center gap-2 lg:w-auto lg:justify-end"
           >
+            {undoView && (
+              <Button
+                data-testid="overview-undo"
+                variant="outline"
+                size="icon"
+                className="h-9 w-9 shrink-0 rounded-none"
+                aria-label="undo last Live View change"
+                title="Undo last Live View change (⌘Z)"
+                disabled={saving}
+                onClick={() => void restorePreviousView()}
+              >
+                <Undo2 className="h-3.5 w-3.5" />
+              </Button>
+            )}
             {view.periodPolicy.type !== "fixed.v1" && (
               <Select
                 value={view.timeRange}
@@ -2852,25 +2900,6 @@ export function BrainOverview({
             />
           </div>
         )}
-        {undoView && (
-          <div
-            data-testid="overview-undo-banner"
-            className="mb-4 flex items-center gap-3 border border-border bg-muted/30 px-3 py-2 text-xs"
-          >
-            <Undo2 className="h-3.5 w-3.5 shrink-0" />
-            <span>Your previous dashboard layout is available.</span>
-            <Button
-              data-testid="overview-undo"
-              variant="ghost"
-              size="sm"
-              className="ml-auto h-7 rounded-none px-2"
-              disabled={saving}
-              onClick={() => void restorePreviousView()}
-            >
-              undo
-            </Button>
-          </div>
-        )}
         {aiBlockProposals.length > 0 && (
           <div
             data-testid="live-view-ai-review"
@@ -2900,7 +2929,9 @@ export function BrainOverview({
                 size="sm"
                 variant="ghost"
                 className="h-7 rounded-none px-2"
-                onClick={() => decideAllAiProposals("accepted")}
+                disabled={saving}
+                title="Accept and save every proposed change"
+                onClick={() => void acceptAllAiProposals()}
               >
                 <Check className="mr-1 h-3 w-3" /> accept all
               </Button>
@@ -2909,7 +2940,9 @@ export function BrainOverview({
                 size="sm"
                 variant="ghost"
                 className="h-7 rounded-none px-2"
-                onClick={() => decideAllAiProposals("rejected")}
+                disabled={saving}
+                title="Reject and discard every proposed change"
+                onClick={discardAiProposals}
               >
                 <X className="mr-1 h-3 w-3" /> reject all
               </Button>
