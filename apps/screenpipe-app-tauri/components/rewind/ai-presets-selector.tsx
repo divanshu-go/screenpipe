@@ -1541,7 +1541,10 @@ export const AIPresetsSelector = ({
                     </CommandItem>
                   </CommandGroup>
                 )}
-                {showModelOnly && selectedPresetData?.provider === "screenpipe-cloud" && piModels.length > 0 && (
+                {showModelOnly &&
+                  (selectedPresetData?.provider === "screenpipe-cloud" ||
+                    selectedPresetData?.provider === "pi") &&
+                  piModels.length > 0 && (
                   <CommandGroup heading="Models">
                     {piModels.map((model) => {
                       const isGated = showUpsell && model.locked;
@@ -1551,14 +1554,14 @@ export const AIPresetsSelector = ({
                           key={`cloud-model-${model.id}`}
                           value={`cloud-model-${model.id}`}
                           disabled={isGated}
-                          onSelect={() => {
+                          onSelect={async () => {
                             if (isGated) return;
                             if (!isSelected) {
                               const updatedPreset = {
                                 ...selectedPresetData,
                                 model: model.id,
                               };
-                              updateSettings({
+                              await updateSettings({
                                 aiPresets: (settings.aiPresets || []).map((preset) =>
                                   preset.id === updatedPreset.id ? updatedPreset : preset,
                                 ),
