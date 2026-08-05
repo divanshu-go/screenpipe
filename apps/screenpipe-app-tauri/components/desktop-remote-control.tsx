@@ -10,45 +10,12 @@ import { commands } from "@/lib/utils/tauri";
 import { useSettings, type Settings } from "@/lib/hooks/use-settings";
 import { isPrimaryWindow } from "@/lib/utils/is-primary-window";
 import {
-  parseSemanticContextRemotePolicy,
-  resolveSemanticContextEnabled,
-  SEMANTIC_CONTEXT_CONTROL_FLAG_KEY,
-} from "@/lib/semantic-context-control";
+  buildDesktopRemoteControlPatch,
+  readDesktopRemotePolicySnapshot,
+} from "@/lib/desktop-remote-control";
 
 const REFRESH_INTERVAL_MS = 60_000;
 const RESTART_SETTLE_MS = 500;
-
-function changedPatch(settings: Settings, payload: unknown): Partial<Settings> {
-  const policy = parseSemanticContextRemotePolicy(payload);
-  const managedValue =
-    settings.enterpriseManagedSettings?.enableSemanticContext;
-  const managedEnabled =
-    typeof managedValue === "boolean"
-      ? managedValue
-      : managedValue === "true"
-        ? true
-        : managedValue === "false"
-          ? false
-          : undefined;
-  const enabled = resolveSemanticContextEnabled(
-    settings.semanticContextPreference,
-    policy,
-    managedEnabled,
-  );
-  const patch: Partial<Settings> = {};
-
-  if (settings.semanticContextRemoteDefault !== policy.defaultEnabled) {
-    patch.semanticContextRemoteDefault = policy.defaultEnabled;
-  }
-  if (settings.semanticContextRemoteForceDisabled !== policy.forceDisabled) {
-    patch.semanticContextRemoteForceDisabled = policy.forceDisabled;
-  }
-  if (settings.enableSemanticContext !== enabled) {
-    patch.enableSemanticContext = enabled;
-  }
-
-  return patch;
-}
 
 async function restartRunningCapture(): Promise<boolean> {
   let paused: boolean;
@@ -56,7 +23,7 @@ async function restartRunningCapture(): Promise<boolean> {
     paused = await commands.isCapturePaused();
   } catch {
     // The engine is not initialized (first-run onboarding) or this is not a
-    // Tauri webview. The persisted value will be used by its eventual start.
+    // Tauri webview. The persisted values will be used by its eventual start.
     return false;
   }
   if (paused) return false;
@@ -74,15 +41,11 @@ async function restartRunningCapture(): Promise<boolean> {
 }
 
 /**
- * Applies the PostHog Remote Config in the one window that owns recorder
- * lifecycle. Flag refreshes are serialized so rapid dashboard edits cannot
- * interleave settings writes or engine restarts.
+ * Applies the finite desktop remote-control registry in the one window that
+ * owns recorder lifecycle. PostHog supplies values only; shipped code owns the
+ * allowlist, precedence, platform constraints, and settings mapping.
  */
-export function SemanticContextRemoteControl({
-  enabled,
-}: {
-  enabled: boolean;
-}) {
+export function DesktopRemoteControl({ enabled }: { enabled: boolean }) {
   const { settings, updateSettings, isSettingsLoaded } = useSettings();
   const settingsRef = useRef(settings);
   const updateSettingsRef = useRef(updateSettings);
@@ -99,56 +62,82 @@ export function SemanticContextRemoteControl({
 
     const reconcile = () => {
       if (cancelled) return;
-      const payload = posthog.getFeatureFlagResult(
-        SEMANTIC_CONTEXT_CONTROL_FLAG_KEY,
-        { send_event: !posthog.has_opted_out_capturing?.() },
-      )?.payload;
+      const sendExposure = !posthog.has_opted_out_capturing?.();
+      const policy = readDesktopRemotePolicySnapshot(
+        (flagKey) =>
+          posthog.getFeatureFlagResult(flagKey, {
+            send_event: sendExposure,
+          })?.payload,
+      );
 
       reconcileRef.current = reconcileRef.current
         .then(async () => {
           if (cancelled) return;
           const current = settingsRef.current;
-          const patch = changedPatch(current, payload);
+          const { patch, changedControls, preferences } =
+            buildDesktopRemoteControlPatch(current, policy);
           if (Object.keys(patch).length === 0) return;
 
-          const engineValueChanged =
-            patch.enableSemanticContext !== undefined &&
-            patch.enableSemanticContext !== current.enableSemanticContext;
-          await updateSettingsRef.current(patch);
-          settingsRef.current = { ...current, ...patch } as Settings;
+          await updateSettingsRef.current(patch as Partial<Settings>);
+          const effective = { ...current, ...patch } as Settings;
+          settingsRef.current = effective;
 
-          const engineRestarted = engineValueChanged
-            ? await restartRunningCapture()
-            : false;
+          const engineRestarted =
+            changedControls.length > 0
+              ? await restartRunningCapture()
+              : false;
 
-          if (!posthog.has_opted_out_capturing?.()) {
-            const policy = parseSemanticContextRemotePolicy(payload);
-            posthog.capture("semantic_context_remote_control_applied", {
-              default_enabled: policy.defaultEnabled,
-              force_disabled: policy.forceDisabled,
-              effective_enabled:
-                patch.enableSemanticContext ?? current.enableSemanticContext,
-              preference_state:
-                current.semanticContextPreference === null ||
-                current.semanticContextPreference === undefined
+          if (sendExposure) {
+            posthog.capture("desktop_remote_control_applied", {
+              schema_version: policy.schemaVersion,
+              changed_controls: changedControls,
+              forced_off_controls: [
+                ...Object.entries(policy.boolean)
+                  .filter(([, value]) => value.forceDisabled)
+                  .map(([key]) => key),
+                ...(policy.aecMode.forceDisabled ? ["aecMode"] : []),
+              ],
+              effective_semantic_context: Boolean(
+                effective.enableSemanticContext,
+              ),
+              effective_coreaudio_system_audio: Boolean(
+                effective.experimentalCoreaudioSystemAudio,
+              ),
+              effective_smart_recording: Boolean(
+                effective.experimentalMeetingPiggyback,
+              ),
+              effective_aec_mode: effective.aecMode ?? "off",
+              preference_semantic_context:
+                preferences.semanticContext === null
                   ? "unset"
-                  : current.semanticContextPreference
+                  : preferences.semanticContext
                     ? "on"
                     : "off",
-              engine_value_changed: engineValueChanged,
+              preference_coreaudio_system_audio:
+                preferences.coreAudioSystemAudio === null
+                  ? "unset"
+                  : preferences.coreAudioSystemAudio
+                    ? "on"
+                    : "off",
+              preference_smart_recording:
+                preferences.smartRecording === null
+                  ? "unset"
+                  : preferences.smartRecording
+                    ? "on"
+                    : "off",
+              preference_aec_mode: preferences.aecMode ?? "unset",
               engine_restarted: engineRestarted,
             });
           }
         })
         .catch((error) => {
-          console.error(
-            "failed to apply semantic context remote control:",
-            error,
-          );
+          console.error("failed to apply desktop remote controls:", error);
         });
     };
 
     try {
+      // onFeatureFlags waits for the async initial response and also fires after
+      // identity or dashboard changes. undefined is never treated as flag-off.
       unsubscribe = posthog.onFeatureFlags(reconcile);
     } catch {
       // PostHog is not initialized in debug, browser-dev, or E2E builds.

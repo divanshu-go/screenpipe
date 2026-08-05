@@ -15,7 +15,16 @@ import {
   SEMANTIC_CONTEXT_MODE_COPY,
   type SemanticContextMode,
 } from "@/lib/semantic-context-mode";
-import { resolveSemanticContextEnabled } from "@/lib/semantic-context-control";
+import {
+  getAecModeSettings,
+  getRemoteAecModePolicy,
+  getRemoteBooleanPolicy,
+  normalizeAecModeForPlatform,
+  normalizeDesktopRemotePreferences,
+  resolveAecModeRemoteValue,
+  resolveBooleanRemoteValue,
+  type AecMode,
+} from "@/lib/desktop-remote-control";
 import {
   createSettingsWriteQueue,
   enqueueSettingsWrite,
@@ -231,8 +240,6 @@ type AudioEngineResolution = {
   fallbackReason: AudioEngineFallbackReason | null;
 };
 
-type AecMode = "off" | "screenpipe" | "macos" | "windows";
-
 type AudioEngineResolutionSettings = Pick<
   Settings,
   "audioTranscriptionEngine" | "deepgramApiKey" | "user"
@@ -240,24 +247,6 @@ type AudioEngineResolutionSettings = Pick<
 
 const getTranscriptionEngineLabel = (engine: string) =>
   TRANSCRIPTION_ENGINE_LABELS[engine] ?? engine;
-
-const getAecMode = (
-  settings: Pick<Settings, "aecMode">,
-  isMacOS: boolean,
-  isWindows: boolean
-): AecMode => {
-  if (settings.aecMode === "screenpipe") return "screenpipe";
-  if (settings.aecMode === "macos" && isMacOS) return "macos";
-  if (settings.aecMode === "windows" && isWindows) return "windows";
-  return "off";
-};
-
-const getAecModeSettings = (mode: AecMode) => ({
-  aecMode: mode,
-  screenpipeAecEnabled: mode === "screenpipe",
-  macosInputVpioEnabled: mode === "macos",
-  windowsInputAecEnabled: mode === "windows",
-});
 
 const getAudioEngineResolution = (
   settings: AudioEngineResolutionSettings
@@ -2072,13 +2061,40 @@ export function RecordingSettings() {
     }
   }, [settings, updateSettings, debouncedValidateSettings]);
 
-  const aecMode = getAecMode(settings, isMacOS, isWindows);
+  const currentPlatform = isMacOS ? "macos" : isWindows ? "windows" : "linux";
+  const aecMode = normalizeAecModeForPlatform(
+    settings.aecMode ?? "off",
+    currentPlatform,
+  );
+  const remoteControlPreferences = normalizeDesktopRemotePreferences(settings);
+  const semanticContextRemotePolicy = getRemoteBooleanPolicy(
+    settings,
+    "semanticContext",
+  );
+  const smartRecordingRemotePolicy = getRemoteBooleanPolicy(
+    settings,
+    "smartRecording",
+  );
+  const aecModeRemotePolicy = getRemoteAecModePolicy(settings);
   const screenContextEnabled = !settings.disableVision;
   const screenshotImagesEnabled = screenContextEnabled && !(settings.disableScreenshots ?? false);
 
   const handleAecModeChange = useCallback((mode: AecMode) => {
-    handleSettingsChange(getAecModeSettings(mode), true);
-  }, [handleSettingsChange]);
+    const preferences = normalizeDesktopRemotePreferences(settings);
+    const policy = getRemoteAecModePolicy(settings);
+    const effectiveMode = resolveAecModeRemoteValue(
+      mode,
+      policy,
+      currentPlatform,
+    );
+    handleSettingsChange(
+      {
+        remoteControlPreferences: { ...preferences, aecMode: mode },
+        ...getAecModeSettings(effectiveMode),
+      },
+      true,
+    );
+  }, [currentPlatform, handleSettingsChange, settings]);
 
   useEffect(() => {
     if (!platformReady) return;
@@ -3230,6 +3246,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   <Switch
                     id="aecToggle"
                     checked={aecMode !== "off"}
+                    disabled={aecModeRemotePolicy.forceDisabled}
                     onCheckedChange={(checked) => {
                       const mode: AecMode = checked
                         ? (isMacOS ? "macos" : isWindows ? "windows" : "screenpipe")
@@ -3238,6 +3255,12 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                     }}
                   />
                 </div>
+                {aecModeRemotePolicy.forceDisabled && (
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Temporarily disabled by the remote safety control. Your
+                    preference is preserved.
+                  </p>
+                )}
               </div>
             )}
           </CardContent>
@@ -3503,10 +3526,33 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
               <Switch
                 id="experimentalMeetingPiggyback"
                 checked={Boolean(settings.experimentalMeetingPiggyback ?? false)}
-                disabled={Boolean(settings.disableMeetingDetector)}
-                onCheckedChange={(checked) => handleSettingsChange({ experimentalMeetingPiggyback: checked }, true)}
+                disabled={
+                  Boolean(settings.disableMeetingDetector) ||
+                  smartRecordingRemotePolicy.forceDisabled
+                }
+                onCheckedChange={(checked) =>
+                  handleSettingsChange(
+                    {
+                      remoteControlPreferences: {
+                        ...remoteControlPreferences,
+                        smartRecording: checked,
+                      },
+                      experimentalMeetingPiggyback: resolveBooleanRemoteValue(
+                        checked,
+                        smartRecordingRemotePolicy,
+                      ),
+                    },
+                    true,
+                  )
+                }
               />
             </div>
+            {smartRecordingRemotePolicy.forceDisabled && (
+              <p className="mt-2 ml-[26px] text-xs text-muted-foreground">
+                Temporarily disabled by the remote safety control. Your
+                preference is preserved.
+              </p>
+            )}
           </CardContent>
         </Card>
         )}
@@ -3769,7 +3815,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                       </p>
                     </div>
                   </div>
-                  {settings.semanticContextRemoteForceDisabled ? (
+                  {semanticContextRemotePolicy.forceDisabled ? (
                     <Switch id="enableSemanticContext" checked={false} disabled />
                   ) : (
                     <ManagedSwitch
@@ -3779,14 +3825,13 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                       onCheckedChange={(checked) =>
                         handleSettingsChange(
                           {
-                            semanticContextPreference: checked,
-                            enableSemanticContext: resolveSemanticContextEnabled(
+                            remoteControlPreferences: {
+                              ...remoteControlPreferences,
+                              semanticContext: checked,
+                            },
+                            enableSemanticContext: resolveBooleanRemoteValue(
                               checked,
-                              {
-                                defaultEnabled:
-                                  settings.semanticContextRemoteDefault ?? false,
-                                forceDisabled: false,
-                              },
+                              semanticContextRemotePolicy,
                             ),
                           },
                           true,
@@ -3796,7 +3841,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   )}
                 </div>
 
-                {settings.semanticContextRemoteForceDisabled && (
+                {semanticContextRemotePolicy.forceDisabled && (
                   <p className="border-t border-border pt-3 text-xs text-muted-foreground">
                     Temporarily disabled by the remote safety control. Your
                     preference is preserved.
@@ -3804,7 +3849,7 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 )}
 
                 {settings.enableSemanticContext &&
-                  !settings.semanticContextRemoteForceDisabled && (
+                  !semanticContextRemotePolicy.forceDisabled && (
                   <LockedSetting settingKey="semanticContextMode">
                     <div className="flex flex-col gap-3 border-t border-border pt-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
                       <div className="min-w-0">

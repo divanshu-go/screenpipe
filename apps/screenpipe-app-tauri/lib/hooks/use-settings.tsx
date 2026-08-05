@@ -47,6 +47,14 @@ import {
 	readLegacyUserGoalCategory,
 	type UserGoalCategory,
 } from "@/lib/live-views/onboarding-activation";
+import {
+	LOCAL_DESKTOP_REMOTE_POLICY,
+	NEW_INSTALL_REMOTE_CONTROL_PREFERENCES,
+	normalizeDesktopRemotePolicySnapshot,
+	normalizeDesktopRemotePreferences,
+	type DesktopRemotePolicySnapshot,
+	type DesktopRemotePreferences,
+} from "@/lib/desktop-remote-control";
 export type VadSensitivity = "low" | "medium" | "high";
 
 export type AIProviderType =
@@ -244,12 +252,12 @@ export type Settings = SettingsStore & {
 	deviceId?: string;
 	/** Device-key values enforced by the current enterprise policy. */
 	enterpriseManagedSettings?: Record<string, ManagedSettingValue>;
-	/** Explicit local choice for structured app context. null means inherit the remote rollout default. */
+	/** @deprecated PR #5878 transition field; migrated into remoteControlPreferences. */
 	semanticContextPreference?: boolean | null;
-	/** Last valid PostHog default, persisted so offline restarts keep the resolved behavior. */
-	semanticContextRemoteDefault?: boolean;
-	/** Emergency PostHog force-off. The Rust engine also enforces this after enterprise overrides. */
-	semanticContextRemoteForceDisabled?: boolean;
+	/** Explicit local choices. null means inherit that control's remote rollout default. */
+	remoteControlPreferences?: DesktopRemotePreferences;
+	/** Last valid bounded policies, persisted for offline restarts and Rust enforcement. */
+	remoteControlPolicy?: DesktopRemotePolicySnapshot;
 	updateChannel?: UpdateChannel;
 	chatHistory?: ChatHistoryStore;
 	ignoredUrls?: string[];
@@ -732,9 +740,24 @@ let DEFAULT_SETTINGS: Settings = {
 			disableVision: false,
 			disableScreenshots: false,
 			enableSemanticContext: false,
-			semanticContextPreference: null,
-			semanticContextRemoteDefault: false,
-			semanticContextRemoteForceDisabled: false,
+			remoteControlPreferences: {
+				...NEW_INSTALL_REMOTE_CONTROL_PREFERENCES,
+			},
+			remoteControlPolicy: {
+				schemaVersion: 1,
+				boolean: {
+					semanticContext: {
+						...LOCAL_DESKTOP_REMOTE_POLICY.boolean.semanticContext,
+					},
+					coreAudioSystemAudio: {
+						...LOCAL_DESKTOP_REMOTE_POLICY.boolean.coreAudioSystemAudio,
+					},
+					smartRecording: {
+						...LOCAL_DESKTOP_REMOTE_POLICY.boolean.smartRecording,
+					},
+				},
+				aecMode: { ...LOCAL_DESKTOP_REMOTE_POLICY.aecMode },
+			},
 			semanticContextMode: "memory",
 			useAllMonitors: true,
 			showShortcutOverlay: true,
@@ -1005,18 +1028,6 @@ function createSettingsStore() {
 
 		let needsUpdate = normalizeSettingsArrays(settings);
 
-		// Existing installs predate the tri-state preference. Preserve their
-		// current value as an explicit choice so a later remote default-on rollout
-		// applies only to new installs. New defaults seed this field as null.
-		if (settings.semanticContextPreference === undefined) {
-			settings.semanticContextPreference = Boolean(
-				settings.enableSemanticContext ?? false,
-			);
-			settings.semanticContextRemoteDefault = false;
-			settings.semanticContextRemoteForceDisabled = false;
-			needsUpdate = true;
-		}
-
 		// Migration: Ensure existing users have deviceId for free tier tracking
 		const existingUserGoal = normalizeUserGoalCategory(
 			settings.userGoalCategory,
@@ -1064,6 +1075,50 @@ function createSettingsStore() {
 		if (!(settings as any).coreaudioTapMigrationV3) {
 			settings.experimentalCoreaudioSystemAudio = true;
 			(settings as any).coreaudioTapMigrationV3 = true;
+			needsUpdate = true;
+		}
+
+		// Existing installs predate the typed remote-control registry. Preserve
+		// the post-migration effective values as explicit choices. Rust seeds an
+		// all-null object for genuinely new installs, so those can inherit rollout
+		// defaults without changing any established user preference.
+		const normalizedRemotePreferences = normalizeDesktopRemotePreferences(settings);
+		if (
+			JSON.stringify(settings.remoteControlPreferences) !==
+			JSON.stringify(normalizedRemotePreferences)
+		) {
+			settings.remoteControlPreferences = normalizedRemotePreferences;
+			needsUpdate = true;
+		}
+		const legacyRemoteSettings = settings as Settings & {
+			semanticContextRemoteDefault?: boolean;
+			semanticContextRemoteForceDisabled?: boolean;
+		};
+		const normalizedRemotePolicy = normalizeDesktopRemotePolicySnapshot(
+			settings.remoteControlPolicy,
+			{
+				defaultEnabled: legacyRemoteSettings.semanticContextRemoteDefault,
+				forceDisabled:
+					legacyRemoteSettings.semanticContextRemoteForceDisabled,
+			},
+		);
+		if (
+			JSON.stringify(settings.remoteControlPolicy) !==
+			JSON.stringify(normalizedRemotePolicy)
+		) {
+			settings.remoteControlPolicy = normalizedRemotePolicy;
+			needsUpdate = true;
+		}
+		if (settings.semanticContextPreference !== undefined) {
+			delete settings.semanticContextPreference;
+			needsUpdate = true;
+		}
+		if (legacyRemoteSettings.semanticContextRemoteDefault !== undefined) {
+			delete legacyRemoteSettings.semanticContextRemoteDefault;
+			needsUpdate = true;
+		}
+		if (legacyRemoteSettings.semanticContextRemoteForceDisabled !== undefined) {
+			delete legacyRemoteSettings.semanticContextRemoteForceDisabled;
 			needsUpdate = true;
 		}
 

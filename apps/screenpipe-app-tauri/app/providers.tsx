@@ -22,7 +22,7 @@ import { usePathname } from "next/navigation";
 import { readCachedAnalyticsId, readCachedAnalyticsEnabled } from "@/lib/analytics-id";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "@/lib/query-client";
-import { SemanticContextRemoteControl } from "@/components/semantic-context-remote-control";
+import { DesktopRemoteControl } from "@/components/desktop-remote-control";
 
 /// Global mount point for the updater event listener. Lives here (not in
 /// per-page hooks) so the listener is registered for the lifetime of the
@@ -122,7 +122,7 @@ export const Providers = forwardRef<
                       <PostHogProvider client={posthog}>
                         {mounted ? (
                           <>
-                            <SemanticContextRemoteControl enabled={posthogReady} />
+                            <DesktopRemoteControl enabled={posthogReady} />
                             {!isOverlay && <DeeplinkHandler />}
                             {!isOverlay && <LiveViewOnboardingFollowUp />}
                             <AppEntitlementGate>{children}</AppEntitlementGate>

@@ -1398,19 +1398,44 @@ Rules:
             acp_agent: None,
         };
 
-        // Rust creates and persists store.bin before the frontend mounts on a
-        // fresh install. Seed the tri-state marker here too: null means the
-        // install may inherit a remote default. Legacy stores lack the key, so
-        // the frontend migration can preserve their existing boolean choice.
-        let semantic_context_control = std::collections::HashMap::from([
-            ("semanticContextPreference".to_string(), Value::Null),
+        // Rust persists store.bin before the frontend mounts. All-null values
+        // identify a genuinely new install that may inherit remote defaults;
+        // legacy stores lack this object and are migrated from their current
+        // effective values. The persisted policy also lets Rust enforce every
+        // emergency force-off after flattened/Enterprise settings are applied.
+        let remote_control = std::collections::HashMap::from([
             (
-                "semanticContextRemoteDefault".to_string(),
-                Value::Bool(false),
+                "remoteControlPreferences".to_string(),
+                json!({
+                    "semanticContext": null,
+                    "coreAudioSystemAudio": null,
+                    "smartRecording": null,
+                    "aecMode": null,
+                }),
             ),
             (
-                "semanticContextRemoteForceDisabled".to_string(),
-                Value::Bool(false),
+                "remoteControlPolicy".to_string(),
+                json!({
+                    "schemaVersion": 1,
+                    "boolean": {
+                        "semanticContext": {
+                            "defaultEnabled": false,
+                            "forceDisabled": false,
+                        },
+                        "coreAudioSystemAudio": {
+                            "defaultEnabled": true,
+                            "forceDisabled": false,
+                        },
+                        "smartRecording": {
+                            "defaultEnabled": false,
+                            "forceDisabled": false,
+                        },
+                    },
+                    "aecMode": {
+                        "defaultValue": "off",
+                        "forceDisabled": false,
+                    },
+                }),
             ),
         ]);
 
@@ -1496,7 +1521,7 @@ Rules:
             minimize_to_tray_on_close: false,
             headless: false,
             headless_record_only: false,
-            extra: semantic_context_control,
+            extra: remote_control,
         }
     }
 }
@@ -1629,17 +1654,41 @@ impl SettingsStore {
             .filter(|s| !s.trim().is_empty())
             .or_else(|| self.user.name.clone().filter(|s| !s.trim().is_empty()))
             .or_else(|| self.user.email.clone().filter(|s| !s.trim().is_empty()));
-        // The remote emergency stop is intentionally applied after the
-        // flattened recording settings (including enterprise-managed values).
-        // This makes the safety control effective for every build while never
-        // allowing remote config to force the parser on.
-        if self
+        // Remote emergency stops are intentionally applied after the flattened
+        // recording settings (including Enterprise-managed values). Remote
+        // config can only turn these reviewed controls off; it cannot force
+        // capture-sensitive behavior on.
+        if let Some(policy) = self
             .extra
-            .get("semanticContextRemoteForceDisabled")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
+            .get("remoteControlPolicy")
+            .filter(|policy| policy.get("schemaVersion").and_then(Value::as_u64) == Some(1))
         {
-            settings.enable_semantic_context = false;
+            let boolean_force_disabled = |control: &str| {
+                policy
+                    .pointer(&format!("/boolean/{control}/forceDisabled"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+            };
+
+            if boolean_force_disabled("semanticContext") {
+                settings.enable_semantic_context = false;
+            }
+            if boolean_force_disabled("coreAudioSystemAudio") {
+                settings.experimental_coreaudio_system_audio = false;
+            }
+            if boolean_force_disabled("smartRecording") {
+                settings.experimental_meeting_piggyback = false;
+            }
+            if policy
+                .pointer("/aecMode/forceDisabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                settings.aec_mode = screenpipe_config::AecMode::Off;
+                settings.screenpipe_aec_enabled = false;
+                settings.macos_input_vpio_enabled = false;
+                settings.windows_input_aec_enabled = false;
+            }
         }
         settings
     }
@@ -3244,44 +3293,72 @@ mod tests {
     }
 
     #[test]
-    fn semantic_context_remote_force_off_wins_after_recording_settings() {
+    fn remote_force_offs_win_after_recording_settings() {
         let mut store = SettingsStore::default();
         store.recording.enable_semantic_context = true;
+        store.recording.experimental_coreaudio_system_audio = true;
+        store.recording.experimental_meeting_piggyback = true;
+        store.recording.aec_mode = screenpipe_config::AecMode::Macos;
+        store.recording.macos_input_vpio_enabled = true;
         store.extra.insert(
-            "semanticContextRemoteForceDisabled".to_string(),
-            Value::Bool(true),
+            "remoteControlPolicy".to_string(),
+            json!({
+                "schemaVersion": 1,
+                "boolean": {
+                    "semanticContext": {"defaultEnabled": true, "forceDisabled": true},
+                    "coreAudioSystemAudio": {"defaultEnabled": true, "forceDisabled": true},
+                    "smartRecording": {"defaultEnabled": true, "forceDisabled": true},
+                },
+                "aecMode": {"defaultValue": "macos", "forceDisabled": true},
+            }),
         );
 
-        assert!(store.recording.enable_semantic_context);
-        assert!(!store.to_recording_settings().enable_semantic_context);
+        let effective = store.to_recording_settings();
+        assert!(!effective.enable_semantic_context);
+        assert!(!effective.experimental_coreaudio_system_audio);
+        assert!(!effective.experimental_meeting_piggyback);
+        assert_eq!(effective.aec_mode, screenpipe_config::AecMode::Off);
+        assert!(!effective.screenpipe_aec_enabled);
+        assert!(!effective.macos_input_vpio_enabled);
+        assert!(!effective.windows_input_aec_enabled);
 
         let round_tripped: SettingsStore =
             serde_json::from_value(serde_json::to_value(store).unwrap()).unwrap();
         assert_eq!(
             round_tripped
                 .extra
-                .get("semanticContextRemoteForceDisabled"),
-            Some(&Value::Bool(true))
+                .get("remoteControlPolicy")
+                .and_then(|policy| policy.pointer("/aecMode/forceDisabled"))
+                .and_then(Value::as_bool),
+            Some(true)
         );
-        assert!(!round_tripped
-            .to_recording_settings()
-            .enable_semantic_context);
+        assert!(!round_tripped.to_recording_settings().enable_semantic_context);
     }
 
     #[test]
-    fn new_store_marks_semantic_context_preference_as_inherited() {
+    fn new_store_marks_remote_control_preferences_as_inherited() {
         let store = SettingsStore::default();
         assert_eq!(
-            store.extra.get("semanticContextPreference"),
-            Some(&Value::Null)
+            store
+                .extra
+                .get("remoteControlPreferences")
+                .and_then(|preferences| preferences.get("semanticContext")),
+            Some(&Value::Null),
         );
         assert_eq!(
-            store.extra.get("semanticContextRemoteDefault"),
-            Some(&Value::Bool(false))
+            store
+                .extra
+                .get("remoteControlPreferences")
+                .and_then(|preferences| preferences.get("coreAudioSystemAudio")),
+            Some(&Value::Null),
         );
         assert_eq!(
-            store.extra.get("semanticContextRemoteForceDisabled"),
-            Some(&Value::Bool(false))
+            store
+                .extra
+                .get("remoteControlPolicy")
+                .and_then(|policy| policy.pointer("/boolean/coreAudioSystemAudio/defaultEnabled"))
+                .and_then(Value::as_bool),
+            Some(true),
         );
     }
 }
