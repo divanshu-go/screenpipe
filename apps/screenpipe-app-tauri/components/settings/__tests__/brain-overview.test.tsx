@@ -1844,6 +1844,88 @@ describe("BrainOverview", () => {
     expect(await screen.findByTestId("overview-undo")).toBeTruthy();
   });
 
+  it("never persists preview-only Block positions while reviewing an added Block", async () => {
+    mocks.listBrainViews.mockResolvedValue({
+      status: "ok",
+      data: [populatedView],
+    });
+    mocks.generateLiveViewWithPi.mockResolvedValue({
+      title: populatedView.title,
+      timeRange: populatedView.timeRange,
+      periodPolicy: populatedView.periodPolicy,
+      note: "Added habit signals.",
+      blocks: [
+        {
+          id: "focus-time",
+          title: "Focus time",
+          intent: "Calculate focused work time",
+          component: "metric.v1",
+          width: 6,
+          pipeName: "daily-summary",
+        },
+        {
+          id: "habit-signals",
+          title: "Habit signals",
+          intent: "Show recurring work habits.",
+          component: "list.v1",
+          width: 6,
+          pipeName: "daily-summary",
+        },
+      ],
+    });
+    mocks.saveBrainViewCanvas.mockImplementation(async (request) => {
+      if (
+        request.blocks.some(
+          (block: { slotId: string }) => block.slotId === "habit-signals",
+        )
+      ) {
+        return {
+          status: "error" as const,
+          error: "canvas contains more Block positions than the Live View",
+        };
+      }
+      return {
+        status: "ok" as const,
+        data: {
+          schema: "live-view-canvas.v1" as const,
+          ...request,
+          revision: (request.expectedRevision ?? 0) + 1,
+          updatedAt: "2026-07-27T18:00:00Z",
+        },
+      };
+    });
+    render(<BrainOverview />);
+
+    fireEvent.change(await screen.findByTestId("live-view-ai-prompt"), {
+      target: { value: "add habit signals" },
+    });
+    fireEvent.click(screen.getByTestId("live-view-ai-generate"));
+
+    expect(await screen.findByTestId("live-view-ai-review")).toBeTruthy();
+    expect(screen.getByTestId("canvas-block-habit-signals")).toBeTruthy();
+    mocks.saveBrainViewCanvas.mockClear();
+    fireEvent.click(screen.getByTestId("canvas-tools-toggle"));
+    fireEvent.click(screen.getByTestId("canvas-fit"));
+
+    await waitFor(() =>
+      expect(mocks.saveBrainViewCanvas).toHaveBeenCalledTimes(1),
+    );
+    expect(mocks.saveBrainViewCanvas).toHaveBeenCalledWith(
+      expect.objectContaining({
+        viewId: populatedView.id,
+        blocks: [expect.objectContaining({ slotId: "focus-time" })],
+      }),
+    );
+    expect(
+      mocks.saveBrainViewCanvas.mock.calls[0][0].blocks.some(
+        (block: { slotId: string }) => block.slotId === "habit-signals",
+      ),
+    ).toBe(false);
+    expect(mocks.toast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ title: "canvas changes were not saved" }),
+    );
+  });
+
   it("rejects a staged Block edit without writing the dashboard", async () => {
     mocks.listBrainViews.mockResolvedValue({
       status: "ok",

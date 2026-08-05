@@ -574,6 +574,7 @@ export function BrainOverview({
   const canvasLoadTokenRef = useRef(0);
   const canvasLatestRef = useRef<BrainViewCanvasDocument | null>(null);
   const canvasServerRevisionsRef = useRef(new Map<string, number>());
+  const canvasSaveErrorsRef = useRef(new Map<string, string>());
   const pendingCanvasSavesRef = useRef(
     new Map<string, BrainViewCanvasDocument>(),
   );
@@ -666,14 +667,17 @@ export function BrainOverview({
           canvasServerRevisionsRef.current.get(viewId) ?? null;
         const result = await commands.saveBrainViewCanvas(request);
         if (result.status === "error") {
-          setCanvasError(result.error);
-          toast({
-            title: "canvas changes were not saved",
-            description: result.error,
-            variant: "destructive",
-          });
+          if (canvasSaveErrorsRef.current.get(viewId) !== result.error) {
+            canvasSaveErrorsRef.current.set(viewId, result.error);
+            toast({
+              title: "canvas changes were not saved",
+              description: result.error,
+              variant: "destructive",
+            });
+          }
           continue;
         }
+        canvasSaveErrorsRef.current.delete(viewId);
         canvasServerRevisionsRef.current.set(viewId, result.data.revision);
         setCanvasError(null);
         if (canvasLatestRef.current?.viewId === viewId) {
@@ -714,6 +718,23 @@ export function BrainOverview({
       void pumpCanvasSaves();
     },
     [pumpCanvasSaves],
+  );
+
+  const changeVisibleCanvasDocument = useCallback(
+    (next: BrainViewCanvasDocument, options: { persist: boolean }) => {
+      if (!view || aiBlockProposals.length === 0) {
+        changeCanvasDocument(next, options);
+        return;
+      }
+
+      // AI review renders a preview that can contain Blocks which do not exist
+      // in the persisted Live View yet. Canvas interactions must never enqueue
+      // those preview-only positions for the backend. Keep safe viewport and
+      // annotation edits, but reconcile Block positions and arrows against the
+      // currently saved definition until the proposals are applied.
+      changeCanvasDocument(reconcileCanvasDocument(view, next), options);
+    },
+    [aiBlockProposals.length, changeCanvasDocument, view],
   );
 
   useEffect(() => {
@@ -3030,7 +3051,7 @@ export function BrainOverview({
             timeRange={view.timeRange}
             refreshingSlotIds={refreshingSlotIds}
             aiEditingSlotId={aiEditingSlotId}
-            onChange={changeCanvasDocument}
+            onChange={changeVisibleCanvasDocument}
             onFeedback={recordCardFeedback}
             onRegenerate={(slot) =>
               void refreshConnectedPipes(view, [slot], "card_regenerated")
