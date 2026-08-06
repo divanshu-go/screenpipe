@@ -4,26 +4,29 @@
 "use client";
 
 import * as React from "react";
-import { useState, useRef, useEffect, useCallback } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { emit, listen } from "@tauri-apps/api/event";
+import { deleteConversationFile } from "@/lib/chat-storage";
 import { writeActiveAiPresetId } from "@/lib/active-ai-preset";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { cn } from "@/lib/utils";
 import { Settings2, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SchedulePromptDialog } from "@/components/chat/schedule-prompt-dialog";
+import { AcpSignInDialog, type AcpSignInRequest } from "@/components/chat/standalone/acp-sign-in-dialog";
+import { acpAdapterInfo } from "@/lib/utils/preset-appearance";
 import { BrowserSidebar } from "@/components/browser-sidebar";
 import { toast } from "@/components/ui/use-toast";
 import type { AIPreset, JsonValue } from "@/lib/utils/tauri";
 // OpenAI SDK no longer used directly — all providers route through Pi agent
 import posthog from "posthog-js";
 import { useFeatureFlagEnabled } from "posthog-js/react";
-import { commands } from "@/lib/utils/tauri";
 import {
   ACP_AGENTS_FLAG,
   filterAcpPresets,
   isAcpRolloutEnabled,
 } from "@/lib/acp-rollout";
+import { commands } from "@/lib/utils/tauri";
 import { useChatConversations } from "@/components/hooks/use-chat-conversations";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { useHardcodedTiles } from "@/lib/hooks/use-hardcoded-tiles";
@@ -89,8 +92,16 @@ import {
   usePipeGenerationCompletion,
 } from "@/components/chat/standalone/hooks/use-chat-window-events";
 import type { ChatSendOptions, ContentBlock, Message } from "@/lib/chat/types";
+import { connectRequestBlock } from "@/lib/chat/connect-card";
+import {
+  agentActionMessage,
+  parseAgentActionRequest,
+  stripAgentActionBlocks,
+} from "@/lib/chat/agent-action-card";
 import { useChatStore } from "@/lib/stores/chat-store";
 import { AGENT_TOPICS, type AgentEventEnvelope } from "@/lib/events/types";
+import { listenTyped, TAURI_EVENTS } from "@/lib/events/tauri-events";
+import { localFetch } from "@/lib/api";
 
 // Session ID is per-conversation — set on mount (new conv) and updated on load/new.
 // Stored as a ref so event listeners always see the current value without stale closures.
@@ -132,6 +143,12 @@ export function StandaloneChat({
   sidebarCollapsed?: boolean;
 } = {}) {
   const { settings, updateSettings, isSettingsLoaded, reloadStore } = useSettings();
+  // ACP stays invisible until PostHog hands out the rollout flag. Filtering the
+  // preset list is the choke point: the composer's ACP surface, the agent
+  // config selector and the sign-in dialog all key off
+  // `activePreset.provider === "acp"`, so a preset list with no ACP entry makes
+  // every one of them unreachable. Fails closed — an undefined flag (offline,
+  // PostHog blocked, opt-out) hides ACP.
   const acpFlag = useFeatureFlagEnabled(ACP_AGENTS_FLAG);
   const acpEnabled = isAcpRolloutEnabled(acpFlag);
   const availableAiPresets = React.useMemo(
@@ -220,6 +237,20 @@ export function StandaloneChat({
   // their messages from the chat store instead — see the `messages` derivation
   // below, after `conversationId` is known.
   const [localMessages, setMessages] = useState<Message[]>([]);
+  // One dialog for every ACP sign-in — CLI login (Kimi, OpenCode) and
+  // in-protocol auth-method selection alike. Single piece of state → deduped.
+  const [acpSignIn, setAcpSignIn] = useState<AcpSignInRequest | null>(null);
+  // A CLI retry is in flight: we re-attempted the connection and are waiting to
+  // see if the agent connects (acp_ready → close) or asks to sign in again
+  // (→ error). The dialog never toggles closed in between, so it can't flicker.
+  const [acpSignInBusy, setAcpSignInBusy] = useState(false);
+  // Red line shown in the sign-in dialog when the last check failed.
+  const [acpSignInError, setAcpSignInError] = useState<string | null>(null);
+  // Event callbacks fire outside React state, so mirror "checking" into a ref
+  // to tell a first-time prompt from a failed retry; the timeout guards the
+  // case where neither acp_ready nor acp_external_auth_required comes back.
+  const acpSignInBusyRef = useRef(false);
+  const acpSignInTimeoutRef = useRef<number | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
@@ -245,6 +276,33 @@ export function StandaloneChat({
       }
     }
   }, []);
+
+  // Persist an ACP config choice (a select option value, or the mode) onto the
+  // active preset's acpAgent defaults, so `apply_session_defaults` applies it on
+  // the next session/new. This is what lets the config popover work on a fresh
+  // chat before any message: the live session (if one exists) is updated by the
+  // selector separately, and a not-yet-started session reads these defaults.
+  const handleAcpConfigDefault = useCallback(
+    (change: { optionId?: string; value?: string; modeId?: string }) => {
+      const preset = activePresetRef.current;
+      const agent = preset?.acpAgent;
+      if (!preset || !agent) return;
+      const nextAgent = { ...agent };
+      if (change.modeId !== undefined) {
+        nextAgent.modeId = change.modeId;
+      }
+      if (change.optionId !== undefined && change.value !== undefined) {
+        nextAgent.config = { ...(agent.config ?? {}), [change.optionId]: change.value };
+      }
+      const nextPreset = { ...preset, acpAgent: nextAgent };
+      const nextPresets = (settings?.aiPresets ?? []).map((entry) =>
+        entry.id === preset.id ? nextPreset : entry,
+      );
+      void updateSettings({ aiPresets: nextPresets });
+      handleSetActivePreset(nextPreset);
+    },
+    [settings, updateSettings, handleSetActivePreset],
+  );
   const isStreamingRef = useRef(false);
   // Mirrors of streaming-relevant state so the unmount-snapshot effect (which
   // runs with `[]` deps) can read the latest values instead of stale closures.
@@ -252,6 +310,7 @@ export function StandaloneChat({
   const messagesRef = useRef<Message[]>([]);
   const connectionCardCleanupTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const inlineConnectAbortRef = useRef<AbortController | null>(null);
+  const answeredAgentRequestIdsRef = useRef<Set<string>>(new Set());
   const abortControllerRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -845,7 +904,7 @@ export function StandaloneChat({
     setIsStreaming,
   });
   useChatWindowSyncEvents({
-    aiPresets: availableAiPresets,
+    aiPresets: settings?.aiPresets,
     setActivePreset: handleSetActivePreset,
   });
 
@@ -890,7 +949,7 @@ export function StandaloneChat({
   } = usePiSessionLifecycle({
     activePreset,
     setActivePreset: handleSetActivePreset,
-    aiPresets: availableAiPresets,
+    aiPresets: settings.aiPresets,
     isSettingsLoaded,
     shouldFreezePresetSelection: Boolean(activePipeExecution),
     userToken: settings.user?.token,
@@ -954,7 +1013,7 @@ export function StandaloneChat({
   });
 
   usePipeWatchSession({
-    aiPresets: availableAiPresets,
+    aiPresets: settings.aiPresets,
     setActivePreset: handleSetActivePreset,
     startPipeExecution,
     clearPipeExecution,
@@ -1054,20 +1113,34 @@ export function StandaloneChat({
   const answerPiExtensionUiRequest = useCallback(async (
     requestId: string | undefined,
     response: JsonValue,
+    sessionId = piSessionIdRef.current,
+    failureTitle = "failed to answer connection request",
   ) => {
-    if (!requestId) return;
-    const result = await commands.piExtensionUiResponse(
-      piSessionIdRef.current,
-      requestId,
-      response,
-    );
+    if (!requestId) return false;
+    let result;
+    try {
+      result = await commands.piExtensionUiResponse(
+        sessionId,
+        requestId,
+        response,
+      );
+    } catch (error) {
+      toast({
+        title: failureTitle,
+        description: error instanceof Error ? error.message : String(error),
+        variant: "destructive",
+      });
+      return false;
+    }
     if (result.status === "error") {
       toast({
-        title: "failed to answer connection request",
+        title: failureTitle,
         description: result.error,
         variant: "destructive",
       });
+      return false;
     }
+    return true;
   }, [piSessionIdRef]);
 
   const removeConnectionActionByRequestId = useCallback((requestId: string | undefined) => {
@@ -1087,13 +1160,85 @@ export function StandaloneChat({
     );
   }, [setMessages]);
 
+  const removeAgentActionByRequestId = useCallback((requestId: string, sessionId: string) => {
+    const stripRequest = (rows: Message[]) =>
+      stripAgentActionBlocks(rows, (block) => block.requestId === requestId);
+    setMessages(stripRequest);
+    // Auth prompts live in the sign-in dialog, not the message list — clear it
+    // too when this request is answered/withdrawn.
+    setAcpSignIn((cur) => (cur?.kind === "methods" && cur.requestId === requestId ? null : cur));
+    const store = useChatStore.getState();
+    const stored = store.sessions[sessionId]?.messages as Message[] | undefined;
+    if (stored) store.actions.setMessages(sessionId, stripRequest(stored));
+  }, [setMessages]);
+
+  const removeAgentActionsForSession = useCallback((sessionId: string) => {
+    // Runs on every turn end; the common case has no agent_action block.
+    // stripAgentActionBlocks returns the same array reference when nothing
+    // matches, so React and the store both bail out of a rebuild + re-render.
+    const stripSession = (rows: Message[]) =>
+      stripAgentActionBlocks(rows, (block) => block.sessionId === sessionId);
+    setMessages(stripSession);
+    // acp_authenticated / acp_fatal / acp_auth_cancelled clear the session's
+    // actions — dismiss any open sign-in dialog for it as well.
+    setAcpSignIn((cur) => (cur?.kind === "methods" && cur.sessionId === sessionId ? null : cur));
+    const store = useChatStore.getState();
+    const stored = store.sessions[sessionId]?.messages as Message[] | undefined;
+    if (stored) {
+      const stripped = stripSession(stored);
+      if (stripped !== stored) store.actions.setMessages(sessionId, stripped);
+    }
+  }, [setMessages]);
+
+  const answerAgentAction = useCallback(async (
+    block: Extract<ContentBlock, { type: "agent_action" }>,
+    selectedOptionId?: string,
+  ): Promise<boolean> => {
+    const answered = await answerPiExtensionUiRequest(
+      block.requestId,
+      selectedOptionId ? { selectedOptionId } : { cancelled: true },
+      block.sessionId,
+      "could not continue the agent",
+    );
+    if (!answered) return false;
+    answeredAgentRequestIdsRef.current.add(`${block.sessionId}:${block.requestId}`);
+    removeAgentActionByRequestId(block.requestId, block.sessionId);
+    return true;
+  }, [answerPiExtensionUiRequest, removeAgentActionByRequestId]);
+
   useEffect(() => {
     return () => {
       inlineConnectAbortRef.current?.abort();
       inlineConnectAbortRef.current = null;
       for (const timer of connectionCardCleanupTimersRef.current) clearTimeout(timer);
       connectionCardCleanupTimersRef.current = [];
+      // The ACP sign-in retry probe (up to 25s) would otherwise fire after the
+      // panel unmounts (e.g. navigating to /settings mid-retry), leaking a
+      // timer and calling setState on an unmounted component.
+      if (acpSignInTimeoutRef.current != null) {
+        window.clearTimeout(acpSignInTimeoutRef.current);
+        acpSignInTimeoutRef.current = null;
+      }
     };
+  }, []);
+
+  // Echo a connect-card outcome back to an agent blocked in the ACP connect
+  // broker (POST /v1/connect-request). No-op for cards that weren't broker-
+  // raised (raw Pi cards answer via answerPiExtensionUiRequest instead).
+  const postConnectResponse = useCallback(async (
+    connectRequestId: string | undefined,
+    status: "connected" | "declined" | "shown",
+  ) => {
+    if (!connectRequestId) return;
+    try {
+      await localFetch("/v1/connect-response", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ request_id: connectRequestId, status }),
+      });
+    } catch {
+      // The agent will time out and fall back to the async card; nothing to do.
+    }
   }, []);
 
   const connectFromInlineCard = useCallback(async (
@@ -1104,6 +1249,7 @@ export function StandaloneChat({
     if (!connection) {
       openConnectionSetup(connectionId);
       await answerPiExtensionUiRequest(block?.extensionRequestId, { cancelled: true });
+      await postConnectResponse(block?.connectRequestId, "declined");
       return { status: "unsupported", reason: "opening setup for this connection" };
     }
 
@@ -1119,6 +1265,7 @@ export function StandaloneChat({
     if (result.status === "connected") {
       await refreshConnectionState();
       await answerPiExtensionUiRequest(block?.extensionRequestId, { confirmed: true });
+      await postConnectResponse(block?.connectRequestId, "connected");
       if (block?.extensionRequestId) {
         const timer = setTimeout(() => {
           removeConnectionActionByRequestId(block.extensionRequestId);
@@ -1130,17 +1277,20 @@ export function StandaloneChat({
     if (result.status === "unsupported") {
       openConnectionSetup(connectionId);
       await answerPiExtensionUiRequest(block?.extensionRequestId, { cancelled: true });
+      await postConnectResponse(block?.connectRequestId, "declined");
       return { status: "unsupported", reason: `${result.reason}; opened setup` };
     }
     await answerPiExtensionUiRequest(block?.extensionRequestId, { cancelled: true });
+    await postConnectResponse(block?.connectRequestId, "declined");
     return result;
-  }, [allConnectionItems, answerPiExtensionUiRequest, openConnectionSetup, refreshConnectionState, removeConnectionActionByRequestId]);
+  }, [allConnectionItems, answerPiExtensionUiRequest, openConnectionSetup, refreshConnectionState, removeConnectionActionByRequestId, postConnectResponse]);
 
   const declineConnectionAction = useCallback((
     block: Extract<ContentBlock, { type: "connection_action" }>,
   ) => {
     void answerPiExtensionUiRequest(block.extensionRequestId, { cancelled: true });
-  }, [answerPiExtensionUiRequest]);
+    void postConnectResponse(block.connectRequestId, "declined");
+  }, [answerPiExtensionUiRequest, postConnectResponse]);
 
   useEffect(() => {
     let disposed = false;
@@ -1198,6 +1348,158 @@ export function StandaloneChat({
     };
   }, [allConnectionItems, piSessionIdRef, setMessages]);
 
+  // ACP connect broker: an agent's screenpipe_connect_app tool blocks on
+  // POST /v1/connect-request, the engine emits acp_connect_request, and it
+  // reaches us here as an engine event. We raise the same connect card,
+  // tagged with the broker request id so connect/decline echoes the outcome
+  // back to the waiting agent. Scoped to this chat by session id.
+  useEffect(() => {
+    let disposed = false;
+    const unlisten = listenTyped(TAURI_EVENTS.engine, (engineEvent) => {
+      if (disposed) return;
+      if (engineEvent.name !== "acp_connect_request") return;
+      const data = (engineEvent.data ?? {}) as Record<string, unknown>;
+      const built = connectRequestBlock(data, conversationId, (id) =>
+        allConnectionItems.find((item) => item.id === id),
+      );
+      if (!built) return;
+      const { requestId, block } = built;
+      const message: Message = {
+        id: `connection-action-${requestId}`,
+        role: "assistant",
+        content: "",
+        timestamp: Date.now(),
+        contentBlocks: [block],
+      };
+      setMessages((prev) => {
+        const alreadyVisible = prev.some((row) =>
+          row.contentBlocks?.some(
+            (block) =>
+              block.type === "connection_action" &&
+              block.connectRequestId === requestId,
+          ),
+        );
+        return alreadyVisible ? prev : [...prev, message];
+      });
+      // Tell the broker the card is up so it stops the fast fallback timer and
+      // waits for the user's real answer (see connect_broker.rs phase 1).
+      void postConnectResponse(requestId, "shown");
+    });
+    return () => {
+      disposed = true;
+      void unlisten.then((release) => release());
+    };
+  }, [allConnectionItems, conversationId, setMessages, postConnectResponse]);
+
+  const handleAgentActionEvent = useCallback((value: unknown, sessionId: string): boolean => {
+    const trace = (stage: string, details?: Record<string, unknown>) => {
+      if (process.env.NEXT_PUBLIC_SCREENPIPE_E2E !== "true" || typeof window === "undefined") return;
+      const target = window as typeof window & { __e2eAgentActionTrace?: unknown[] };
+      target.__e2eAgentActionTrace = target.__e2eAgentActionTrace ?? [];
+      target.__e2eAgentActionTrace.push({ stage, sessionId, ...details });
+    };
+    if (!value || typeof value !== "object") return false;
+    const inner = value as Record<string, unknown>;
+    if (
+      inner.type === "extension_ui_request" ||
+      inner.type === "acp_fatal" ||
+      inner.type === "acp_auth_cancelled"
+    ) {
+      trace("action-handler", { type: inner.type, method: inner.method });
+    }
+    if (
+      inner.type === "agent_end" ||
+      inner.type === "acp_authenticated" ||
+      inner.type === "acp_fatal" ||
+      inner.type === "acp_auth_cancelled"
+    ) {
+      removeAgentActionsForSession(sessionId);
+      // Confirm a successful sign-in so the card closing doesn't read as a
+      // glitch — some agents (Cursor) authenticate instantly with no browser.
+      if (inner.type === "acp_authenticated") {
+        setAcpSignInError(null);
+        toast({ title: `signed in to ${acpAdapterInfo(activePresetRef.current?.acpAgent?.id).name}` });
+      }
+      return false;
+    }
+    // Sign-in succeeded for a prompt that was already stuck in this
+    // (unauthenticated) session, which can't cleanly pick up the new
+    // credential. Start a fresh chat — which resets all turn state and spawns a
+    // new agent process that reads the credential — re-send the same message
+    // there (with its display label so a card like "Day Recap" still renders as
+    // a card, not raw text), and drop the old chat so no failed shell lingers.
+    if (inner.type === "acp_reinit_resend") {
+      const failed = [...messagesRef.current].reverse().find((m) => m.role === "user");
+      const content = (failed?.content ?? lastUserMessageRef.current ?? "").trim();
+      const display = failed?.displayContent;
+      const oldId = piSessionIdRef.current;
+      void startNewConversationRef.current?.().then(() => {
+        if (content) void sendMessageRef.current?.(content, display)?.catch(() => {});
+        // Remove the failed chat from the store, disk, and other windows'
+        // sidebars. Use the low-level primitives, not deleteConversation, which
+        // would wipe the just-created chat if React hasn't re-rendered the new
+        // conversationId yet.
+        if (oldId && oldId !== piSessionIdRef.current) {
+          useChatStore.getState().actions.drop(oldId);
+          void deleteConversationFile(oldId).catch(() => {});
+          void emit("chat-deleted", { id: oldId }).catch(() => {});
+        }
+      });
+      return true;
+    }
+    // A sign-in method the user picked failed (e.g. the browser login was
+    // cancelled or timed out). Keep the card open and show why, so they can
+    // retry or cancel instead of it spinning on "opening browser…".
+    if (inner.type === "acp_auth_error") {
+      const message = typeof inner.message === "string" ? inner.message : "that didn't work. try again.";
+      setAcpSignInError(message);
+      return false;
+    }
+    // Shared parser (same as the background router) so a foreground- and a
+    // background-received prompt normalize identically.
+    const parsed = parseAgentActionRequest(inner);
+    if (!parsed) return false;
+    const { actionKind, requestId, title, message: messageText, options } = parsed;
+    const requestKey = `${sessionId}:${requestId}`;
+    if (answeredAgentRequestIdsRef.current.has(requestKey)) return true;
+
+    // Sign-in prompts go to the unified sign-in dialog, not an inline card, so
+    // every ACP auth (CLI login and in-protocol method selection) looks the
+    // same. Permission prompts stay inline — they recur mid-turn and a modal
+    // per approval would be disruptive.
+    if (actionKind === "auth") {
+      setAcpSignIn({
+        kind: "methods",
+        // The prompt is for the currently active ACP agent — carry its id so
+        // the dialog can show that agent's real icon and name.
+        agentId: activePresetRef.current?.acpAgent?.id,
+        requestId,
+        sessionId,
+        title,
+        message: messageText,
+        options,
+      });
+      return true;
+    }
+
+    const message: Message = agentActionMessage(parsed, sessionId);
+
+    setMessages((prev) => {
+      const alreadyVisible = prev.some((row) =>
+        row.contentBlocks?.some(
+          (block) => block.type === "agent_action" && block.requestId === requestId,
+        ),
+      );
+      trace("action-state-update", {
+        requestId,
+        alreadyVisible,
+        previousMessageCount: prev.length,
+      });
+      return alreadyVisible ? prev : [...prev, message];
+    });
+    return true;
+  }, [removeAgentActionsForSession, setMessages, messagesRef, lastUserMessageRef, piSessionIdRef, sendMessageRef, startNewConversationRef, activePresetRef]);
+
   usePiForegroundEvents({
     activePreset,
     activePresetRef,
@@ -1210,9 +1512,34 @@ export function StandaloneChat({
     flushStreamingMessageRender,
     forceQueueModeRef,
     handleAgentEventDataRef,
+    handleAgentActionEvent,
+    clearAgentActionsForSession: removeAgentActionsForSession,
     handleInvalidatedAuthToken,
     lastUserMessageRef,
     markTurnIntentConsumed,
+    onAcpExternalAuthRequired: (info) => {
+      // If this fired during a retry, the user still isn't signed in — surface
+      // a red error. On the first prompt it's just the initial ask (no error).
+      // Either way the dialog stays open (open never goes false → no flicker).
+      const wasChecking = acpSignInBusyRef.current;
+      acpSignInBusyRef.current = false;
+      if (acpSignInTimeoutRef.current != null) window.clearTimeout(acpSignInTimeoutRef.current);
+      setAcpSignInBusy(false);
+      setAcpSignIn({ kind: "cli", ...info });
+      setAcpSignInError(
+        wasChecking
+          ? `still not signed in to ${info.agentName}. run the command below in a terminal, then retry.`
+          : null,
+      );
+    },
+    // Session opened successfully — dismiss any sign-in dialog waiting on it.
+    onAcpSessionReady: () => {
+      acpSignInBusyRef.current = false;
+      if (acpSignInTimeoutRef.current != null) window.clearTimeout(acpSignInTimeoutRef.current);
+      setAcpSignInBusy(false);
+      setAcpSignInError(null);
+      setAcpSignIn(null);
+    },
     messages,
     messagesRef,
     mountedRef,
@@ -1340,6 +1667,7 @@ export function StandaloneChat({
     onOpenConnectionSetup: openConnectionSetup,
     onConnectConnectionAction: connectFromInlineCard,
     onDeclineConnectionAction: declineConnectionAction,
+    onAnswerAgentAction: answerAgentAction,
     scheduleMessage: (message, displayLabel) => {
       piMessageIdRef.current = null;
       sendMessage(message, displayLabel);
@@ -1349,6 +1677,160 @@ export function StandaloneChat({
     messages,
     citationPlan,
   });
+
+  // Sign-in dialog actions.
+  const acpDefaultPresetLabel =
+    settings?.aiPresets?.find((preset) => preset.defaultPreset)?.id ?? "screenpipe-cloud";
+  // Resolve the agent's real name + icon from the catalog so the dialog shows
+  // its brand mark (Codex, Kimi, …) instead of a generic key. For CLI login
+  // the ACP-reported name is more specific, so prefer it.
+  const acpSignInAgent = useMemo(() => {
+    const agentId = acpSignIn?.agentId;
+    const info = acpAdapterInfo(agentId);
+    const name =
+      acpSignIn?.kind === "cli" ? acpSignIn.agentName : info.name;
+    return {
+      name: name || "this agent",
+      iconSrc: info.imageSrc,
+      iconInvert: info.invertInDark === true,
+    };
+  }, [acpSignIn]);
+  const clearAcpSignInProbe = useCallback(() => {
+    acpSignInBusyRef.current = false;
+    if (acpSignInTimeoutRef.current != null) {
+      window.clearTimeout(acpSignInTimeoutRef.current);
+      acpSignInTimeoutRef.current = null;
+    }
+    setAcpSignInBusy(false);
+  }, []);
+  // "i've signed in, retry": re-attempt the connection and report the outcome
+  // in the dialog. First a hard check that the CLI is even installed (a clear,
+  // actionable error if not). Then reconnect: acp_ready closes the dialog and
+  // resends the pending message; acp_external_auth_required re-fires as a red
+  // "still not signed in" error; a timeout guards the case where neither comes
+  // back. The dialog stays open throughout, so the user always sees what
+  // happened instead of it silently closing or spinning forever.
+  const handleAcpRetry = useCallback(() => {
+    // Works for both the CLI-login card and the "use my login" row of the
+    // method picker: re-attempt the connection after the user signed in.
+    if (!acpSignIn) return;
+    const agentId = acpSignIn.agentId;
+    const agentName =
+      acpSignIn.kind === "cli" ? acpSignIn.agentName : acpAdapterInfo(agentId).name;
+    setAcpSignInError(null);
+    setAcpSignInBusy(true);
+    acpSignInBusyRef.current = true;
+
+    void (async () => {
+      try {
+        const status = agentId ? await commands.piAcpAgentInstallStatus(agentId) : null;
+        if (status && status.requiresInstall && !status.installed) {
+          clearAcpSignInProbe();
+          setAcpSignInError(
+            status.command
+              ? `${agentName} isn't installed yet. install it first: ${status.command}`
+              : `${agentName} isn't installed yet — install it, then retry.`,
+          );
+          return;
+        }
+      } catch {
+        // Install check is best-effort; fall through to the connect attempt.
+      }
+      if (!acpSignInBusyRef.current) return; // dismissed while checking
+
+      if (acpSignInTimeoutRef.current != null) window.clearTimeout(acpSignInTimeoutRef.current);
+      acpSignInTimeoutRef.current = window.setTimeout(() => {
+        if (!acpSignInBusyRef.current) return;
+        clearAcpSignInProbe();
+        setAcpSignInError(`couldn't reach ${agentName}. make sure you ran the command, then retry.`);
+      }, 25_000);
+
+      // Trigger a fresh connection. A pending message rides along on success;
+      // with none, restart the session directly so the check still runs.
+      const pending = lastUserMessageRef.current?.trim();
+      if (pending) {
+        piMessageIdRef.current = null;
+        void sendMessage(pending).catch(() => {});
+      } else {
+        const cfg = buildProviderConfig();
+        if (cfg) void restartCurrentPiSession(cfg).catch(() => {});
+      }
+    })();
+  }, [acpSignIn, clearAcpSignInProbe, lastUserMessageRef, piMessageIdRef, sendMessage, buildProviderConfig, restartCurrentPiSession]);
+  // "switch to default": fall back to the default preset and resend there.
+  // Safe to close immediately — the default provider won't re-trigger the
+  // agent's CLI-login prompt, so there's no reopen to flicker against.
+  const handleAcpSwitchToDefault = useCallback(() => {
+    clearAcpSignInProbe();
+    setAcpSignInError(null);
+    setAcpSignIn(null);
+    // "Switch to default" must land on a NON-acp preset — otherwise it can
+    // resend to another agent that also needs sign-in, defeating the escape
+    // hatch. Prefer the default non-acp preset, then any non-acp preset.
+    const presets = settings?.aiPresets ?? [];
+    const fallback =
+      presets.find((preset) => preset.defaultPreset && preset.provider !== "acp") ??
+      presets.find((preset) => preset.provider !== "acp");
+    // handleSetActivePreset updates activePresetRef synchronously, so the
+    // resend below goes to the default provider, not the failed agent.
+    if (fallback) handleSetActivePreset(fallback);
+    const pending = lastUserMessageRef.current?.trim();
+    if (pending) {
+      piMessageIdRef.current = null;
+      void sendMessage(pending).catch(() => {});
+    }
+  }, [clearAcpSignInProbe, settings, handleSetActivePreset, lastUserMessageRef, piMessageIdRef, sendMessage]);
+  // In-protocol auth: answer the agent's method-selection request. Cancelling
+  // (undefined optionId) closes the card. Picking a method delivers it but keeps
+  // the card open in its waiting state — a terminal login opens a browser and
+  // takes a while, so we wait for acp_authenticated (success → card cleared by
+  // the session's action cleanup) or acp_auth_error (failure → error shown)
+  // rather than hiding progress the instant the selection is sent.
+  const handleAcpSignInMethod = useCallback(
+    async (optionId?: string): Promise<boolean> => {
+      if (acpSignIn?.kind !== "methods") return false;
+      const { requestId, sessionId } = acpSignIn;
+      const answered = await answerPiExtensionUiRequest(
+        requestId,
+        optionId ? { selectedOptionId: optionId } : { cancelled: true },
+        sessionId,
+        "could not continue the agent",
+      );
+      if (!answered) return false;
+      answeredAgentRequestIdsRef.current.add(`${sessionId}:${requestId}`);
+      if (optionId) {
+        setAcpSignInError(null);
+      } else {
+        setAcpSignIn(null);
+      }
+      return true;
+    },
+    [acpSignIn, answerPiExtensionUiRequest],
+  );
+  const handleAcpDismiss = useCallback(() => {
+    if (acpSignIn?.kind === "methods") {
+      const key = `${acpSignIn.sessionId}:${acpSignIn.requestId}`;
+      // If a method was already picked (a login is in flight), the selection is
+      // consumed, so cancelling just closes the card — the background login is
+      // abandoned. Otherwise deliver a real cancellation to the agent.
+      if (answeredAgentRequestIdsRef.current.has(key)) {
+        setAcpSignInError(null);
+        setAcpSignIn(null);
+      } else {
+        void handleAcpSignInMethod(undefined);
+      }
+      return;
+    }
+    clearAcpSignInProbe();
+    setAcpSignInError(null);
+    setAcpSignIn(null);
+  }, [acpSignIn, handleAcpSignInMethod, clearAcpSignInProbe]);
+  // Config-menu "re-authenticate": re-show the agent's sign-in methods without
+  // signing out. The agent owns its credentials; picking a method re-runs that
+  // login in place, so an existing login is never lost as a side effect.
+  const handleReauthenticate = useCallback(() => {
+    void commands.piAcpReauthenticate(currentQueueSessionId).catch(() => {});
+  }, [currentQueueSessionId]);
 
   return (
     <div ref={dropRootRef} className={cn("flex flex-col bg-background", className ?? "h-screen")} data-testid="section-home">
@@ -1600,6 +2082,8 @@ export function StandaloneChat({
           currentQueueSessionId,
           onPresetSaved: handlePiRestart,
           onSelectPreset: handleSetActivePreset,
+          onAcpConfigDefault: handleAcpConfigDefault,
+          onReauthenticate: handleReauthenticate,
         }}
         connectBanner={{
           show: showConnectBanner,
@@ -1650,6 +2134,20 @@ export function StandaloneChat({
         <SchedulePromptDialog {...scheduleDialogProps} />
       )}
       <ImageViewerDialog {...imageViewerProps} />
+
+      <AcpSignInDialog
+        request={acpSignIn}
+        agentName={acpSignInAgent.name}
+        iconSrc={acpSignInAgent.iconSrc}
+        iconInvert={acpSignInAgent.iconInvert}
+        busy={acpSignInBusy}
+        error={acpSignInError}
+        defaultPresetLabel={acpDefaultPresetLabel}
+        onSwitchToDefault={handleAcpSwitchToDefault}
+        onRetry={handleAcpRetry}
+        onSelectMethod={handleAcpSignInMethod}
+        onDismiss={handleAcpDismiss}
+      />
 
     </div>
   );

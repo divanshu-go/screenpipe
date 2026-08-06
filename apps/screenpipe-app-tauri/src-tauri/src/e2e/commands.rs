@@ -556,6 +556,33 @@ fn seed_flags() -> Vec<String> {
     super::seeds::flags()
 }
 
+/// E2E helper: run the real Pi/ACP startup path while keeping its expected
+/// failure inside Rust. WebDriver implementations can surface a rejected Tauri
+/// invocation as the browser command result even when page JavaScript catches
+/// the promise, which makes negative-path process cleanup tests nondeterministic.
+#[command]
+async fn capture_pi_start_error(
+    app_handle: tauri::AppHandle,
+    state: State<'_, crate::pi::PiState>,
+    session_id: String,
+    project_dir: String,
+    provider_config: Option<crate::pi::PiProviderConfig>,
+) -> Result<String, String> {
+    match crate::pi::pi_start_inner(
+        app_handle,
+        &state,
+        &session_id,
+        project_dir,
+        None,
+        provider_config,
+    )
+    .await
+    {
+        Ok(_) => Ok(String::new()),
+        Err(error) => Ok(error),
+    }
+}
+
 pub(super) fn plugin() -> TauriPlugin<Wry> {
     Builder::<Wry>::new("e2e")
         // build.rs verifies this inventory matches the feature-only plugin ACL.
@@ -589,6 +616,7 @@ pub(super) fn plugin() -> TauriPlugin<Wry> {
             inject_db_hard_fault,
             db_hard_fault_state,
             seed_flags,
+            capture_pi_start_error,
         ])
         .build()
 }

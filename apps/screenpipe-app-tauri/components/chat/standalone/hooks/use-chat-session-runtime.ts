@@ -95,7 +95,28 @@ export function useChatSessionRuntime({
     // how a queued follow-up's `message_start(role=user)` got materialized by
     // the router into a *second* user bubble next to the one the panel had
     // already rendered (the duplicated message on chat switch).
+    //
+    // The ACP branch originally awaited the mount here; keeping that would have
+    // reopened the duplicate-bubble race (#5934), so its e2e trace rides on the
+    // synchronous registration instead.
     const off = registerForeground(conversationId, (envelope) => {
+      if (
+        process.env.NEXT_PUBLIC_SCREENPIPE_E2E === "true" &&
+        typeof window !== "undefined" &&
+        ["extension_ui_request", "acp_fatal", "acp_auth_cancelled"].includes(
+          envelope.event?.type ?? "",
+        )
+      ) {
+        const target = window as typeof window & { __e2eAgentActionTrace?: unknown[] };
+        target.__e2eAgentActionTrace = target.__e2eAgentActionTrace ?? [];
+        target.__e2eAgentActionTrace.push({
+          stage: "foreground-dispatch",
+          sessionId: envelope.sessionId,
+          currentSessionId: piSessionIdRef.current,
+          type: envelope.event?.type,
+          hasHandler: Boolean(handleAgentEventDataRef.current),
+        });
+      }
       if (envelope.sessionId !== piSessionIdRef.current) {
         void handlePiEvent(envelope);
         return;

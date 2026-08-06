@@ -176,6 +176,7 @@
         "src/pipe_stream.rs",
         "src/routes/activity_summary.rs",
         "src/routes/artifacts.rs",
+        "src/routes/connect_broker.rs",
         "src/routes/content.rs",
         "src/routes/data.rs",
         "src/routes/elements.rs",
