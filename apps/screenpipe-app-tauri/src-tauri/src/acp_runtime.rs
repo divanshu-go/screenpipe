@@ -2146,12 +2146,24 @@ fn is_screenpipe_read_tool(tool_title: &str) -> bool {
         return true;
     }
     // Specific read-only tools from the bundled screenpipe-tools server.
-    // `query_recordings` is server-side-validated SELECT-only. The write/bridge
-    // tools (save_artifact, sp_mcp_call, screenpipe_connect_app, live_view,
-    // sp_web_search) are deliberately NOT auto-approved.
+    // `query_recordings` is server-side-validated SELECT-only. The trailing
+    // block are the core read/query tools this server mirrors over HTTP for
+    // http-only agents (Cursor, Copilot) — all plain GETs of the user's own
+    // recordings, so auto-approved exactly like their mcp__screenpipe__*
+    // equivalents on stdio. The write/bridge tools (save_artifact, sp_mcp_call,
+    // screenpipe_connect_app, live_view, sp_web_search) stay NOT auto-approved.
     matches!(
         tool_title,
-        "mcp__screenpipe-tools__query_recordings" | "mcp__screenpipe-tools__list_connections"
+        "mcp__screenpipe-tools__query_recordings"
+            | "mcp__screenpipe-tools__list_connections"
+            | "mcp__screenpipe-tools__activity_summary"
+            | "mcp__screenpipe-tools__keyword_search"
+            | "mcp__screenpipe-tools__search_elements"
+            | "mcp__screenpipe-tools__frame_context"
+            | "mcp__screenpipe-tools__get_frame_elements"
+            | "mcp__screenpipe-tools__list_meetings"
+            | "mcp__screenpipe-tools__get_meeting"
+            | "mcp__screenpipe-tools__health_check"
     )
 }
 
@@ -3838,6 +3850,11 @@ mod tests {
         assert!(is_screenpipe_read_tool("mcp__screenpipe__search-content"));
         assert!(is_screenpipe_read_tool("mcp__screenpipe-tools__query_recordings"));
         assert!(is_screenpipe_read_tool("mcp__screenpipe-tools__list_connections"));
+        // Core read tools mirrored on screenpipe-tools for http-only agents.
+        assert!(is_screenpipe_read_tool("mcp__screenpipe-tools__activity_summary"));
+        assert!(is_screenpipe_read_tool("mcp__screenpipe-tools__keyword_search"));
+        assert!(is_screenpipe_read_tool("mcp__screenpipe-tools__get_meeting"));
+        assert!(is_screenpipe_read_tool("mcp__screenpipe-tools__health_check"));
         assert!(!is_screenpipe_read_tool("mcp__screenpipe-tools__sp_mcp_call"));
         assert!(!is_screenpipe_read_tool("mcp__screenpipe-tools__save_artifact"));
         assert!(!is_screenpipe_read_tool("bash"));
