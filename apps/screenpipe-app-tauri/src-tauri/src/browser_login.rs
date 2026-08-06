@@ -68,15 +68,26 @@ pub enum PollOutcome {
     Failed(String),
 }
 
+/// Byte positions of a UUIDv4 that are fully random.
+///
+/// Byte 6 carries the fixed version nibble and byte 8 the fixed variant bits,
+/// so neither spans all 256 values. Folding byte 6 onto the charset would reach
+/// only half of it and quietly cost a bit of entropy, so those two positions are
+/// skipped in favour of positions that are pure CSPRNG output.
+const CODE_RANDOM_BYTE_POSITIONS: [usize; CODE_LEN] = [0, 1, 2, 3, 4, 5, 7, 9];
+
 /// Mint an unguessable login code.
 ///
-/// Uses `uuid::Uuid::new_v4`, which is CSPRNG-backed, and folds its bytes onto
-/// the CLI's human-readable charset. 32^8 ≈ 1.1e12 possibilities.
+/// Uses `uuid::Uuid::new_v4`, which is CSPRNG-backed, and folds its fully random
+/// bytes onto the CLI's human-readable charset. The charset has 32 symbols and
+/// 256 is an exact multiple of 32, so the fold is unbiased and every position
+/// reaches all 32 symbols: 32^8 ≈ 1.1e12 possibilities.
 pub fn generate_login_code() -> String {
-    let bytes = uuid::Uuid::new_v4();
-    let bytes = bytes.as_bytes();
-    (0..CODE_LEN)
-        .map(|i| CODE_CHARSET[(bytes[i] as usize) % CODE_CHARSET.len()] as char)
+    let uuid = uuid::Uuid::new_v4();
+    let bytes = uuid.as_bytes();
+    CODE_RANDOM_BYTE_POSITIONS
+        .iter()
+        .map(|&i| CODE_CHARSET[(bytes[i] as usize) % CODE_CHARSET.len()] as char)
         .collect()
 }
 
@@ -274,6 +285,31 @@ mod tests {
             // Ambiguous glyphs must never appear — these get typed by hand.
             assert!(!code.contains('O') && !code.contains('I'));
             assert!(!code.contains('0') && !code.contains('1'));
+        }
+    }
+
+    #[test]
+    fn every_position_reaches_the_whole_charset() {
+        // Folding a UUID's version byte (index 6) or variant byte (index 8)
+        // onto the charset would leave one position stuck in half the alphabet,
+        // silently shrinking the code space. Sample enough codes that a
+        // half-width position cannot plausibly look full.
+        let mut seen: Vec<std::collections::HashSet<char>> =
+            vec![std::collections::HashSet::new(); CODE_LEN];
+        for _ in 0..20_000 {
+            for (position, ch) in generate_login_code().chars().enumerate() {
+                seen[position].insert(ch);
+            }
+        }
+        for (position, symbols) in seen.iter().enumerate() {
+            assert_eq!(
+                symbols.len(),
+                CODE_CHARSET.len(),
+                "position {position} only reached {} of {} symbols — it is probably folding a \
+                 fixed UUID byte",
+                symbols.len(),
+                CODE_CHARSET.len()
+            );
         }
     }
 
