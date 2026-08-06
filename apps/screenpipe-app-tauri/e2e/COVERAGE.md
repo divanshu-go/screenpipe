@@ -6,9 +6,9 @@ and layer declared in the manifest, weighted by confidence and criticality.
 
 - Manifest: `e2e/coverage-map.json`
 - Specs directory: `e2e/specs`
-- Mapped specs: 98
-- Declared test blocks: 278
-- Weighted coverage points: 214.4
+- Mapped specs: 99
+- Declared test blocks: 280
+- Weighted coverage points: 216.4
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -19,9 +19,9 @@ can execute more runtime cases than this number shows.
 
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
-| windows | 76 | 240 | 193.9 | 15 | 84 | 91% |
-| macos | 94 | 241 | 185.2 | 17 | 86 | 89% |
-| linux | 66 | 200 | 163.7 | 14 | 79 | 88% |
+| windows | 77 | 242 | 195.9 | 15 | 85 | 91% |
+| macos | 95 | 243 | 187.2 | 17 | 87 | 89% |
+| linux | 67 | 202 | 165.7 | 14 | 80 | 88% |
 
 ## Runtime Results
 
@@ -39,16 +39,16 @@ pass/fail/skip counts.
 | capture-ocr | 2 specs / 16 tests / 6.4 pts | 7 specs / 11 tests / 4.4 pts | 1 specs / 3 tests / 1.2 pts |
 | chat-ai | 23 specs / 47 tests / 34.8 pts | 32 specs / 66 tests / 46.4 pts | 22 specs / 46 tests / 34.3 pts |
 | entitlement | - | 1 specs / 1 tests / 1.0 pts | - |
-| local-api | 20 specs / 104 tests / 86.8 pts | 24 specs / 88 tests / 74.4 pts | 16 specs / 75 tests / 66.2 pts |
+| local-api | 21 specs / 106 tests / 88.8 pts | 25 specs / 90 tests / 76.4 pts | 17 specs / 77 tests / 68.2 pts |
 | notifications | 4 specs / 25 tests / 16.3 pts | 3 specs / 5 tests / 3.4 pts | 2 specs / 4 tests / 3.1 pts |
 | onboarding | 4 specs / 10 tests / 7.6 pts | 5 specs / 11 tests / 8.0 pts | 4 specs / 10 tests / 7.6 pts |
 | os-integration | 7 specs / 29 tests / 24.8 pts | 12 specs / 24 tests / 14.4 pts | 2 specs / 12 tests / 8.7 pts |
 | performance | 2 specs / 44 tests / 44.0 pts | 4 specs / 34 tests / 30.5 pts | 1 specs / 29 tests / 29.0 pts |
-| pipes | 6 specs / 18 tests / 18.0 pts | 7 specs / 23 tests / 23.0 pts | 6 specs / 18 tests / 18.0 pts |
-| real-ui-e2e | 53 specs / 147 tests / 120.0 pts | 62 specs / 146 tests / 119.1 pts | 49 specs / 125 tests / 106.4 pts |
+| pipes | 6 specs / 19 tests / 19.0 pts | 7 specs / 24 tests / 24.0 pts | 6 specs / 19 tests / 19.0 pts |
+| real-ui-e2e | 53 specs / 148 tests / 121.0 pts | 62 specs / 147 tests / 120.1 pts | 49 specs / 126 tests / 107.4 pts |
 | settings | 14 specs / 37 tests / 34.0 pts | 16 specs / 32 tests / 27.7 pts | 13 specs / 29 tests / 26.0 pts |
 | storage-privacy | 9 specs / 39 tests / 30.3 pts | 9 specs / 25 tests / 24.1 pts | 6 specs / 18 tests / 17.1 pts |
-| tauri-command | 13 specs / 32 tests / 22.0 pts | 17 specs / 37 tests / 24.9 pts | 12 specs / 31 tests / 21.0 pts |
+| tauri-command | 14 specs / 33 tests / 23.0 pts | 18 specs / 38 tests / 25.9 pts | 13 specs / 32 tests / 22.0 pts |
 | window-lifecycle | 18 specs / 62 tests / 52.6 pts | 18 specs / 43 tests / 31.0 pts | 13 specs / 38 tests / 29.5 pts |
 
 ## Critical Feature Matrix
@@ -105,7 +105,7 @@ pass/fail/skip counts.
 | app-lifecycle.spec.ts | windows, macos, linux | real-ui-e2e, window-lifecycle | app-launch, home-navigation, webview-stability, route-churn, browser-storage | high | strong | mixed | 14 | Home webview, routing, reload, focus, resize, and storage stability. |
 | artifacts-api.spec.ts | windows, macos, linux | local-api | local-api-auth, artifacts | medium | strong | api | 7 | CRUD coverage for artifact registration, validation, unified listing, upsert, and delete. |
 | audio-fallback.spec.ts | macos | audio-device, settings, notifications | audio-device-health, settings-recording, notifications | medium | conditional | real-user-flow | 1 | Opt-in macOS cloud audio fallback seed. |
-| brain-overview.spec.ts | windows, macos, linux | real-ui-e2e, local-api, pipes | brain, brain-overview, brain-canvas, artifacts, pipes | high | strong | real-user-flow | 4 | Deletes the last dashboard at 800x600, scrolls to the final starter template, verifies the real local builder keeps its generated dashboard on review through save, and samples the native Canvas viewport across an AI-added Block focus to prove eased intermediate movement instead of a teleport. Also renders source-backed selectable and fixed-period Live Views, verifies dashboard switching stays available during refresh, omits fixed-period controls from view and Customize, exercises durable Canvas notes, connections, keyboard movement, navigation restore, deletion cleanup, and checks layout bounds from 800x600 through 1920x1080. |
+| brain-overview.spec.ts | windows, macos, linux | real-ui-e2e, local-api, pipes | brain, brain-overview, brain-canvas, artifacts, pipes | high | strong | real-user-flow | 5 | Deletes the last dashboard at 800x600, scrolls to the final starter template, verifies the real local builder keeps its generated dashboard on review through save, requires four AI-proposed Blocks to be visible on an empty Canvas before acceptance, and samples the native Canvas viewport across an AI-added Block focus to prove eased intermediate movement instead of a teleport. Also renders source-backed selectable and fixed-period Live Views, verifies dashboard switching stays available during refresh, omits fixed-period controls from view and Customize, exercises durable Canvas notes, connections, keyboard movement, navigation restore, deletion cleanup, and checks layout bounds from 800x600 through 1920x1080. |
 | brain-section.spec.ts | windows, macos, linux | real-ui-e2e | brain, artifacts, memories, viewer-deeplink | medium | strong | real-user-flow | 10 | Brain coverage for filters, search, delete flows, selection pruning, add memory, and inline artifact markdown preview. |
 | capture-frequency-floor.spec.ts | macos | capture-ocr, settings, real-ui-e2e | capture-ocr, settings-recording, restart-flow | high | conditional | real-user-flow | 1 | macOS fixed screenshot cadence regression: persists the 1s setting before immediate Apply & Restart, then verifies real capture attempts and frame writes. |
 | capture-loop-liveness.spec.ts | macos | capture-ocr, local-api, os-integration | app-launch, capture-ocr | high | conditional | api | 1 | Opt-in macOS fault injection wedges a visual-change probe; asserts the bounded probe keeps the capture loop and its /health heartbeat live (no false stale/incident). |
@@ -153,6 +153,7 @@ pass/fail/skip counts.
 | main-window.spec.ts | windows, macos, linux | window-lifecycle, tauri-command | window-lifecycle, main-window | medium | partial | command | 2 | Main window show/hide dedupe. |
 | meeting-apps-picker.spec.ts | windows, macos, linux | settings, real-ui-e2e | settings-recording, meeting-detector-ignored-apps | medium | strong | real-user-flow | 3 | Per-app meeting-detection ignore picker: open, toggle, count badge, persistence across reopen (#3882 / #3847). |
 | meeting-note-bottom-click.spec.ts | windows, macos, linux | real-ui-e2e, local-api | meeting-notes | high | strong | real-user-flow | 3 | Seeds and opens a long meeting note, checks editor shell click focus behavior, then clicks the bottom editor line. |
+| meeting-overlay-stream.spec.ts | windows, macos, linux | local-api, tauri-command | meeting-notes, meeting-overlay-stream | high | strong | mixed | 1 | Starts a real isolated meeting, verifies bounded snapshot plus deterministic delta/final transcript frames, and proves the stream clears on the authoritative stop edge. |
 | meeting-summary-recovery.spec.ts | windows, macos, linux | real-ui-e2e, local-api | meeting-notes, meeting-summary-recovery | high | strong | real-user-flow | 1 | Seeds an ended meeting through the isolated API and verifies persistent saved-audio retranscription, its replacement warning, and completed-summary rerun without launching hosted AI. |
 | meeting-workspace-tabs.spec.ts | windows, macos, linux | real-ui-e2e, local-api | meeting-notes | high | strong | real-user-flow | 1 | Seeds a meeting with notes and summary, switches persistent tabs, resizes to 640x560, checks footer separation and horizontal overflow, then captures a review screenshot. |
 | meetings-only-audio-lifecycle.spec.ts | windows, macos | audio-device, local-api, real-ui-e2e | meetings-only-audio-lifecycle, audio-device-health | high | conditional | real-user-flow | 1 | Opt-in real-audio lifecycle lane: configured devices stay closed outside meetings and open only across a manual meeting edge. |
