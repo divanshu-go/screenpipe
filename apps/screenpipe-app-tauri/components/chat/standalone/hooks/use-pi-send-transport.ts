@@ -5,9 +5,10 @@
 import { homeDir, join } from "@tauri-apps/api/path";
 import posthog from "posthog-js";
 import { toast } from "@/components/ui/use-toast";
-import { commands, type Result } from "@/lib/utils/tauri";
+import { commands, type PiInfo, type Result } from "@/lib/utils/tauri";
 import { isPlaceholderConversationTitle } from "@/lib/chat/message-rendering";
 import { buildProviderErrorPresentation, preflightChatProvider } from "@/lib/chat/provider-errors";
+import { isAcpAuthenticationCancelledError, isAcpExternalAuthError } from "@/lib/chat/auth-errors";
 import { queuedPreviewForText } from "@/lib/chat/queued-display";
 import { useChatStore } from "@/lib/stores/chat-store";
 import { createPiMessageQueueTransport } from "@/components/chat/standalone/hooks/use-pi-message-queue-transport";
@@ -27,6 +28,52 @@ import {
 import type { ChatSendOptions, Message } from "@/lib/chat/types";
 import { chatSendTelemetryContext } from "@/lib/chat/response-feedback";
 import type { PiSendTransportOptions } from "@/components/chat/standalone/hooks/pi-types";
+
+type LivePiSessionCheck =
+  | { running: true; info: PiInfo }
+  // `indeterminate` = the piInfo query itself failed/threw, so liveness is
+  // unknown (transient IPC race), as opposed to a definitive "not running".
+  // Callers must not hard-abort a send on an indeterminate result.
+  | { running: false; error: string; indeterminate: boolean };
+
+export async function awaitPendingPiPresetSwitch(
+  promiseRef: { current: Promise<void> | null },
+): Promise<void> {
+  const pendingSwitch = promiseRef.current;
+  if (pendingSwitch) await pendingSwitch;
+}
+
+/** Read the process manager instead of trusting the render-time `piInfo`. */
+export async function checkLivePiSession(
+  sessionId: string,
+  setPiInfo: (info: PiInfo | null) => void,
+  readPiInfo: (sessionId: string) => Promise<Result<PiInfo, string>> = commands.piInfo,
+): Promise<LivePiSessionCheck> {
+  try {
+    const result = await readPiInfo(sessionId);
+    if (result.status !== "ok") {
+      // Query failed — we could not determine liveness. Don't claim the
+      // session is down; mark indeterminate so callers don't hard-abort.
+      return {
+        running: false,
+        error: result.error || "Could not check the AI assistant",
+        indeterminate: true,
+      };
+    }
+    setPiInfo(result.data);
+    if (!result.data.running) {
+      // Definitive: the backend says the process is not running.
+      return { running: false, error: "The AI assistant is not running", indeterminate: false };
+    }
+    return { running: true, info: result.data };
+  } catch (error) {
+    return {
+      running: false,
+      error: error instanceof Error ? error.message : String(error),
+      indeterminate: true,
+    };
+  }
+}
 
 export function usePiSendTransport(options: PiSendTransportOptions) {
   const {
@@ -50,7 +97,6 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     piActiveStopRequestedRef,
     piContentBlocksRef,
     piCrashCountRef,
-    piInfo,
     piMessageIdRef,
     piPresetSwitchPromiseRef,
     piRateLimitRetries,
@@ -174,9 +220,36 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     sendOptions?: ChatSendOptions,
   ) {
     clearPendingSteerTransportState();
+    // Capture the attempt up front so it survives a failed ACP start — the
+    // "switch to default" sign-in card resends this message on the new preset.
+    lastUserMessageRef.current = userMessage;
 
-    // Auto-start Pi if it's not running yet (new session or crash recovery)
-    if (!piInfo?.running) {
+    // A selector change may be in the narrow gap before React disables the
+    // composer. Wait for it here as the authoritative boundary. Rejections
+    // (including "not now" during ACP authentication) abort this send before
+    // a user bubble is persisted or a provider receives the prompt.
+    try {
+      await awaitPendingPiPresetSwitch(piPresetSwitchPromiseRef);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!isAcpAuthenticationCancelledError(message) && !isAcpExternalAuthError(message)) {
+        toast({
+          title: "could not switch AI assistant",
+          description: message,
+          variant: "destructive",
+        });
+      }
+      return;
+    }
+
+    // React's `piInfo` may still describe the process from before a completed
+    // preset switch. Ask the process manager first so a successful switch is
+    // not immediately started a second time, and a failed one cannot reuse the
+    // stale provider.
+    let liveSession = await checkLivePiSession(piSessionIdRef.current, setPiInfo);
+
+    // Auto-start Pi if it is actually not running (new session or recovery).
+    if (!liveSession.running) {
       if (piStartInFlightRef.current) {
         if (!autoSendBypassRef.current) {
           toast({ title: "Pi starting", description: "Please wait a moment", variant: "destructive" });
@@ -199,7 +272,11 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
         const activeP = getActivePreset();
         const allPresets = settings.aiPresets ?? [];
         const fallbackPresets = allPresets.filter(
-          (p) => p.id !== activeP?.id && p.model && p.model.trim() !== "",
+          (p) =>
+            p.id !== activeP?.id &&
+            p.provider !== "acp" &&
+            p.model &&
+            p.model.trim() !== "",
         );
         const presetsToTry = activeP ? [activeP, ...fallbackPresets] : [...fallbackPresets];
 
@@ -265,12 +342,50 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
                 started = true;
                 break;
               } else {
-                lastError = result.status === "error" ? result.error ?? "Unknown error" : "Unknown error";
+                lastError = result.status === "error"
+                  ? result.error ?? "Unknown error"
+                  : result.data.startupError ?? "Unknown error";
                 console.warn(`[Pi] Preset "${preset.id}" (${providerConfig.provider}) failed: ${lastError}`);
+                if (
+                  providerConfig.backend === "acp"
+                ) {
+                  // An ACP selection is an explicit harness boundary. Never
+                  // fall through and send its prompt through another provider.
+                  // Auth-cancel and CLI-login-required both render their own
+                  // in-chat card — don't also fire a destructive toast.
+                  if (
+                    !isAcpAuthenticationCancelledError(lastError) &&
+                    !isAcpExternalAuthError(lastError)
+                  ) {
+                    toast({
+                      title: `failed to start AI assistant (${preset.id})`,
+                      description: lastError,
+                      variant: "destructive",
+                    });
+                  }
+                  return;
+                }
               }
             } catch (e) {
               lastError = String(e);
               console.warn(`[Pi] Preset "${preset.id}" (${providerConfig.provider}) threw: ${lastError}`);
+                if (
+                  providerConfig.backend === "acp"
+                ) {
+                  // Auth-cancel and CLI-login-required both render their own
+                  // in-chat card — don't also fire a destructive toast.
+                  if (
+                    !isAcpAuthenticationCancelledError(lastError) &&
+                    !isAcpExternalAuthError(lastError)
+                  ) {
+                    toast({
+                      title: `failed to start AI assistant (${preset.id})`,
+                      description: lastError,
+                      variant: "destructive",
+                    });
+                  }
+                  return;
+                }
             }
           }
 
@@ -292,8 +407,20 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
       }
     }
 
-    if (piPresetSwitchPromiseRef.current) {
-      await piPresetSwitchPromiseRef.current;
+    // Verify once more after a possible start/wait immediately before mutating
+    // chat state or dispatching the prompt. Only hard-abort on a DEFINITIVE
+    // not-running; if the liveness query itself failed (indeterminate, e.g. a
+    // transient IPC race), proceed with the send — the backend command surfaces
+    // a real error if the process is genuinely gone, rather than dropping a send
+    // that would have worked.
+    liveSession = await checkLivePiSession(piSessionIdRef.current, setPiInfo);
+    if (!liveSession.running && !liveSession.indeterminate) {
+      toast({
+        title: "AI assistant is not ready",
+        description: liveSession.error,
+        variant: "destructive",
+      });
+      return;
     }
 
     await interruptActivePiTurn();
