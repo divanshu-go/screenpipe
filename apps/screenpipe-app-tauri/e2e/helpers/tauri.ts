@@ -45,10 +45,7 @@ export async function invoke<T = unknown>(
       };
       const inv = g.__TAURI__?.core?.invoke ?? g.__TAURI_INTERNALS__?.invoke;
       if (!inv) {
-        done({
-          ok: false,
-          error: "Tauri invoke not available in this context",
-        });
+        done({ ok: false, error: "Tauri invoke not available in this context" });
         return;
       }
       void inv(command, params)
