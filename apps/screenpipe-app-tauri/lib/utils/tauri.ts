@@ -486,6 +486,9 @@ async getActiveDataDir() : Promise<Result<string, string>> {
 async getAppIdentifier() : Promise<string> {
     return await TAURI_INVOKE("get_app_identifier");
 },
+async getAppScreenCaptureProtection() : Promise<ScreenCaptureProtectionStatus> {
+    return await TAURI_INVOKE("get_app_screen_capture_protection");
+},
 /**
  * Get the app-local focus/notification server port.
  */
@@ -2024,6 +2027,20 @@ async setApiAuthKey(key: string) : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+/**
+ * Apply the user's preference immediately to every currently-live webview.
+ * Persistence remains owned by the settings store; accepting the value here
+ * avoids a read-after-write race between the frontend store and native window
+ * APIs when the switch is clicked.
+ */
+async setAppScreenCaptureProtection(hidden: boolean) : Promise<Result<ScreenCaptureProtectionStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_app_screen_capture_protection", { hidden }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async setAutostart(enabled: boolean) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("set_autostart", { enabled }) };
@@ -2969,6 +2986,7 @@ endTime: string;
  */
 recordMode: string }
 export type SchedulerStatus = { running: boolean; last_sync: string | null; last_error: string | null }
+export type ScreenCaptureProtectionStatus = { requestedHidden: boolean; effectiveHidden: boolean; platformSupported: boolean; e2EBypass: boolean; windowLabels: string[] }
 /**
  * Which AI projection to build from the existing screen/accessibility stream.
  *
@@ -3565,6 +3583,11 @@ overlayMode?: string;
  * Disabled by default so the overlay doesn't appear in screenpipe's own recordings.
  */
 showOverlayInScreenRecording?: boolean;
+/**
+ * Hide screenpipe windows from screenshots and screen-sharing viewers
+ * while keeping them visible and interactive on the user's own display.
+ */
+hideAppInScreenShare?: boolean;
 /**
  * When true, the chat window stays above all other windows (default: true).
  */

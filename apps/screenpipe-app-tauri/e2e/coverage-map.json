@@ -93,7 +93,7 @@
     },
     {
       "id": "settings-recording",
-      "label": "Recording settings UX",
+      "label": "Screen and audio settings UX",
       "platforms": [
         "windows",
         "macos",
@@ -102,6 +102,12 @@
       "layers": [
         "settings"
       ]
+    },
+    {
+      "id": "screen-share-privacy",
+      "label": "Screen-share window privacy preference",
+      "platforms": ["windows", "macos"],
+      "layers": ["settings", "tauri-command"]
     },
     {
       "id": "settings-ai",
@@ -1721,6 +1727,7 @@
       ],
       "features": [
         "settings-recording",
+        "screen-share-privacy",
         "settings-ai",
         "settings-privacy-api-auth",
         "settings-permissions",
@@ -1731,7 +1738,7 @@
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "Settings sections, AI preset/preferences split and toggle flows, default-off low-disk capture stop with persistent notification, storage, privacy, macOS-only permissions recovery hub (asserted absent on Windows/Linux), and rapid switching crash guard."
+      "notes": "Separate Screen and Audio & meetings destinations, persisted screen-share privacy toggle with native-status readback, AI preset/preferences split and toggle flows, low-disk capture stop with persistent notification, storage, privacy, macOS-only permissions recovery hub (asserted absent on Windows/Linux), and rapid switching crash guard."
     },
     {
       "spec": "spotlight-exclusion.spec.ts",
@@ -1976,6 +1983,7 @@
         "home-search",
         "timeline",
         "settings-recording",
+        "screen-share-privacy",
         "meeting-notes",
         "shortcut-reminder",
         "notifications",
@@ -1985,7 +1993,7 @@
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "Windows-first real UX journey across search, timeline, settings, meetings, notifications, storage, and privacy."
+      "notes": "Windows-first real UX journey across search, timeline, separate screen/audio settings, meetings, notifications, storage, and privacy."
     },
     {
       "spec": "zz-owned-browser-background-nav.spec.ts",

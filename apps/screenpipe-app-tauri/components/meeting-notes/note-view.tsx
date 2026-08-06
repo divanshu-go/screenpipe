@@ -1956,10 +1956,10 @@ function AudioHealthButton({
   const [open, setOpen] = useState(false);
   const anyAudioActive = isLive && (inputActive || outputActive);
 
-  const openRecordingSettings = () => {
+  const openAudioSettings = () => {
     window.dispatchEvent(
       new CustomEvent("open-settings", {
-        detail: { section: "recording" },
+        detail: { section: "audio" },
       }),
     );
   };
@@ -2003,10 +2003,10 @@ function AudioHealthButton({
           </div>
           <button
             type="button"
-            onClick={openRecordingSettings}
+            onClick={openAudioSettings}
             className="flex h-7 w-7 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
-            title="open recording settings"
-            aria-label="open recording settings"
+            title="open audio settings"
+            aria-label="open audio settings"
           >
             <ExternalLink className="h-3.5 w-3.5" />
           </button>
