@@ -6,9 +6,9 @@ and layer declared in the manifest, weighted by confidence and criticality.
 
 - Manifest: `e2e/coverage-map.json`
 - Specs directory: `e2e/specs`
-- Mapped specs: 99
-- Declared test blocks: 270
-- Weighted coverage points: 209.7
+- Mapped specs: 100
+- Declared test blocks: 271
+- Weighted coverage points: 210.4
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -19,9 +19,9 @@ can execute more runtime cases than this number shows.
 
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
-| windows | 77 | 232 | 189.2 | 15 | 79 | 91% |
-| macos | 95 | 233 | 180.5 | 17 | 81 | 89% |
-| linux | 67 | 192 | 159.0 | 14 | 74 | 88% |
+| windows | 78 | 233 | 189.9 | 15 | 79 | 91% |
+| macos | 96 | 234 | 181.2 | 17 | 81 | 89% |
+| linux | 68 | 193 | 159.7 | 14 | 74 | 88% |
 
 ## Runtime Results
 
@@ -37,7 +37,7 @@ pass/fail/skip counts.
 | auth | - | 1 specs / 1 tests / 1.0 pts | - |
 | billing | 4 specs / 6 tests / 5.7 pts | 4 specs / 6 tests / 5.7 pts | 4 specs / 6 tests / 5.7 pts |
 | capture-ocr | 2 specs / 16 tests / 6.4 pts | 7 specs / 11 tests / 4.4 pts | 1 specs / 3 tests / 1.2 pts |
-| chat-ai | 23 specs / 37 tests / 28.1 pts | 32 specs / 56 tests / 39.7 pts | 22 specs / 36 tests / 27.6 pts |
+| chat-ai | 24 specs / 38 tests / 28.8 pts | 33 specs / 57 tests / 40.4 pts | 23 specs / 37 tests / 28.3 pts |
 | entitlement | - | 1 specs / 1 tests / 1.0 pts | - |
 | local-api | 21 specs / 106 tests / 88.8 pts | 25 specs / 90 tests / 76.4 pts | 17 specs / 77 tests / 68.2 pts |
 | notifications | 4 specs / 25 tests / 16.3 pts | 3 specs / 5 tests / 3.4 pts | 2 specs / 4 tests / 3.1 pts |
@@ -134,6 +134,7 @@ pass/fail/skip counts.
 | chat-source-file-preview.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat | medium | strong | real-user-flow | 1 | Clicking a chat file source opens it in the preview sidebar with rendered markdown + syntax-highlighted code. |
 | chat-stop-midturn.spec.ts | macos | chat-ai | chat | high | conditional | synthetic | 2 | Stop on a live turn against a real Pi subprocess: abort mid-stream then send again (no ghost turn or hang), and two overlapping Stops followed by a clean send. Queue lifecycle regression for the request-id correlation refactor. |
 | chat-streaming-performance.spec.ts | macos | chat-ai, performance | chat, chat-streaming | medium | conditional | performance | 2 | macOS-only chat streaming responsiveness. |
+| chat-stuck-queue-guard.spec.ts | windows, macos, linux | chat-ai | chat | high | partial | synthetic | 1 | A turn that ends while the panel does not own the session on the agent-event bus must still release the composer dispatch guards and must not duplicate the user message; regression for the stuck 'analyzing…' chat whose later messages all piled into QUEUED. |
 | chat-subagent-async-completion.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e, tauri-command | chat | high | strong | real-user-flow | 1 | Verifies an asynchronous subagent completion appears as a second assistant turn after the original answer settles. |
 | chat-switch-context-loss.spec.ts | windows, macos, linux | chat-ai | chat, chat-context | medium | partial | synthetic | 1 | Switching conversations during streaming must not corrupt state. |
 | chat-tool-activity.spec.ts | windows, macos, linux | chat-ai, real-ui-e2e | chat, chat-tools, pi-tool-activity, progressive-disclosure | high | strong | mixed | 4 | Mixed Python, JavaScript, Screenpipe API, file, test, recovered-error, and optional live Pi tool flows stay collapsed by default, expose only friendly activity on first expansion, keep completed tools active while the shared Pi turn is still streaming, and capture screenshots. |

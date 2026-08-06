@@ -587,3 +587,62 @@ describe("pi-event-router: live tool output", () => {
     expect(tool.progress.length).toBe(4000);
   });
 });
+
+describe("pi-event-router: user echo does not duplicate the optimistic bubble", () => {
+  beforeEach(reset);
+
+  // Regression: the panel appends its own `[user, "Processing..."]` pair the
+  // moment the user hits send. When ownership moves to this router after that
+  // — a chat switch mid-turn, or the gap before the panel's foreground handler
+  // is registered — Pi echoes the same prompt as `message_start(role=user)`.
+  // The router used to materialize that echo unconditionally, so the user's
+  // message appeared TWICE; on switch-back the duplicated transcript won the
+  // merge because `snapshotSession` keeps the longer array.
+  it("adopts the existing placeholder instead of appending a second user message", async () => {
+    seed("A", {
+      messages: [
+        { id: "u1", role: "user", content: "hello", timestamp: 1 },
+        { id: "a1", role: "assistant", content: "Processing...", timestamp: 2 },
+      ],
+      messageCount: 2,
+    });
+    useChatStore.setState({ currentId: "B" });
+
+    await handlePiEvent(
+      piEvt("A", {
+        type: "message_start",
+        message: { role: "user", content: "hello" },
+      } as AgentInnerEvent),
+    );
+
+    const session = useChatStore.getState().sessions.A;
+    expect(session.messages).toHaveLength(2);
+    expect(session.messages?.filter((m) => m.role === "user")).toHaveLength(1);
+    // The echo still opens the turn — it just reuses the placeholder the panel
+    // already rendered rather than creating a second one.
+    expect(session.streamingMessageId).toBe("a1");
+    expect(session.isStreaming).toBe(true);
+  });
+
+  it("still materializes a genuinely new queued turn", async () => {
+    seed("A", {
+      messages: [
+        { id: "u1", role: "user", content: "hello", timestamp: 1 },
+        { id: "a1", role: "assistant", content: "hi there", timestamp: 2 },
+      ],
+      messageCount: 2,
+    });
+    useChatStore.setState({ currentId: "B" });
+
+    await handlePiEvent(
+      piEvt("A", {
+        type: "message_start",
+        message: { role: "user", content: "a different follow-up" },
+      } as AgentInnerEvent),
+    );
+
+    const session = useChatStore.getState().sessions.A;
+    expect(session.messages).toHaveLength(4);
+    expect(session.messages?.filter((m) => m.role === "user")).toHaveLength(2);
+  });
+});
