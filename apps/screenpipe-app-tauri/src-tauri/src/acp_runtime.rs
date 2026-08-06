@@ -1137,29 +1137,56 @@ impl RuntimeState {
             .unwrap_or_default();
         match kind {
             "agent_message_chunk" => {
-                self.close_thought_locked(&mut turn);
-                self.ensure_turn_locked(&mut turn);
-                if let Some(delta) = content_text(update.get("content")) {
-                    self.output.send(json!({
-                        "type": "message_update",
-                        "assistantMessageEvent": { "type": "text_delta", "delta": delta }
-                    }));
+                // Subagent text rides on its launching Task via parentToolUseId;
+                // attach it to that tool row as streamed output instead of
+                // letting it pollute the assistant's own message.
+                if let Some(parent) = parent_tool_call_id(&update) {
+                    if let Some(delta) = content_text(update.get("content")) {
+                        self.output.send(json!({
+                            "type": "tool_execution_progress",
+                            "toolCallId": parent,
+                            "outputDelta": delta,
+                            "subagentTranscript": true
+                        }));
+                    }
+                } else {
+                    self.close_thought_locked(&mut turn);
+                    self.ensure_turn_locked(&mut turn);
+                    if let Some(delta) = content_text(update.get("content")) {
+                        self.output.send(json!({
+                            "type": "message_update",
+                            "assistantMessageEvent": { "type": "text_delta", "delta": delta }
+                        }));
+                    }
                 }
             }
             "agent_thought_chunk" => {
-                self.ensure_turn_locked(&mut turn);
-                if !turn.thought_open {
-                    turn.thought_open = true;
-                    self.output.send(json!({
-                        "type": "message_update",
-                        "assistantMessageEvent": { "type": "thinking_start" }
-                    }));
-                }
-                if let Some(delta) = content_text(update.get("content")) {
-                    self.output.send(json!({
-                        "type": "message_update",
-                        "assistantMessageEvent": { "type": "thinking_delta", "delta": delta }
-                    }));
+                // Subagent thinking likewise nests under its Task row.
+                if let Some(parent) = parent_tool_call_id(&update) {
+                    if let Some(delta) = content_text(update.get("content")) {
+                        self.output.send(json!({
+                            "type": "tool_execution_progress",
+                            "toolCallId": parent,
+                            "outputDelta": delta,
+                            "subagentTranscript": true,
+                            "thinking": true
+                        }));
+                    }
+                } else {
+                    self.ensure_turn_locked(&mut turn);
+                    if !turn.thought_open {
+                        turn.thought_open = true;
+                        self.output.send(json!({
+                            "type": "message_update",
+                            "assistantMessageEvent": { "type": "thinking_start" }
+                        }));
+                    }
+                    if let Some(delta) = content_text(update.get("content")) {
+                        self.output.send(json!({
+                            "type": "message_update",
+                            "assistantMessageEvent": { "type": "thinking_delta", "delta": delta }
+                        }));
+                    }
                 }
             }
             "plan" => {
@@ -1210,6 +1237,10 @@ impl RuntimeState {
                 if let Some(parent) = parent_tool_call_id(&update) {
                     start["parentToolCallId"] = json!(parent);
                 }
+                // The Task/Agent call itself is the subagent container.
+                if is_subagent_call(&update) {
+                    start["subagent"] = json!(true);
+                }
                 self.output.send(start);
                 if update_status_finished(&update) {
                     finish_tool(&self.output, &id, &update);
@@ -1242,6 +1273,9 @@ impl RuntimeState {
                     });
                     if let Some(parent) = parent_tool_call_id(&merged) {
                         start["parentToolCallId"] = json!(parent);
+                    }
+                    if is_subagent_call(&merged) {
+                        start["subagent"] = json!(true);
                     }
                     self.output.send(start);
                 }
@@ -1462,6 +1496,27 @@ fn tool_content_item_text(item: &Value) -> Option<String> {
         }
         _ => serde_json::to_string(item).ok(),
     }
+}
+
+/// The client `_meta` that opts into nested subagent transcripts. Advertised on
+/// `clientCapabilities._meta`; agents that don't know the key ignore it and keep
+/// the flattened fallback.
+fn subagent_transcript_capability() -> serde_json::Map<String, Value> {
+    let mut meta = serde_json::Map::new();
+    meta.insert("subagent-transcript".to_owned(), Value::Bool(true));
+    meta
+}
+
+/// True when a tool call is the launch of a subagent (Claude Code stamps
+/// `_meta.claudeCode.subagent = true` on the Agent/Task call), so the chat can
+/// mark it as a container for the nested transcript beneath it.
+fn is_subagent_call(update: &Value) -> bool {
+    update
+        .get("_meta")
+        .and_then(|meta| meta.get("claudeCode"))
+        .and_then(|claude| claude.get("subagent"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 /// Parent Task linkage for subagent child tool calls. Claude Code stamps
@@ -2843,7 +2898,16 @@ async fn run_protocol(
                                         SessionConfigOptionsCapabilities::new()
                                             .boolean(BooleanConfigOptionCapabilities::new()),
                                     ),
-                                ),
+                                )
+                                // Opt into nested subagent transcripts. ACP 1.2
+                                // has no standard for this, so it rides on _meta:
+                                // Claude Code then forwards a subagent's text,
+                                // thinking, and tool calls related to the
+                                // launching Task via
+                                // _meta.claudeCode.parentToolUseId, instead of
+                                // flattening (and dropping the subagent's text)
+                                // into the main turn.
+                                .meta(subagent_transcript_capability()),
                         )
                         .client_info(
                             Implementation::new("screenpipe", env!("CARGO_PKG_VERSION"))
@@ -3946,6 +4010,69 @@ mod tests {
         }));
         let events = output.drain();
         assert!(events_of_type(&events, "tool_execution_start").is_empty());
+    }
+
+    #[test]
+    fn advertises_and_detects_the_subagent_transcript_capability() {
+        let meta = subagent_transcript_capability();
+        assert_eq!(meta.get("subagent-transcript"), Some(&json!(true)));
+        assert!(is_subagent_call(
+            &json!({ "_meta": { "claudeCode": { "subagent": true } } })
+        ));
+        assert!(!is_subagent_call(&json!({ "_meta": { "claudeCode": {} } })));
+        assert!(!is_subagent_call(&json!({})));
+    }
+
+    #[test]
+    fn subagent_text_nests_under_its_task_not_the_main_message() {
+        let output = ParentOutput::buffer();
+        let state = test_state(&output);
+        // Subagent text carries parentToolUseId → attach to the Task row.
+        state.handle_update(json!({
+            "sessionUpdate": "agent_message_chunk",
+            "content": { "type": "text", "text": "searching the codebase" },
+            "_meta": { "claudeCode": { "parentToolUseId": "task_1" } }
+        }));
+        let events = output.drain();
+        let progress = events_of_type(&events, "tool_execution_progress");
+        assert_eq!(progress.len(), 1);
+        assert_eq!(progress[0]["toolCallId"], json!("task_1"));
+        assert_eq!(progress[0]["outputDelta"], json!("searching the codebase"));
+        assert_eq!(progress[0]["subagentTranscript"], json!(true));
+        assert!(
+            events_of_type(&events, "message_update").is_empty(),
+            "subagent text must not land in the main assistant message"
+        );
+
+        // Top-level assistant text (no parent) still streams to the main message.
+        state.handle_update(json!({
+            "sessionUpdate": "agent_message_chunk",
+            "content": { "type": "text", "text": "here is the summary" }
+        }));
+        let events = output.drain();
+        assert!(events_of_type(&events, "message_update").iter().any(|e| {
+            e["assistantMessageEvent"]["type"] == json!("text_delta")
+                && e["assistantMessageEvent"]["delta"] == json!("here is the summary")
+        }));
+        assert!(events_of_type(&events, "tool_execution_progress").is_empty());
+    }
+
+    #[test]
+    fn subagent_task_call_is_marked_as_a_container() {
+        let output = ParentOutput::buffer();
+        let state = test_state(&output);
+        state.handle_update(json!({
+            "sessionUpdate": "tool_call",
+            "toolCallId": "task_1",
+            "title": "Task",
+            "kind": "other",
+            "status": "in_progress",
+            "_meta": { "claudeCode": { "subagent": true } }
+        }));
+        let events = output.drain();
+        let starts = events_of_type(&events, "tool_execution_start");
+        assert_eq!(starts.len(), 1);
+        assert_eq!(starts[0]["subagent"], json!(true));
     }
 
     #[test]
