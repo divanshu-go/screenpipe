@@ -1263,17 +1263,22 @@ impl RuntimeState {
                 let first_sighting = !id.is_empty() && !turn.active_tools.contains_key(&id);
                 let merged = merge_json(turn.active_tools.get(&id), &update);
                 turn.active_tools.insert(id.clone(), merged.clone());
-                if first_sighting {
+                // Synthesize a start ONLY for a subagent child: it carries
+                // parentToolUseId and its opening tool_call is never sent, so
+                // without this it would not render. Every other agent (Cursor,
+                // Copilot, Codex, ...) keeps the original pass-through — a
+                // first-seen update with no start flows to the normal
+                // finish/progress paths — so we never fabricate a nameless row
+                // for a non-subagent tool that just streamed an update.
+                if first_sighting && parent_tool_call_id(&merged).is_some() {
                     let mut start = json!({
                         "type": "tool_execution_start",
                         "toolCallId": id,
                         "toolName": tool_name(&merged),
                         "kind": tool_kind(&merged),
-                        "args": tool_args(&merged)
+                        "args": tool_args(&merged),
+                        "parentToolCallId": parent_tool_call_id(&merged)
                     });
-                    if let Some(parent) = parent_tool_call_id(&merged) {
-                        start["parentToolCallId"] = json!(parent);
-                    }
                     if is_subagent_call(&merged) {
                         start["subagent"] = json!(true);
                     }
@@ -4026,6 +4031,42 @@ mod tests {
         }));
         let events = output.drain();
         assert!(events_of_type(&events, "tool_execution_start").is_empty());
+    }
+
+    #[test]
+    fn non_subagent_first_seen_update_does_not_synthesize_a_row() {
+        // A first-seen tool_call_update WITHOUT a subagent parent (Cursor,
+        // Copilot, Codex streaming an update for a tool whose start we did not
+        // get) must NOT fabricate a nameless start — that path is subagent-only,
+        // so these agents keep their original behavior.
+        let output = ParentOutput::buffer();
+        let state = test_state(&output);
+        state.handle_update(json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "cursor_tool_1",
+            "title": "shell",
+            "_meta": { "terminal_output_delta": { "data": "building...\n" } }
+        }));
+        let events = output.drain();
+        assert!(
+            events_of_type(&events, "tool_execution_start").is_empty(),
+            "no start should be synthesized for a non-subagent update"
+        );
+        let progress = events_of_type(&events, "tool_execution_progress");
+        assert_eq!(progress.len(), 1);
+        assert_eq!(progress[0]["outputDelta"], json!("building...\n"));
+
+        // A completed non-subagent first-seen update still finishes with its
+        // result, exactly as before, and still synthesizes no start.
+        state.handle_update(json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "cursor_tool_2",
+            "status": "completed",
+            "content": [{ "type": "text", "text": "done" }]
+        }));
+        let events = output.drain();
+        assert!(events_of_type(&events, "tool_execution_start").is_empty());
+        assert_eq!(events_of_type(&events, "tool_execution_end").len(), 1);
     }
 
     #[test]
