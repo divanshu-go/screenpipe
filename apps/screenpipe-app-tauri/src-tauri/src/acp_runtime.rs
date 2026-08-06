@@ -269,7 +269,7 @@ impl RuntimeConfig {
 /// core screenpipe search server, and points at the seeded `.pi/skills` guides
 /// that third-party agents otherwise only find by chance.
 const SCREENPIPE_TOOLS_HINT: &str = "\
-You are running inside screenpipe. Prefer its MCP tools over shell/curl (this is your usage guide):
+You are running inside screenpipe. Prefer its MCP tools over shell/curl (this is your usage guide). Tool names below are written with hyphens; some agents expose the same tools with underscores (activity_summary, search_content) or a query_recordings tool for read-only SQL — use whatever your own tool list shows, and never fall back to curl or /raw_sql just because a name here doesn't match exactly:
 - the `screenpipe` server searches and summarizes the user's screen, audio, and UI history.
   - `activity-summary` for broad questions (\"what was I doing?\", \"which apps?\", \"how long on X?\"): it pre-summarizes apps, windows, and transcripts and owns the time math — pass natural-language times (\"today\", \"2h ago\") and never sum minutes yourself.
   - `search-content` for specific lookups; filter by content_type, app_name, window_name, and a time range.
