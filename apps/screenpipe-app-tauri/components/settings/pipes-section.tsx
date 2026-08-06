@@ -69,6 +69,7 @@ import { ChatPrefillData } from "@/lib/chat-utils";
 import { commands } from "@/lib/utils/tauri";
 import { cn } from "@/lib/utils";
 import { describeSchedule, type ScheduleConfig } from "@/lib/utils/schedule-builder";
+import { formatNextRun } from "@/lib/utils/schedule-format";
 import {
   PipeActivityIndicator,
   formatPipeElapsed,
@@ -618,6 +619,10 @@ interface PipeStatus {
   installed_version?: number;
   locally_modified?: boolean;
   execution_count?: number;
+  /** When the engine will next fire this pipe (RFC3339), or absent when it
+   *  never will. Computed engine-side from the same schedule and last-run
+   *  anchor the scheduler uses, so it cannot drift from real behaviour. */
+  next_run?: string | null;
 }
 
 interface PipeRunLog {
@@ -2584,15 +2589,29 @@ export function PipesSection() {
                   : lastExec?.started_at
                     ? `ran ${relativeTime(lastExec.started_at)}`
                     : "never run";
+              // Forward-looking, and only while auto-run is on — a countdown
+              // beside a paused task would promise a run that isn't coming.
+              const nextRunLabel = pipe.config.enabled
+                ? formatNextRun(pipe.next_run)
+                : null;
               // The row gets exactly one status token, in priority order —
               // never stacked. "paused" outranks the last run because the
               // schedule beside it ("hourly", "daily · 5 PM") otherwise
               // promises runs that will never happen: auto-run is off.
+              //
+              // A failure outranks the countdown: "next run in 7m" beside a
+              // broken pipe reads as healthy, and silently-failing automations
+              // are the thing users actually get burned by. Healthy pipes get
+              // the forward-looking answer to "when does this run again?".
               const lastRunSummary = isRunning
                 ? `running ${runningLabel ?? "now"}`
                 : !pipe.config.enabled
                   ? "paused"
-                  : lastRunFact;
+                  : lastStatus === "error"
+                    ? lastRunFact
+                    : nextRunLabel
+                      ? `next run ${nextRunLabel}`
+                      : lastRunFact;
               const description =
                 typeof pipe.config.description === "string" &&
                 (pipe.config.description as string).trim()
@@ -2744,6 +2763,14 @@ export function PipesSection() {
                       ) : (
                         <span className="font-mono text-xs text-muted-foreground">
                           {lastRunFact}
+                        </span>
+                      )}
+                      {/* The detail has room for both halves of the answer, so
+                          the countdown adds to the last-run fact here instead
+                          of replacing it as it does in the row. */}
+                      {!isRunning && nextRunLabel && (
+                        <span className="font-mono text-xs text-muted-foreground">
+                          · next run {nextRunLabel}
                         </span>
                       )}
                       {/* Team sharing badges */}

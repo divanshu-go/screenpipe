@@ -68,6 +68,33 @@ export function humanizeDow(dow: string): string {
   return order.filter((d) => set.has(d)).map((d) => short[d]).join(", ");
 }
 
+/**
+ * Compact countdown to a future instant: "in 7m", "in 3h", "in 2d", "in 3w".
+ *
+ * Rounds up, so a slot 30 seconds out reads "in 1m" rather than the misleading
+ * "in 0m". Anything already due — the engine returns past instants for pipes
+ * the next scheduler tick will pick up — collapses to "due now" instead of a
+ * negative duration. Returns null for a missing or unparseable timestamp so
+ * callers can fall back to backward-looking status.
+ */
+export function formatNextRun(
+  iso: string | null | undefined,
+  now: Date = new Date(),
+): string | null {
+  if (!iso) return null;
+  const target = new Date(iso).getTime();
+  if (Number.isNaN(target)) return null;
+
+  const minutes = Math.ceil((target - now.getTime()) / 60_000);
+  if (minutes <= 0) return "due now";
+  if (minutes < 60) return `in ${minutes}m`;
+  const hours = Math.ceil(minutes / 60);
+  if (hours < 24) return `in ${hours}h`;
+  const days = Math.ceil(hours / 24);
+  if (days < 7) return `in ${days}d`;
+  return `in ${Math.ceil(days / 7)}w`;
+}
+
 /** Convert a raw schedule string to a short human-readable label. */
 export function humanizeSchedule(schedule: string | undefined): string {
   if (!schedule || schedule === "manual") return "manual";
