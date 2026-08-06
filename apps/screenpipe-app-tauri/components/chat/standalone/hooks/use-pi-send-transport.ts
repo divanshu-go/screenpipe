@@ -176,11 +176,22 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
   ) {
     clearPendingSteerTransportState();
 
+    // Acknowledge the send in the same frame it was dispatched. The Home
+    // cards are gated on `!isLoading` and the active-turn loader on
+    // `isLoading`, but the real user bubble is only appended ~130 lines
+    // below — behind an unbounded preflight (Pi auto-start with its 5s
+    // ChatGPT token pre-check, a pending preset switch, and the interrupt of
+    // any active turn). Until this flag flips, a card click leaves the grid
+    // sitting there untouched, so the click reads as ignored for as long as
+    // the preflight takes. Every abort and throw below restores it.
+    setIsLoading(true);
+
     // Auto-start Pi if it's not running yet (new session or crash recovery)
     if (!piInfo?.running) {
       if (piStartInFlightRef.current) {
         if (!autoSendBypassRef.current) {
           toast({ title: "Pi starting", description: "Please wait a moment", variant: "destructive" });
+          setIsLoading(false);
           return;
         }
         // Prefill auto-send: wait for in-flight start to complete
@@ -188,7 +199,10 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
         while (piStartInFlightRef.current && Date.now() - startWait < 10000) {
           await new Promise(r => setTimeout(r, 300));
         }
-        if (piStartInFlightRef.current) return; // timed out
+        if (piStartInFlightRef.current) {
+          setIsLoading(false);
+          return; // timed out
+        }
       } else {
         console.log("[Pi] Not running, auto-starting before sending message");
         piStartInFlightRef.current = true;
@@ -283,8 +297,15 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
                 : lastError,
               variant: "destructive",
             });
+            setIsLoading(false);
             return;
           }
+        } catch (e) {
+          // A throw here (project dir, token check, piStart) aborts the send
+          // before any turn exists. Without this the optimistic loading flag
+          // set above would strand the chat: cards gone, loader forever.
+          setIsLoading(false);
+          throw e;
         } finally {
           setPiStarting(false);
           piStartInFlightRef.current = false;
@@ -292,11 +313,19 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
       }
     }
 
-    if (piPresetSwitchPromiseRef.current) {
-      await piPresetSwitchPromiseRef.current;
-    }
+    // Same contract as the auto-start block: these two awaits run before the
+    // user bubble exists, so a rejection must hand the view back rather than
+    // leave the optimistic loader up with no turn behind it.
+    try {
+      if (piPresetSwitchPromiseRef.current) {
+        await piPresetSwitchPromiseRef.current;
+      }
 
-    await interruptActivePiTurn();
+      await interruptActivePiTurn();
+    } catch (e) {
+      setIsLoading(false);
+      throw e;
+    }
     forceQueueModeRef.current = true;
 
     const outgoingImages = imageDataUrls ?? pastedImages;
