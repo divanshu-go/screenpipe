@@ -505,7 +505,6 @@ export const validateApiKey = (
       }
       break;
     case "anthropic":
-    case "acp":
       if (!apiKey.startsWith("sk-ant-")) {
         return { isValid: false, error: "Anthropic API keys should start with 'sk-ant-'" };
       }
