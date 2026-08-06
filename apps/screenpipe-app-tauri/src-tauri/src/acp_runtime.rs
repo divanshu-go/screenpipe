@@ -375,13 +375,12 @@ async fn run_terminal_login(
 ) -> Result<(), String> {
     let agent =
         agent_catalog().into_iter().find(|a| a.id == agent_id).ok_or("unknown agent")?;
+    // Invoke the agent's package with the login args only. The launch args are
+    // the ACP-server mode (e.g. Copilot's `--acp`) and must not ride along on a
+    // login command (`copilot login`, not `copilot --acp login`).
     let (program, mut args) = match agent.launch {
-        AgentLaunch::Npx { package, args } => {
-            let mut all = vec!["x".to_string(), package];
-            all.extend(args);
-            (bun_path.to_string(), all)
-        }
-        AgentLaunch::Binary { command, args } => (command, args),
+        AgentLaunch::Npx { package, .. } => (bun_path.to_string(), vec!["x".to_string(), package]),
+        AgentLaunch::Binary { command, .. } => (command, Vec::new()),
     };
     args.extend(method_args.iter().cloned());
 
@@ -2221,6 +2220,19 @@ fn external_auth_command(agent_id: &str) -> Option<&'static str> {
     }
 }
 
+/// Login args a method declares under the `_meta["terminal-auth"]` convention,
+/// if any. Agents like Copilot advertise a normal ACP method plus this meta
+/// (`{command, args, label}`) so the client runs their CLI login (a browser
+/// flow) instead of authenticating over the protocol. We run the args against
+/// the agent's own launch command, like a `terminal`-type method. Generic: any
+/// agent using this convention works with no per-agent code. (Claude's methods
+/// arrive as the `AuthMethod::Terminal` variant instead and carry their args
+/// directly.)
+fn terminal_auth_args(method: &Value) -> Option<Vec<String>> {
+    let args = method.get("_meta")?.get("terminal-auth")?.get("args")?.as_array()?;
+    Some(args.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+}
+
 fn available_auth_methods(
     init: &InitializeResponse,
 ) -> Vec<&agent_client_protocol::schema::v1::AuthMethod> {
@@ -2311,15 +2323,20 @@ async fn authenticate(
                 }
             }
         };
-        // A `terminal` method (Claude's Subscription / Anthropic Console) is run
-        // by the client: we spawn the agent's own login command (which opens the
-        // browser and writes the credential), rather than calling ACP
-        // authenticate (which the adapter doesn't implement for these).
-        // Agent-type methods (Codex ChatGPT) authenticate over the protocol.
+        // Some methods are run by the client as the agent's own login command
+        // (which opens the browser and writes the credential) rather than over
+        // ACP: a `terminal` method (Claude's Subscription / Anthropic Console)
+        // advertises the args directly, and Copilot advertises a normal method
+        // whose `copilot login` is a browser flow (see cli_login_args). The rest
+        // (Codex ChatGPT) authenticate over the protocol.
         let method_id = method.id().to_string();
-        if let AuthMethod::Terminal(terminal) = method {
+        let terminal_args = match method {
+            AuthMethod::Terminal(terminal) => Some(terminal.args.clone()),
+            _ => serde_json::to_value(method).ok().as_ref().and_then(terminal_auth_args),
+        };
+        if let Some(args) = terminal_args {
             if let Err(error) =
-                run_terminal_login(&config.bun_path, &config.agent_id, &terminal.args).await
+                run_terminal_login(&config.bun_path, &config.agent_id, &args).await
             {
                 // Show why it failed and loop back to re-emit the card so the
                 // user can retry or cancel instead of it hanging.
@@ -3420,6 +3437,26 @@ pub async fn run_from_env() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminal_auth_meta_drives_a_cli_login() {
+        // A standard advertised method (not the Terminal variant) that carries
+        // the terminal-auth meta convention, like Copilot's copilot-login. It
+        // must survive a round-trip through the crate's AuthMethod so we can run
+        // its CLI login instead of authenticating over the protocol.
+        let raw = json!({
+            "id": "copilot-login",
+            "name": "Log in with Copilot CLI",
+            "_meta": { "terminal-auth": { "command": "copilot", "args": ["login"], "label": "Copilot Login" } }
+        });
+        let method: agent_client_protocol::schema::v1::AuthMethod =
+            serde_json::from_value(raw).expect("deserialize copilot method");
+        let round = serde_json::to_value(&method).expect("serialize");
+        assert_eq!(terminal_auth_args(&round), Some(vec!["login".to_string()]));
+        // A plain method (Codex ChatGPT) declares no such meta and authenticates
+        // over the protocol.
+        assert_eq!(terminal_auth_args(&json!({ "id": "chat-gpt", "name": "ChatGPT" })), None);
+    }
 
     fn runtime_config(agent_id: &str) -> RuntimeConfig {
         RuntimeConfig {
