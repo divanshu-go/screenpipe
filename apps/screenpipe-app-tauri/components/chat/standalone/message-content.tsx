@@ -1353,11 +1353,25 @@ function ToolCallGroup({
       setRunningSummary(runningLabel);
       return;
     }
+    // No tool is running right now, but the turn is still marked working (the
+    // model is streaming its final text, or a late agent_end hasn't cleared
+    // isGenerating). The tool WORK is done, so freeze the duration at the last
+    // tool's end instead of letting the wall clock run away past turn end —
+    // that is the "2 min 26 sec · 7/7 done" bug. The spinner/label stay, so
+    // there is no flicker between sequential tool calls; the number just stops.
+    if (!hasRunningTool) {
+      const settledMs = toolWorkEndedAt(toolCalls);
+      const frozenMs = settledMs ? Math.max(1, settledMs - startedAtMs) : undefined;
+      setRunningSummary(
+        frozenMs ? `${runningLabel} · ${formatDurationParts(frozenMs)}` : runningLabel,
+      );
+      return;
+    }
     const updateSummary = () => setRunningSummary(formatRunningWorkDuration(runningLabel, startedAtMs));
     updateSummary();
     const id = window.setInterval(updateSummary, 1000);
     return () => window.clearInterval(id);
-  }, [isWorking, runningLabel, startedAtMs]);
+  }, [isWorking, runningLabel, startedAtMs, hasRunningTool, toolCalls]);
 
   useEffect(() => {
     if (isWorking) {
