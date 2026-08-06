@@ -225,6 +225,17 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     // "switch to default" sign-in card resends this message on the new preset.
     lastUserMessageRef.current = userMessage;
 
+    // Acknowledge the send in the same frame it was dispatched. The Home
+    // cards are gated on `!isLoading` and the active-turn loader on
+    // `isLoading`, but the real user bubble is only appended ~200 lines
+    // below — behind an unbounded preflight (a pending preset switch, an ACP
+    // sign-in round trip, Pi auto-start with its 5s ChatGPT token pre-check,
+    // two liveness checks, and the interrupt of any active turn). Until this
+    // flag flips, a card click leaves the grid sitting there untouched, so
+    // the click reads as ignored for as long as the preflight takes. Every
+    // abort and throw below restores it.
+    setIsLoading(true);
+
     // A selector change may be in the narrow gap before React disables the
     // composer. Wait for it here as the authoritative boundary. Rejections
     // (including "not now" during ACP authentication) abort this send before
@@ -240,6 +251,7 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
           variant: "destructive",
         });
       }
+      setIsLoading(false);
       return;
     }
 
@@ -247,13 +259,20 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     // preset switch. Ask the process manager first so a successful switch is
     // not immediately started a second time, and a failed one cannot reuse the
     // stale provider.
-    let liveSession = await checkLivePiSession(piSessionIdRef.current, setPiInfo);
+    let liveSession: Awaited<ReturnType<typeof checkLivePiSession>>;
+    try {
+      liveSession = await checkLivePiSession(piSessionIdRef.current, setPiInfo);
+    } catch (e) {
+      setIsLoading(false);
+      throw e;
+    }
 
     // Auto-start Pi if it is actually not running (new session or recovery).
     if (!liveSession.running) {
       if (piStartInFlightRef.current) {
         if (!autoSendBypassRef.current) {
           toast({ title: "Pi starting", description: "Please wait a moment", variant: "destructive" });
+          setIsLoading(false);
           return;
         }
         // Prefill auto-send: wait for in-flight start to complete
@@ -261,7 +280,10 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
         while (piStartInFlightRef.current && Date.now() - startWait < 10000) {
           await new Promise(r => setTimeout(r, 300));
         }
-        if (piStartInFlightRef.current) return; // timed out
+        if (piStartInFlightRef.current) {
+          setIsLoading(false);
+          return; // timed out
+        }
       } else {
         console.log("[Pi] Not running, auto-starting before sending message");
         piStartInFlightRef.current = true;
@@ -363,6 +385,9 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
                       variant: "destructive",
                     });
                   }
+                  // The ACP sign-in / auth-cancelled card renders in-chat;
+                  // leave the loader up and it spins behind that card forever.
+                  setIsLoading(false);
                   return;
                 }
               }
@@ -384,6 +409,9 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
                       variant: "destructive",
                     });
                   }
+                  // Same as the branch above: the in-chat auth card owns the
+                  // outcome, so the optimistic loader must be handed back.
+                  setIsLoading(false);
                   return;
                 }
             }
@@ -398,8 +426,15 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
                 : lastError,
               variant: "destructive",
             });
+            setIsLoading(false);
             return;
           }
+        } catch (e) {
+          // A throw here (project dir, token check, piStart) aborts the send
+          // before any turn exists. Without this the optimistic loading flag
+          // set above would strand the chat: cards gone, loader forever.
+          setIsLoading(false);
+          throw e;
         } finally {
           setPiStarting(false);
           piStartInFlightRef.current = false;
@@ -407,23 +442,33 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
       }
     }
 
-    // Verify once more after a possible start/wait immediately before mutating
-    // chat state or dispatching the prompt. Only hard-abort on a DEFINITIVE
-    // not-running; if the liveness query itself failed (indeterminate, e.g. a
-    // transient IPC race), proceed with the send — the backend command surfaces
-    // a real error if the process is genuinely gone, rather than dropping a send
-    // that would have worked.
-    liveSession = await checkLivePiSession(piSessionIdRef.current, setPiInfo);
-    if (!liveSession.running && !liveSession.indeterminate) {
-      toast({
-        title: "AI assistant is not ready",
-        description: liveSession.error,
-        variant: "destructive",
-      });
-      return;
-    }
+    // Same contract as the auto-start block: everything from here to the user
+    // bubble runs before any turn exists, so an abort or rejection must hand
+    // the view back rather than leave the optimistic loader up with nothing
+    // behind it.
+    try {
+      // Verify once more after a possible start/wait immediately before mutating
+      // chat state or dispatching the prompt. Only hard-abort on a DEFINITIVE
+      // not-running; if the liveness query itself failed (indeterminate, e.g. a
+      // transient IPC race), proceed with the send — the backend command surfaces
+      // a real error if the process is genuinely gone, rather than dropping a send
+      // that would have worked.
+      liveSession = await checkLivePiSession(piSessionIdRef.current, setPiInfo);
+      if (!liveSession.running && !liveSession.indeterminate) {
+        toast({
+          title: "AI assistant is not ready",
+          description: liveSession.error,
+          variant: "destructive",
+        });
+        setIsLoading(false);
+        return;
+      }
 
-    await interruptActivePiTurn();
+      await interruptActivePiTurn();
+    } catch (e) {
+      setIsLoading(false);
+      throw e;
+    }
     forceQueueModeRef.current = true;
 
     const outgoingImages = imageDataUrls ?? pastedImages;

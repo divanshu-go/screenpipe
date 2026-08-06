@@ -69,6 +69,7 @@ import {
   isInjectedTitleSourcePrompt,
 } from "@/lib/chat-utils";
 import { deriveFallbackConversationTitle } from "@/lib/utils/chat-title";
+import { optimisticAssistantForUserEcho } from "@/lib/chat/cross-window-transcript-sync";
 import { isInternalTitleSession } from "@/lib/utils/internal-session";
 import { useAcpSessionConfig } from "@/lib/stores/acp-session-config";
 import {
@@ -607,6 +608,32 @@ function applyEventToSessionContent(sid: string, payload: PiInnerEvent) {
     const text = extractInjectedUserText(rawText) ?? rawText;
     const images = imageDataUrlsFromPiContent(payload.message?.content);
     if (!text && images.length === 0) return;
+
+    // The panel appends its own optimistic `[user, "Processing..."]` pair the
+    // moment the user hits send. If ownership moved to this router after that
+    // (chat switch mid-turn, or the gap before the panel's foreground handler
+    // registered), Pi's echo of the same prompt arrives here — and blindly
+    // materializing it produced a SECOND copy of the user's message next to
+    // the optimistic one, which then won the switch-back merge because
+    // `snapshotSession` keeps the longer array. Adopt the existing placeholder
+    // instead, exactly as the foreground handler does for the same echo.
+    const optimistic = optimisticAssistantForUserEcho(
+      (existing.messages ?? []) as unknown as Parameters<
+        typeof optimisticAssistantForUserEcho
+      >[0],
+      text,
+    );
+    if (optimistic) {
+      store.actions.setStreaming(sid, {
+        streamingMessageId: optimistic.assistantMessageId,
+        streamingText: "",
+        contentBlocks: [],
+        isStreaming: true,
+        isLoading: true,
+      });
+      store.actions.patch(sid, { draft: false });
+      return;
+    }
 
     const userId = `pi-user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const assistantId = `pi-assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;

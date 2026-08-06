@@ -68,6 +68,12 @@ interface UseChatConversationsOpts {
   piContentBlocksRef: MutableRefObject<ContentBlock[]>;
   piSessionSyncedRef: MutableRefObject<boolean>;
   piSessionIdRef: MutableRefObject<string>;
+  /** Composer dispatch guards owned by the Pi send transport. Optional so
+   *  non-StandaloneChat call-sites don't have to thread them; when present,
+   *  starting or loading a conversation releases them so the incoming chat
+   *  never inherits the outgoing turn's queue-only mode. */
+  forceQueueModeRef?: MutableRefObject<boolean>;
+  sendDispatchInFlightRef?: MutableRefObject<boolean>;
   setIsLoading: Dispatch<SetStateAction<boolean>>;
   setIsStreaming: Dispatch<SetStateAction<boolean>>;
   setPastedImages: Dispatch<SetStateAction<string[]>>;
@@ -143,6 +149,8 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     piContentBlocksRef,
     piSessionSyncedRef,
     piSessionIdRef,
+    forceQueueModeRef,
+    sendDispatchInFlightRef,
     setIsLoading,
     setIsStreaming,
     setPastedImages,
@@ -1259,6 +1267,10 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     piStreamingTextRef.current = "";
     piMessageIdRef.current = null;
     piContentBlocksRef.current = [];
+    // Dispatch guards are panel-local too: leaving them set makes the chat we
+    // are switching INTO inherit the outgoing turn's queue-only composer.
+    if (forceQueueModeRef) forceQueueModeRef.current = false;
+    if (sendDispatchInFlightRef) sendDispatchInFlightRef.current = false;
     setIsLoading(false);
     setIsStreaming(false);
     // Composer state (text, images, docs) is scoped to the chat the user
@@ -1718,6 +1730,14 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     piStreamingTextRef.current = "";
     piMessageIdRef.current = null;
     piContentBlocksRef.current = [];
+    // Release the composer's dispatch guards with the rest of the turn state.
+    // These are set on every send and previously cleared only by `agent_end`
+    // or Stop, so a chat left mid-turn handed its queue-only mode to the NEW
+    // chat: the first message went to `pi_queue_prompt` against a session with
+    // no Pi process, which fails and restores the input — "I can't start a new
+    // chat, everything is stuck".
+    if (forceQueueModeRef) forceQueueModeRef.current = false;
+    if (sendDispatchInFlightRef) sendDispatchInFlightRef.current = false;
     setIsLoading(false);
     setIsStreaming(false);
     setMessages([]);

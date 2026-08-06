@@ -829,6 +829,8 @@ export function StandaloneChat({
     piContentBlocksRef,
     piSessionSyncedRef,
     piSessionIdRef,
+    forceQueueModeRef,
+    sendDispatchInFlightRef,
     setIsLoading,
     setIsStreaming,
     setPastedImages,
@@ -896,6 +898,8 @@ export function StandaloneChat({
     piStreamingTextRef,
     piMessageIdRef,
     piContentBlocksRef,
+    forceQueueModeRef,
+    sendDispatchInFlightRef,
     setIsLoading,
     setIsStreaming,
   });
@@ -927,6 +931,8 @@ export function StandaloneChat({
     messagesRef,
     handleAgentEventDataRef,
     startNewConversationRef,
+    forceQueueModeRef,
+    sendDispatchInFlightRef,
   });
 
   const {

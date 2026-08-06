@@ -2933,6 +2933,7 @@ pub(crate) async fn show_shortcut_reminder_impl(
 
             // Clone window to pass into main thread closure
             let window_clone = window.clone();
+            let capturable = crate::window::app_windows_are_capturable(&app_handle);
             let _ = app_handle.run_on_main_thread(move || {
                 use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
 
@@ -2950,8 +2951,8 @@ pub(crate) async fn show_shortcut_reminder_impl(
                     // Don't hide when app deactivates (default is YES for NSPanel)
                     panel.set_hides_on_deactivate(false);
 
-                    // Visible in screen capture (NSWindowSharingReadOnly = 1)
-                    let _: () = unsafe { msg_send![&*panel, setSharingType: 1_u64] };
+                    let sharing: u64 = if capturable { 1 } else { 0 };
+                    let _: () = unsafe { msg_send![&*panel, setSharingType: sharing] };
 
                     // Accept mouse events without requiring click-to-activate
                     let _: () = unsafe { msg_send![&*panel, setAcceptsMouseMovedEvents: true] };
@@ -3410,6 +3411,7 @@ pub async fn show_notification_panel(
             // steals focus. orderFront: in the main thread block handles visibility.
 
             let window_clone = window.clone();
+            let capturable = crate::window::app_windows_are_capturable(&app_handle);
             let _ = app_handle.run_on_main_thread(move || {
                 use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
 
@@ -3420,8 +3422,8 @@ pub async fn show_notification_panel(
                     panel.set_style_mask(128);
                     panel.set_hides_on_deactivate(false);
 
-                    // Visible in screen capture (NSWindowSharingReadOnly = 1)
-                    let _: () = unsafe { msg_send![&*panel, setSharingType: 1_u64] };
+                    let sharing: u64 = if capturable { 1 } else { 0 };
+                    let _: () = unsafe { msg_send![&*panel, setSharingType: sharing] };
 
                     // Accept mouse events without requiring click-to-activate.
                     // NSNonactivatingPanelMask prevents the panel from becoming key,
