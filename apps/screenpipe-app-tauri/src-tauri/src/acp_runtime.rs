@@ -655,17 +655,42 @@ fn resolve_windows_program_in(
 }
 
 #[derive(Clone)]
-struct ParentOutput(Arc<Mutex<std::io::Stdout>>);
+enum ParentOutput {
+    Stdout(Arc<Mutex<std::io::Stdout>>),
+    // A capturing sink so tests can assert the exact events handle_update /
+    // close_turn_ex emit, which otherwise go straight to the parent's stdout.
+    #[cfg(test)]
+    Buffer(Arc<Mutex<Vec<Value>>>),
+}
 
 impl ParentOutput {
     fn new() -> Self {
-        Self(Arc::new(Mutex::new(std::io::stdout())))
+        Self::Stdout(Arc::new(Mutex::new(std::io::stdout())))
+    }
+
+    #[cfg(test)]
+    fn buffer() -> Self {
+        Self::Buffer(Arc::new(Mutex::new(Vec::new())))
+    }
+
+    #[cfg(test)]
+    fn drain(&self) -> Vec<Value> {
+        match self {
+            Self::Buffer(events) => std::mem::take(&mut events.lock().unwrap()),
+            Self::Stdout(_) => Vec::new(),
+        }
     }
 
     fn send(&self, value: Value) {
-        if let Ok(mut stdout) = self.0.lock() {
-            let _ = writeln!(stdout, "{value}");
-            let _ = stdout.flush();
+        match self {
+            Self::Stdout(stdout) => {
+                if let Ok(mut stdout) = stdout.lock() {
+                    let _ = writeln!(stdout, "{value}");
+                    let _ = stdout.flush();
+                }
+            }
+            #[cfg(test)]
+            Self::Buffer(events) => events.lock().unwrap().push(value),
         }
     }
 }
@@ -1064,12 +1089,22 @@ impl RuntimeState {
         };
         self.close_thought_locked(&mut turn);
         for (tool_call_id, tool) in turn.active_tools.drain() {
+            // A tool still open when the turn ends is usually one the agent left
+            // running on purpose: Claude ends its turn while a background command
+            // or a subagent Task keeps going. That is not a failure, so only a
+            // cancel or a real error renders red; a normal end leaves a neutral
+            // note instead of a false "the tool failed" card.
+            let (result, is_error) = match stop_reason {
+                "cancelled" => ("Cancelled", true),
+                "error" => ("ACP turn ended before the tool reported completion", true),
+                _ => ("Still running when the turn ended", false),
+            };
             self.output.send(json!({
                 "type": "tool_execution_end",
                 "toolCallId": tool_call_id,
                 "toolName": tool_name(&tool),
-                "result": if stop_reason == "cancelled" { "Cancelled" } else { "ACP turn ended before the tool reported completion" },
-                "isError": true
+                "result": result,
+                "isError": is_error
             }));
         }
         if turn.message_open {
@@ -1188,8 +1223,28 @@ impl RuntimeState {
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_owned();
+                // A subagent child's first surfaced event is often a
+                // tool_call_update, not a tool_call — Claude Code stamps
+                // parentToolUseId on the subagent's updates. Without a start the
+                // chat has no row to render or group, so synthesize one from the
+                // merged view and carry the parent linkage the tool_call arm
+                // would have sent.
+                let first_sighting = !id.is_empty() && !turn.active_tools.contains_key(&id);
                 let merged = merge_json(turn.active_tools.get(&id), &update);
                 turn.active_tools.insert(id.clone(), merged.clone());
+                if first_sighting {
+                    let mut start = json!({
+                        "type": "tool_execution_start",
+                        "toolCallId": id,
+                        "toolName": tool_name(&merged),
+                        "kind": tool_kind(&merged),
+                        "args": tool_args(&merged)
+                    });
+                    if let Some(parent) = parent_tool_call_id(&merged) {
+                        start["parentToolCallId"] = json!(parent);
+                    }
+                    self.output.send(start);
+                }
                 if update_status_finished(&merged) {
                     finish_tool(&self.output, &id, &merged);
                     turn.active_tools.remove(&id);
@@ -1198,6 +1253,11 @@ impl RuntimeState {
                         "type": "tool_execution_progress",
                         "toolCallId": id,
                     });
+                    // Carry the parent so a subagent heartbeat nests under its
+                    // Task row even when linkage only appears on updates.
+                    if let Some(parent) = parent_tool_call_id(&merged) {
+                        event["parentToolCallId"] = json!(parent);
+                    }
                     if let (Some(event_map), Value::Object(fields)) =
                         (event.as_object_mut(), progress)
                     {
@@ -3788,6 +3848,104 @@ mod tests {
 
         // A bare status merge carries nothing renderable.
         assert_eq!(tool_progress(&json!({ "status": "in_progress" })), None);
+    }
+
+    fn test_state(output: &ParentOutput) -> RuntimeState {
+        RuntimeState {
+            output: output.clone(),
+            project_dir: PathBuf::from("/tmp"),
+            turn: Mutex::new(TurnState {
+                prompt_in_flight: true,
+                ..Default::default()
+            }),
+            ui_waiters: Mutex::new(HashMap::new()),
+            terminals: Mutex::new(HashMap::new()),
+            system_context: Mutex::new(None),
+        }
+    }
+
+    fn events_of_type<'a>(events: &'a [Value], ty: &str) -> Vec<&'a Value> {
+        events.iter().filter(|e| e["type"] == json!(ty)).collect()
+    }
+
+    #[test]
+    fn turn_end_leaves_background_tools_running_not_failed() {
+        // A tool still open at a normal end_turn is a background command or a
+        // subagent the agent left running — not a failure. Only cancel/error
+        // render red.
+        let output = ParentOutput::buffer();
+        let state = test_state(&output);
+        {
+            let mut turn = state.turn.lock().unwrap();
+            turn.turn_open = true;
+            turn.active_tools.insert(
+                "bg1".into(),
+                json!({ "toolCallId": "bg1", "title": "Bash", "status": "in_progress" }),
+            );
+        }
+        state.close_turn_ex("end_turn", false);
+        let ends = output.drain();
+        let end = events_of_type(&ends, "tool_execution_end");
+        assert_eq!(end.len(), 1);
+        assert_eq!(end[0]["isError"], json!(false));
+        assert_eq!(end[0]["result"], json!("Still running when the turn ended"));
+
+        // Cancel still renders as an error card.
+        let state = test_state(&output);
+        {
+            let mut turn = state.turn.lock().unwrap();
+            turn.turn_open = true;
+            turn.active_tools
+                .insert("bg2".into(), json!({ "toolCallId": "bg2", "title": "Bash" }));
+        }
+        state.close_turn_ex("cancelled", false);
+        let ends = output.drain();
+        let end = events_of_type(&ends, "tool_execution_end");
+        assert_eq!(end[0]["isError"], json!(true));
+        assert_eq!(end[0]["result"], json!("Cancelled"));
+    }
+
+    #[test]
+    fn subagent_update_without_a_start_synthesizes_a_linked_row() {
+        // Claude Code surfaces subagent child activity as tool_call_updates that
+        // carry parentToolUseId, often with no preceding tool_call. The runtime
+        // must synthesize a start (with parent linkage) so the chat has a row to
+        // group under the Task, and carry the parent on the progress heartbeat.
+        let output = ParentOutput::buffer();
+        let state = test_state(&output);
+        state.handle_update(json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "child1",
+            "title": "Grep",
+            "kind": "search",
+            "status": "in_progress",
+            "_meta": { "claudeCode": {
+                "parentToolUseId": "task_parent",
+                "toolResponse": { "elapsedTimeSeconds": 3.0, "subagentType": "researcher" }
+            } }
+        }));
+        let events = output.drain();
+
+        let starts = events_of_type(&events, "tool_execution_start");
+        assert_eq!(starts.len(), 1, "a start should be synthesized for the unseen child");
+        assert_eq!(starts[0]["toolCallId"], json!("child1"));
+        assert_eq!(starts[0]["parentToolCallId"], json!("task_parent"));
+
+        let progress = events_of_type(&events, "tool_execution_progress");
+        assert_eq!(progress.len(), 1);
+        assert_eq!(progress[0]["parentToolCallId"], json!("task_parent"));
+        assert_eq!(progress[0]["subagentType"], json!("researcher"));
+
+        // A second update for the same child must NOT synthesize another start.
+        state.handle_update(json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "child1",
+            "status": "in_progress",
+            "_meta": { "claudeCode": { "parentToolUseId": "task_parent",
+                "toolResponse": { "elapsedTimeSeconds": 6.0 } } }
+        }));
+        let events = output.drain();
+        assert!(events_of_type(&events, "tool_execution_start").is_empty());
     }
 
     #[test]
