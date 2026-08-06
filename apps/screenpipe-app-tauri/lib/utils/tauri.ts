@@ -1885,6 +1885,14 @@ async resizeSearchWindow(width: number, height: number) : Promise<Result<null, s
 }
 },
 /**
+ * Restart only after the user explicitly clicks the in-app action. macOS's
+ * native Screen Recording sheet includes a "Later" choice; closing that sheet
+ * must never be treated as consent to relaunch screenpipe.
+ */
+async restartAfterScreenRecordingPermission() : Promise<void> {
+    await TAURI_INVOKE("restart_after_screen_recording_permission");
+},
+/**
  * Banner-click restart. Mirror the auto-update path: gate, stop server, then
  * spawn the replacement app and `_exit` the old process so C/C++ atexit
  * handlers cannot abort during restart. See 2026-06-10 and 2026-07-02 reports.
@@ -2764,7 +2772,7 @@ export type OAuthStatus = { connected: boolean; display_name: string | null;
  */
 needs_attention?: boolean }
 export type OSPermission = "screenRecording" | "microphone" | "accessibility" | "automation" | "inputMonitoring" | "calendar"
-export type OSPermissionStatus = "notNeeded" | "empty" | "granted" | "denied"
+export type OSPermissionStatus = "notNeeded" | "empty" | "granted" | "restartRequired" | "denied"
 export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; microphone: OSPermissionStatus; accessibility: OSPermissionStatus }
 export type OnboardingStore = { isCompleted: boolean; completedAt: string | null;
 /**
