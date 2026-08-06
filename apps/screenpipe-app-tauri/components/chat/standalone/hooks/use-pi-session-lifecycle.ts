@@ -5,8 +5,8 @@
 import { acpSpawnSignature } from "@/lib/chat/acp-spawn-signature";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type * as React from "react";
-import { homeDir, join } from "@tauri-apps/api/path";
 import { readActiveAiPresetId } from "@/lib/active-ai-preset";
+import { piProjectDirForSession } from "@/lib/chat/pi-project-dir";
 import { toast } from "@/components/ui/use-toast";
 import { buildAppAwarenessContext, buildConnectionsContext, buildSystemPrompt } from "@/lib/chat/system-prompt";
 import { isAcpAuthenticationCancelledError, isAcpExternalAuthError } from "@/lib/chat/auth-errors";
@@ -282,8 +282,7 @@ export function usePiSessionLifecycle({
       piStoppedIntentionallyRef.current = true;
     }
 
-    const home = await homeDir();
-    const dir = await join(home, ".screenpipe", "pi-chat");
+    const dir = await piProjectDirForSession(piSessionIdRef.current);
     try {
       const result = await commands.piStart(
         piSessionIdRef.current,

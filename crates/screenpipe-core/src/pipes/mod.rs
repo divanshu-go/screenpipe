@@ -335,6 +335,11 @@ pub struct PipeConfig {
     #[serde(default, skip_serializing_if = "is_false")]
     pub subagent: bool,
 
+    /// Continue this pipe's Pi session and materialize every run in one chat.
+    /// Default: false (each execution is an isolated chat).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub history: bool,
+
     /// When true, the pipe's agent has `SCREENPIPE_FILTER_PII=1` in its
     /// env so the BASH_ENV shim rewrites every `curl .../search` call to
     /// append `filter_pii=1` — PII is redacted server-side before the
@@ -1131,6 +1136,10 @@ pub struct PipeStatus {
     pub last_run: Option<DateTime<Utc>>,
     pub last_success: Option<bool>,
     pub is_running: bool,
+    /// Whether Pi has durable context for this Pipe's working directory.
+    /// This exposes presence only, never session contents.
+    #[serde(default)]
+    pub has_saved_context: bool,
     /// True only when this pipe's name and contents exactly match a pipe
     /// bundled with the app. Any user edit makes this false.
     #[serde(default)]
@@ -1179,6 +1188,9 @@ pub struct PipeExecution {
     pub error_message: Option<String>,
     pub duration_ms: Option<i64>,
     pub session_path: Option<String>,
+    /// Stable chat id shared by continued runs. None means this execution uses
+    /// the legacy per-run `pipe:<name>:<execution_id>` identity.
+    pub conversation_id: Option<String>,
     /// Event that triggered this run, and that event's identity (e.g. a meeting
     /// id). Both None for scheduled and manual runs.
     pub trigger_event: Option<String>,
@@ -1270,6 +1282,11 @@ pub trait PipeStore: Send + Sync {
 
     /// Transition an execution to 'running' and record its PID.
     async fn set_execution_running(&self, id: i64, pid: Option<u32>) -> Result<()>;
+
+    /// Associate an execution with the stable chat used for continued runs.
+    async fn set_execution_conversation_id(&self, _id: i64, _conversation_id: &str) -> Result<()> {
+        Ok(())
+    }
 
     /// Mark an execution as finished (completed/failed/cancelled/timed_out).
     async fn finish_execution(
@@ -2155,9 +2172,37 @@ pub type OnPipeRunComplete =
 /// Synchronous scheduler launch guard. Returning `Some(reason)` skips the run.
 pub type SchedulerRunGuard = Arc<dyn Fn() -> Option<String> + Send + Sync>;
 
-/// Callback fired for each stdout line from a running pipe.
-/// Args: (pipe_name, execution_id, line)
-pub type OnPipeOutputLine = Arc<dyn Fn(&str, i64, &str) + Send + Sync>;
+/// Callback fired for each lifecycle event and stdout line from a running pipe.
+/// Args: (pipe_name, execution_id, continues_chat, line)
+pub type OnPipeOutputLine = Arc<dyn Fn(&str, i64, bool, &str) + Send + Sync>;
+
+/// Conversation id for a pipe execution. Continued pipes deliberately reuse
+/// one stable id; isolated pipes keep one id per execution.
+pub fn pipe_conversation_id(pipe_name: &str, execution_id: i64, continues_chat: bool) -> String {
+    if continues_chat {
+        format!("pipe:{pipe_name}:continuous")
+    } else {
+        format!("pipe:{pipe_name}:{execution_id}")
+    }
+}
+
+fn emit_pipe_start(
+    on_output: Option<&OnPipeOutputLine>,
+    pipe_name: &str,
+    execution_id: i64,
+    continues_chat: bool,
+    started_at: DateTime<Utc>,
+) {
+    let Some(callback) = on_output else {
+        return;
+    };
+    let event = serde_json::json!({
+        "type": "pipe_start",
+        "started_at": started_at.to_rfc3339(),
+    })
+    .to_string();
+    callback(pipe_name, execution_id, continues_chat, &event);
+}
 
 /// Async predicate: given a pipe's required connections, return the
 /// subset that is NOT yet configured (`enabled && credentials present`).
@@ -2493,6 +2538,19 @@ impl PipeManager {
         self.on_output_line = Some(cb);
     }
 
+    /// Add an output consumer without replacing an existing desktop or stream
+    /// listener. Both callbacks receive every line in registration order.
+    pub fn add_on_output_line(&mut self, cb: OnPipeOutputLine) {
+        let Some(previous) = self.on_output_line.take() else {
+            self.on_output_line = Some(cb);
+            return;
+        };
+        self.on_output_line = Some(Arc::new(move |pipe, execution_id, continues_chat, line| {
+            previous(pipe, execution_id, continues_chat, line);
+            cb(pipe, execution_id, continues_chat, line);
+        }));
+    }
+
     /// Mark orphaned 'running' executions as failed on startup,
     /// then prune old executions and archive old disk logs.
     pub async fn startup_recovery(&self) {
@@ -2760,6 +2818,8 @@ impl PipeManager {
                         last_run: last_log.map(|l| l.finished_at),
                         last_success: last_log.map(|l| l.success),
                         is_running: running.contains_key(name),
+                        has_saved_context: find_latest_pi_session(&self.pipes_dir.join(name))
+                            .is_some(),
                         is_bundled_builtin,
                         prompt_body: body.clone(),
                         raw_content: raw.clone(),
@@ -2936,6 +2996,7 @@ impl PipeManager {
                     last_run: last_log.map(|l| l.finished_at),
                     last_success: last_log.map(|l| l.success),
                     is_running: running.contains_key(name),
+                    has_saved_context: find_latest_pi_session(&self.pipes_dir.join(name)).is_some(),
                     is_bundled_builtin,
                     prompt_body: body.clone(),
                     raw_content: raw.clone(),
@@ -3325,6 +3386,8 @@ impl PipeManager {
             }
         };
 
+        let history_enabled = config.history;
+
         // Create DB execution row
         let exec_id = if let Some(ref store) = self.store {
             match store
@@ -3332,6 +3395,12 @@ impl PipeManager {
                 .await
             {
                 Ok(id) => {
+                    if history_enabled {
+                        let conversation_id = pipe_conversation_id(name, id, true);
+                        let _ = store
+                            .set_execution_conversation_id(id, &conversation_id)
+                            .await;
+                    }
                     let mut exec_ids = self.running_execution_ids.lock().await;
                     exec_ids.insert(name.to_string(), id);
                     Some(id)
@@ -3345,13 +3414,6 @@ impl PipeManager {
         } else {
             None
         };
-
-        // Check if history/session continuation is enabled for this pipe
-        let history_enabled = config
-            .config
-            .get("history")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
 
         let pipe_dir = self.pipes_dir.clone().join(name);
 
@@ -3382,6 +3444,13 @@ impl PipeManager {
         if let (Some(ref store), Some(id)) = (&self.store, exec_id) {
             let _ = store.set_execution_running(id, None).await;
         }
+        emit_pipe_start(
+            self.on_output_line.as_ref(),
+            &pipe_name,
+            exec_id.unwrap_or(0),
+            history_enabled,
+            Utc::now(),
+        );
 
         let shared_pid_for_kill = shared_pid.clone();
 
@@ -3453,7 +3522,7 @@ impl PipeManager {
                         tw.append_line(&line);
                     }
                     if let Some(ref cb) = drain_on_output {
-                        cb(&drain_pipe_name, drain_exec_id, &line);
+                        cb(&drain_pipe_name, drain_exec_id, history_enabled, &line);
                     }
                 }
                 if let Some(tw) = drain_trajectory.take() {
@@ -3461,12 +3530,18 @@ impl PipeManager {
                 }
                 // Channel closed — pipe process exited. Emit a done sentinel.
                 if let Some(ref cb) = drain_on_output {
-                    cb(&drain_pipe_name, drain_exec_id, r#"{"type":"pipe_done"}"#);
+                    cb(
+                        &drain_pipe_name,
+                        drain_exec_id,
+                        history_enabled,
+                        r#"{"type":"pipe_done"}"#,
+                    );
                 }
             });
 
             let mcp_server_allowlist = selected_mcp_server_ids(&config);
-            let session_owner = format!("pipe:{pipe_name}:{}", exec_id.unwrap_or(0));
+            let session_owner =
+                pipe_conversation_id(&pipe_name, exec_id.unwrap_or(0), history_enabled);
             if let Some(ref registry) = mcp_session_access {
                 if mcp_server_allowlist.is_empty() {
                     registry.clear_session(&session_owner).await;
@@ -3888,6 +3963,8 @@ impl PipeManager {
                 }
             };
 
+            let history_enabled = config.history;
+
             // Create DB execution row
             let exec_id = if let Some(ref store) = self.store {
                 match store
@@ -3895,6 +3972,12 @@ impl PipeManager {
                     .await
                 {
                     Ok(id) => {
+                        if history_enabled {
+                            let conversation_id = pipe_conversation_id(name, id, true);
+                            let _ = store
+                                .set_execution_conversation_id(id, &conversation_id)
+                                .await;
+                        }
                         // Track execution ID for stop API
                         let mut exec_ids = self.running_execution_ids.lock().await;
                         exec_ids.insert(name.to_string(), id);
@@ -3908,13 +3991,6 @@ impl PipeManager {
             } else {
                 None
             };
-
-            // Check if history/session continuation is enabled for this pipe
-            let history_enabled = config
-                .config
-                .get("history")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
 
             // Build prompt with context header
             let pipe_system_prompt = render_pipe_system_prompt(
@@ -3933,6 +4009,13 @@ impl PipeManager {
             if let (Some(ref store), Some(id)) = (&self.store, exec_id) {
                 let _ = store.set_execution_running(id, None).await;
             }
+            emit_pipe_start(
+                self.on_output_line.as_ref(),
+                name,
+                exec_id.unwrap_or(0),
+                history_enabled,
+                started_at,
+            );
 
             spawn_pid_watcher(
                 self.running.clone(),
@@ -3991,7 +4074,7 @@ impl PipeManager {
                         tw.append_line(&line);
                     }
                     if let Some(ref cb) = drain_on_output {
-                        cb(&drain_pipe_name, drain_exec_id, &line);
+                        cb(&drain_pipe_name, drain_exec_id, history_enabled, &line);
                     }
                 }
                 if let Some(tw) = drain_trajectory.take() {
@@ -3999,12 +4082,17 @@ impl PipeManager {
                 }
                 // Channel closed — pipe process exited. Emit a done sentinel.
                 if let Some(ref cb) = drain_on_output {
-                    cb(&drain_pipe_name, drain_exec_id, r#"{"type":"pipe_done"}"#);
+                    cb(
+                        &drain_pipe_name,
+                        drain_exec_id,
+                        history_enabled,
+                        r#"{"type":"pipe_done"}"#,
+                    );
                 }
             });
 
             let mcp_server_allowlist = selected_mcp_server_ids(&config);
-            let session_owner = format!("pipe:{name}:{}", exec_id.unwrap_or(0));
+            let session_owner = pipe_conversation_id(name, exec_id.unwrap_or(0), history_enabled);
             if let Some(ref registry) = self.mcp_session_access {
                 if mcp_server_allowlist.is_empty() {
                     registry.clear_session(&session_owner).await;
@@ -4405,6 +4493,11 @@ impl PipeManager {
                 "timeout" => {
                     config.timeout = v.as_u64();
                 }
+                "history" => {
+                    if let Some(value) = v.as_bool() {
+                        config.history = value;
+                    }
+                }
                 "trigger" => {
                     if v.is_null() {
                         config.trigger = None;
@@ -4757,6 +4850,12 @@ impl PipeManager {
         let pipe_dir = self.pipes_dir.join(name);
         if !pipe_dir.exists() {
             return Err(anyhow!("pipe '{}' not found", name));
+        }
+        if self.running.lock().await.contains_key(name) {
+            return Err(anyhow!(
+                "pipe '{}' is running; stop it before clearing remembered context",
+                name
+            ));
         }
         delete_pi_sessions(&pipe_dir)?;
         info!("cleared history for pipe '{}'", name);
@@ -5548,11 +5647,7 @@ impl PipeManager {
                     }
 
                     // Check if history/session continuation is enabled
-                    let history_enabled = config
-                        .config
-                        .get("history")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false);
+                    let history_enabled = config.history;
 
                     let pipe_dir = pipes_dir.join(name);
 
@@ -5665,6 +5760,13 @@ impl PipeManager {
                                 .await
                             {
                                 Ok(id) => {
+                                    if history_enabled {
+                                        let conversation_id =
+                                            pipe_conversation_id(&pipe_name, id, true);
+                                        let _ = store
+                                            .set_execution_conversation_id(id, &conversation_id)
+                                            .await;
+                                    }
                                     let mut exec_ids = running_exec_ids_ref.lock().await;
                                     exec_ids.insert(pipe_name.clone(), id);
                                     Some(id)
@@ -5694,6 +5796,13 @@ impl PipeManager {
                         );
 
                         let started_at = Utc::now();
+                        emit_pipe_start(
+                            on_output.as_ref(),
+                            &pipe_name,
+                            exec_id.unwrap_or(0),
+                            history_enabled,
+                            started_at,
+                        );
                         let timeout_duration = std::time::Duration::from_secs(pipe_timeout);
                         let was_cancelled =
                             || stop_requested.load(std::sync::atomic::Ordering::SeqCst);
@@ -5719,7 +5828,7 @@ impl PipeManager {
                                     tw.append_line(&line);
                                 }
                                 if let Some(ref cb) = sched_on_output {
-                                    cb(&sched_pipe_name, sched_exec_id, &line);
+                                    cb(&sched_pipe_name, sched_exec_id, history_enabled, &line);
                                 }
                             }
                             if let Some(tw) = sched_trajectory.take() {
@@ -5727,11 +5836,17 @@ impl PipeManager {
                             }
                             // Channel closed — pipe process exited. Emit a done sentinel.
                             if let Some(ref cb) = sched_on_output {
-                                cb(&sched_pipe_name, sched_exec_id, r#"{"type":"pipe_done"}"#);
+                                cb(
+                                    &sched_pipe_name,
+                                    sched_exec_id,
+                                    history_enabled,
+                                    r#"{"type":"pipe_done"}"#,
+                                );
                             }
                         });
 
-                        let session_owner = format!("pipe:{pipe_name}:{}", exec_id.unwrap_or(0));
+                        let session_owner =
+                            pipe_conversation_id(&pipe_name, exec_id.unwrap_or(0), history_enabled);
                         if let Some(ref registry) = mcp_session_access_ref {
                             if mcp_server_allowlist.is_empty() {
                                 registry.clear_session(&session_owner).await;
@@ -7575,28 +7690,54 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 /// Encode a working-directory path the same way Pi does for session storage.
-/// Pi uses the CWD as a key: `~/.pi/agent/sessions/<encoded-cwd>/`.
+/// Pi uses the CWD as a key: `<PI_CODING_AGENT_DIR>/sessions/<encoded-cwd>/`.
 /// The encoding wraps the path with `--` and replaces `/` (or `\`) with `-`.
 /// Example: `/Users/me/.screenpipe/pipes/foo/` → `--Users-me-.screenpipe-pipes-foo--`
+#[cfg(test)]
 fn encode_pi_session_dir(working_dir: &Path) -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
-    let sessions_base = home.join(".pi").join("agent").join("sessions");
+    let agent_dir = crate::agents::pi::pi_config_dir().ok()?;
+    Some(encode_pi_session_dir_from_base(working_dir, &agent_dir))
+}
+
+fn encode_pi_session_dirs(working_dir: &Path) -> Option<Vec<PathBuf>> {
+    let agent_dir = crate::agents::pi::pi_config_dir().ok()?;
+    Some(encode_pi_session_dirs_from_base(working_dir, &agent_dir))
+}
+
+fn encode_pi_session_dirs_from_base(working_dir: &Path, agent_dir: &Path) -> Vec<PathBuf> {
+    let lexical = encode_pi_session_dir_from_base(working_dir, agent_dir);
+    let mut session_dirs = vec![lexical.clone()];
+
+    // Pi keys sessions by process.cwd(), which resolves filesystem aliases on
+    // macOS (notably /tmp -> /private/tmp). Keep the lexical candidate too so
+    // sessions created by older Pi versions or non-canonical launch paths are
+    // still discoverable and resettable.
+    if let Ok(canonical_working_dir) = working_dir.canonicalize() {
+        let canonical = encode_pi_session_dir_from_base(&canonical_working_dir, agent_dir);
+        if canonical != lexical {
+            session_dirs.push(canonical);
+        }
+    }
+
+    session_dirs
+}
+
+fn encode_pi_session_dir_from_base(working_dir: &Path, agent_dir: &Path) -> PathBuf {
+    let sessions_base = agent_dir.join("sessions");
     // Pi encodes: strip leading/trailing separators, replace all separators
     // with `-`, wrap with `--` prefix and `--` suffix
     let cwd_str = working_dir.to_string_lossy();
     let stripped = cwd_str.trim_matches(|c| c == '/' || c == '\\');
     let encoded = format!("--{}--", stripped.replace(['/', '\\'], "-"));
-    Some(sessions_base.join(encoded))
+    sessions_base.join(encoded)
 }
 
 /// Find the most recently modified Pi session file for a pipe's working directory.
 pub fn find_latest_pi_session(pipe_dir: &Path) -> Option<PathBuf> {
-    let session_dir = encode_pi_session_dir(pipe_dir)?;
-    if !session_dir.exists() {
-        return None;
-    }
-    std::fs::read_dir(&session_dir)
-        .ok()?
+    encode_pi_session_dirs(pipe_dir)?
+        .into_iter()
+        .filter_map(|session_dir| std::fs::read_dir(session_dir).ok())
+        .flatten()
         .filter_map(|e| e.ok())
         .filter(|e| {
             e.path()
@@ -7610,11 +7751,13 @@ pub fn find_latest_pi_session(pipe_dir: &Path) -> Option<PathBuf> {
 
 /// Delete all Pi session files for a pipe's working directory.
 pub fn delete_pi_sessions(pipe_dir: &Path) -> Result<()> {
-    let session_dir = encode_pi_session_dir(pipe_dir)
+    let session_dirs = encode_pi_session_dirs(pipe_dir)
         .ok_or_else(|| anyhow!("could not determine Pi session directory"))?;
-    if session_dir.exists() {
-        std::fs::remove_dir_all(&session_dir)?;
-        info!("deleted Pi sessions at {:?}", session_dir);
+    for session_dir in session_dirs {
+        if session_dir.exists() {
+            std::fs::remove_dir_all(&session_dir)?;
+            info!("deleted Pi sessions at {:?}", session_dir);
+        }
     }
     Ok(())
 }
@@ -7999,6 +8142,18 @@ mod tests {
             vec!["meeting_ended"]
         );
         assert!(!meeting_triggered.is_bundled_builtin);
+
+        manager
+            .update_config(
+                "day-recap",
+                HashMap::from([("history".to_string(), serde_json::Value::Bool(true))]),
+            )
+            .await
+            .unwrap();
+        let continued = manager.get_pipe("day-recap").await.unwrap();
+        assert!(continued.config.history);
+        assert!(!continued.config.config.contains_key("history"));
+        assert!(continued.raw_content.contains("history: true"));
     }
 
     #[tokio::test]
@@ -9087,6 +9242,7 @@ mod tests {
             installed_version: None,
             source_hash: None,
             subagent: false,
+            history: false,
             privacy_filter: false,
             artifacts: vec![],
             trigger: None,
@@ -9133,16 +9289,16 @@ mod tests {
     }
 
     #[test]
-    fn test_serialize_preserves_unknown_extra_fields() {
-        // Extra fields that are NOT known struct fields should survive roundtrip
+    fn test_serialize_preserves_history_field() {
         let content = "---\nschedule: every 1h\nenabled: true\nhistory: true\n---\n\nBody";
         let (config, body) = parse_frontmatter(content).unwrap();
-        assert!(config.config.contains_key("history"));
+        assert!(config.history);
+        assert!(!config.config.contains_key("history"));
 
         let serialized = serialize_pipe(&config, &body).unwrap();
         assert!(
             serialized.contains("history: true"),
-            "unknown extra field 'history' should be preserved, got:\n{}",
+            "history should be preserved, got:\n{}",
             serialized
         );
     }
@@ -9854,6 +10010,7 @@ mod tests {
             installed_version: None,
             source_hash: None,
             subagent: false,
+            history: false,
             privacy_filter: false,
             artifacts: vec![],
             trigger: None,
@@ -9889,6 +10046,7 @@ mod tests {
             installed_version: None,
             source_hash: None,
             subagent: false,
+            history: false,
             privacy_filter: false,
             artifacts: vec![],
             trigger: None,
@@ -9916,6 +10074,7 @@ mod tests {
             installed_version: None,
             source_hash: None,
             subagent: false,
+            history: false,
             privacy_filter: false,
             artifacts: vec![],
             trigger: None,
@@ -9952,6 +10111,7 @@ mod tests {
             installed_version: None,
             source_hash: None,
             subagent: false,
+            history: false,
             privacy_filter: false,
             artifacts: vec![],
             trigger: None,
@@ -10022,6 +10182,7 @@ mod tests {
             error_message: None,
             duration_ms: Some(60000),
             session_path: None,
+            conversation_id: Some("pipe:test:continuous".to_string()),
             trigger_event: Some("meeting_ended".to_string()),
             trigger_key: Some("42".to_string()),
         };
@@ -10031,6 +10192,10 @@ mod tests {
         assert_eq!(parsed.status, "completed");
         assert_eq!(parsed.pid, Some(1234));
         assert_eq!(parsed.duration_ms, Some(60000));
+        assert_eq!(
+            parsed.conversation_id.as_deref(),
+            Some("pipe:test:continuous")
+        );
         assert_eq!(parsed.trigger_event.as_deref(), Some("meeting_ended"));
         assert_eq!(parsed.trigger_key.as_deref(), Some("42"));
     }
@@ -10071,6 +10236,7 @@ mod tests {
                 installed_version: None,
                 source_hash: None,
                 subagent: false,
+                history: false,
                 privacy_filter: false,
                 artifacts: vec![],
                 trigger: None,
@@ -10078,6 +10244,7 @@ mod tests {
             last_run: None,
             last_success: None,
             is_running: false,
+            has_saved_context: false,
             is_bundled_builtin: false,
             prompt_body: String::new(),
             raw_content: String::new(),
@@ -10092,6 +10259,7 @@ mod tests {
         assert!(json.contains("\"current_execution_id\":99"));
         assert!(json.contains("\"consecutive_failures\":5"));
         assert!(json.contains("\"is_bundled_builtin\":false"));
+        assert!(json.contains("\"has_saved_context\":false"));
     }
 
     // -- truncate_string ----------------------------------------------------
@@ -10175,6 +10343,42 @@ mod tests {
     }
 
     #[test]
+    fn test_encode_pi_session_dir_uses_isolated_agent_base() {
+        let result = encode_pi_session_dir_from_base(
+            Path::new("/Users/me/.screenpipe/pipes/foo"),
+            Path::new("/tmp/screenpipe-pi-agent"),
+        );
+        assert_eq!(
+            result,
+            Path::new("/tmp/screenpipe-pi-agent/sessions/--Users-me-.screenpipe-pipes-foo--"),
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_encode_pi_session_dirs_include_canonical_working_dir() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let real_root = temp.path().join("private-tmp");
+        let real_pipe = real_root.join("pipes").join("daily-brief");
+        std::fs::create_dir_all(&real_pipe).unwrap();
+        let alias_root = temp.path().join("tmp");
+        symlink(&real_root, &alias_root).unwrap();
+        let alias_pipe = alias_root.join("pipes").join("daily-brief");
+        let agent_dir = temp.path().join("pi-agent");
+
+        let candidates = encode_pi_session_dirs_from_base(&alias_pipe, &agent_dir);
+
+        assert_eq!(candidates.len(), 2);
+        assert!(candidates.contains(&encode_pi_session_dir_from_base(&alias_pipe, &agent_dir)));
+        assert!(candidates.contains(&encode_pi_session_dir_from_base(
+            &real_pipe.canonicalize().unwrap(),
+            &agent_dir,
+        )));
+    }
+
+    #[test]
     fn test_encode_pi_session_dir_trailing_slash() {
         let dir = Path::new("/Users/me/.screenpipe/pipes/foo/");
         if let Some(path) = encode_pi_session_dir(dir) {
@@ -10190,24 +10394,75 @@ mod tests {
     fn test_parse_frontmatter_history_flag() {
         let content = "---\nschedule: every 4h\nenabled: true\nhistory: true\n---\n\nPrompt";
         let (config, _) = parse_frontmatter(content).unwrap();
-        let history = config
-            .config
-            .get("history")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        assert!(history, "history flag should be true");
+        assert!(config.history, "history flag should be true");
     }
 
     #[test]
     fn test_parse_frontmatter_history_default_false() {
         let content = "---\nschedule: every 1h\n---\n\nPrompt";
         let (config, _) = parse_frontmatter(content).unwrap();
-        let history = config
-            .config
-            .get("history")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        assert!(!history, "history should default to false");
+        assert!(!config.history, "history should default to false");
+    }
+
+    #[test]
+    fn test_pipe_conversation_id_reuses_only_continued_chat() {
+        assert_eq!(
+            pipe_conversation_id("daily-brief", 7, true),
+            pipe_conversation_id("daily-brief", 8, true)
+        );
+        assert_ne!(
+            pipe_conversation_id("daily-brief", 7, false),
+            pipe_conversation_id("daily-brief", 8, false)
+        );
+    }
+
+    #[test]
+    fn test_pipe_start_callback_emits_lifecycle_event() {
+        let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured_for_callback = captured.clone();
+        let callback: OnPipeOutputLine =
+            Arc::new(move |pipe_name, execution_id, continues_chat, line| {
+                captured_for_callback.lock().unwrap().push((
+                    pipe_name.to_string(),
+                    execution_id,
+                    continues_chat,
+                    line.to_string(),
+                ));
+            });
+        let started_at = Utc.with_ymd_and_hms(2026, 8, 5, 12, 0, 0).unwrap();
+
+        emit_pipe_start(Some(&callback), "daily-brief", 42, true, started_at);
+
+        let events = captured.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].0, "daily-brief");
+        assert_eq!(events[0].1, 42);
+        assert!(events[0].2);
+        let event: serde_json::Value = serde_json::from_str(&events[0].3).unwrap();
+        assert_eq!(event["type"], "pipe_start");
+        assert_eq!(event["started_at"], "2026-08-05T12:00:00+00:00");
+    }
+
+    #[test]
+    fn test_add_on_output_line_preserves_existing_listener() {
+        let mut manager = PipeManager::new(
+            std::path::PathBuf::from("/tmp/screenpipe-output-listener-test"),
+            HashMap::new(),
+            None,
+            3030,
+        );
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let first_calls = calls.clone();
+        manager.set_on_output_line(Arc::new(move |_, _, _, _| {
+            first_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }));
+        let second_calls = calls.clone();
+        manager.add_on_output_line(Arc::new(move |_, _, _, _| {
+            second_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }));
+
+        manager.on_output_line.as_ref().unwrap()("daily-brief", 7, true, "line");
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 
     // -- frontmatter round-trip tests (trigger/duplicate detection) -----------

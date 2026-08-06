@@ -275,13 +275,11 @@ export async function handlePiEvent(envelope: AgentEventEnvelope) {
   // panel either reads the store directly or syncs its local state from
   // the store on session switch.
   //
-  // Pipe-watch sessions are written by `pipe-watch-writer` instead —
-  // pipe streams don't follow chat-shaped lifecycles (missing
-  // message_start between turns, terminal `agent_end` carrying the
-  // canonical messages array), and double-writing here would race
-  // against that writer. Status mirroring (the sidebar dot / preview)
-  // still happens below for both kinds.
-  if (existing.kind !== "pipe-watch") {
+  // Pipe content has dedicated owners: `pipe-watch-writer` for a watched run
+  // and `pipe-run-recorder` for durable run history. A continued Pipe reuses
+  // its sid, so generic accumulation would duplicate and race those writers.
+  // Status mirroring below still runs for both Pi and Pipe sessions.
+  if (envelope.source === "pi") {
     applyEventToSessionContent(sid, inner);
   }
 
@@ -367,7 +365,12 @@ export function handleTerminated(payload: AgentTerminatedPayload) {
   // crashed mid-stream — without this the user loses everything that
   // was generated after the moment they navigated away. Foreground
   // session has its own pi_terminated handler in standalone-chat.
-  if (store.currentId !== sid) {
+  const sessionKind = store.sessions[sid]?.kind;
+  if (
+    store.currentId !== sid &&
+    sessionKind !== "pipe-run" &&
+    sessionKind !== "pipe-watch"
+  ) {
     void persistBackgroundSession(sid, acpSessionIdSnapshot);
   }
 }
@@ -902,6 +905,10 @@ async function persistBackgroundSession(
     .then(async () => {
       const session = useChatStore.getState().sessions[sid];
       if (!session) return;
+      // Pipe transcripts are persisted by their dedicated writers. This guard
+      // also protects close/termination flushes from overwriting a recorder
+      // save with metadata or stale in-memory content.
+      if (session.kind === "pipe-run" || session.kind === "pipe-watch") return;
       const messages = (session.messages as MutableMessage[] | undefined) ?? [];
       if (messages.length === 0) return;
 

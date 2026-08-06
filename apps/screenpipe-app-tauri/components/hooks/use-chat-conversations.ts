@@ -43,6 +43,7 @@ import {
   updateConversationFlags,
   type ConversationMeta,
 } from "@/lib/chat-storage";
+import { pipeConversationDeletionKey } from "@/lib/pipe-execution-status";
 import type { ContentBlock, Message } from "@/lib/chat/types";
 import {
   savedTurnEventState,
@@ -1154,6 +1155,11 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
 
   // ---- deleteConversation ----
   const deleteConversation = async (convId: string) => {
+    const metadata = fileConversations.find((conversation) => conversation.id === convId);
+    const deletionKey = pipeConversationDeletionKey(
+      convId,
+      metadata?.pipeContext?.executionId,
+    );
     await deleteConversationFile(convId);
     await refreshFileConversations();
 
@@ -1181,7 +1187,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
 
     // Broadcast so other windows (home sidebar / overlay) update immediately.
     try {
-      await emit("chat-deleted", { id: convId });
+      await emit("chat-deleted", { id: convId, deletionKey });
     } catch (e) {
       console.warn("[chat] failed to broadcast delete:", e);
     }
