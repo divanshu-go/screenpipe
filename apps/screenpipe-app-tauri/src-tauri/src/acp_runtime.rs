@@ -2134,28 +2134,6 @@ fn auth_error(error: &Error) -> bool {
         .any(|needle| error.to_string().to_ascii_lowercase().contains(needle))
 }
 
-fn configured_env_nonempty(config: &RuntimeConfig, name: &str) -> Option<String> {
-    config
-        .env
-        .get(name)
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-        .or_else(|| env_nonempty(name))
-}
-
-fn auth_method_has_required_env(
-    agent_id: &str,
-    method_id: &str,
-    is_configured: impl Fn(&str) -> bool,
-) -> bool {
-    match (agent_id, method_id) {
-        ("codex-acp", "api-key") => {
-            is_configured("CODEX_API_KEY") || is_configured("OPENAI_API_KEY")
-        }
-        _ => true,
-    }
-}
-
 /// Screenpipe's own local, read-only screen-data tools (the `screenpipe` MCP
 /// server: search-content, activity-summary, ...). Reading the user's own
 /// recordings is the product's core purpose, so these are auto-approved rather
@@ -2243,18 +2221,10 @@ fn external_auth_command(agent_id: &str) -> Option<&'static str> {
     }
 }
 
-fn available_auth_methods<'a>(
-    init: &'a InitializeResponse,
-    config: &RuntimeConfig,
-) -> Vec<&'a agent_client_protocol::schema::v1::AuthMethod> {
-    init.auth_methods
-        .iter()
-        .filter(|method| {
-            auth_method_has_required_env(&config.agent_id, &method.id().to_string(), |name| {
-                configured_env_nonempty(config, name).is_some()
-            })
-        })
-        .collect()
+fn available_auth_methods(
+    init: &InitializeResponse,
+) -> Vec<&agent_client_protocol::schema::v1::AuthMethod> {
+    init.auth_methods.iter().collect()
 }
 
 async fn authenticate(
@@ -2286,7 +2256,7 @@ async fn authenticate(
     // methods now come from what it advertised at `initialize`: ChatGPT for
     // Codex, Cursor Login for Cursor, and — because we declare the terminal-auth
     // capability — Claude Subscription / Anthropic Console for Claude.
-    let methods = available_auth_methods(init, config);
+    let methods = available_auth_methods(init);
     if methods.is_empty() {
         return Err("ACP agent requires authentication but offered no auth methods".into());
     }
@@ -3532,24 +3502,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn codex_key_auth_requires_an_available_key() {
-        assert!(!auth_method_has_required_env(
-            "codex-acp",
-            "api-key",
-            |_| false,
-        ));
-        assert!(auth_method_has_required_env(
-            "codex-acp",
-            "api-key",
-            |name| name == "OPENAI_API_KEY",
-        ));
-        assert!(auth_method_has_required_env(
-            "codex-acp",
-            "chat-gpt",
-            |_| false,
-        ));
-    }
 
     #[test]
     fn external_auth_agents_use_their_cli_login() {
