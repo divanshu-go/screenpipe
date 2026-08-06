@@ -37,6 +37,9 @@ import {
       await invokeOrThrow("plugin:e2e|set_screen_recording_restart_required", {
         required: true,
       });
+      expect(await invokeOrThrow("check_screen_recording_permission")).toBe(
+        "restartRequired",
+      );
       await invokeOrThrow("reset_onboarding");
       await invokeOrThrow("set_onboarding_step", { step: "permissions" });
       await showWindow("Onboarding");
@@ -44,14 +47,55 @@ import {
       await browser.switchToWindow("onboarding");
       await waitForWindowUrl("/onboarding", undefined, t(15_000));
 
+      // Onboarding waits for settings and managed-policy hydration before it
+      // restores the saved permissions step. A cold packaged app can spend
+      // part of that window installing its bundled Pi dependencies.
+      await browser.waitUntil(
+        async () =>
+          Boolean(
+            await browser.execute(
+              () => {
+                const prompt = document.querySelector(
+                  "[data-testid='screen-recording-restart-prompt']",
+                );
+                if (!(prompt instanceof HTMLElement) || !prompt.textContent) {
+                  return false;
+                }
+                const rect = prompt.getBoundingClientRect();
+                if (rect.width === 0 || rect.height === 0) return false;
+                let element: HTMLElement | null = prompt;
+                while (element) {
+                  const style = getComputedStyle(element);
+                  if (
+                    style.display === "none" ||
+                    style.visibility === "hidden" ||
+                    Number(style.opacity) === 0
+                  ) {
+                    return false;
+                  }
+                  element = element.parentElement;
+                }
+                return true;
+              },
+            ),
+          ),
+        {
+          timeout: t(45_000),
+          interval: 250,
+          timeoutMsg: "restart prompt did not mount in onboarding",
+        },
+      );
       const prompt = await $("[data-testid='screen-recording-restart-prompt']");
-      await prompt.waitForDisplayed({ timeout: t(15_000) });
       const text = (await prompt.getText()).toLowerCase();
       expect(text).toContain("restart required");
       expect(text).toContain("screenpipe won't work until you restart");
 
       const button = await $("[data-testid='screen-recording-restart-button']");
       expect((await button.getText()).toLowerCase()).toBe("restart screenpipe");
+      const screenshot = await saveScreenshot(
+        "screen-recording-explicit-restart",
+      );
+      expect(existsSync(screenshot)).toBe(true);
       await button.click();
 
       await browser.waitUntil(
@@ -66,10 +110,6 @@ import {
         },
       );
 
-      const screenshot = await saveScreenshot(
-        "screen-recording-explicit-restart",
-      );
-      expect(existsSync(screenshot)).toBe(true);
     });
   },
 );
