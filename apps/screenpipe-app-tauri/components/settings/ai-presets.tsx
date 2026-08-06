@@ -139,6 +139,12 @@ import {
   filterPresetsForEnterprisePolicy,
   isEnterpriseManagedPreset,
 } from "@/lib/enterprise-ai-preset-policy";
+import { useFeatureFlagEnabled } from "posthog-js/react";
+import {
+  ACP_AGENTS_FLAG,
+  filterAcpPresets,
+  isAcpRolloutEnabled,
+} from "@/lib/acp-rollout";
 
 // Helper to detect UUID-like strings and format preset names nicely
 const formatPresetName = (name: string): string => {
@@ -311,13 +317,27 @@ const AISection = ({
     () => settingsPreset?.provider === "openai-chatgpt"
   );
 
+  // ACP is team-only until PostHog hands out the rollout flag. Fails closed:
+  // an undefined flag (offline, PostHog blocked, analytics opt-out) hides it.
+  const acpEnabled = isAcpRolloutEnabled(useFeatureFlagEnabled(ACP_AGENTS_FLAG));
+
+  // A preset created while the flag was on must not keep the editor pinned to
+  // a provider the user can no longer see once it is turned off.
+  useEffect(() => {
+    if (!acpEnabled && settingsPreset?.provider === "acp") {
+      setSettingsPreset(undefined);
+    }
+  }, [acpEnabled, settingsPreset?.provider]);
+
   // Filter presets the same way the UI does so hidden presets don't block creation
   const visiblePresets = useMemo(
-    () =>
-      !isManagedDeployment
+    () => {
+      const policyVisiblePresets = !isManagedDeployment
         ? settings.aiPresets
-        : filterPresetsForEnterprisePolicy(settings.aiPresets, aiPresetPolicy),
-    [settings.aiPresets, isManagedDeployment, aiPresetPolicy]
+        : filterPresetsForEnterprisePolicy(settings.aiPresets, aiPresetPolicy);
+      return filterAcpPresets(policyVisiblePresets, acpEnabled);
+    },
+    [settings.aiPresets, isManagedDeployment, aiPresetPolicy, acpEnabled]
   );
 
   // Optimized validation with debouncing
@@ -1342,15 +1362,17 @@ const AISection = ({
             onClick={() => handleAiProviderChange("custom")}
           />
 
-          <AIProviderCard
-            type="acp"
-            title="Coding agent"
-            description="Use Pi, Codex, Claude Code, OpenCode, Cursor, or any ACP-compatible agent"
-            imageSrc="/images/acp.svg"
-            imageClassName="dark:invert"
-            selected={settingsPreset?.provider === "acp"}
-            onClick={() => handleAiProviderChange("acp")}
-          />
+          {acpEnabled && (
+            <AIProviderCard
+              type="acp"
+              title="Coding agent"
+              description="Use Pi, Codex, Claude Code, OpenCode, Cursor, or any ACP-compatible agent"
+              imageSrc="/images/acp.svg"
+              imageClassName="dark:invert"
+              selected={settingsPreset?.provider === "acp"}
+              onClick={() => handleAiProviderChange("acp")}
+            />
+          )}
 
           <AIProviderCard
             type="native-ollama"

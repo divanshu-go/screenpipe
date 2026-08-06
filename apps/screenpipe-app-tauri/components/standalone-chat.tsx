@@ -20,6 +20,12 @@ import { toast } from "@/components/ui/use-toast";
 import type { AIPreset, JsonValue } from "@/lib/utils/tauri";
 // OpenAI SDK no longer used directly — all providers route through Pi agent
 import posthog from "posthog-js";
+import { useFeatureFlagEnabled } from "posthog-js/react";
+import {
+  ACP_AGENTS_FLAG,
+  filterAcpPresets,
+  isAcpRolloutEnabled,
+} from "@/lib/acp-rollout";
 import { commands } from "@/lib/utils/tauri";
 import { useChatConversations } from "@/components/hooks/use-chat-conversations";
 import { usePlatform } from "@/lib/hooks/use-platform";
@@ -137,6 +143,22 @@ export function StandaloneChat({
   sidebarCollapsed?: boolean;
 } = {}) {
   const { settings, updateSettings, isSettingsLoaded, reloadStore } = useSettings();
+  // ACP stays invisible until PostHog hands out the rollout flag. Filtering the
+  // preset list is the choke point: the composer's ACP surface, the agent
+  // config selector and the sign-in dialog all key off
+  // `activePreset.provider === "acp"`, so a preset list with no ACP entry makes
+  // every one of them unreachable. Fails closed — an undefined flag (offline,
+  // PostHog blocked, opt-out) hides ACP.
+  const acpFlag = useFeatureFlagEnabled(ACP_AGENTS_FLAG);
+  const acpEnabled = isAcpRolloutEnabled(acpFlag);
+  const availableAiPresets = React.useMemo(
+    () => filterAcpPresets(settings.aiPresets, acpEnabled),
+    [settings.aiPresets, acpEnabled],
+  );
+  const rolloutSettings = React.useMemo(
+    () => ({ ...settings, aiPresets: availableAiPresets }) as typeof settings,
+    [settings, availableAiPresets],
+  );
   const { isMac, isWindows, isLoading: isPlatformLoading } = usePlatform();
   const hardcodedConnectionTiles = useHardcodedTiles();
   // Drop the macOS traffic-light reservation when the window is fullscreen
@@ -819,7 +841,7 @@ export function StandaloneChat({
     pastedImagesRef,
     attachedDocsRef,
     pendingDocsRef,
-    settings,
+    settings: rolloutSettings,
     selectedPreset: activePreset ?? null,
     selectedPresetRef: activePresetRef,
     inlineHistoryEnabled: !hideInlineHistory,
@@ -1066,7 +1088,7 @@ export function StandaloneChat({
     setPrefillContext,
     setPrefillFrameId,
     setRunningConfigFromProviderConfig,
-    settings,
+    settings: rolloutSettings,
     stagePendingAttachments,
     syncThinkingLevelAfterStart,
     takeQueuedDisplayById,
@@ -1544,7 +1566,7 @@ export function StandaloneChat({
     setIsStreaming,
     setMessages,
     setPiInfo,
-    settings,
+    settings: rolloutSettings,
     syncThinkingLevelAfterStart,
     turnIntentTextValuesMatch,
   });
@@ -2048,7 +2070,7 @@ export function StandaloneChat({
           onPickFiles: handleFilePicker,
         }}
         modelControls={{
-          settings,
+          settings: rolloutSettings,
           activePreset,
           activePipeExecution,
           currentQueueSessionId,

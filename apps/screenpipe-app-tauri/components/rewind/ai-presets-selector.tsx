@@ -23,6 +23,11 @@ import {
   presetImageSrc,
 } from "@/lib/utils/preset-appearance";
 import { AcpAgentPicker } from "@/components/settings/acp-agent-picker";
+import { useFeatureFlagEnabled } from "posthog-js/react";
+import {
+  ACP_AGENTS_FLAG,
+  isAcpRolloutEnabled,
+} from "@/lib/acp-rollout";
 import {
   Command,
   CommandEmpty,
@@ -297,6 +302,19 @@ export function AIProviderConfig({
   };
   // Set by AcpInstallGate: true when the selected binary agent's CLI is missing.
   const [acpInstallBlocked, setAcpInstallBlocked] = useState(false);
+
+  // Second ACP entry point (the first is Settings → AI presets). Same
+  // fail-closed rollout gate, otherwise this selector would hand every user a
+  // coding-agent provider the settings page deliberately hides.
+  const acpEnabled = isAcpRolloutEnabled(useFeatureFlagEnabled(ACP_AGENTS_FLAG));
+
+  // A preset saved while the flag was on must not leave this editor stuck on a
+  // provider whose picker is no longer rendered.
+  useEffect(() => {
+    if (!acpEnabled && selectedProvider === "acp") {
+      setSelectedProvider("screenpipe-cloud");
+    }
+  }, [acpEnabled, selectedProvider]);
 
   // Last name this dialog generated itself. While the field still holds it
   // (or is empty) selection changes keep regenerating it; a name the user
@@ -697,6 +715,7 @@ export function AIProviderConfig({
             <span>claude api</span>
           </Button>
 
+          {acpEnabled && (
           <Button
             type="button"
             variant={selectedProvider === "acp" ? "default" : "outline"}
@@ -725,9 +744,10 @@ export function AIProviderConfig({
             />
             <span>coding agent</span>
           </Button>
+          )}
         </div>
 
-        {selectedProvider === "acp" && (
+        {acpEnabled && selectedProvider === "acp" && (
           <AcpAgentPicker
             compact
             agent={formData.acpAgent}
