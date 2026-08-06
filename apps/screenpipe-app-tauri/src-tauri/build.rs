@@ -388,6 +388,7 @@ const E2E_COMMANDS: &[&str] = &[
     "inject_db_hard_fault",
     "db_hard_fault_state",
     "seed_flags",
+    "capture_pi_start_error",
 ];
 
 fn validate_e2e_command_inventory() {
