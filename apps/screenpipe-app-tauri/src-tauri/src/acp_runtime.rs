@@ -360,22 +360,6 @@ struct CatalogAgent {
     /// key is `httpMcp`.
     #[serde(default)]
     http_mcp: bool,
-    /// The env vars this agent can read a credential from (ANTHROPIC_API_KEY and
-    /// CLAUDE_CODE_OAUTH_TOKEN for Claude, CODEX_API_KEY for Codex). Non-empty
-    /// means the sign-in card offers a key input per env, and a stored value is
-    /// injected here at launch. JSON key is `apiKeyEnvs`.
-    #[serde(default)]
-    api_key_envs: Vec<String>,
-}
-
-/// The env vars an agent reads a credential from, if it takes one (from the
-/// catalog). Used to offer the key inputs and to inject stored values at launch.
-pub fn agent_api_key_envs(id: &str) -> Vec<String> {
-    agent_catalog()
-        .into_iter()
-        .find(|agent| agent.id == id)
-        .map(|agent| agent.api_key_envs)
-        .unwrap_or_default()
 }
 
 /// Run a `terminal`-type ACP auth method's login: the agent's own launch
@@ -1235,7 +1219,6 @@ impl RuntimeState {
         title: String,
         message: String,
         options: Value,
-        api_key_envs: &[String],
         detail: Option<&str>,
     ) -> Option<String> {
         let request_id = format!("{prefix}-{}", uuid::Uuid::new_v4());
@@ -1249,12 +1232,6 @@ impl RuntimeState {
             "message": message,
             "options": options
         });
-        // When non-empty, the card also offers a credential input per env var
-        // alongside any method buttons. The key path stores + respawns
-        // client-side, so it does not resolve this selection.
-        if !api_key_envs.is_empty() {
-            request["apiKeyEnvs"] = json!(api_key_envs);
-        }
         // The exact command / target, shown verbatim as a code block under a
         // short human title, so the heading stays readable instead of a mangled
         // humanized command.
@@ -2309,9 +2286,8 @@ async fn authenticate(
     // methods now come from what it advertised at `initialize`: ChatGPT for
     // Codex, Cursor Login for Cursor, and — because we declare the terminal-auth
     // capability — Claude Subscription / Anthropic Console for Claude.
-    let api_key_envs = agent_api_key_envs(&config.agent_id);
     let methods = available_auth_methods(init, config);
-    if methods.is_empty() && api_key_envs.is_empty() {
+    if methods.is_empty() {
         return Err("ACP agent requires authentication but offered no auth methods".into());
     }
     let agent_name = init
@@ -2348,7 +2324,6 @@ async fn authenticate(
                         format!("acp:auth:{agent_name}"),
                         "Sign in to this agent to continue. Authentication is handled by the agent and credentials stay in its local store.".into(),
                         Value::Array(options),
-                        &api_key_envs,
                         None,
                     )
                     .await;
@@ -2638,7 +2613,6 @@ async fn run_protocol(
                             format!("acp:permission:{label}"),
                             "the agent needs your approval before it can continue.".to_owned(),
                             options,
-                            &[],
                             detail,
                         )
                         .await;
@@ -3491,14 +3465,6 @@ mod tests {
             user_mcp_servers: Vec::new(),
             resume_session_id: None,
         }
-    }
-
-    #[test]
-    fn claude_owns_its_credentials_and_advertises_no_hardcoded_login() {
-        // The Zed model: Claude owns its credentials. We never read/inject a
-        // token and no longer hardcode its login methods — they come from what
-        // the adapter advertises once we declare the terminal-auth capability.
-        assert!(agent_api_key_envs("claude-acp").is_empty());
     }
 
     #[test]

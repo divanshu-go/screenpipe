@@ -1438,7 +1438,6 @@ export function StandaloneChat({
         title,
         message: messageText,
         options,
-        apiKeyEnvs: parsed.apiKeyEnvs,
       });
       return true;
     }
@@ -1786,40 +1785,6 @@ export function StandaloneChat({
     setAcpSignInError(null);
     setAcpSignIn(null);
   }, [acpSignIn, handleAcpSignInMethod, clearAcpSignInProbe]);
-  // API-key sign-in: store the pasted key in the OS keychain, then respawn the
-  // agent so it's injected at launch. Carries any pending message.
-  const handleAcpSubmitApiKey = useCallback(
-    async (values: Record<string, string>): Promise<boolean> => {
-      if (acpSignIn?.kind !== "methods") return false;
-      const agentId = acpSignIn.agentId;
-      if (!agentId || Object.keys(values).length === 0) return false;
-      for (const [envVar, key] of Object.entries(values)) {
-        const res = await commands.acpSetAgentApiKey(agentId, envVar, key);
-        if (res.status !== "ok") return false;
-      }
-      clearAcpSignInProbe();
-      setAcpSignInError(null);
-      setAcpSignIn(null);
-      const pending = lastUserMessageRef.current?.trim();
-      if (pending) {
-        piMessageIdRef.current = null;
-        void sendMessage(pending).catch(() => {});
-      } else {
-        const cfg = buildProviderConfig();
-        if (cfg) void restartCurrentPiSession(cfg).catch(() => {});
-      }
-      return true;
-    },
-    [
-      acpSignIn,
-      clearAcpSignInProbe,
-      lastUserMessageRef,
-      piMessageIdRef,
-      sendMessage,
-      buildProviderConfig,
-      restartCurrentPiSession,
-    ],
-  );
   // Config-menu "re-authenticate": re-show the agent's sign-in methods without
   // signing out. The agent owns its credentials; picking a method re-runs that
   // login in place, so an existing login is never lost as a side effect.
@@ -2140,7 +2105,6 @@ export function StandaloneChat({
         onSwitchToDefault={handleAcpSwitchToDefault}
         onRetry={handleAcpRetry}
         onSelectMethod={handleAcpSignInMethod}
-        onSubmitApiKey={handleAcpSubmitApiKey}
         onDismiss={handleAcpDismiss}
       />
 

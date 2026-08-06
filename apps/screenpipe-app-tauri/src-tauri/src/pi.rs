@@ -2746,13 +2746,6 @@ pub async fn pi_start_inner(
                 .entry("DISABLE_MCP_CONFIG_FILTERING".to_string())
                 .or_insert_with(|| "true".to_string());
         }
-        // Inject any credential the user saved in the sign-in card (kept in the
-        // encrypted secret store, not the preset). An explicit env value wins.
-        for env_name in crate::acp_runtime::agent_api_key_envs(agent_id) {
-            if let Some(key) = crate::acp_credentials::read_agent_api_key(agent_id, &env_name).await {
-                resolved_env.entry(env_name).or_insert(key);
-            }
-        }
         // Claude: force ANTHROPIC_API_KEY empty so the Claude Agent SDK ignores
         // any ambient API key and resolves the subscription/OAuth login it wrote
         // itself. We never read or parse Claude Code's credential store — the

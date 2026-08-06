@@ -55,21 +55,7 @@ export type AcpSignInRequest =
       title: string;
       message?: string;
       options: AgentActionOption[];
-      // Env vars the agent reads a credential from (ANTHROPIC_API_KEY,
-      // CLAUDE_CODE_OAUTH_TOKEN, CODEX_API_KEY). Each shows a credential input.
-      apiKeyEnvs?: string[];
     };
-
-// Readable label + placeholder + hint for a credential env var.
-function apiKeyField(envName: string): { label: string; placeholder: string; hint?: string } {
-  if (envName === "ANTHROPIC_API_KEY")
-    return { label: "Anthropic API key", placeholder: "sk-ant-…", hint: "from console.anthropic.com" };
-  if (envName === "CLAUDE_CODE_OAUTH_TOKEN")
-    return { label: "Claude subscription token", placeholder: "sk-ant-oat…", hint: "run: claude setup-token" };
-  if (envName === "CODEX_API_KEY" || envName === "OPENAI_API_KEY")
-    return { label: "OpenAI API key", placeholder: "sk-…", hint: "from platform.openai.com" };
-  return { label: envName, placeholder: "paste your key" };
-}
 
 function CopyCommandButton({ command }: { command: string }) {
   const [copied, setCopied] = useState(false);
@@ -105,7 +91,6 @@ export function AcpSignInDialog({
   onSwitchToDefault,
   onRetry,
   onSelectMethod,
-  onSubmitApiKey,
   onDismiss,
 }: {
   request: AcpSignInRequest | null;
@@ -125,17 +110,12 @@ export function AcpSignInDialog({
   onSwitchToDefault: () => void;
   onRetry: () => void;
   onSelectMethod: (optionId?: string) => Promise<boolean> | boolean;
-  // Store the pasted credentials (env var -> value) and respawn the agent with
-  // them. Returns false to keep the dialog open on failure.
-  onSubmitApiKey: (values: Record<string, string>) => Promise<boolean> | boolean;
   onDismiss: () => void;
 }) {
   const [state, setState] = useState<"idle" | "waiting" | "error">("idle");
-  const [keyValues, setKeyValues] = useState<Record<string, string>>({});
   // Which row's action is in flight, so only that button shows a spinner.
   const [pendingId, setPendingId] = useState<string | null>(null);
 
-  const apiKeyEnvs = request?.kind === "methods" ? request.apiKeyEnvs ?? [] : [];
   const options = request?.kind === "methods" ? request.options : [];
   // Every agent's sign-in methods come from what it advertised at initialize:
   // Claude Subscription / Anthropic Console for Claude, ChatGPT for Codex,
@@ -148,21 +128,12 @@ export function AcpSignInDialog({
   );
 
   // One button per way to sign in, "continue with X" style: click acts
-  // directly, no radio to select first. The key-paste field appears only for
-  // agents that advertise no browser method at all.
-  type Method =
-    | { id: string; kind: "key"; env: string; title: string; sub?: string; placeholder: string }
-    | { id: string; kind: "option"; title: string; sub?: string; optionId: string };
+  // directly, no radio to select first.
+  type Method = { id: string; kind: "option"; title: string; sub?: string; optionId: string };
   const methods: Method[] = [];
   if (request?.kind === "methods") {
     for (const option of acpOptions) {
       methods.push({ id: `opt:${option.optionId}`, kind: "option", title: option.name, sub: option.description, optionId: option.optionId });
-    }
-    if (acpOptions.length === 0) {
-      for (const env of apiKeyEnvs) {
-        const f = apiKeyField(env);
-        methods.push({ id: `key:${env}`, kind: "key", env, title: f.label, sub: f.hint, placeholder: f.placeholder });
-      }
     }
   }
 
@@ -171,7 +142,6 @@ export function AcpSignInDialog({
     request?.kind === "methods" ? request.requestId : request?.kind === "cli" ? request.agentId : null;
   useEffect(() => {
     setState("idle");
-    setKeyValues({});
     setPendingId(null);
   }, [requestKey]);
 
@@ -184,18 +154,6 @@ export function AcpSignInDialog({
     }
   }, [error]);
 
-  const submitKey = async (id: string, env: string) => {
-    const val = (keyValues[env] ?? "").trim();
-    if (state === "waiting" || !val) return;
-    setState("waiting");
-    setPendingId(id);
-    try {
-      const ok = await onSubmitApiKey({ [env]: val });
-      if (!ok) setState("error");
-    } catch {
-      setState("error");
-    }
-  };
 
   const isCli = request?.kind === "cli";
   const hasCommand = isCli && Boolean(request.command?.trim());
@@ -306,48 +264,8 @@ export function AcpSignInDialog({
                 const isPending = pendingId === method.id;
                 const disabled = state === "waiting";
                 const dim = disabled && !isPending;
-                // Key methods keep an inline field; browser/ACP methods are one
-                // direct "continue with X" button, primary for the first.
-                if (method.kind === "key") {
-                  return (
-                    <form
-                      key={method.id}
-                      className="flex flex-col gap-1.5"
-                      onSubmit={(e) => {
-                        e.preventDefault();
-                        void submitKey(method.id, method.env);
-                      }}
-                    >
-                      <span className="text-[11px] leading-4 text-muted-foreground">{method.sub}</span>
-                      <div className="flex gap-1.5">
-                        <input
-                          type="password"
-                          value={keyValues[method.env] ?? ""}
-                          onChange={(e) =>
-                            setKeyValues((prev) => ({ ...prev, [method.env]: e.target.value }))
-                          }
-                          placeholder={method.placeholder}
-                          autoComplete="off"
-                          spellCheck={false}
-                          disabled={disabled}
-                          className="min-w-0 flex-1 rounded-sm border border-border bg-background px-2 py-1.5 font-mono text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground"
-                        />
-                        <Button
-                          type="submit"
-                          size="sm"
-                          disabled={disabled || !(keyValues[method.env] ?? "").trim()}
-                          className="h-auto min-h-8 shrink-0 px-3 py-1.5"
-                        >
-                          {isPending ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
-                          ) : (
-                            "save"
-                          )}
-                        </Button>
-                      </div>
-                    </form>
-                  );
-                }
+                // Browser/ACP methods are one direct "continue with X" button,
+                // primary for the first.
                 const onClick = () => void respond(method.optionId, method.id);
                 return (
                   <button

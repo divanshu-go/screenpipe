@@ -9,29 +9,6 @@
 
 export const commands = {
 /**
- * Whether a credential is stored for an agent + env var (never returns it).
- */
-async acpAgentApiKeyStatus(agentId: string, envVar: string) : Promise<Result<boolean, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("acp_agent_api_key_status", { agentId, envVar }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Store (or, with an empty key, clear) one credential for an agent + env var.
- * Called by the sign-in card when the user pastes a key or token.
- */
-async acpSetAgentApiKey(agentId: string, envVar: string, key: string) : Promise<Result<null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("acp_set_agent_api_key", { agentId, envVar, key }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
  * Frontend hook for browser OAuth flows that complete by polling (MCP and
  * Composio). Generic integration OAuth calls the same mechanism directly.
  */

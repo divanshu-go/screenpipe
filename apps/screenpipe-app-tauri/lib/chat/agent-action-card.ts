@@ -12,10 +12,6 @@ export interface ParsedAgentAction {
   title: string;
   message?: string;
   options: AgentActionOption[];
-  /** Env vars the agent reads a credential from, when the card should also
-   *  offer a key input per one (Claude: API key + subscription token; Codex:
-   *  API key). Set only on `auth` requests. */
-  apiKeyEnvs?: string[];
   /** The exact command / target for a permission prompt, shown verbatim as a
    *  code block under the short title (e.g. the full shell command). */
   detail?: string;
@@ -68,10 +64,6 @@ export function parseAgentActionRequest(payload: unknown): ParsedAgentAction | n
     title: agentActionTitle(rawTitle, actionKind),
     message: typeof p.message === "string" ? p.message : undefined,
     options,
-    apiKeyEnvs:
-      actionKind === "auth" && Array.isArray(p.apiKeyEnvs)
-        ? p.apiKeyEnvs.filter((env): env is string => typeof env === "string" && env.length > 0)
-        : undefined,
     detail: typeof p.detail === "string" && p.detail.trim() ? p.detail : undefined,
   };
 }

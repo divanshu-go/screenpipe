@@ -22,8 +22,6 @@ export interface AcpAdapterInfo {
   /** Hidden from the picker but kept in the catalog so the runtime and any
    *  existing presets still resolve its name/icon. Flip in agents.json. */
   disabled?: boolean;
-  /** Credential env vars this agent reads (for clearing on sign-out). */
-  apiKeyEnvs?: string[];
 }
 
 // The whole agent catalog — name, icon, copy, and launch — lives in one static
@@ -38,7 +36,6 @@ const CATALOG_ACP_ADAPTERS: readonly AcpAdapterInfo[] = (
     description: string;
     invertInDark?: boolean;
     disabled?: boolean;
-    apiKeyEnvs?: string[];
   }>
 ).map((agent) => ({
   id: agent.id,
@@ -48,7 +45,6 @@ const CATALOG_ACP_ADAPTERS: readonly AcpAdapterInfo[] = (
   presetName: agent.presetName,
   description: agent.description,
   disabled: agent.disabled === true,
-  apiKeyEnvs: agent.apiKeyEnvs,
 }));
 
 const CUSTOM_ACP_ADAPTER: AcpAdapterInfo = {

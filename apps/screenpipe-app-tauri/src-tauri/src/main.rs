@@ -32,7 +32,6 @@ use tracing_oslog::OsLogger;
 use updates::start_update_check;
 use window::ShowRewindWindow;
 
-mod acp_credentials;
 mod acp_runtime;
 mod analytics;
 mod auth_session;
