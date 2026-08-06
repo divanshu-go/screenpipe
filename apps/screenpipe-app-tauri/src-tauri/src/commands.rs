@@ -1678,6 +1678,32 @@ pub async fn open_login_window(
     {
         use tauri::{WebviewUrl, WebviewWindowBuilder};
 
+        // Prefer the user's real browser. The embedded WebView below is a cold
+        // browser — no cookies, no password manager, no live SSO session — so
+        // every Windows/Linux user re-typed credentials that their default
+        // browser already holds. macOS never had this problem because
+        // ASWebAuthenticationSession runs inside Safari's own session.
+        //
+        // `fresh_session` ("use different account") deliberately stays on the
+        // WebView: it needs an isolated profile directory, which we cannot
+        // force in the user's default browser.
+        if !fresh_session {
+            match crate::browser_login::start_browser_login(
+                app_handle.clone(),
+                crate::web_base::screenpipe_web_base(),
+                deep_link_scheme().to_string(),
+            )
+            .await
+            {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    // No usable default browser — fall through to the WebView
+                    // rather than stranding the user with no way to sign in.
+                    warn!("browser login unavailable, falling back to webview: {e}");
+                }
+            }
+        }
+
         let label = if fresh_session {
             let id = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
