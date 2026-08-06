@@ -1588,9 +1588,25 @@ fn tool_name(update: &Value) -> String {
         .get("title")
         .and_then(Value::as_str)
         .filter(|title| !title.trim().is_empty())
+        // A title-less tool_call_update (a subagent or result-first tool whose
+        // starting tool_call we never saw) still carries the real name here —
+        // recover it before falling back to the bare kind, which the chat
+        // renders as a generic "background step" with no name.
+        .or_else(|| meta_tool_name(update))
         .or_else(|| update.get("kind").and_then(Value::as_str))
         .unwrap_or("tool")
         .to_owned()
+}
+
+/// The tool name Claude Code always stamps at `_meta.claudeCode.toolName`, even
+/// on updates that omit the top-level `title`.
+fn meta_tool_name(update: &Value) -> Option<&str> {
+    update
+        .get("_meta")?
+        .get("claudeCode")?
+        .get("toolName")?
+        .as_str()
+        .filter(|name| !name.trim().is_empty())
 }
 
 // The ACP tool-call `kind` category, forwarded so the desktop can label native
@@ -4080,6 +4096,24 @@ mod tests {
         assert_eq!(
             tool_name(&json!({ "kind": "search", "title": "Grep" })),
             "Grep"
+        );
+        // A title-less update recovers the real name from _meta.claudeCode
+        // rather than collapsing to the kind category (a generic "background
+        // step" in the chat).
+        assert_eq!(
+            tool_name(&json!({
+                "kind": "search",
+                "_meta": { "claudeCode": { "toolName": "Grep" } }
+            })),
+            "Grep"
+        );
+        // Title still wins over the meta name when present (it is friendlier).
+        assert_eq!(
+            tool_name(&json!({
+                "title": "Grep 'foo'",
+                "_meta": { "claudeCode": { "toolName": "Grep" } }
+            })),
+            "Grep 'foo'"
         );
         assert_eq!(tool_name(&json!({ "kind": "execute", "title": "" })), "execute");
         assert_eq!(tool_name(&json!({})), "tool");
