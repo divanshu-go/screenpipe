@@ -212,7 +212,15 @@ export async function startApp(port = WEBDRIVER_PORT): Promise<ReturnType<typeof
     );
   }
 
-  rmSync(E2E_DATA_DIR, { recursive: true, force: true });
+  // Windows can keep the prior app's Pi sidecar files briefly locked after a
+  // preceding E2E phase exits. Let Node retry EBUSY/EPERM/ENOTEMPTY instead of
+  // starting the next WebDriver run with a half-cleaned data directory.
+  rmSync(E2E_DATA_DIR, {
+    recursive: true,
+    force: true,
+    maxRetries: 20,
+    retryDelay: 250,
+  });
   mkdirSync(E2E_DATA_DIR, { recursive: true });
   removeSpotlightExclusion(E2E_DATA_DIR);
 
