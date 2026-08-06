@@ -462,7 +462,12 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
 
               {/* Text */}
               <span className="relative z-10 font-mono text-sm tracking-[0.25em] uppercase font-medium text-foreground group-hover:text-background transition-colors duration-150">
-                sign in
+                {/* Enterprise users are handed an existing account by their
+                    admin, so "sign in" is literally correct there. Everyone
+                    else on this slide is a fresh install with no account yet,
+                    and "sign in" reads as an instruction for people who
+                    already have one. */}
+                {suppressAutoAdvance ? "sign in" : "get started"}
               </span>
 
               {/* Corner marks */}
@@ -481,7 +486,7 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
             >
               {suppressAutoAdvance
                 ? "sign in with your enterprise account"
-                : "sign in to start free"}
+                : "sign in or create a free account"}
             </motion.p>
           </>
         )}

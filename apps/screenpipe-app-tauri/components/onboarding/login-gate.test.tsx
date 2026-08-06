@@ -200,11 +200,42 @@ describe("onboarding login gate", () => {
     vi.useRealTimers();
   });
 
-  it("shows the sign-in button when not signed in", () => {
+  it("shows the sign-in action when not signed in", () => {
     mocks.settings = { user: null };
     mocks.hasAppEntitlement.mockReturnValue(false);
     render(<OnboardingLogin handleNextSlide={vi.fn()} />);
+    expect(screen.getByText(/^get started$/i)).toBeInTheDocument();
+  });
+
+  // Everyone reaching this slide on a consumer build is a fresh install with
+  // no account. Labelling the only affordance "sign in" tells them the app is
+  // for people who already have one, and nothing on the slide offered to
+  // create an account: "sign up" appeared exactly once in the whole app UI,
+  // inside unrelated referral copy.
+  it("does not ask a brand-new user to sign in to an account they do not have", () => {
+    mocks.settings = { user: null };
+    mocks.hasAppEntitlement.mockReturnValue(false);
+
+    render(<OnboardingLogin handleNextSlide={vi.fn()} />);
+
+    expect(screen.getByText(/^get started$/i)).toBeInTheDocument();
+    expect(screen.queryByText(/^sign in$/i)).toBeNull();
+    // Creating an account must be named, and it must stay free.
+    expect(
+      screen.getByText(/sign in or create a free account/i),
+    ).toBeInTheDocument();
+  });
+
+  it("still sends enterprise users to sign in, because their account already exists", () => {
+    mocks.settings = { user: null };
+    mocks.hasAppEntitlement.mockReturnValue(false);
+
+    render(<OnboardingLogin handleNextSlide={vi.fn()} suppressAutoAdvance />);
+
+    // An admin provisioned this account, so "create one" would be wrong.
     expect(screen.getByText(/^sign in$/i)).toBeInTheDocument();
+    expect(screen.queryByText(/^get started$/i)).toBeNull();
+    expect(screen.queryByText(/create a free account/i)).toBeNull();
   });
 
   it("labels sign-in as the enterprise-account option during enterprise onboarding", () => {
