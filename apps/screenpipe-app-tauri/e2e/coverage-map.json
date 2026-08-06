@@ -835,6 +835,16 @@
       "notes": "Accelerated app-level replay of the idle-to-attended stale race verifies that return input does not raise the recording-health failure overlay before capture recovery can be observed."
     },
     {
+      "spec": "pipe-continuous-chat.spec.ts",
+      "platforms": ["macos"],
+      "layers": ["pipes", "chat-ai", "real-ui-e2e", "local-api", "storage-privacy"],
+      "features": ["pipes", "chat"],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "real-user-flow",
+      "notes": "Five native desktop journeys cover failed-save rollback and retry, stable one-chat continuity across real Pipe runs, a human follow-up carried into the next scheduled run, explicit pause/resume behavior with a read-only old chat, reset rejection during an active human reply, and a confirmed clean run without prior scheduled or human context."
+    },
+    {
       "spec": "pipes.spec.ts",
       "platforms": ["windows", "macos", "linux"],
       "layers": ["pipes", "real-ui-e2e", "local-api"],
