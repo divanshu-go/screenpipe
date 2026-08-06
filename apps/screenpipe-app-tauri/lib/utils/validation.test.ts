@@ -112,6 +112,12 @@ describe("BYOK connection validation", () => {
     ).toEqual({ apiKey: "API key is required" });
   });
 
+  it("never requires an api key for an ACP preset (agents sign in on their own)", () => {
+    expect(
+      validateAiPresetConnectionFields({ provider: "acp", model: "claude-acp", apiKey: "" }),
+    ).toEqual({});
+  });
+
   it("validates an editable Ollama URL", () => {
     expect(
       validateAiPresetConnectionFields({

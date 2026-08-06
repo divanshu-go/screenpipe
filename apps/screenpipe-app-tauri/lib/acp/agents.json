@@ -13,8 +13,7 @@
     "imageSrc": "/images/codex.svg",
     "presetName": "codex",
     "description": "Use your existing Codex account and configuration.",
-    "launch": { "kind": "npx", "package": "@agentclientprotocol/codex-acp@1.1.7", "args": [] },
-    "apiKeyEnvs": ["CODEX_API_KEY"]
+    "launch": { "kind": "npx", "package": "@agentclientprotocol/codex-acp@1.1.7", "args": [] }
   },
   {
     "id": "claude-acp",
