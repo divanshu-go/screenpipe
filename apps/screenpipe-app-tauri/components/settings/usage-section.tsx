@@ -17,6 +17,7 @@ import { loadAllConversations } from "@/lib/chat-storage";
 import { homeDir, join } from "@tauri-apps/api/path";
 import { readTextFile, writeTextFile, exists } from "@tauri-apps/plugin-fs";
 import { localFetch } from "@/lib/api";
+import { quotaPlanLabel } from "@/lib/chat/quota-errors";
 import {
   useUsageStatus,
   formatUsagePercent,
@@ -456,9 +457,11 @@ export function UsageSection() {
           <CardContent className="pt-6 space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-medium">AI usage</h3>
-              {hostedUsage.hosted_ai.plan && (
-                <span className="text-xs text-muted-foreground capitalize">
-                  {hostedUsage.hosted_ai.plan} plan
+              {/* `hosted_ai.plan` is a gateway id, so `capitalize` rendered it
+                  as "Pro plan" / "Pro_max plan" — names that do not exist. */}
+              {quotaPlanLabel(hostedUsage.hosted_ai.plan) && (
+                <span className="text-xs text-muted-foreground">
+                  {quotaPlanLabel(hostedUsage.hosted_ai.plan)} plan
                 </span>
               )}
             </div>
@@ -474,7 +477,9 @@ export function UsageSection() {
                   rel="noopener noreferrer"
                   className="underline hover:text-foreground"
                 >
-                  upgrade to {hostedUsage.hosted_ai.upgrade.requiredPlan}
+                  upgrade to{" "}
+                  {quotaPlanLabel(hostedUsage.hosted_ai.upgrade.requiredPlan) ??
+                    "a higher plan"}
                 </a>
               </p>
             )}
