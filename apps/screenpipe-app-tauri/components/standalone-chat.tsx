@@ -20,6 +20,8 @@ import { toast } from "@/components/ui/use-toast";
 import type { AIPreset, JsonValue } from "@/lib/utils/tauri";
 // OpenAI SDK no longer used directly — all providers route through Pi agent
 import posthog from "posthog-js";
+import { useAcpWarmup } from "@/components/chat/standalone/hooks/use-acp-warmup";
+import { piProjectDirForSession } from "@/lib/chat/pi-project-dir";
 import {
   filterAcpPresets,
   useAcpRolloutEnabled,
@@ -966,6 +968,26 @@ export function StandaloneChat({
     piStoppedIntentionallyRef,
     piPresetSwitchPromiseRef,
   });
+
+  // Connect an ACP agent as soon as it is picked, so its install and sign-in
+  // happen while the composer is still being typed into rather than after the
+  // first send. Must sit after usePiSessionLifecycle — it needs that hook's
+  // buildProviderConfig.
+  useAcpWarmup({
+    enabled: acpEnabled && isSettingsLoaded,
+    activePreset,
+    piInfo,
+    piStartInFlightRef,
+    piSessionIdRef,
+    piProjectDirForSession,
+    buildProviderConfig,
+    userToken: settings.user?.token,
+    setPiInfo,
+    setPiStarting,
+    setRunningConfigFromProviderConfig,
+    syncThinkingLevelAfterStart,
+  });
+
   useEffect(() => {
     const stablePipeChat = continuousPipeChatPolicy({
       conversationId,
