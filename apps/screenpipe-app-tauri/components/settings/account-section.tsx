@@ -522,7 +522,13 @@ export function AccountSection() {
               <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full font-medium">active</span>
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-2 text-sm text-muted-foreground">
+          {/* What this account already has. The plan grid below repeats some
+              of these lines for the Business option, so keep them separately
+              addressable. */}
+          <div
+            className="grid grid-cols-2 gap-2 text-sm text-muted-foreground"
+            data-testid="account-active-plan-features"
+          >
             {BUSINESS_PLAN_FEATURES.map((feature) => (
               <div key={feature} className="flex items-start gap-2">
                 <span aria-hidden="true">✓</span>
