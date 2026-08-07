@@ -546,14 +546,19 @@ function ToolCallRailItem({
                 {/* Streamed output: live while running, and kept after the tool
                     finishes so what streamed doesn't vanish. Only for bash once
                     done, since other tools already show their full result below. */}
-                {toolCall.progress && (toolCall.isRunning || toolCall.toolName === "bash") && (
+                {toolCall.progress && (toolCall.isRunning || toolCall.toolName === "bash" || toolCall.subagent) && (
                   <div className="mt-1 pt-1 border-t border-border/50">
                     <pre className="whitespace-pre-wrap break-words max-h-[200px] overflow-y-auto overflow-x-hidden max-w-full text-xs font-mono text-foreground/50">
                       {toolCall.progress}
                     </pre>
                   </div>
                 )}
-                {toolCall.result !== undefined && toolCall.toolName !== "bash" && (
+                {/* A subagent launch's raw result is Claude's internal
+                    orchestration metadata ("Async agent launched ... never quote
+                    ... agentId ... output_file ..."), meant for the model, not the
+                    user. Its real content is the nested transcript above, so
+                    suppress the launch boilerplate. */}
+                {toolCall.result !== undefined && toolCall.toolName !== "bash" && !toolCall.subagent && (
                   <div className="mt-1 pt-1 border-t border-border/50">
                     <pre className={cn(
                       "whitespace-pre-wrap break-words max-h-[300px] overflow-y-auto overflow-x-hidden max-w-full text-xs font-mono",
