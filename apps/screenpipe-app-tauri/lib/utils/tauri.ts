@@ -1157,8 +1157,17 @@ async openGoogleCalendarAuthWindow(authUrl: string) : Promise<Result<null, strin
  * `fresh_session` is used by "use different account": macOS asks
  * ASWebAuthenticationSession for an ephemeral browser session instead of
  * reusing Safari cookies, and Windows/Linux use a throwaway webview profile.
+ * Returns the device code when this call started the browser device-code flow,
+ * and an empty string for every path that needs no out-of-band confirmation
+ * (macOS auth session, embedded WebView fallback).
+ *
+ * The code is returned as well as broadcast on `login-browser-pending` so a
+ * caller never has to depend on a global event to render it. #5936 changed
+ * this shared command to require the user read a code out of the app, but only
+ * taught onboarding to show one; every other login surface silently opened a
+ * browser asking for a code nothing displayed.
  */
-async openLoginWindow(freshSession: boolean | null) : Promise<Result<null, string>> {
+async openLoginWindow(freshSession: boolean | null) : Promise<Result<string, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("open_login_window", { freshSession }) };
 } catch (e) {
