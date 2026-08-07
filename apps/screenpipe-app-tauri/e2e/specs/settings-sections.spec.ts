@@ -158,8 +158,17 @@ describe('Settings sections', () => {
       windowLabels: string[];
     }>('get_app_screen_capture_protection');
     expect(initial.requestedHidden).toBe(true);
-    expect(initial.platformSupported).toBe(true);
+    // Content protection is a macOS/Windows capability (capture_protection.rs
+    // gates platform_supported on exactly those two). Linux has no equivalent,
+    // so asserting support unconditionally fails there on a platform gap rather
+    // than on anything this test is about. The preference itself is
+    // cross-platform and still asserted below.
+    expect(initial.platformSupported).toBe(
+      process.platform === 'darwin' || process.platform === 'win32',
+    );
     expect(initial.e2eBypass).toBe(true);
+    // Never actually hidden here: the e2e bypass keeps windows capturable on
+    // the supported platforms, and Linux cannot hide them at all.
     expect(initial.effectiveHidden).toBe(false);
     expect(initial.windowLabels).toContain('home');
     expect(await toggle.getAttribute('data-state')).toBe('checked');
