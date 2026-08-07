@@ -3627,7 +3627,9 @@ keepComputerAwake?: boolean;
  */
 useChineseMirror: boolean;
 /**
- * Enable anonymous analytics (PostHog).
+ * Enable product analytics (PostHog). Events carry only a random device
+ * ID when signed out; when signed in they are linked to the account,
+ * including its email. Never includes recordings, audio, or OCR text.
  */
 analyticsEnabled: boolean;
 /**
