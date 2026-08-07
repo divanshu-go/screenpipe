@@ -169,7 +169,13 @@ export function StandaloneChat({
   const isFullscreen = useIsFullscreen();
   const { items: appItems, isLoading: appsLoading, refresh: refreshAppItems } = useSqlAutocomplete("app");
   const { items: tagItems, isLoading: tagsLoading, refresh: refreshTagItems } = useTagAutocomplete();
-  const { suggestions: autoSuggestions, refreshing: suggestionsRefreshing, forceRefresh: refreshSuggestions } = useAutoSuggestions();
+  const {
+    suggestions: autoSuggestions,
+    mode: suggestionMode,
+    loading: suggestionsLoading,
+    refreshing: suggestionsRefreshing,
+    forceRefresh: refreshSuggestions,
+  } = useAutoSuggestions();
   const {
     pipes,
     templatePipes,
@@ -229,6 +235,25 @@ export function StandaloneChat({
     setChipScrollTop,
     clearConnectionChip,
   } = useChatComposerShell();
+  // Holds the exact text a contextual starter put in the composer, so the send
+  // can tell "sent the starter as-is" from "reworked it into their own
+  // question". The second is the outcome the experiment is actually testing —
+  // a click alone proves neither. Cleared once the composer is emptied.
+  const pendingContextualHomeSuggestionRef = useRef<string | null>(null);
+  const fillContextualHomeSuggestion = useCallback(
+    (text: string) => {
+      pendingContextualHomeSuggestionRef.current = text;
+      setInput(text);
+      requestAnimationFrame(() => {
+        inputRef.current?.focus();
+        inputRef.current?.setSelectionRange(text.length, text.length);
+      });
+    },
+    [inputRef, setInput],
+  );
+  useEffect(() => {
+    if (!input.trim()) pendingContextualHomeSuggestionRef.current = null;
+  }, [input]);
   useTryInChatEvent({
     startNewRef: tryInChatStartNewRef,
     setConnectionChip,
@@ -1147,6 +1172,27 @@ export function StandaloneChat({
     turnIntentLedgerRef,
   });
 
+  const sendComposerMessage = useCallback(
+    (message: string, displayLabel?: string) => {
+      const filledSuggestion = pendingContextualHomeSuggestionRef.current;
+      pendingContextualHomeSuggestionRef.current = null;
+      if (filledSuggestion === null) {
+        return sendMessage(message, displayLabel, undefined, {
+          composerAuthorship: "user_authored",
+        });
+      }
+      return sendMessage(message, displayLabel, undefined, {
+        entrySource: "home_card",
+        entryCard: "contextual_suggestion",
+        composerAuthorship:
+          message.trim() === filledSuggestion.trim()
+            ? "template_unmodified"
+            : "template_edited",
+      });
+    },
+    [sendMessage],
+  );
+
   // E2E-only: expose the stop action so specs can end a turn and drive sends
   // back-to-back without the Pi subprocess staying busy. Render assignment (the
   // repo's preferred pattern over mirror effects); harmless no-op in production.
@@ -1669,7 +1715,7 @@ export function StandaloneChat({
     isKnownConnectionId: (id) => INTEGRATION_ICON_KEYS.has(id),
     handlePastedFiles,
     attachPastedText,
-    sendMessage,
+    sendMessage: sendComposerMessage,
     steerMessage,
     steerQueuedPrompt,
   });
@@ -1983,8 +2029,16 @@ export function StandaloneChat({
           await commands.showWindow({ Home: { page: "pipes" } });
         }}
         summaryCardsProps={{
-          onSendMessage: (message, displayLabel, entrySource, entryCard) =>
-            sendMessage(message, displayLabel, undefined, { entrySource, entryCard }),
+          onSendMessage: (message, displayLabel, entrySource, entryCard) => {
+            pendingContextualHomeSuggestionRef.current = null;
+            // Control cards send their prompt on click without ever showing it,
+            // so the user authored nothing.
+            return sendMessage(message, displayLabel, undefined, {
+              entrySource,
+              entryCard,
+              composerAuthorship: "template_unmodified",
+            });
+          },
           customTemplates,
           onSaveCustomTemplate: saveCustomTemplate,
           onUpdateCustomTemplate: updateCustomTemplate,
@@ -2007,6 +2061,14 @@ export function StandaloneChat({
               enabled: pipe.config.enabled,
               schedule: pipe.config.schedule,
             })),
+        }}
+        homeStarterProps={{
+          suggestions: connectionAwareSuggestions,
+          activityMode: suggestionMode,
+          isLoading: suggestionsLoading,
+          isRefreshing: suggestionsRefreshing,
+          onFillSuggestion: fillContextualHomeSuggestion,
+          onRefresh: refreshVisibleSuggestions,
         }}
         messageListProps={messageListProps}
         isUserScrolledUp={isUserScrolledUp}

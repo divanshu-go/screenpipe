@@ -191,9 +191,14 @@ export function UpgradeQuotaBanner() {
                 onClick={onUpgrade}
                 disabled={busy}
               >
+                {/* Name where the click actually goes. With no server upgrade
+                    this opens the Business offer, so it says so; only an
+                    upgrade to a plan this build cannot name is generic. */}
                 {requiredPlanLabel
                   ? `Upgrade to ${requiredPlanLabel}`
-                  : "See plans"}
+                  : activeUpgrade
+                    ? "See plans"
+                    : "View Business"}
               </Button>
             )}
             <button

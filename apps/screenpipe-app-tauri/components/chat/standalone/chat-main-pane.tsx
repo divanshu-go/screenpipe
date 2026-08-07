@@ -7,6 +7,7 @@ import * as React from "react";
 import { ChevronDown, Loader2, Settings, Workflow } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SummaryCards } from "@/components/chat/summary-cards";
+import { HomeStarterSurface } from "@/components/chat/home-starter-surface";
 import { PipeContextBanner } from "@/components/chat/pipe-context-banner";
 import { PipeAIIconLarge } from "@/components/pipe-ai-icon";
 import { InlineChatHistory } from "@/components/chat/standalone/inline-chat-history";
@@ -52,6 +53,10 @@ interface ChatMainPaneProps {
   onOpenSettings: () => void | Promise<void>;
   onOpenPipeSettings: () => void | Promise<void>;
   summaryCardsProps: React.ComponentProps<typeof SummaryCards>;
+  homeStarterProps: Omit<
+    React.ComponentProps<typeof HomeStarterSurface>,
+    "summaryCardsProps"
+  >;
   messageListProps: ChatMessageListProps;
   isUserScrolledUp: boolean;
   scrollToBottom: () => void;
@@ -86,6 +91,7 @@ export function ChatMainPane({
   onOpenSettings,
   onOpenPipeSettings,
   summaryCardsProps,
+  homeStarterProps,
   messageListProps,
   isUserScrolledUp,
   scrollToBottom,
@@ -238,7 +244,12 @@ export function ChatMainPane({
               !isLoading &&
               !isStreaming &&
               hasPresets &&
-              hasValidModel && <SummaryCards {...summaryCardsProps} />}
+              hasValidModel && (
+                <HomeStarterSurface
+                  summaryCardsProps={summaryCardsProps}
+                  {...homeStarterProps}
+                />
+              )}
             {/* A conversation switch is a hard visual boundary. Remounting the
                 list prevents AnimatePresence from carrying an outgoing chat's
                 exit nodes into the new chat's empty state. */}
