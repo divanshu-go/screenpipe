@@ -8778,7 +8778,7 @@ mod tests {
             .expect("meeting-summary is bundled");
         assert!(migrate_builtin_pipe_text("meeting-summary", bundled).is_none());
         let (config, body) = parse_frontmatter(bundled).expect("bundled prompt should parse");
-        assert_eq!(config.timeout, Some(300));
+        assert_eq!(config.timeout, Some(600));
         assert!(!body.contains("buildMeetingSummarizeInstructions"));
         assert!(body.contains("screenpipe API search is required"));
         assert!(body.contains("never run recursive `find` or `grep`"));
