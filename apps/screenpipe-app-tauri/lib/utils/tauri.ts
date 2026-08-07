@@ -993,9 +993,15 @@ async livetextHide() : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
-async livetextHighlight(terms: string[]) : Promise<Result<number, string>> {
+/**
+ * Highlight `terms` on the frame they were matched in. `frame_id` scopes the
+ * request: the bridge only paints when that frame's analysis is on the overlay,
+ * and re-paints automatically once it lands (analysis is asynchronous, so the
+ * highlight request usually arrives first).
+ */
+async livetextHighlight(terms: string[], frameId: string) : Promise<Result<number, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("livetext_highlight", { terms }) };
+    return { status: "ok", data: await TAURI_INVOKE("livetext_highlight", { terms, frameId }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
