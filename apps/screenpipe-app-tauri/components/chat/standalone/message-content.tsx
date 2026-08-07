@@ -457,13 +457,19 @@ function RunningToolStatus({ toolCall }: { toolCall: ToolCall }) {
 function ToolCallRailItem({
   toolCall,
   isLast,
+  childToolCalls,
   onAskUserReply,
 }: {
   toolCall: ToolCall;
   isLast: boolean;
+  // Nested tool calls (a subagent's own tools). Rendered inside this row's
+  // expand so clicking the container toggles its whole subtree, rather than
+  // leaving the children as always-on siblings that clutter the rail.
+  childToolCalls?: ToolCall[];
   onAskUserReply?: (reply: string, displayLabel: string) => void | Promise<void>;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const hasChildren = (childToolCalls?.length ?? 0) > 0;
   const presentation = presentToolActivity(toolCall);
   const label = toolCall.isRunning ? presentation.runningLabel : presentation.completedLabel;
   const appName = extractAppFromToolCall(toolCall);
@@ -524,6 +530,11 @@ function ToolCallRailItem({
             <span className="truncate flex-1 text-xs text-foreground/70 group-hover:text-foreground transition-colors duration-150">
               {label}
             </span>
+            {hasChildren && !expanded && (
+              <span className="flex-shrink-0 text-[11px] text-foreground/30">
+                {childToolCalls!.length} {childToolCalls!.length === 1 ? "step" : "steps"}
+              </span>
+            )}
             {expanded ? (
               <ChevronDown className="h-3 w-3 flex-shrink-0 text-foreground/30 group-hover:text-foreground/60 transition-colors duration-150" />
             ) : (
@@ -566,6 +577,21 @@ function ToolCallRailItem({
                     )}>
                       {toolCall.result}
                     </pre>
+                  </div>
+                )}
+                {/* A subagent's own tools nest inside its expand, so clicking
+                    the subagent row reveals or hides its whole subtree instead
+                    of leaving the children always on. */}
+                {hasChildren && (
+                  <div className="mt-1">
+                    {childToolCalls!.map((child, j) => (
+                      <ToolCallRailItem
+                        key={toolCallRenderKey(child, j)}
+                        toolCall={child}
+                        isLast={j === childToolCalls!.length - 1}
+                        onAskUserReply={onAskUserReply}
+                      />
+                    ))}
                   </div>
                 )}
               </div>
@@ -1502,21 +1528,10 @@ function ToolCallGroup({
                     >
                       <ToolCallRailItem
                         toolCall={tc}
-                        isLast={isLastTop && children.length === 0}
+                        isLast={isLastTop}
+                        childToolCalls={children}
                         onAskUserReply={onAskUserReply}
                       />
-                      {children.length > 0 && (
-                        <div className="ml-5">
-                          {children.map((child, j) => (
-                            <ToolCallRailItem
-                              key={toolCallRenderKey(child, j)}
-                              toolCall={child}
-                              isLast={isLastTop && j === children.length - 1}
-                              onAskUserReply={onAskUserReply}
-                            />
-                          ))}
-                        </div>
-                      )}
                     </motion.div>
                   );
                 });
