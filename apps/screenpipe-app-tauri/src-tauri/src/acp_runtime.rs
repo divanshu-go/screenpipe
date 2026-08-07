@@ -1504,10 +1504,20 @@ fn subagent_transcript_capability() -> serde_json::Map<String, Value> {
     meta
 }
 
-/// True when a tool call is the launch of a subagent (Claude Code stamps
-/// `_meta.claudeCode.subagent = true` on the Agent/Task call), so the chat can
-/// mark it as a container for the nested transcript beneath it.
+/// True when a tool call is the launch of a subagent, so the chat can mark it
+/// as a container for the nested transcript beneath it. ACP has no standard
+/// subagent flag and claude-agent-acp does not stamp `_meta.claudeCode.subagent`
+/// on the wire (only `{toolName, parentToolUseId}`), so identify it by the tool
+/// name: the Agent/Task tool (which the adapter maps to kind "think"). The real
+/// name is in `_meta.claudeCode.toolName`, since the top-level title is the task
+/// description, not the tool name. The `subagent` flag check stays for adapters
+/// that start sending it.
 fn is_subagent_call(update: &Value) -> bool {
+    if let Some(name) = meta_tool_name(update) {
+        if name.eq_ignore_ascii_case("agent") || name.eq_ignore_ascii_case("task") {
+            return true;
+        }
+    }
     update
         .get("_meta")
         .and_then(|meta| meta.get("claudeCode"))
@@ -4077,6 +4087,18 @@ mod tests {
     fn advertises_and_detects_the_subagent_transcript_capability() {
         let meta = subagent_transcript_capability();
         assert_eq!(meta.get("subagent-transcript"), Some(&json!(true)));
+        // The shipped adapter identifies the launch by tool name (Agent/Task),
+        // not a subagent flag, so that is the primary detection.
+        assert!(is_subagent_call(
+            &json!({ "_meta": { "claudeCode": { "toolName": "Task" } } })
+        ));
+        assert!(is_subagent_call(
+            &json!({ "_meta": { "claudeCode": { "toolName": "Agent" } } })
+        ));
+        assert!(!is_subagent_call(
+            &json!({ "_meta": { "claudeCode": { "toolName": "Grep" } } })
+        ));
+        // The explicit flag still counts, for adapters that add it later.
         assert!(is_subagent_call(
             &json!({ "_meta": { "claudeCode": { "subagent": true } } })
         ));
