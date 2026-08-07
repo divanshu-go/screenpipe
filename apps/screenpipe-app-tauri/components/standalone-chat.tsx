@@ -20,11 +20,9 @@ import { toast } from "@/components/ui/use-toast";
 import type { AIPreset, JsonValue } from "@/lib/utils/tauri";
 // OpenAI SDK no longer used directly — all providers route through Pi agent
 import posthog from "posthog-js";
-import { useFeatureFlagEnabled } from "posthog-js/react";
 import {
-  ACP_AGENTS_FLAG,
   filterAcpPresets,
-  isAcpRolloutEnabled,
+  useAcpRolloutEnabled,
 } from "@/lib/acp-rollout";
 import { commands } from "@/lib/utils/tauri";
 import { useChatConversations } from "@/components/hooks/use-chat-conversations";
@@ -149,8 +147,7 @@ export function StandaloneChat({
   // `activePreset.provider === "acp"`, so a preset list with no ACP entry makes
   // every one of them unreachable. Fails closed — an undefined flag (offline,
   // PostHog blocked, opt-out) hides ACP.
-  const acpFlag = useFeatureFlagEnabled(ACP_AGENTS_FLAG);
-  const acpEnabled = isAcpRolloutEnabled(acpFlag);
+  const acpEnabled = useAcpRolloutEnabled();
   const availableAiPresets = React.useMemo(
     () => filterAcpPresets(settings.aiPresets, acpEnabled),
     [settings.aiPresets, acpEnabled],
