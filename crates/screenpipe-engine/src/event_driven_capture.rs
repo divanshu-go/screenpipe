@@ -1063,7 +1063,7 @@ pub(crate) async fn event_driven_capture_loop(
                 None, // first capture — no elements ref
                 &mut walk_budget,
                 &mut ocr_gate,
-                false, // screenshot enabled on startup
+                screenshot_disabled,
                 false, // hd not active at startup (Manual is dedup-exempt anyway)
                 false, // not in a meeting at startup
                 true,  // focus unknown at startup — controller defaults to Active
@@ -1189,6 +1189,8 @@ pub(crate) async fn event_driven_capture_loop(
         let mut warm_trigger_override: Option<CaptureTrigger> = None;
         {
             use crate::focus_aware_controller::CaptureState;
+            // Only the debug-only e2e override below reassigns this.
+            #[cfg_attr(not(debug_assertions), allow(unused_mut))]
             let mut capture_state = focus_controller.state_for_monitor(&monitor);
             #[cfg(debug_assertions)]
             if e2e_force_focus_cold(monitor_id) {

@@ -180,6 +180,42 @@ export const QUOTA_PLAN_LABELS: Record<
   business_ultra: "Business Ultra",
 };
 
+/**
+ * Customer-facing name for any plan id the gateway sends, including ids this
+ * build predates. Surfaces used to print the raw id — "Pro_max plan",
+ * "upgrade to business_max" — which are names no plan has ever had.
+ * Returns null when there is nothing safe to show, so callers omit the label
+ * rather than inventing one.
+ */
+export function quotaPlanLabel(plan: string | null | undefined): string | null {
+  if (typeof plan !== "string") return null;
+  const normalized = plan.trim().toLowerCase();
+  if (!normalized || normalized === "none") return null;
+  if (normalized in QUOTA_PLAN_LABELS) {
+    return QUOTA_PLAN_LABELS[normalized as QuotaUpgradeAction["requiredPlan"]];
+  }
+  switch (normalized) {
+    case "free":
+      return "Free";
+    case "standard":
+      return "Basic";
+    case "pro":
+      return "Business";
+    case "pro_max":
+      return "Business Max";
+    case "pro_ultra":
+      return "Business Ultra";
+    case "lifetime":
+      return "Lifetime";
+    case "team":
+      return "Team";
+    case "enterprise":
+      return "Enterprise";
+    default:
+      return null;
+  }
+}
+
 export type QuotaErrorType = "daily" | "hosted_busy" | "rate" | "none";
 
 export function classifyQuotaError(errorStr: string): QuotaErrorType {
