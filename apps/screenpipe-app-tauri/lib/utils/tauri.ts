@@ -2701,7 +2701,15 @@ config?: { [key in string]: string };
 /**
  * Default session mode id, applied after every session/new.
  */
-modeId?: string | null }
+modeId?: string | null;
+/**
+ * Send the agent's model calls through Screenpipe Cloud instead of the
+ * user's own provider account. Only honoured for agents whose catalog
+ * entry declares `cloudRouting`; a closed agent (Cursor, Copilot) talks to
+ * its own service and ignores this. `None` means the preset predates the
+ * choice, which keeps the agent on its own account.
+ */
+useScreenpipeCloud?: boolean | null }
 /**
  * Whether a built-in agent's CLI is installed on this computer. Binary agents
  * (OpenCode, Cursor, Kimi) require the user to install the CLI; npx agents run

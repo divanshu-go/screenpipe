@@ -22,6 +22,10 @@ export interface AcpAdapterInfo {
   /** Hidden from the picker but kept in the catalog so the runtime and any
    *  existing presets still resolve its name/icon. Flip in agents.json. */
   disabled?: boolean;
+  /** True when the catalog declares how to point this agent at Screenpipe
+   *  Cloud. Closed agents (Cursor, Copilot) talk to their own service and can
+   *  never be routed, so the choice is not offered for them. */
+  supportsCloudRouting?: boolean;
   /** PostHog flag that has to be on before this agent is offered as a new
    *  choice. Absent means always offered (Pi, Codex, Claude Code). Set it in
    *  agents.json for agents whose sign-in or account requirements are not
@@ -42,6 +46,7 @@ const CATALOG_ACP_ADAPTERS: readonly AcpAdapterInfo[] = (
     invertInDark?: boolean;
     disabled?: boolean;
     flag?: string;
+    cloudRouting?: unknown;
   }>
 ).map((agent) => ({
   id: agent.id,
@@ -52,6 +57,7 @@ const CATALOG_ACP_ADAPTERS: readonly AcpAdapterInfo[] = (
   description: agent.description,
   disabled: agent.disabled === true,
   flag: agent.flag,
+  supportsCloudRouting: !!agent.cloudRouting,
 }));
 
 const CUSTOM_ACP_ADAPTER: AcpAdapterInfo = {
