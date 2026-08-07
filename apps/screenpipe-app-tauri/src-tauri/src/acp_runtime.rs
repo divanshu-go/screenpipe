@@ -2233,10 +2233,31 @@ fn terminal_auth_args(method: &Value) -> Option<Vec<String>> {
     Some(args.iter().filter_map(Value::as_str).map(str::to_owned).collect())
 }
 
+/// Consumer Claude subscription sign-in, which Screenpipe must never offer.
+///
+/// Anthropic's guidance to third-party developers is that a product embedding
+/// Claude Code uses an API key (Anthropic Console) or a supported cloud, and
+/// does not put users through Claude.ai login or route Free/Pro/Max credentials
+/// on their behalf. The adapter is launched with `--hide-claude-auth`
+/// (agents.json), which drops exactly these methods and keeps the Console
+/// method. This is the second layer: an adapter upgrade that renames the flag,
+/// ignores it, or advertises the method anyway must not silently put the
+/// subscription option back in front of a user.
+fn is_claude_subscription_auth(id: &str, name: &str) -> bool {
+    let id = id.to_ascii_lowercase();
+    let name = name.to_ascii_lowercase();
+    // Codex's ChatGPT method is deliberately not matched: OpenAI supports
+    // signing into Codex with a ChatGPT plan, so it is not the same boundary.
+    id == "claude-ai-login" || id == "claude-login" || name.contains("claude subscription")
+}
+
 fn available_auth_methods(
     init: &InitializeResponse,
 ) -> Vec<&agent_client_protocol::schema::v1::AuthMethod> {
-    init.auth_methods.iter().collect()
+    init.auth_methods
+        .iter()
+        .filter(|method| !is_claude_subscription_auth(&method.id().to_string(), method.name()))
+        .collect()
 }
 
 async fn authenticate(
@@ -3658,6 +3679,57 @@ mod tests {
         // Invalid boolean strings and unknown options are skipped, never sent.
         assert_eq!(default_option_value(&session, "fast", "yes"), None);
         assert_eq!(default_option_value(&session, "gone", "a"), None);
+    }
+
+    /// Anthropic's guidance is that an embedding product uses an API key or a
+    /// supported cloud, not Claude.ai login on the user's behalf. Both layers
+    /// are pinned: the launch flag that makes the adapter withhold the method,
+    /// and the filter that drops it if an adapter advertises it anyway.
+    #[test]
+    fn claude_adapter_launches_with_subscription_auth_hidden() {
+        let claude = agent_catalog()
+            .into_iter()
+            .find(|agent| agent.id == "claude-acp")
+            .expect("claude-acp in catalog");
+
+        match claude.launch {
+            AgentLaunch::Npx { ref args, .. } => {
+                assert!(
+                    args.iter().any(|arg| arg == "--hide-claude-auth"),
+                    "claude-acp must launch with --hide-claude-auth, got {args:?}"
+                );
+            }
+            AgentLaunch::Binary { .. } => panic!("claude-acp should launch via npx"),
+        }
+    }
+
+    #[test]
+    fn claude_subscription_auth_methods_are_never_offered() {
+        // The adapter's own ids/labels for consumer sign-in.
+        assert!(is_claude_subscription_auth(
+            "claude-ai-login",
+            "Claude Subscription"
+        ));
+        assert!(is_claude_subscription_auth(
+            "claude-login",
+            "Log in with Claude"
+        ));
+        // Matched by label too, so a renamed id still cannot slip through.
+        assert!(is_claude_subscription_auth(
+            "something-new",
+            "Claude subscription "
+        ));
+
+        // The API-key path must survive: hiding every method would leave the
+        // agent unusable rather than compliant.
+        assert!(!is_claude_subscription_auth(
+            "console-login",
+            "Anthropic Console"
+        ));
+        // Codex signs in with a ChatGPT plan, which OpenAI supports. Not the
+        // same boundary, and filtering it would break Codex sign-in.
+        assert!(!is_claude_subscription_auth("chatgpt", "ChatGPT"));
+        assert!(!is_claude_subscription_auth("cursor-login", "Cursor Login"));
     }
 
     #[test]
