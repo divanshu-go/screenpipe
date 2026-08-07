@@ -269,7 +269,7 @@ impl RuntimeConfig {
 /// core screenpipe search server, and points at the seeded `.pi/skills` guides
 /// that third-party agents otherwise only find by chance.
 const SCREENPIPE_TOOLS_HINT: &str = "\
-You are running inside screenpipe. Prefer its MCP tools over shell/curl (this is your usage guide):
+You are running inside screenpipe. Prefer its MCP tools over shell/curl (this is your usage guide). Tool names below are written with hyphens; some agents expose the same tools with underscores (activity_summary, search_content) or a query_recordings tool for read-only SQL — use whatever your own tool list shows, and never fall back to curl or /raw_sql just because a name here doesn't match exactly:
 - the `screenpipe` server searches and summarizes the user's screen, audio, and UI history.
   - `activity-summary` for broad questions (\"what was I doing?\", \"which apps?\", \"how long on X?\"): it pre-summarizes apps, windows, and transcripts and owns the time math — pass natural-language times (\"today\", \"2h ago\") and never sum minutes yourself.
   - `search-content` for specific lookups; filter by content_type, app_name, window_name, and a time range.
@@ -2229,12 +2229,24 @@ fn is_screenpipe_read_tool(tool_title: &str) -> bool {
         return true;
     }
     // Specific read-only tools from the bundled screenpipe-tools server.
-    // `query_recordings` is server-side-validated SELECT-only. The write/bridge
-    // tools (save_artifact, sp_mcp_call, screenpipe_connect_app, live_view,
-    // sp_web_search) are deliberately NOT auto-approved.
+    // `query_recordings` is server-side-validated SELECT-only. The trailing
+    // block are the core read/query tools this server mirrors over HTTP for
+    // http-only agents (Cursor, Copilot) — all plain GETs of the user's own
+    // recordings, so auto-approved exactly like their mcp__screenpipe__*
+    // equivalents on stdio. The write/bridge tools (save_artifact, sp_mcp_call,
+    // screenpipe_connect_app, live_view, sp_web_search) stay NOT auto-approved.
     matches!(
         tool_title,
-        "mcp__screenpipe-tools__query_recordings" | "mcp__screenpipe-tools__list_connections"
+        "mcp__screenpipe-tools__query_recordings"
+            | "mcp__screenpipe-tools__list_connections"
+            | "mcp__screenpipe-tools__activity_summary"
+            | "mcp__screenpipe-tools__keyword_search"
+            | "mcp__screenpipe-tools__search_elements"
+            | "mcp__screenpipe-tools__frame_context"
+            | "mcp__screenpipe-tools__get_frame_elements"
+            | "mcp__screenpipe-tools__list_meetings"
+            | "mcp__screenpipe-tools__get_meeting"
+            | "mcp__screenpipe-tools__health_check"
     )
 }
 
@@ -4067,6 +4079,11 @@ mod tests {
         assert!(is_screenpipe_read_tool("mcp__screenpipe__search-content"));
         assert!(is_screenpipe_read_tool("mcp__screenpipe-tools__query_recordings"));
         assert!(is_screenpipe_read_tool("mcp__screenpipe-tools__list_connections"));
+        // Core read tools mirrored on screenpipe-tools for http-only agents.
+        assert!(is_screenpipe_read_tool("mcp__screenpipe-tools__activity_summary"));
+        assert!(is_screenpipe_read_tool("mcp__screenpipe-tools__keyword_search"));
+        assert!(is_screenpipe_read_tool("mcp__screenpipe-tools__get_meeting"));
+        assert!(is_screenpipe_read_tool("mcp__screenpipe-tools__health_check"));
         assert!(!is_screenpipe_read_tool("mcp__screenpipe-tools__sp_mcp_call"));
         assert!(!is_screenpipe_read_tool("mcp__screenpipe-tools__save_artifact"));
         assert!(!is_screenpipe_read_tool("bash"));
