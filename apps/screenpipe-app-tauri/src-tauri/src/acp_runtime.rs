@@ -1216,11 +1216,7 @@ impl RuntimeState {
             "tool_call" => {
                 self.close_thought_locked(&mut turn);
                 self.ensure_turn_locked(&mut turn);
-                let id = update
-                    .get("toolCallId")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                let id = tool_call_id(&update).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
                 turn.active_tools.insert(id.clone(), update.clone());
                 let mut start = json!({
                     "type": "tool_execution_start",
@@ -1249,11 +1245,7 @@ impl RuntimeState {
             }
             "tool_call_update" => {
                 self.ensure_turn_locked(&mut turn);
-                let id = update
-                    .get("toolCallId")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned();
+                let id = tool_call_id(&update).unwrap_or_default();
                 // A subagent child's first surfaced event is often a
                 // tool_call_update, not a tool_call — Claude Code stamps
                 // parentToolUseId on the subagent's updates. Without a start the
@@ -1522,6 +1514,18 @@ fn is_subagent_call(update: &Value) -> bool {
         .and_then(|claude| claude.get("subagent"))
         .and_then(Value::as_bool)
         .unwrap_or(false)
+}
+
+/// The tool call id, with control characters stripped. Cursor emits an id with
+/// an embedded newline (`call-<uuid>-0\nfc_<...>`), and a raw control char in an
+/// identifier silently breaks id-keyed matching and rendering downstream (the
+/// tool start and its end no longer line up, so the row never resolves).
+/// Normalizing here, at the single point every id is read, keeps start, update,
+/// finish, and turn-close all agreeing on the same key.
+fn tool_call_id(update: &Value) -> Option<String> {
+    let raw = update.get("toolCallId").and_then(Value::as_str)?;
+    let clean: String = raw.chars().filter(|c| !c.is_control()).collect();
+    (!clean.is_empty()).then_some(clean)
 }
 
 /// Parent Task linkage for subagent child tool calls. Claude Code stamps
@@ -4158,6 +4162,23 @@ mod tests {
         );
         assert_eq!(tool_name(&json!({ "kind": "execute", "title": "" })), "execute");
         assert_eq!(tool_name(&json!({})), "tool");
+    }
+
+    #[test]
+    fn tool_call_id_strips_embedded_control_chars() {
+        // Cursor emits ids with an embedded newline (call-<uuid>-0\nfc_<...>); a
+        // raw control char breaks start/end matching, so it must be stripped and
+        // the two halves kept so the id stays unique.
+        assert_eq!(
+            tool_call_id(&json!({ "toolCallId": "call-abc-0\nfc_xyz" })).as_deref(),
+            Some("call-abc-0fc_xyz")
+        );
+        assert_eq!(
+            tool_call_id(&json!({ "toolCallId": "clean-123" })).as_deref(),
+            Some("clean-123")
+        );
+        assert_eq!(tool_call_id(&json!({ "toolCallId": "\n\t" })), None);
+        assert_eq!(tool_call_id(&json!({})), None);
     }
 
     #[test]
